@@ -46,6 +46,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
+use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
@@ -69,7 +70,7 @@ use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
 use codex_protocol::protocol::SandboxPolicy;
-use codex_protocol::protocol::SessionConfiguredEvent;
+use codex_protocol::protocol::SessionNetworkProxyRuntime;
 use color_eyre::eyre::ContextCompat;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -97,6 +98,25 @@ pub(crate) struct AppServerSession {
     next_request_id: i64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ThreadSessionState {
+    pub(crate) thread_id: ThreadId,
+    pub(crate) forked_from_id: Option<ThreadId>,
+    pub(crate) thread_name: Option<String>,
+    pub(crate) model: String,
+    pub(crate) model_provider_id: String,
+    pub(crate) service_tier: Option<codex_protocol::config_types::ServiceTier>,
+    pub(crate) approval_policy: AskForApproval,
+    pub(crate) approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
+    pub(crate) sandbox_policy: SandboxPolicy,
+    pub(crate) cwd: PathBuf,
+    pub(crate) reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+    pub(crate) history_log_id: u64,
+    pub(crate) history_entry_count: u64,
+    pub(crate) network_proxy: Option<SessionNetworkProxyRuntime>,
+    pub(crate) rollout_path: Option<PathBuf>,
+}
+
 #[derive(Clone, Copy)]
 enum ThreadParamsMode {
     Embedded,
@@ -112,18 +132,9 @@ impl ThreadParamsMode {
     }
 }
 
-/// Result of starting, resuming, or forking an app-server thread.
-///
-/// Carries the full `Thread` snapshot returned by the server alongside the
-/// derived `SessionConfiguredEvent`. The snapshot's `turns` are used by
-/// `App::restore_started_app_server_thread` to seed the event store and
-/// replay transcript history — this is the only source of prior-turn data
-/// for remote sessions, where historical websocket notifications are not
-/// re-sent after the handshake.
 pub(crate) struct AppServerStartedThread {
-    pub(crate) thread: Thread,
-    pub(crate) session_configured: SessionConfiguredEvent,
-    pub(crate) show_raw_agent_reasoning: bool,
+    pub(crate) session: ThreadSessionState,
+    pub(crate) turns: Vec<Turn>,
 }
 
 impl AppServerSession {
@@ -274,7 +285,6 @@ impl AppServerSession {
         config: Config,
         thread_id: ThreadId,
     ) -> Result<AppServerStartedThread> {
-        let show_raw_agent_reasoning = config.show_raw_agent_reasoning;
         let request_id = self.next_request_id();
         let response: ThreadResumeResponse = self
             .client
@@ -288,7 +298,7 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/resume failed during TUI bootstrap")?;
-        started_thread_from_resume_response(response, show_raw_agent_reasoning)
+        started_thread_from_resume_response(&response)
     }
 
     pub(crate) async fn fork_thread(
@@ -296,7 +306,6 @@ impl AppServerSession {
         config: Config,
         thread_id: ThreadId,
     ) -> Result<AppServerStartedThread> {
-        let show_raw_agent_reasoning = config.show_raw_agent_reasoning;
         let request_id = self.next_request_id();
         let response: ThreadForkResponse = self
             .client
@@ -310,7 +319,7 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/fork failed during TUI bootstrap")?;
-        started_thread_from_fork_response(response, show_raw_agent_reasoning)
+        started_thread_from_fork_response(&response)
     }
 
     fn thread_params_mode(&self) -> ThreadParamsMode {
@@ -837,47 +846,40 @@ fn thread_cwd_from_config(config: &Config, thread_params_mode: ThreadParamsMode)
 fn started_thread_from_start_response(
     response: ThreadStartResponse,
 ) -> Result<AppServerStartedThread> {
-    let session_configured = session_configured_from_thread_start_response(&response)
+    let session = thread_session_state_from_thread_start_response(&response)
         .map_err(color_eyre::eyre::Report::msg)?;
     Ok(AppServerStartedThread {
-        thread: response.thread,
-        session_configured,
-        show_raw_agent_reasoning: false,
+        session,
+        turns: response.thread.turns.clone(),
     })
 }
 
 fn started_thread_from_resume_response(
-    response: ThreadResumeResponse,
-    show_raw_agent_reasoning: bool,
+    response: &ThreadResumeResponse,
 ) -> Result<AppServerStartedThread> {
-    let session_configured = session_configured_from_thread_resume_response(&response)
+    let session = thread_session_state_from_thread_resume_response(response)
         .map_err(color_eyre::eyre::Report::msg)?;
-    let thread = response.thread;
     Ok(AppServerStartedThread {
-        thread,
-        session_configured,
-        show_raw_agent_reasoning,
+        session,
+        turns: response.thread.turns.clone(),
     })
 }
 
 fn started_thread_from_fork_response(
-    response: ThreadForkResponse,
-    show_raw_agent_reasoning: bool,
+    response: &ThreadForkResponse,
 ) -> Result<AppServerStartedThread> {
-    let session_configured = session_configured_from_thread_fork_response(&response)
+    let session = thread_session_state_from_thread_fork_response(response)
         .map_err(color_eyre::eyre::Report::msg)?;
-    let thread = response.thread;
     Ok(AppServerStartedThread {
-        thread,
-        session_configured,
-        show_raw_agent_reasoning,
+        session,
+        turns: response.thread.turns.clone(),
     })
 }
 
-fn session_configured_from_thread_start_response(
+fn thread_session_state_from_thread_start_response(
     response: &ThreadStartResponse,
-) -> Result<SessionConfiguredEvent, String> {
-    session_configured_from_thread_response(
+) -> Result<ThreadSessionState, String> {
+    thread_session_state_from_thread_response(
         &response.thread.id,
         response.thread.name.clone(),
         response.thread.path.clone(),
@@ -892,10 +894,10 @@ fn session_configured_from_thread_start_response(
     )
 }
 
-fn session_configured_from_thread_resume_response(
+fn thread_session_state_from_thread_resume_response(
     response: &ThreadResumeResponse,
-) -> Result<SessionConfiguredEvent, String> {
-    session_configured_from_thread_response(
+) -> Result<ThreadSessionState, String> {
+    thread_session_state_from_thread_response(
         &response.thread.id,
         response.thread.name.clone(),
         response.thread.path.clone(),
@@ -910,10 +912,10 @@ fn session_configured_from_thread_resume_response(
     )
 }
 
-fn session_configured_from_thread_fork_response(
+fn thread_session_state_from_thread_fork_response(
     response: &ThreadForkResponse,
-) -> Result<SessionConfiguredEvent, String> {
-    session_configured_from_thread_response(
+) -> Result<ThreadSessionState, String> {
+    thread_session_state_from_thread_response(
         &response.thread.id,
         response.thread.name.clone(),
         response.thread.path.clone(),
@@ -951,7 +953,7 @@ fn review_target_to_app_server(
     clippy::too_many_arguments,
     reason = "session mapping keeps explicit fields"
 )]
-fn session_configured_from_thread_response(
+fn thread_session_state_from_thread_response(
     thread_id: &str,
     thread_name: Option<String>,
     rollout_path: Option<PathBuf>,
@@ -963,12 +965,12 @@ fn session_configured_from_thread_response(
     sandbox_policy: SandboxPolicy,
     cwd: PathBuf,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
-) -> Result<SessionConfiguredEvent, String> {
-    let session_id = ThreadId::from_string(thread_id)
+) -> Result<ThreadSessionState, String> {
+    let thread_id = ThreadId::from_string(thread_id)
         .map_err(|err| format!("thread id `{thread_id}` is invalid: {err}"))?;
 
-    Ok(SessionConfiguredEvent {
-        session_id,
+    Ok(ThreadSessionState {
+        thread_id,
         forked_from_id: None,
         thread_name,
         model,
@@ -981,7 +983,6 @@ fn session_configured_from_thread_response(
         reasoning_effort,
         history_log_id: 0,
         history_entry_count: 0,
-        initial_messages: None,
         network_proxy: None,
         rollout_path,
     })

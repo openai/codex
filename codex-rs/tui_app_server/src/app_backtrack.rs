@@ -38,6 +38,7 @@ use crate::tui::TuiEvent;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
+#[cfg(test)]
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::user_input::TextElement;
 use color_eyre::eyre::Result;
@@ -462,6 +463,7 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
+    #[cfg(test)]
     pub(crate) fn handle_backtrack_event(&mut self, event: &EventMsg) {
         match event {
             EventMsg::ThreadRolledBack(rollback) => {
@@ -491,6 +493,19 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    pub(crate) fn handle_backtrack_rollback_succeeded(&mut self, num_turns: u32) {
+        if self.backtrack.pending_rollback.is_some() {
+            self.finish_pending_backtrack();
+        } else {
+            self.app_event_tx
+                .send(AppEvent::ApplyThreadRollback { num_turns });
+        }
+    }
+
+    pub(crate) fn handle_backtrack_rollback_failed(&mut self) {
+        self.backtrack.pending_rollback = None;
     }
 
     /// Apply rollback semantics for `ThreadRolledBack` events where this TUI does not have an

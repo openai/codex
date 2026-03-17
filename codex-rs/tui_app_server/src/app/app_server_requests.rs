@@ -7,16 +7,12 @@ use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::GrantedPermissionProfile;
 use codex_app_server_protocol::McpServerElicitationAction;
-use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ToolRequestUserInputResponse;
-use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::mcp::RequestId as McpRequestId;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ReviewDecision;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,9 +33,7 @@ pub(super) struct PendingAppServerRequests {
     file_change_approvals: HashMap<String, AppServerRequestId>,
     permissions_approvals: HashMap<String, AppServerRequestId>,
     user_inputs: HashMap<String, AppServerRequestId>,
-    mcp_pending_by_matcher: HashMap<McpServerMatcher, AppServerRequestId>,
-    mcp_legacy_by_matcher: HashMap<McpServerMatcher, McpLegacyRequestKey>,
-    mcp_legacy_requests: HashMap<McpLegacyRequestKey, AppServerRequestId>,
+    mcp_requests: HashMap<McpLegacyRequestKey, AppServerRequestId>,
 }
 
 impl PendingAppServerRequests {
@@ -48,9 +42,7 @@ impl PendingAppServerRequests {
         self.file_change_approvals.clear();
         self.permissions_approvals.clear();
         self.user_inputs.clear();
-        self.mcp_pending_by_matcher.clear();
-        self.mcp_legacy_by_matcher.clear();
-        self.mcp_legacy_requests.clear();
+        self.mcp_requests.clear();
     }
 
     pub(super) fn note_server_request(
@@ -82,14 +74,13 @@ impl PendingAppServerRequests {
                 None
             }
             ServerRequest::McpServerElicitationRequest { request_id, params } => {
-                let matcher = McpServerMatcher::from_v2(params);
-                if let Some(legacy_key) = self.mcp_legacy_by_matcher.remove(&matcher) {
-                    self.mcp_legacy_requests
-                        .insert(legacy_key, request_id.clone());
-                } else {
-                    self.mcp_pending_by_matcher
-                        .insert(matcher, request_id.clone());
-                }
+                self.mcp_requests.insert(
+                    McpLegacyRequestKey {
+                        server_name: params.server_name.clone(),
+                        request_id: app_server_request_id_to_mcp_request_id(request_id),
+                    },
+                    request_id.clone(),
+                );
                 None
             }
             ServerRequest::DynamicToolCall { request_id, .. } => {
@@ -116,27 +107,6 @@ impl PendingAppServerRequests {
                             .to_string(),
                 })
             }
-        }
-    }
-
-    pub(super) fn note_legacy_event(&mut self, event: &Event) {
-        let EventMsg::ElicitationRequest(request) = &event.msg else {
-            return;
-        };
-
-        let matcher = McpServerMatcher::from_core(
-            &request.server_name,
-            request.turn_id.as_deref(),
-            &request.request,
-        );
-        let legacy_key = McpLegacyRequestKey {
-            server_name: request.server_name.clone(),
-            request_id: request.id.clone(),
-        };
-        if let Some(request_id) = self.mcp_pending_by_matcher.remove(&matcher) {
-            self.mcp_legacy_requests.insert(legacy_key, request_id);
-        } else {
-            self.mcp_legacy_by_matcher.insert(matcher, legacy_key);
         }
     }
 
@@ -233,7 +203,7 @@ impl PendingAppServerRequests {
                 content,
                 meta,
             } => self
-                .mcp_legacy_requests
+                .mcp_requests
                 .remove(&McpLegacyRequestKey {
                     server_name: server_name.to_string(),
                     request_id: request_id.clone(),
@@ -274,64 +244,7 @@ impl PendingAppServerRequests {
         self.permissions_approvals
             .retain(|_, value| value != request_id);
         self.user_inputs.retain(|_, value| value != request_id);
-        self.mcp_pending_by_matcher
-            .retain(|_, value| value != request_id);
-        self.mcp_legacy_requests
-            .retain(|_, value| value != request_id);
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct McpServerMatcher {
-    server_name: String,
-    turn_id: Option<String>,
-    request: String,
-}
-
-impl McpServerMatcher {
-    fn from_v2(params: &McpServerElicitationRequestParams) -> Self {
-        Self {
-            server_name: params.server_name.clone(),
-            turn_id: params.turn_id.clone(),
-            request: serde_json::to_string(
-                &serde_json::to_value(&params.request).unwrap_or(serde_json::Value::Null),
-            )
-            .unwrap_or_else(|_| "null".to_string()),
-        }
-    }
-
-    fn from_core(server_name: &str, turn_id: Option<&str>, request: &ElicitationRequest) -> Self {
-        let request = match request {
-            ElicitationRequest::Form {
-                meta,
-                message,
-                requested_schema,
-            } => serde_json::to_string(&serde_json::json!({
-                "mode": "form",
-                "_meta": meta,
-                "message": message,
-                "requestedSchema": requested_schema,
-            }))
-            .unwrap_or_else(|_| "null".to_string()),
-            ElicitationRequest::Url {
-                meta,
-                message,
-                url,
-                elicitation_id,
-            } => serde_json::to_string(&serde_json::json!({
-                "mode": "url",
-                "_meta": meta,
-                "message": message,
-                "url": url,
-                "elicitationId": elicitation_id,
-            }))
-            .unwrap_or_else(|_| "null".to_string()),
-        };
-        Self {
-            server_name: server_name.to_string(),
-            turn_id: turn_id.map(str::to_string),
-            request,
-        }
+        self.mcp_requests.retain(|_, value| value != request_id);
     }
 }
 
@@ -339,6 +252,13 @@ impl McpServerMatcher {
 struct McpLegacyRequestKey {
     server_name: String,
     request_id: McpRequestId,
+}
+
+fn app_server_request_id_to_mcp_request_id(request_id: &AppServerRequestId) -> McpRequestId {
+    match request_id {
+        AppServerRequestId::String(value) => McpRequestId::String(value.clone()),
+        AppServerRequestId::Integer(value) => McpRequestId::Integer(*value),
+    }
 }
 
 fn file_change_decision(decision: &ReviewDecision) -> Result<FileChangeApprovalDecision, String> {

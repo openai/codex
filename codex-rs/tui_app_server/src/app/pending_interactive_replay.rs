@@ -1,6 +1,12 @@
 use crate::app_command::AppCommand;
 use crate::app_command::AppCommandView;
+use codex_app_server_protocol::RequestId as AppServerRequestId;
+use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ThreadItem;
+#[cfg(test)]
 use codex_protocol::protocol::Event;
+#[cfg(test)]
 use codex_protocol::protocol::EventMsg;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -47,18 +53,13 @@ pub(super) struct PendingInteractiveReplayState {
 }
 
 impl PendingInteractiveReplayState {
-    pub(super) fn event_can_change_pending_thread_approvals(event: &Event) -> bool {
+    pub(super) fn request_can_change_pending_thread_approvals(request: &ServerRequest) -> bool {
         matches!(
-            &event.msg,
-            EventMsg::ExecApprovalRequest(_)
-                | EventMsg::ApplyPatchApprovalRequest(_)
-                | EventMsg::ElicitationRequest(_)
-                | EventMsg::RequestPermissions(_)
-                | EventMsg::ExecCommandBegin(_)
-                | EventMsg::PatchApplyBegin(_)
-                | EventMsg::TurnComplete(_)
-                | EventMsg::TurnAborted(_)
-                | EventMsg::ShutdownComplete
+            request,
+            ServerRequest::CommandExecutionRequestApproval { .. }
+                | ServerRequest::FileChangeRequestApproval { .. }
+                | ServerRequest::McpServerElicitationRequest { .. }
+                | ServerRequest::PermissionsRequestApproval { .. }
         )
     }
 
@@ -142,162 +143,168 @@ impl PendingInteractiveReplayState {
         }
     }
 
-    pub(super) fn note_event(&mut self, event: &Event) {
-        match &event.msg {
-            EventMsg::ExecApprovalRequest(ev) => {
-                let approval_id = ev.effective_approval_id();
+    pub(super) fn note_server_request(&mut self, request: &ServerRequest) {
+        match request {
+            ServerRequest::CommandExecutionRequestApproval { params, .. } => {
+                let approval_id = params
+                    .approval_id
+                    .clone()
+                    .unwrap_or_else(|| params.item_id.clone());
                 self.exec_approval_call_ids.insert(approval_id.clone());
                 self.exec_approval_call_ids_by_turn_id
-                    .entry(ev.turn_id.clone())
+                    .entry(params.turn_id.clone())
                     .or_default()
                     .push(approval_id);
             }
-            EventMsg::ExecCommandBegin(ev) => {
-                self.exec_approval_call_ids.remove(&ev.call_id);
-                Self::remove_call_id_from_turn_map(
-                    &mut self.exec_approval_call_ids_by_turn_id,
-                    &ev.call_id,
-                );
-            }
-            EventMsg::ApplyPatchApprovalRequest(ev) => {
-                self.patch_approval_call_ids.insert(ev.call_id.clone());
+            ServerRequest::FileChangeRequestApproval { params, .. } => {
+                self.patch_approval_call_ids.insert(params.item_id.clone());
                 self.patch_approval_call_ids_by_turn_id
-                    .entry(ev.turn_id.clone())
+                    .entry(params.turn_id.clone())
                     .or_default()
-                    .push(ev.call_id.clone());
+                    .push(params.item_id.clone());
             }
-            EventMsg::PatchApplyBegin(ev) => {
-                self.patch_approval_call_ids.remove(&ev.call_id);
-                Self::remove_call_id_from_turn_map(
-                    &mut self.patch_approval_call_ids_by_turn_id,
-                    &ev.call_id,
-                );
-            }
-            EventMsg::ElicitationRequest(ev) => {
+            ServerRequest::McpServerElicitationRequest { request_id, params } => {
                 self.elicitation_requests.insert(ElicitationRequestKey::new(
-                    ev.server_name.clone(),
-                    ev.id.clone(),
+                    params.server_name.clone(),
+                    app_server_request_id_to_mcp_request_id(request_id),
                 ));
             }
-            EventMsg::RequestUserInput(ev) => {
-                self.request_user_input_call_ids.insert(ev.call_id.clone());
+            ServerRequest::ToolRequestUserInput { params, .. } => {
+                self.request_user_input_call_ids
+                    .insert(params.item_id.clone());
                 self.request_user_input_call_ids_by_turn_id
-                    .entry(ev.turn_id.clone())
+                    .entry(params.turn_id.clone())
                     .or_default()
-                    .push(ev.call_id.clone());
+                    .push(params.item_id.clone());
             }
-            EventMsg::RequestPermissions(ev) => {
-                self.request_permissions_call_ids.insert(ev.call_id.clone());
+            ServerRequest::PermissionsRequestApproval { params, .. } => {
+                self.request_permissions_call_ids
+                    .insert(params.item_id.clone());
                 self.request_permissions_call_ids_by_turn_id
-                    .entry(ev.turn_id.clone())
+                    .entry(params.turn_id.clone())
                     .or_default()
-                    .push(ev.call_id.clone());
+                    .push(params.item_id.clone());
             }
-            // A turn ending (normally or aborted/replaced) invalidates any unresolved
-            // turn-scoped approvals, permission prompts, and request_user_input prompts.
-            EventMsg::TurnComplete(ev) => {
-                self.clear_exec_approval_turn(&ev.turn_id);
-                self.clear_patch_approval_turn(&ev.turn_id);
-                self.clear_request_permissions_turn(&ev.turn_id);
-                self.clear_request_user_input_turn(&ev.turn_id);
-            }
-            EventMsg::TurnAborted(ev) => {
-                if let Some(turn_id) = &ev.turn_id {
-                    self.clear_exec_approval_turn(turn_id);
-                    self.clear_patch_approval_turn(turn_id);
-                    self.clear_request_permissions_turn(turn_id);
-                    self.clear_request_user_input_turn(turn_id);
-                }
-            }
-            EventMsg::ShutdownComplete => self.clear(),
             _ => {}
         }
     }
 
-    pub(super) fn note_evicted_event(&mut self, event: &Event) {
-        match &event.msg {
-            EventMsg::ExecApprovalRequest(ev) => {
-                let approval_id = ev.effective_approval_id();
+    pub(super) fn note_server_notification(&mut self, notification: &ServerNotification) {
+        match notification {
+            ServerNotification::ItemStarted(notification) => match &notification.item {
+                ThreadItem::CommandExecution { id, .. } => {
+                    self.exec_approval_call_ids.remove(id);
+                    Self::remove_call_id_from_turn_map(
+                        &mut self.exec_approval_call_ids_by_turn_id,
+                        id,
+                    );
+                }
+                ThreadItem::FileChange { id, .. } => {
+                    self.patch_approval_call_ids.remove(id);
+                    Self::remove_call_id_from_turn_map(
+                        &mut self.patch_approval_call_ids_by_turn_id,
+                        id,
+                    );
+                }
+                _ => {}
+            },
+            ServerNotification::TurnCompleted(notification) => {
+                self.clear_exec_approval_turn(&notification.turn.id);
+                self.clear_patch_approval_turn(&notification.turn.id);
+                self.clear_request_permissions_turn(&notification.turn.id);
+                self.clear_request_user_input_turn(&notification.turn.id);
+            }
+            ServerNotification::ThreadClosed(_) => self.clear(),
+            _ => {}
+        }
+    }
+
+    pub(super) fn note_evicted_server_request(&mut self, request: &ServerRequest) {
+        match request {
+            ServerRequest::CommandExecutionRequestApproval { params, .. } => {
+                let approval_id = params
+                    .approval_id
+                    .clone()
+                    .unwrap_or_else(|| params.item_id.clone());
                 self.exec_approval_call_ids.remove(&approval_id);
                 Self::remove_call_id_from_turn_map_entry(
                     &mut self.exec_approval_call_ids_by_turn_id,
-                    &ev.turn_id,
+                    &params.turn_id,
                     &approval_id,
                 );
             }
-            EventMsg::ApplyPatchApprovalRequest(ev) => {
-                self.patch_approval_call_ids.remove(&ev.call_id);
+            ServerRequest::FileChangeRequestApproval { params, .. } => {
+                self.patch_approval_call_ids.remove(&params.item_id);
                 Self::remove_call_id_from_turn_map_entry(
                     &mut self.patch_approval_call_ids_by_turn_id,
-                    &ev.turn_id,
-                    &ev.call_id,
+                    &params.turn_id,
+                    &params.item_id,
                 );
             }
-            EventMsg::ElicitationRequest(ev) => {
+            ServerRequest::McpServerElicitationRequest { request_id, params } => {
                 self.elicitation_requests
                     .remove(&ElicitationRequestKey::new(
-                        ev.server_name.clone(),
-                        ev.id.clone(),
+                        params.server_name.clone(),
+                        app_server_request_id_to_mcp_request_id(request_id),
                     ));
             }
-            EventMsg::RequestUserInput(ev) => {
-                self.request_user_input_call_ids.remove(&ev.call_id);
+            ServerRequest::ToolRequestUserInput { params, .. } => {
+                self.request_user_input_call_ids.remove(&params.item_id);
                 let mut remove_turn_entry = false;
                 if let Some(call_ids) = self
                     .request_user_input_call_ids_by_turn_id
-                    .get_mut(&ev.turn_id)
+                    .get_mut(&params.turn_id)
                 {
-                    call_ids.retain(|call_id| call_id != &ev.call_id);
+                    call_ids.retain(|call_id| call_id != &params.item_id);
                     if call_ids.is_empty() {
                         remove_turn_entry = true;
                     }
                 }
                 if remove_turn_entry {
                     self.request_user_input_call_ids_by_turn_id
-                        .remove(&ev.turn_id);
+                        .remove(&params.turn_id);
                 }
             }
-            EventMsg::RequestPermissions(ev) => {
-                self.request_permissions_call_ids.remove(&ev.call_id);
+            ServerRequest::PermissionsRequestApproval { params, .. } => {
+                self.request_permissions_call_ids.remove(&params.item_id);
                 let mut remove_turn_entry = false;
                 if let Some(call_ids) = self
                     .request_permissions_call_ids_by_turn_id
-                    .get_mut(&ev.turn_id)
+                    .get_mut(&params.turn_id)
                 {
-                    call_ids.retain(|call_id| call_id != &ev.call_id);
+                    call_ids.retain(|call_id| call_id != &params.item_id);
                     if call_ids.is_empty() {
                         remove_turn_entry = true;
                     }
                 }
                 if remove_turn_entry {
                     self.request_permissions_call_ids_by_turn_id
-                        .remove(&ev.turn_id);
+                        .remove(&params.turn_id);
                 }
             }
             _ => {}
         }
     }
 
-    pub(super) fn should_replay_snapshot_event(&self, event: &Event) -> bool {
-        match &event.msg {
-            EventMsg::ExecApprovalRequest(ev) => self
+    pub(super) fn should_replay_snapshot_request(&self, request: &ServerRequest) -> bool {
+        match request {
+            ServerRequest::CommandExecutionRequestApproval { params, .. } => self
                 .exec_approval_call_ids
-                .contains(&ev.effective_approval_id()),
-            EventMsg::ApplyPatchApprovalRequest(ev) => {
-                self.patch_approval_call_ids.contains(&ev.call_id)
+                .contains(params.approval_id.as_ref().unwrap_or(&params.item_id)),
+            ServerRequest::FileChangeRequestApproval { params, .. } => {
+                self.patch_approval_call_ids.contains(&params.item_id)
             }
-            EventMsg::ElicitationRequest(ev) => {
-                self.elicitation_requests
-                    .contains(&ElicitationRequestKey::new(
-                        ev.server_name.clone(),
-                        ev.id.clone(),
-                    ))
+            ServerRequest::McpServerElicitationRequest { request_id, params } => self
+                .elicitation_requests
+                .contains(&ElicitationRequestKey::new(
+                    params.server_name.clone(),
+                    app_server_request_id_to_mcp_request_id(request_id),
+                )),
+            ServerRequest::ToolRequestUserInput { params, .. } => {
+                self.request_user_input_call_ids.contains(&params.item_id)
             }
-            EventMsg::RequestUserInput(ev) => {
-                self.request_user_input_call_ids.contains(&ev.call_id)
-            }
-            EventMsg::RequestPermissions(ev) => {
-                self.request_permissions_call_ids.contains(&ev.call_id)
+            ServerRequest::PermissionsRequestApproval { params, .. } => {
+                self.request_permissions_call_ids.contains(&params.item_id)
             }
             _ => true,
         }
@@ -379,6 +386,15 @@ impl PendingInteractiveReplayState {
         self.request_permissions_call_ids_by_turn_id.clear();
         self.request_user_input_call_ids.clear();
         self.request_user_input_call_ids_by_turn_id.clear();
+    }
+}
+
+fn app_server_request_id_to_mcp_request_id(
+    request_id: &AppServerRequestId,
+) -> codex_protocol::mcp::RequestId {
+    match request_id {
+        AppServerRequestId::String(value) => codex_protocol::mcp::RequestId::String(value.clone()),
+        AppServerRequestId::Integer(value) => codex_protocol::mcp::RequestId::Integer(*value),
     }
 }
 
