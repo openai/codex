@@ -288,8 +288,6 @@ mod tests {
         );
 
         assert_eq!(metadata.cwd, PathBuf::from("/child/worktree"));
-        assert_eq!(metadata.model.as_deref(), Some("gpt-5"));
-        assert_eq!(metadata.reasoning_effort, None);
         assert_eq!(
             metadata.sandbox_policy,
             super::enum_to_string(&SandboxPolicy::DangerFullAccess)
@@ -298,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn turn_context_sets_cwd_model_and_reasoning_effort_when_session_cwd_missing() {
+    fn turn_context_sets_cwd_when_session_cwd_missing() {
         let mut metadata = metadata_for_test();
         metadata.cwd = PathBuf::new();
 
@@ -328,6 +326,37 @@ mod tests {
         );
 
         assert_eq!(metadata.cwd, PathBuf::from("/fallback/workspace"));
+    }
+
+    #[test]
+    fn turn_context_sets_model_and_reasoning_effort() {
+        let mut metadata = metadata_for_test();
+
+        apply_rollout_item(
+            &mut metadata,
+            &RolloutItem::TurnContext(TurnContextItem {
+                turn_id: Some("turn-1".to_string()),
+                trace_id: None,
+                cwd: PathBuf::from("/fallback/workspace"),
+                current_date: None,
+                timezone: None,
+                approval_policy: AskForApproval::OnRequest,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                network: None,
+                model: "gpt-5".to_string(),
+                personality: None,
+                collaboration_mode: None,
+                realtime_active: None,
+                effort: Some(ReasoningEffort::High),
+                summary: ReasoningSummary::Auto,
+                user_instructions: None,
+                developer_instructions: None,
+                final_output_json_schema: None,
+                truncation_policy: None,
+            }),
+            "test-provider",
+        );
+
         assert_eq!(metadata.model.as_deref(), Some("gpt-5"));
         assert_eq!(metadata.reasoning_effort, Some(ReasoningEffort::High));
     }

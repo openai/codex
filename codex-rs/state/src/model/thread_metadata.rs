@@ -382,7 +382,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             model_provider,
             model,
             reasoning_effort: reasoning_effort
-                .map(|value| serde_json::from_value(serde_json::Value::String(value)))
+                .map(|value| value.parse::<ReasoningEffort>().map_err(anyhow::Error::msg))
                 .transpose()?,
             cwd: PathBuf::from(cwd),
             cli_version,
