@@ -57,6 +57,7 @@ codex-secrets = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-utils-stream-parser = { workspace = true }
 codex-windows-sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
+crypto_box = { workspace = true }
 csv = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }

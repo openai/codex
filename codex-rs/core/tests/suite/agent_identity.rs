@@ -6,6 +6,7 @@ use std::sync::Mutex;
 
 use anyhow::Result;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
@@ -25,6 +26,8 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
+use crypto_box::PublicKey as CryptoBoxPublicKey;
+use ed25519_dalek::VerifyingKey;
 use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
@@ -36,28 +39,70 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::path_regex;
 
-#[derive(Clone)]
-struct JsonSequenceResponder {
-    bodies: Arc<Mutex<VecDeque<Value>>>,
+#[derive(Clone, Default)]
+struct RegisteredAgentState {
+    public_key: Arc<Mutex<Option<String>>>,
 }
 
-impl JsonSequenceResponder {
-    fn new(bodies: Vec<Value>) -> Self {
+#[derive(Clone)]
+struct AgentRegisterResponder {
+    state: RegisteredAgentState,
+}
+
+impl Respond for AgentRegisterResponder {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let public_key = request_json_body(request)
+            .get("agent_public_key")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("missing agent_public_key"))
+            .to_string();
+        *self
+            .state
+            .public_key
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(public_key);
+        ResponseTemplate::new(200).set_body_json(json!({
+            "agent_runtime_id": "agent-runtime-1",
+        }))
+    }
+}
+
+#[derive(Clone)]
+struct EncryptedTaskResponder {
+    state: RegisteredAgentState,
+    task_ids: Arc<Mutex<VecDeque<String>>>,
+}
+
+impl EncryptedTaskResponder {
+    fn new(state: RegisteredAgentState, task_ids: Vec<&str>) -> Self {
         Self {
-            bodies: Arc::new(Mutex::new(VecDeque::from(bodies))),
+            state,
+            task_ids: Arc::new(Mutex::new(VecDeque::from(
+                task_ids.into_iter().map(str::to_string).collect::<Vec<_>>(),
+            ))),
         }
     }
 }
 
-impl Respond for JsonSequenceResponder {
+impl Respond for EncryptedTaskResponder {
     fn respond(&self, _request: &Request) -> ResponseTemplate {
-        let body = self
-            .bodies
+        let agent_public_key = self
+            .state
+            .public_key
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .unwrap_or_else(|| panic!("agent registration should happen before task registration"));
+        let task_id = self
+            .task_ids
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pop_front()
-            .unwrap_or_else(|| panic!("missing queued JSON response"));
-        ResponseTemplate::new(200).set_body_json(body)
+            .unwrap_or_else(|| panic!("missing queued task id"));
+        let encrypted_task_id = encrypt_task_id_for_public_key(&agent_public_key, &task_id);
+        ResponseTemplate::new(200).set_body_json(json!({
+            "encrypted_task_id": encrypted_task_id,
+        }))
     }
 }
 
@@ -88,11 +133,14 @@ async fn feature_off_skips_agent_identity_requests() -> Result<()> {
 
     let requests = server.received_requests().await.unwrap_or_default();
     assert_eq!(
-        count_requests_for_path(&requests, "/backend-api/agent/register"),
+        count_requests_for_path(&requests, "/backend-api/v1/agent/register"),
         0
     );
     assert_eq!(
-        count_requests_for_path(&requests, "/backend-api/task/register"),
+        count_requests_for_path(
+            &requests,
+            "/backend-api/v1/agent/agent-runtime-1/task/register"
+        ),
         0
     );
     assert_eq!(
@@ -142,26 +190,44 @@ async fn agent_identity_registers_once_and_reuses_task_within_thread() -> Result
 
     let requests = server.received_requests().await.unwrap_or_default();
     assert_eq!(
-        count_requests_for_path(&requests, "/backend-api/agent/register"),
+        count_requests_for_path(&requests, "/backend-api/v1/agent/register"),
         1
     );
     assert_eq!(
-        count_requests_for_path(&requests, "/backend-api/task/register"),
+        count_requests_for_path(
+            &requests,
+            "/backend-api/v1/agent/agent-runtime-1/task/register"
+        ),
         1
     );
     assert_eq!(response_mock.requests().len(), 2);
 
+    let register_request = request_json_body(
+        requests
+            .iter()
+            .find(|request| request.url.path() == "/backend-api/v1/agent/register")
+            .expect("missing agent register request"),
+    );
+    assert!(
+        register_request["agent_public_key"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("ssh-ed25519 ")
+    );
+    assert!(register_request.get("metadata").is_none());
+    assert!(register_request.get("on_behalf_of").is_none());
+
     let task_request = request_json_body(
         requests
             .iter()
-            .find(|request| request.url.path() == "/backend-api/task/register")
+            .find(|request| {
+                request.url.path() == "/backend-api/v1/agent/agent-runtime-1/task/register"
+            })
             .expect("missing task register request"),
     );
-    assert_eq!(task_request["agent_id"], json!("agent-runtime-1"));
-    assert_eq!(
-        task_request["metadata"]["thread_id"],
-        json!(test.session_configured.session_id.to_string())
-    );
+    assert!(task_request.get("agent_id").is_none());
+    assert!(task_request.get("agent_runtime_id").is_none());
+    assert!(task_request.get("metadata").is_none());
     assert!(
         !task_request["timestamp"]
             .as_str()
@@ -243,11 +309,14 @@ async fn new_thread_reuses_agent_identity_but_gets_new_task() -> Result<()> {
 
     let requests = server.received_requests().await.unwrap_or_default();
     assert_eq!(
-        count_requests_for_path(&requests, "/backend-api/agent/register"),
+        count_requests_for_path(&requests, "/backend-api/v1/agent/register"),
         1
     );
     assert_eq!(
-        count_requests_for_path(&requests, "/backend-api/task/register"),
+        count_requests_for_path(
+            &requests,
+            "/backend-api/v1/agent/agent-runtime-1/task/register"
+        ),
         2
     );
 
@@ -329,11 +398,14 @@ async fn auth_account_change_registers_a_new_agent_identity() -> Result<()> {
 
     let requests = server.received_requests().await.unwrap_or_default();
     assert_eq!(
-        count_requests_for_path(&requests, "/backend-api/agent/register"),
+        count_requests_for_path(&requests, "/backend-api/v1/agent/register"),
         2
     );
     assert_eq!(
-        count_requests_for_path(&requests, "/backend-api/task/register"),
+        count_requests_for_path(
+            &requests,
+            "/backend-api/v1/agent/agent-runtime-1/task/register"
+        ),
         2
     );
 
@@ -369,11 +441,14 @@ async fn api_key_auth_bypasses_agent_identity_flow() -> Result<()> {
 
     let requests = server.received_requests().await.unwrap_or_default();
     assert_eq!(
-        count_requests_for_path(&requests, "/backend-api/agent/register"),
+        count_requests_for_path(&requests, "/backend-api/v1/agent/register"),
         0
     );
     assert_eq!(
-        count_requests_for_path(&requests, "/backend-api/task/register"),
+        count_requests_for_path(
+            &requests,
+            "/backend-api/v1/agent/agent-runtime-1/task/register"
+        ),
         0
     );
     assert_eq!(
@@ -387,22 +462,18 @@ async fn api_key_auth_bypasses_agent_identity_flow() -> Result<()> {
 }
 
 async fn mount_agent_identity_endpoints(server: &wiremock::MockServer, task_ids: Vec<&str>) {
+    let state = RegisteredAgentState::default();
     Mock::given(method("POST"))
-        .and(path("/backend-api/agent/register"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "agent_runtime_id": "agent-runtime-1",
-        })))
+        .and(path("/backend-api/v1/agent/register"))
+        .respond_with(AgentRegisterResponder {
+            state: state.clone(),
+        })
         .mount(server)
         .await;
 
     Mock::given(method("POST"))
-        .and(path("/backend-api/task/register"))
-        .respond_with(JsonSequenceResponder::new(
-            task_ids
-                .into_iter()
-                .map(|task_id| json!({ "task_id": task_id }))
-                .collect(),
-        ))
+        .and(path_regex("/backend-api/v1/agent/[^/]+/task/register"))
+        .respond_with(EncryptedTaskResponder::new(state, task_ids))
         .mount(server)
         .await;
 }
@@ -419,6 +490,56 @@ fn request_json_body(request: &wiremock::Request) -> Value {
         Ok(body) => body,
         Err(err) => panic!("request body should be valid JSON: {err}"),
     }
+}
+
+fn encrypt_task_id_for_public_key(agent_public_key: &str, task_id: &str) -> String {
+    let verifying_key = decode_ssh_ed25519_public_key(agent_public_key);
+    let recipient_public_key = CryptoBoxPublicKey::from(verifying_key.to_montgomery().to_bytes());
+    let encrypted_task_id = recipient_public_key
+        .seal(&mut crypto_box::aead::OsRng, task_id.as_bytes())
+        .unwrap_or_else(|err| panic!("encrypt task id: {err}"));
+    BASE64_STANDARD.encode(encrypted_task_id)
+}
+
+fn decode_ssh_ed25519_public_key(agent_public_key: &str) -> VerifyingKey {
+    let mut parts = agent_public_key.split_whitespace();
+    let key_type = parts.next().unwrap_or_default();
+    let encoded = parts
+        .next()
+        .unwrap_or_else(|| panic!("missing SSH public key payload"));
+    assert_eq!(key_type, "ssh-ed25519");
+    let decoded = BASE64_STANDARD
+        .decode(encoded)
+        .unwrap_or_else(|err| panic!("decode SSH public key payload: {err}"));
+    let mut cursor = decoded.as_slice();
+    let key_type_blob = read_ssh_string(&mut cursor);
+    assert_eq!(key_type_blob, b"ssh-ed25519");
+    let key_bytes = read_ssh_string(&mut cursor);
+    assert!(
+        cursor.is_empty(),
+        "unexpected trailing SSH public key bytes"
+    );
+    let key_bytes: [u8; 32] = key_bytes
+        .try_into()
+        .unwrap_or_else(|_| panic!("ssh-ed25519 key should be 32 bytes"));
+    VerifyingKey::from_bytes(&key_bytes)
+        .unwrap_or_else(|err| panic!("build verifying key from SSH payload: {err}"))
+}
+
+fn read_ssh_string<'a>(cursor: &mut &'a [u8]) -> &'a [u8] {
+    let (length_bytes, rest) = cursor
+        .split_at_checked(4)
+        .unwrap_or_else(|| panic!("missing SSH string length"));
+    let length = u32::from_be_bytes(
+        length_bytes
+            .try_into()
+            .unwrap_or_else(|_| panic!("SSH string length should be exactly 4 bytes")),
+    ) as usize;
+    let (value, remaining) = rest
+        .split_at_checked(length)
+        .unwrap_or_else(|| panic!("SSH string length {length} exceeds payload size"));
+    *cursor = remaining;
+    value
 }
 
 fn workspace_write_with_network() -> codex_protocol::protocol::SandboxPolicy {
