@@ -515,14 +515,11 @@ fn auth_token_present(auth: Option<&CodexAuth>) -> bool {
 fn build_auth_status_observation(
     provider_id: &str,
     response: &GetAuthStatusResponse,
+    resolved_auth_token_present: bool,
     include_token_requested: bool,
     refresh_token_requested: bool,
 ) -> AppServerAuthStatusObservation {
     let requires_openai_auth = response.requires_openai_auth.unwrap_or(true);
-    let auth_token_present = response
-        .auth_token
-        .as_ref()
-        .is_some_and(|token| !token.is_empty());
     let decision_state = if !requires_openai_auth || response.auth_method.is_some() {
         "connected"
     } else {
@@ -533,7 +530,7 @@ fn build_auth_status_observation(
         provider_id: provider_id.to_string(),
         requires_openai_auth,
         auth_method: normalize_app_server_auth_method(response.auth_method),
-        auth_token_present,
+        auth_token_present: resolved_auth_token_present,
         include_token_requested,
         refresh_token_requested,
         decision_state: decision_state.to_string(),
@@ -1622,22 +1619,32 @@ impl CodexMessageProcessor {
             match self.auth_manager.auth().await {
                 Some(auth) => {
                     let auth_mode = auth.api_auth_mode();
-                    let (reported_auth_method, token_opt) = match auth.get_token() {
-                        Ok(token) if !token.is_empty() => {
-                            let tok = if include_token { Some(token) } else { None };
-                            (Some(auth_mode), tok)
-                        }
-                        Ok(_) => (None, None),
-                        Err(err) => {
-                            tracing::warn!("failed to get token for auth status: {err}");
-                            (None, None)
-                        }
-                    };
-                    GetAuthStatusResponse {
+                    let (reported_auth_method, token_opt, resolved_auth_token_present) =
+                        match auth.get_token() {
+                            Ok(token) if !token.is_empty() => {
+                                let tok = if include_token { Some(token) } else { None };
+                                (Some(auth_mode), tok, true)
+                            }
+                            Ok(_) => (None, None, false),
+                            Err(err) => {
+                                tracing::warn!("failed to get token for auth status: {err}");
+                                (None, None, false)
+                            }
+                        };
+                    let response = GetAuthStatusResponse {
                         auth_method: reported_auth_method,
                         auth_token: token_opt,
                         requires_openai_auth: Some(true),
-                    }
+                    };
+                    emit_auth_status_observation(&build_auth_status_observation(
+                        self.config.model_provider_id.as_str(),
+                        &response,
+                        resolved_auth_token_present,
+                        include_token,
+                        do_refresh,
+                    ));
+                    self.outgoing.send_response(request_id, response).await;
+                    return;
                 }
                 None => GetAuthStatusResponse {
                     auth_method: None,
@@ -1650,6 +1657,7 @@ impl CodexMessageProcessor {
         emit_auth_status_observation(&build_auth_status_observation(
             self.config.model_provider_id.as_str(),
             &response,
+            false,
             include_token,
             do_refresh,
         ));
@@ -8813,10 +8821,13 @@ mod tests {
         for (
             provider_id,
             response,
+            resolved_auth_token_present,
             expected_auth_method,
             expected_auth_token_present,
             expected_requires_openai_auth,
             expected_decision_state,
+            include_token_requested,
+            refresh_token_requested,
         ) in [
             (
                 "openai",
@@ -8825,10 +8836,13 @@ mod tests {
                     auth_token: None,
                     requires_openai_auth: Some(true),
                 },
+                false,
                 "none",
                 false,
                 true,
                 "unauthed",
+                false,
+                false,
             ),
             (
                 "mock_provider",
@@ -8837,10 +8851,13 @@ mod tests {
                     auth_token: None,
                     requires_openai_auth: Some(false),
                 },
+                false,
                 "none",
                 false,
                 false,
                 "connected",
+                false,
+                true,
             ),
             (
                 "openai",
@@ -8849,13 +8866,37 @@ mod tests {
                     auth_token: None,
                     requires_openai_auth: Some(true),
                 },
+                true,
                 "chatgpt",
-                false,
+                true,
                 true,
                 "connected",
+                false,
+                false,
+            ),
+            (
+                "openai",
+                GetAuthStatusResponse {
+                    auth_method: Some(AuthMode::Chatgpt),
+                    auth_token: Some("opaque-token".to_string()),
+                    requires_openai_auth: Some(true),
+                },
+                true,
+                "chatgpt",
+                true,
+                true,
+                "connected",
+                true,
+                false,
             ),
         ] {
-            let observation = build_auth_status_observation(provider_id, &response, false, false);
+            let observation = build_auth_status_observation(
+                provider_id,
+                &response,
+                resolved_auth_token_present,
+                include_token_requested,
+                refresh_token_requested,
+            );
 
             assert_eq!(observation.provider_id, provider_id);
             assert_eq!(observation.auth_method, expected_auth_method);
@@ -8865,8 +8906,8 @@ mod tests {
                 expected_requires_openai_auth
             );
             assert_eq!(observation.decision_state, expected_decision_state);
-            assert!(!observation.include_token_requested);
-            assert!(!observation.refresh_token_requested);
+            assert_eq!(observation.include_token_requested, include_token_requested);
+            assert_eq!(observation.refresh_token_requested, refresh_token_requested);
         }
     }
 
