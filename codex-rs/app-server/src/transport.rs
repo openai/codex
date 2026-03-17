@@ -2,7 +2,7 @@ pub(crate) mod auth;
 
 use self::auth::WebsocketAuthPolicy;
 use self::auth::authorize_upgrade;
-use self::auth::validate_listener_startup;
+use self::auth::should_warn_about_unauthenticated_non_loopback_listener;
 use crate::error_code::OVERLOADED_ERROR_CODE;
 use crate::message_processor::ConnectionSessionState;
 use crate::outgoing_message::ConnectionId;
@@ -88,7 +88,7 @@ fn print_websocket_startup_banner(addr: SocketAddr) {
         );
     } else {
         eprintln!(
-            "  {note_label} this is a raw WS server; consider running behind TLS/auth for real remote use"
+            "  {note_label} websocket auth is opt-in in this build; configure `--ws-auth ...` before real remote use"
         );
     }
 }
@@ -349,7 +349,12 @@ pub(crate) async fn start_websocket_acceptor(
     shutdown_token: CancellationToken,
     auth_policy: WebsocketAuthPolicy,
 ) -> IoResult<JoinHandle<()>> {
-    validate_listener_startup(bind_address, &auth_policy)?;
+    if should_warn_about_unauthenticated_non_loopback_listener(bind_address, &auth_policy) {
+        warn!(
+            %bind_address,
+            "starting non-loopback websocket listener without auth; websocket auth is opt-in for now and will become the default in a future release"
+        );
+    }
     let listener = TcpListener::bind(bind_address).await?;
     let local_addr = listener.local_addr()?;
     print_websocket_startup_banner(local_addr);

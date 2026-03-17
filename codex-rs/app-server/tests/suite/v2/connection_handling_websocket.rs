@@ -310,21 +310,24 @@ async fn websocket_transport_rejects_short_signed_bearer_secret_configuration() 
 }
 
 #[tokio::test]
-async fn websocket_transport_blocks_unauthenticated_non_loopback_startup() -> Result<()> {
+async fn websocket_transport_allows_unauthenticated_non_loopback_startup_by_default() -> Result<()>
+{
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
 
-    let output = run_websocket_server_to_completion(codex_home.path(), "ws://0.0.0.0:0").await?;
-    assert!(
-        !output.status.success(),
-        "non-loopback websocket server should fail without auth"
-    );
-    let stderr = String::from_utf8(output.stderr).context("stderr should be valid utf-8")?;
-    assert!(
-        stderr.contains("non-loopback websocket listeners require websocket auth flags"),
-        "unexpected stderr: {stderr}"
-    );
+    let (mut process, bind_addr) =
+        spawn_websocket_server_with_args(codex_home.path(), "ws://0.0.0.0:0", &[]).await?;
+
+    let mut ws = connect_websocket(bind_addr).await?;
+    send_initialize_request(&mut ws, 1, "ws_non_loopback_default_client").await?;
+    let init = read_response_for_id(&mut ws, 1).await?;
+    assert_eq!(init.id, RequestId::Integer(1));
+
+    process
+        .kill()
+        .await
+        .context("failed to stop websocket app-server process")?;
 
     Ok(())
 }
@@ -488,13 +491,6 @@ async fn assert_websocket_connect_rejected_with_headers(
         }
         Err(err) => bail!("expected http rejection during websocket handshake: {err}"),
     }
-}
-
-async fn run_websocket_server_to_completion(
-    codex_home: &Path,
-    listen_url: &str,
-) -> Result<std::process::Output> {
-    run_websocket_server_to_completion_with_args(codex_home, listen_url, &[]).await
 }
 
 async fn run_websocket_server_to_completion_with_args(

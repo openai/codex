@@ -241,21 +241,13 @@ pub(crate) fn policy_from_settings(
     })
 }
 
-pub(crate) fn validate_listener_startup(
+pub(crate) fn should_warn_about_unauthenticated_non_loopback_listener(
     bind_address: SocketAddr,
     policy: &WebsocketAuthPolicy,
-) -> io::Result<()> {
-    if bind_address.ip().is_loopback()
-        || policy.mode.is_some()
-        || policy.allow_unauthenticated_non_loopback_ws
-    {
-        return Ok(());
-    }
-
-    Err(io::Error::new(
-        ErrorKind::PermissionDenied,
-        "non-loopback websocket listeners require websocket auth flags or `--allow-unauthenticated-non-loopback-ws`",
-    ))
+) -> bool {
+    !bind_address.ip().is_loopback()
+        && policy.mode.is_none()
+        && !policy.allow_unauthenticated_non_loopback_ws
 }
 
 pub(crate) fn authorize_upgrade(
@@ -458,11 +450,32 @@ mod tests {
     }
 
     #[test]
-    fn validate_listener_startup_blocks_unauthenticated_non_loopback() {
+    fn warns_about_unauthenticated_non_loopback_listener() {
         let policy = WebsocketAuthPolicy::default();
-        let err = validate_listener_startup("0.0.0.0:8765".parse().unwrap(), &policy)
-            .expect_err("non-loopback startup should require auth");
-        assert_eq!(err.kind(), ErrorKind::PermissionDenied);
+        assert!(should_warn_about_unauthenticated_non_loopback_listener(
+            "0.0.0.0:8765".parse().unwrap(),
+            &policy,
+        ));
+        assert!(!should_warn_about_unauthenticated_non_loopback_listener(
+            "127.0.0.1:8765".parse().unwrap(),
+            &policy,
+        ));
+        assert!(!should_warn_about_unauthenticated_non_loopback_listener(
+            "0.0.0.0:8765".parse().unwrap(),
+            &WebsocketAuthPolicy {
+                allow_unauthenticated_non_loopback_ws: true,
+                mode: None,
+            },
+        ));
+        assert!(!should_warn_about_unauthenticated_non_loopback_listener(
+            "0.0.0.0:8765".parse().unwrap(),
+            &WebsocketAuthPolicy {
+                allow_unauthenticated_non_loopback_ws: false,
+                mode: Some(WebsocketAuthMode::CapabilityToken {
+                    token_sha256: [0u8; 32],
+                }),
+            },
+        ));
     }
 
     #[test]
