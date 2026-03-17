@@ -800,8 +800,6 @@ pub struct FuzzyFileSearchParams {
 pub struct FuzzyFileSearchResult {
     pub root: String,
     pub path: String,
-    #[serde(rename = "matchType")]
-    #[ts(rename = "matchType")]
     pub match_type: FuzzyFileSearchMatchType,
     pub file_name: String,
     pub score: u32,
@@ -809,8 +807,8 @@ pub struct FuzzyFileSearchResult {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "lowercase")]
-#[ts(rename_all = "lowercase")]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
 pub enum FuzzyFileSearchMatchType {
     File,
     Directory,

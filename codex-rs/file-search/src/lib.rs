@@ -54,7 +54,6 @@ pub use cli::Cli;
 pub struct FileMatch {
     pub score: u32,
     pub path: PathBuf,
-    #[serde(rename = "matchType")]
     pub match_type: MatchType,
     pub root: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -463,9 +462,7 @@ fn walker_worker(
             let Some(full_path) = path.to_str() else {
                 return ignore::WalkState::Continue;
             };
-            if let Some((_, relative_path)) = get_file_path(path, &search_directories)
-                && !relative_path.is_empty()
-            {
+            if let Some((_, relative_path)) = get_file_path(path, &search_directories) {
                 injector.push(Arc::from(full_path), |_, cols| {
                     cols[0] = Utf32String::from(relative_path);
                 });
