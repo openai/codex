@@ -464,6 +464,33 @@
         {
           "properties": {
             "content": {
+              "$ref": "#/definitions/FunctionCallOutputPayload"
+            },
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "writeOnly": true
+            },
+            "type": {
+              "enum": [
+                "notification"
+              ],
+              "title": "NotificationResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "content",
+            "type"
+          ],
+          "title": "NotificationResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "content": {
               "default": null,
               "items": {
                 "$ref": "#/definitions/ReasoningItemContent"
