@@ -958,6 +958,7 @@ fn filter_disallowed_connectors_filters_openai_prefix() {
 fn filter_disallowed_connectors_filters_disallowed_connector_ids() {
     let filtered = filter_disallowed_connectors(vec![
         app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
+        app("connector_3f8d1a79f27c4c7ba1a897ab13bf37dc"),
         app("delta"),
     ]);
     assert_eq!(filtered, vec![app("delta")]);
