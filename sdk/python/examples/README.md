@@ -60,7 +60,7 @@ python examples/01_quickstart_constructor/async.py
 - `02_turn_run/`
   - inspect full turn output fields
 - `03_turn_stream_events/`
-  - stream and print raw notifications
+  - stream a turn with a small curated event view
 - `04_models_and_metadata/`
   - read server metadata and model list
 - `05_existing_thread/`
@@ -81,3 +81,5 @@ python examples/01_quickstart_constructor/async.py
   - one turn using most optional `turn(...)` params (sync + async)
 - `13_model_select_and_turn_params/`
   - list models, pick highest model + highest supported reasoning effort, run turns, print message and usage
+- `14_turn_controls/`
+  - separate best-effort `steer()` and `interrupt()` demos with concise summaries

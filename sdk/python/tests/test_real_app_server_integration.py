@@ -55,6 +55,8 @@ EXAMPLE_CASES: list[tuple[str, str]] = [
     ("12_turn_params_kitchen_sink", "async.py"),
     ("13_model_select_and_turn_params", "sync.py"),
     ("13_model_select_and_turn_params", "async.py"),
+    ("14_turn_controls", "sync.py"),
+    ("14_turn_controls", "async.py"),
 ]
 
 
@@ -422,7 +424,8 @@ def test_real_examples_run_and_assert(
         assert "thread_id:" in out and "turn_id:" in out and "status:" in out
         assert "persisted.items.count:" in out
     elif folder == "03_turn_stream_events":
-        assert "turn/completed" in out
+        assert "stream.completed:" in out
+        assert "assistant>" in out
     elif folder == "04_models_and_metadata":
         assert "models.count:" in out
         assert "server_name=None" not in out
@@ -443,3 +446,6 @@ def test_real_examples_run_and_assert(
         assert "Status:" in out and "Items:" in out
     elif folder == "13_model_select_and_turn_params":
         assert "selected.model:" in out and "agent.message.params:" in out and "items.params:" in out
+    elif folder == "14_turn_controls":
+        assert "steer.result:" in out and "steer.final.status:" in out
+        assert "interrupt.result:" in out and "interrupt.final.status:" in out
