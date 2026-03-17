@@ -80,6 +80,7 @@ genrule(
     name = "v8_146_4_0_aarch64_unknown_linux_gnu",
     srcs = [
         ":v8_146_4_0_aarch64_unknown_linux_gnu_base",
+        "@llvm//runtimes/compiler-rt:clang_rt.builtins.static",
     ] + CARGO_READY_RUNTIME_LIBS,
     tools = LLVM_AR_TOOLS,
     outs = ["libv8_146_4_0_aarch64_unknown_linux_gnu.a"],
@@ -87,6 +88,7 @@ genrule(
       cat > "$(@D)/merge.mri" <<'EOF'
 create $@
 addlib $(location :v8_146_4_0_aarch64_unknown_linux_gnu_base)
+addlib $(location @llvm//runtimes/compiler-rt:clang_rt.builtins.static)
 addlib $(location @llvm//runtimes/libcxx:libcxx.static)
 addlib $(location @llvm//runtimes/libcxx:libcxxabi.static)
 addlib $(location @llvm//runtimes/libunwind:libunwind.static)
