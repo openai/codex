@@ -14,6 +14,18 @@ fn remote_env_connects_creates_temp_dir_and_runs_sample_script() -> Result<()> {
         return Ok(());
     };
 
+    let version_stdout = run_remote_script(
+        &remote_env,
+        r#"
+set -euo pipefail
+/tmp/codex --version
+"#,
+    )?;
+    ensure!(
+        version_stdout.contains("codex"),
+        "unexpected codex --version output: {version_stdout:?}"
+    );
+
     let output = run_remote_script(
         &remote_env,
         r#"

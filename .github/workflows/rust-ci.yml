@@ -514,23 +514,6 @@ jobs:
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
           fi
 
-      - name: Set up remote test env (Docker)
-        if: ${{ runner.os == 'Linux' && matrix.remote_env == 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if ! command -v docker >/dev/null 2>&1; then
-            echo "docker is required for remote env tests" >&2
-            exit 1
-          fi
-
-          docker rm -f codex-remote-test-env >/dev/null 2>&1 || true
-          docker run -d --name codex-remote-test-env ubuntu:24.04 sleep infinity
-
-          {
-            echo "CODEX_TEST_REMOTE_ENV=codex-remote-test-env"
-          } >> "$GITHUB_ENV"
       # Some integration tests rely on DotSlash being installed.
       # See https://github.com/openai/codex/pull/7617.
       - name: Install DotSlash
@@ -614,6 +597,15 @@ jobs:
           if sudo sysctl -a 2>/dev/null | grep -q '^kernel.apparmor_restrict_unprivileged_userns'; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
+
+      - name: Set up remote test env (Docker)
+        if: ${{ runner.os == 'Linux' && matrix.remote_env == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CODEX_TEST_REMOTE_ENV_CONTAINER_NAME=codex-remote-test-env
+          source "${GITHUB_WORKSPACE}/scripts/test-remote-env.sh"
+          echo "CODEX_TEST_REMOTE_ENV=${CODEX_TEST_REMOTE_ENV}" >> "$GITHUB_ENV"
 
       - name: tests
         id: test
