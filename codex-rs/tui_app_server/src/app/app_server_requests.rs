@@ -1,3 +1,23 @@
+//! Tracks pending app-server requests and correlates them with user
+//! decisions to produce JSON-RPC response payloads.
+//!
+//! When the remote app-server needs interactive input (command approval,
+//! file-change approval, permission grant, user-input prompt, or MCP
+//! elicitation), it sends a `ServerRequest` with a `request_id`. This
+//! module records that request, waits for the TUI to produce an
+//! `AppCommand` with the user's decision, and then builds the
+//! `AppServerRequestResolution` that the caller sends back as a
+//! JSON-RPC response.
+//!
+//! ## MCP elicitation correlation
+//!
+//! MCP elicitation has a two-phase correlation problem: the legacy event
+//! path delivers an `ElicitationRequest` event (with a core
+//! `McpRequestId`), while the server-request path delivers a
+//! `McpServerElicitationRequest` (with an app-server `RequestId`).
+//! `McpServerMatcher` hashes on `(server_name, turn_id, request_body)`
+//! to pair these two regardless of arrival order.
+
 use std::collections::HashMap;
 
 use crate::app_command::AppCommand;
@@ -33,6 +53,13 @@ pub(super) struct UnsupportedAppServerRequest {
     pub(super) message: String,
 }
 
+/// Discriminates between the two wire formats for exec-approval responses.
+///
+/// - `LegacyV1` — older `ExecCommandApproval` path; serializes to
+///   `ExecCommandApprovalResponse` with `{ "decision": "approved" }`.
+/// - `V2` — current `CommandExecutionRequestApproval` path; serializes
+///   to `CommandExecutionRequestApprovalResponse` with
+///   `{ "decision": "accept" }`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ExecApprovalResponseKind {
     LegacyV1,
@@ -45,14 +72,27 @@ struct PendingExecApproval {
     response_kind: ExecApprovalResponseKind,
 }
 
+/// In-memory registry of app-server requests awaiting user decisions.
+///
+/// Each request type has its own index keyed by the identifier the TUI
+/// will use to look it up when the user makes a choice (approval ID,
+/// item ID, turn ID, etc.). The maps are drained by `take_resolution`
+/// and bulk-cleared on turn boundaries or disconnects.
 #[derive(Debug, Default)]
 pub(super) struct PendingAppServerRequests {
+    /// Keyed by approval-ID (or item-ID fallback).
     exec_approvals: HashMap<String, PendingExecApproval>,
+    /// Keyed by item-ID.
     file_change_approvals: HashMap<String, AppServerRequestId>,
+    /// Keyed by item-ID.
     permissions_approvals: HashMap<String, AppServerRequestId>,
+    /// Keyed by turn-ID.
     user_inputs: HashMap<String, AppServerRequestId>,
+    /// V2 server-requests that arrived before the matching legacy event.
     mcp_pending_by_matcher: HashMap<McpServerMatcher, AppServerRequestId>,
+    /// Legacy events that arrived before the matching V2 server-request.
     mcp_legacy_by_matcher: HashMap<McpServerMatcher, McpLegacyRequestKey>,
+    /// Fully correlated MCP requests ready for resolution.
     mcp_legacy_requests: HashMap<McpLegacyRequestKey, AppServerRequestId>,
 }
 
@@ -168,6 +208,12 @@ impl PendingAppServerRequests {
             .retain(|_, value| value != request_id);
     }
 
+    /// Record a legacy event so it can be correlated with a future
+    /// `McpServerElicitationRequest` server-request.
+    ///
+    /// Only `ElicitationRequest` events need this treatment; all other
+    /// legacy event types are either fully handled by the legacy path or
+    /// have a 1:1 server-request equivalent that carries its own ID.
     pub(super) fn note_legacy_event(&mut self, event: &Event) {
         let EventMsg::ElicitationRequest(request) = &event.msg else {
             return;
@@ -349,10 +395,18 @@ impl PendingAppServerRequests {
     }
 }
 
+/// Content-based key for pairing a legacy `ElicitationRequest` event
+/// with its corresponding `McpServerElicitationRequest` server-request.
+///
+/// Both sides serialize the elicitation request body to a canonical JSON
+/// string so they produce the same matcher regardless of which arrives
+/// first. The `turn_id` further scopes the match to the correct turn.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct McpServerMatcher {
     server_name: String,
     turn_id: Option<String>,
+    /// Canonical JSON serialization of the elicitation request body,
+    /// used for equality comparison.
     request: String,
 }
 
@@ -403,6 +457,8 @@ impl McpServerMatcher {
     }
 }
 
+/// Identifies a legacy MCP elicitation by the values the TUI uses to
+/// resolve it: the server name and the core-protocol request ID.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct McpLegacyRequestKey {
     server_name: String,

@@ -1,14 +1,45 @@
 /*
-This module holds the temporary adapter layer between the TUI and the app
-server during the hybrid migration period.
+Temporary adapter layer between the TUI and the app server during the
+hybrid migration period.
 
-For now, the TUI still owns its existing direct-core behavior, but startup
-allocates a local in-process app server and drains its event stream. Keeping
-the app-server-specific wiring here keeps that transitional logic out of the
-main `app.rs` orchestration path.
+The TUI still owns its existing direct-core behavior, but startup
+allocates a local in-process app server and drains its event stream.
+Keeping the app-server-specific wiring here keeps that transitional logic
+out of the main `app.rs` orchestration path.
 
-As more TUI flows move onto the app-server surface directly, this adapter
-should shrink and eventually disappear.
+## Two protocol worlds
+
+The adapter translates between:
+
+- **Upstream** — the app-server protocol (`codex_app_server_protocol`):
+  `ServerNotification`, `ServerRequest`, and `LegacyNotification`.
+- **Downstream** — the TUI event store (`codex_protocol::protocol::Event`
+  / `EventMsg`).
+
+## Local vs remote
+
+When the app-server runs in-process (`is_remote == false`), most
+interactive flows — command execution, approvals, permissions — are
+handled through the legacy event path and do not need translation here.
+
+When connecting to a **remote** app-server (`is_remote == true`), this
+module provides the full translation surface:
+
+- `ServerNotification` → `Event` sequences via
+  `server_notification_thread_events`, including command-execution
+  lifecycle, output streaming, and terminal interaction.
+- `ServerRequest` → `Event` via `server_request_thread_event`, covering
+  command-execution approval, permissions, user-input, and MCP
+  elicitation.
+
+## Snapshot replay
+
+`thread_snapshot_events` / `turn_snapshot_events` expand a `Thread`
+snapshot into the event sequence the TUI would have observed live. This
+drives the resume and fork-history flows.
+
+As more TUI flows move onto the app-server surface directly, this
+adapter should shrink and eventually disappear.
 */
 
 use super::App;
@@ -416,6 +447,13 @@ pub(super) fn thread_snapshot_events(
         .collect()
 }
 
+/// Translate a remote `ServerRequest` (an interactive prompt from the
+/// app-server that expects a JSON-RPC response) into a TUI `Event` that
+/// will surface the appropriate approval / input dialog.
+///
+/// Returns `Err` with a human-readable message for request types that the
+/// TUI does not yet support; the caller is expected to reject the request
+/// back to the server with that message.
 fn server_request_thread_event(request: &ServerRequest) -> Result<(ThreadId, Event), String> {
     match request {
         ServerRequest::CommandExecutionRequestApproval { params, .. } => Ok((
@@ -574,10 +612,20 @@ fn thread_id_from_remote_request(context: &str, thread_id: &str) -> Result<Threa
         .map_err(|err| format!("failed to parse remote {context} thread id `{thread_id}`: {err}"))
 }
 
+/// Tokenize a remote command string into the `Vec<String>` argv the TUI
+/// approval dialog expects.
+///
+/// Falls back to a single-element vec when `shlex` cannot parse the input
+/// (e.g. unbalanced quotes). The fallback means the user sees one opaque
+/// string rather than a structured argv; this is intentional so that
+/// approvals are never silently blocked by a parse failure.
 fn split_remote_command_for_approval(command: &str) -> Vec<String> {
     shlex::split(command).unwrap_or_else(|| vec![command.to_string()])
 }
 
+/// Map an app-server `CommandExecutionApprovalDecision` to the TUI's
+/// `ReviewDecision` so the approval dialog can present the same options
+/// the remote server advertised.
 fn command_approval_decision_to_review_decision(
     decision: CommandExecutionApprovalDecision,
 ) -> ReviewDecision {
@@ -622,6 +670,9 @@ fn legacy_thread_event(params: Option<Value>) -> Option<(ThreadId, Event)> {
     Some((thread_id, event))
 }
 
+/// Returns `true` if the legacy event is also delivered via a
+/// `ServerNotification`, so the legacy copy should be dropped to avoid
+/// double-processing.
 fn legacy_event_is_shadowed_by_server_notification(msg: &EventMsg) -> bool {
     matches!(
         msg,
@@ -640,6 +691,13 @@ fn legacy_event_is_shadowed_by_server_notification(msg: &EventMsg) -> bool {
     )
 }
 
+/// Translate a `ServerNotification` into zero or more TUI `Event`s,
+/// returning the owning thread ID.
+///
+/// When `is_remote` is true, additional notification types are bridged:
+/// `CommandExecutionOutputDelta` and `TerminalInteraction`. These are
+/// only emitted by remote servers; the local app-server handles command
+/// I/O through the legacy event path.
 fn server_notification_thread_events(
     notification: ServerNotification,
     is_remote: bool,
@@ -971,6 +1029,12 @@ fn append_terminal_turn_events(events: &mut Vec<Event>, turn: &Turn, include_fai
     }
 }
 
+/// Remote-specific translation for `ItemStarted` notifications.
+///
+/// For `CommandExecution` items that are `InProgress`, this produces an
+/// `ExecCommandBegin` event instead of the generic `ItemStarted`, because
+/// the TUI renders command execution through the exec-command widget
+/// rather than the item-list widget.
 fn thread_item_started_events(
     thread_id: ThreadId,
     turn_id: String,
@@ -991,6 +1055,10 @@ fn thread_item_started_events(
     }])
 }
 
+/// Remote-specific translation for `ItemCompleted` notifications.
+///
+/// Mirrors `thread_item_started_events`: completed `CommandExecution`
+/// items produce `ExecCommandEnd` with aggregated output and exit code.
 fn thread_item_completed_events(
     thread_id: ThreadId,
     turn_id: String,
@@ -1011,6 +1079,9 @@ fn thread_item_completed_events(
     }])
 }
 
+/// If `item` is an in-progress `CommandExecution`, produce the
+/// `ExecCommandBegin` event the TUI uses to open a command-output panel.
+/// Returns `None` for non-command items or already-finished commands.
 fn command_execution_begin_event(turn_id: &str, item: &ThreadItem) -> Option<Event> {
     let ThreadItem::CommandExecution {
         id,
@@ -1048,6 +1119,9 @@ fn command_execution_begin_event(turn_id: &str, item: &ThreadItem) -> Option<Eve
     })
 }
 
+/// If `item` is a finished `CommandExecution`, produce the
+/// `ExecCommandEnd` event with aggregated output, exit code, and
+/// duration. Returns `None` for non-command items or still-running ones.
 fn command_execution_end_event(turn_id: &str, item: &ThreadItem) -> Option<Event> {
     let ThreadItem::CommandExecution {
         id,
@@ -1095,6 +1169,11 @@ fn command_execution_end_event(turn_id: &str, item: &ThreadItem) -> Option<Event
     })
 }
 
+/// Map the app-server's command-execution status to the TUI core enum.
+///
+/// `InProgress` is mapped to `Failed` defensively — a completed
+/// notification should never carry `InProgress`, so if it does the safest
+/// rendering is a failure indicator.
 fn command_execution_status_to_core(status: &CommandExecutionStatus) -> ExecCommandStatus {
     match status {
         CommandExecutionStatus::Completed => ExecCommandStatus::Completed,
