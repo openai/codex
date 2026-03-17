@@ -396,8 +396,10 @@ async fn plugin_list_returns_plugin_interface_with_absolute_asset_paths() -> Res
         "source": "local",
         "path": "./plugins/demo-plugin"
       },
-      "installPolicy": "AVAILABLE",
-      "authPolicy": "ON_INSTALL",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
       "category": "Design"
     }
   ]

@@ -220,7 +220,7 @@ use codex_core::mcp::group_tools_by_server;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::parse_cursor;
 use codex_core::plugins::MarketplaceError;
-use codex_core::plugins::MarketplacePluginSourceSummary;
+use codex_core::plugins::MarketplacePluginSource;
 use codex_core::plugins::PluginInstallError as CorePluginInstallError;
 use codex_core::plugins::PluginInstallRequest;
 use codex_core::plugins::PluginReadRequest;
@@ -5429,8 +5429,8 @@ impl CodexMessageProcessor {
                                 enabled: plugin.enabled,
                                 name: plugin.name,
                                 source: marketplace_plugin_source_to_info(plugin.source),
-                                install_policy: plugin.install_policy.into(),
-                                auth_policy: plugin.auth_policy.into(),
+                                install_policy: plugin.policy.installation.into(),
+                                auth_policy: plugin.policy.authentication.into(),
                                 interface: plugin.interface.map(plugin_interface_to_info),
                             })
                             .collect(),
@@ -5519,8 +5519,8 @@ impl CodexMessageProcessor {
                 source: marketplace_plugin_source_to_info(outcome.plugin.source),
                 installed: outcome.plugin.installed,
                 enabled: outcome.plugin.enabled,
-                install_policy: outcome.plugin.install_policy.into(),
-                auth_policy: outcome.plugin.auth_policy.into(),
+                install_policy: outcome.plugin.policy.installation.into(),
+                auth_policy: outcome.plugin.policy.authentication.into(),
                 interface: outcome.plugin.interface.map(plugin_interface_to_info),
             },
             description: outcome.plugin.description,
@@ -7456,7 +7456,7 @@ fn plugin_skills_to_info(skills: &[codex_core::skills::SkillMetadata]) -> Vec<Sk
 }
 
 fn plugin_interface_to_info(
-    interface: codex_core::plugins::PluginManifestInterfaceSummary,
+    interface: codex_core::plugins::PluginManifestInterface,
 ) -> PluginInterface {
     PluginInterface {
         display_name: interface.display_name,
@@ -7476,9 +7476,9 @@ fn plugin_interface_to_info(
     }
 }
 
-fn marketplace_plugin_source_to_info(source: MarketplacePluginSourceSummary) -> PluginSource {
+fn marketplace_plugin_source_to_info(source: MarketplacePluginSource) -> PluginSource {
     match source {
-        MarketplacePluginSourceSummary::Local { path } => PluginSource::Local { path },
+        MarketplacePluginSource::Local { path } => PluginSource::Local { path },
     }
 }
 

@@ -655,12 +655,24 @@ fn write_plugin_marketplace(
     install_policy: Option<&str>,
     auth_policy: Option<&str>,
 ) -> std::io::Result<()> {
-    let install_policy = install_policy
-        .map(|install_policy| format!(",\n      \"installPolicy\": \"{install_policy}\""))
-        .unwrap_or_default();
-    let auth_policy = auth_policy
-        .map(|auth_policy| format!(",\n      \"authPolicy\": \"{auth_policy}\""))
-        .unwrap_or_default();
+    let policy = if install_policy.is_some() || auth_policy.is_some() {
+        let installation = install_policy
+            .map(|installation| format!("\n        \"installation\": \"{installation}\""))
+            .unwrap_or_default();
+        let separator = if install_policy.is_some() && auth_policy.is_some() {
+            ","
+        } else {
+            ""
+        };
+        let authentication = auth_policy
+            .map(|authentication| {
+                format!("{separator}\n        \"authentication\": \"{authentication}\"")
+            })
+            .unwrap_or_default();
+        format!(",\n      \"policy\": {{{installation}{authentication}\n      }}")
+    } else {
+        String::new()
+    };
     std::fs::create_dir_all(repo_root.join(".git"))?;
     std::fs::create_dir_all(repo_root.join(".agents/plugins"))?;
     std::fs::write(
@@ -674,7 +686,7 @@ fn write_plugin_marketplace(
       "source": {{
         "source": "local",
         "path": "{source_path}"
-      }}{install_policy}{auth_policy}
+      }}{policy}
     }}
   ]
 }}"#
