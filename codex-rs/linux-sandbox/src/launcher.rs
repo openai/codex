@@ -35,13 +35,7 @@ pub(crate) fn exec_bwrap(
 }
 
 fn preferred_bwrap_launcher() -> BubblewrapLauncher {
-    let system_bwrap_exists = Path::new(SYSTEM_BWRAP_PATH).exists();
-
-    preferred_bwrap_launcher_with(system_bwrap_exists)
-}
-
-fn preferred_bwrap_launcher_with(system_bwrap_exists: bool) -> BubblewrapLauncher {
-    if system_bwrap_exists {
+    if Path::new(SYSTEM_BWRAP_PATH).exists() {
         BubblewrapLauncher::System(PathBuf::from(SYSTEM_BWRAP_PATH))
     } else {
         BubblewrapLauncher::Vendored
@@ -109,22 +103,6 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use tempfile::NamedTempFile;
-
-    #[test]
-    fn prefers_system_bwrap_when_present() {
-        assert_eq!(
-            preferred_bwrap_launcher_with(/*system_bwrap_exists*/ true),
-            BubblewrapLauncher::System(PathBuf::from(SYSTEM_BWRAP_PATH))
-        );
-    }
-
-    #[test]
-    fn falls_back_to_vendored_when_system_bwrap_is_missing() {
-        assert_eq!(
-            preferred_bwrap_launcher_with(/*system_bwrap_exists*/ false),
-            BubblewrapLauncher::Vendored
-        );
-    }
 
     #[test]
     fn preserved_files_are_made_inheritable_for_system_exec() {
