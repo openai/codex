@@ -9,12 +9,11 @@ use std::path::PathBuf;
 use crate::vendored_bwrap::exec_vendored_bwrap;
 
 const SYSTEM_BWRAP_PATH: &str = "/usr/bin/bwrap";
-const UBUNTU_APPARMOR_BWRAP_USERNS_RESTRICT_PROFILE: &str = "/etc/apparmor.d/bwrap-userns-restrict";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum BubblewrapLauncher {
     System(PathBuf),
-    Vendored { warn_missing_system_bwrap: bool },
+    Vendored,
 }
 
 pub(crate) fn exec_bwrap(
@@ -24,10 +23,8 @@ pub(crate) fn exec_bwrap(
 ) -> ! {
     match preferred_bwrap_launcher() {
         BubblewrapLauncher::System(program) => exec_system_bwrap(&program, argv, preserved_files),
-        BubblewrapLauncher::Vendored {
-            warn_missing_system_bwrap,
-        } => {
-            if warn_missing_system_bwrap && emit_missing_system_bwrap_warning {
+        BubblewrapLauncher::Vendored => {
+            if emit_missing_system_bwrap_warning {
                 eprintln!(
                     "warning: Codex could not find system bubblewrap at {SYSTEM_BWRAP_PATH}. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime."
                 );
@@ -38,24 +35,16 @@ pub(crate) fn exec_bwrap(
 }
 
 fn preferred_bwrap_launcher() -> BubblewrapLauncher {
-    let apparmor_profile_exists = Path::new(UBUNTU_APPARMOR_BWRAP_USERNS_RESTRICT_PROFILE).exists();
     let system_bwrap_exists = Path::new(SYSTEM_BWRAP_PATH).exists();
 
-    preferred_bwrap_launcher_with(apparmor_profile_exists, system_bwrap_exists)
+    preferred_bwrap_launcher_with(system_bwrap_exists)
 }
 
-fn preferred_bwrap_launcher_with(
-    apparmor_profile_exists: bool,
-    system_bwrap_exists: bool,
-) -> BubblewrapLauncher {
-    match (apparmor_profile_exists, system_bwrap_exists) {
-        (true, true) => BubblewrapLauncher::System(PathBuf::from(SYSTEM_BWRAP_PATH)),
-        (true, false) => BubblewrapLauncher::Vendored {
-            warn_missing_system_bwrap: true,
-        },
-        (false, _) => BubblewrapLauncher::Vendored {
-            warn_missing_system_bwrap: false,
-        },
+fn preferred_bwrap_launcher_with(system_bwrap_exists: bool) -> BubblewrapLauncher {
+    if system_bwrap_exists {
+        BubblewrapLauncher::System(PathBuf::from(SYSTEM_BWRAP_PATH))
+    } else {
+        BubblewrapLauncher::Vendored
     }
 }
 
@@ -122,37 +111,18 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn prefers_system_bwrap_for_ubuntu_apparmor_profile() {
+    fn prefers_system_bwrap_when_present() {
         assert_eq!(
-            preferred_bwrap_launcher_with(
-                /*apparmor_profile_exists*/ true, /*system_bwrap_exists*/ true
-            ),
+            preferred_bwrap_launcher_with(/*system_bwrap_exists*/ true),
             BubblewrapLauncher::System(PathBuf::from(SYSTEM_BWRAP_PATH))
         );
     }
 
     #[test]
-    fn falls_back_to_vendored_without_warning_when_apparmor_profile_is_absent() {
+    fn falls_back_to_vendored_when_system_bwrap_is_missing() {
         assert_eq!(
-            preferred_bwrap_launcher_with(
-                /*apparmor_profile_exists*/ false, /*system_bwrap_exists*/ true
-            ),
-            BubblewrapLauncher::Vendored {
-                warn_missing_system_bwrap: false,
-            }
-        );
-    }
-
-    #[test]
-    fn falls_back_to_vendored_with_warning_when_apparmor_profile_exists_but_system_bwrap_is_missing()
-     {
-        assert_eq!(
-            preferred_bwrap_launcher_with(
-                /*apparmor_profile_exists*/ true, /*system_bwrap_exists*/ false
-            ),
-            BubblewrapLauncher::Vendored {
-                warn_missing_system_bwrap: true,
-            }
+            preferred_bwrap_launcher_with(/*system_bwrap_exists*/ false),
+            BubblewrapLauncher::Vendored
         );
     }
 

@@ -60,10 +60,10 @@ only when the split filesystem policy round-trips through the legacy
 cases like `/repo = write`, `/repo/a = none`, `/repo/a/b = write`, where the
 more specific writable child must reopen under a denied parent.
 
-On Ubuntu/AppArmor hosts that ship `/etc/apparmor.d/bwrap-userns-restrict`,
-the Linux sandbox helper prefers `/usr/bin/bwrap` so the distro's userns
-exception applies. Other Linux hosts continue to use the vendored bubblewrap
-path compiled into the helper binary.
+The Linux sandbox helper prefers `/usr/bin/bwrap` whenever it is available and
+falls back to the vendored bubblewrap path otherwise. This also covers the
+Ubuntu/AppArmor case where the distro's userns exception is path-specific to
+`/usr/bin/bwrap`.
 
 ### All Platforms
 
