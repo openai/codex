@@ -361,6 +361,38 @@ mod tests {
         assert_eq!(metadata.reasoning_effort, Some(ReasoningEffort::High));
     }
 
+    #[test]
+    fn session_meta_does_not_set_model_or_reasoning_effort() {
+        let mut metadata = metadata_for_test();
+        let thread_id = metadata.id;
+
+        apply_rollout_item(
+            &mut metadata,
+            &RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    id: thread_id,
+                    forked_from_id: None,
+                    timestamp: "2026-02-26T00:00:00.000Z".to_string(),
+                    cwd: PathBuf::from("/workspace"),
+                    originator: "codex_cli_rs".to_string(),
+                    cli_version: "0.0.0".to_string(),
+                    source: SessionSource::Cli,
+                    agent_nickname: None,
+                    agent_role: None,
+                    model_provider: Some("openai".to_string()),
+                    base_instructions: None,
+                    dynamic_tools: None,
+                    memory_mode: None,
+                },
+                git: None,
+            }),
+            "test-provider",
+        );
+
+        assert_eq!(metadata.model, None);
+        assert_eq!(metadata.reasoning_effort, None);
+    }
+
     fn metadata_for_test() -> ThreadMetadata {
         let id = ThreadId::from_string(&Uuid::from_u128(42).to_string()).expect("thread id");
         let created_at = DateTime::<Utc>::from_timestamp(1_735_689_600, 0).expect("timestamp");
