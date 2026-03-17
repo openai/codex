@@ -156,7 +156,7 @@ fn build_tool_suggestion_elicitation_request_uses_expected_shape() {
                         "https://chatgpt.com/apps/google-calendar/connector_2128aebfecb84f64a069897515042a44"
                     ),
                 })),
-                message: "Google Calendar could help with this request.\n\nPlan and reference events from your calendar\n\nOpen ChatGPT to install it, then confirm here if you finish.".to_string(),
+                message: "Plan and reference events from your calendar".to_string(),
                 requested_schema: McpElicitationSchema {
                     schema_uri: None,
                     type_: McpElicitationObjectType::Object,
@@ -209,7 +209,7 @@ fn build_tool_suggestion_elicitation_request_for_plugin_omits_install_url() {
                     tool_name: "Sample Plugin",
                     install_url: None,
                 })),
-                message: "Sample Plugin could help with this request.\n\nUse the sample plugin's skills and MCP server\n\nInstall it here to continue.".to_string(),
+                message: "Use the sample plugin's skills and MCP server".to_string(),
                 requested_schema: McpElicitationSchema {
                     schema_uri: None,
                     type_: McpElicitationObjectType::Object,

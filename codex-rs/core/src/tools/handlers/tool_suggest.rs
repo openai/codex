@@ -186,14 +186,7 @@ fn build_tool_suggestion_elicitation_request(
 ) -> McpServerElicitationRequestParams {
     let tool_name = tool.name().to_string();
     let install_url = tool.install_url().map(ToString::to_string);
-    let message = match install_url.as_deref() {
-        Some(_) => format!(
-            "{tool_name} could help with this request.\n\n{suggest_reason}\n\nOpen ChatGPT to install it, then confirm here if you finish."
-        ),
-        None => format!(
-            "{tool_name} could help with this request.\n\n{suggest_reason}\n\nInstall it here to continue."
-        ),
-    };
+    let message = suggest_reason.to_string();
 
     McpServerElicitationRequestParams {
         thread_id,
