@@ -211,8 +211,14 @@ fn create_filesystem_args(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     cwd: &Path,
 ) -> Result<BwrapArgs> {
-    let writable_roots =
-        existing_writable_roots(file_system_sandbox_policy.get_writable_roots_with_cwd(cwd));
+    // Bubblewrap requires bind mount targets to exist. Skip missing writable
+    // roots so mixed-platform configs can keep harmless paths for other
+    // environments without breaking Linux command startup.
+    let writable_roots = file_system_sandbox_policy
+        .get_writable_roots_with_cwd(cwd)
+        .into_iter()
+        .filter(|writable_root| writable_root.root.as_path().exists())
+        .collect::<Vec<_>>();
     let unreadable_roots = file_system_sandbox_policy.get_unreadable_roots_with_cwd(cwd);
 
     let mut args = if file_system_sandbox_policy.has_full_disk_read_access() {
@@ -381,17 +387,6 @@ fn create_filesystem_args(
         args,
         preserved_files,
     })
-}
-
-/// Bubblewrap requires bind mount targets to exist.
-///
-/// Skip missing writable roots so mixed-platform configs can keep harmless
-/// paths for other environments without breaking Linux command startup.
-fn existing_writable_roots(writable_roots: Vec<WritableRoot>) -> Vec<WritableRoot> {
-    writable_roots
-        .into_iter()
-        .filter(|writable_root| writable_root.root.as_path().exists())
-        .collect()
 }
 
 fn path_to_string(path: &Path) -> String {
