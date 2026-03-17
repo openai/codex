@@ -552,9 +552,13 @@ fn matcher_worker(
                             } else {
                                 None
                             };
+                            let mut display_path = relative_path.to_string();
+                            if Path::new(full_path).is_dir() && !display_path.ends_with('/') {
+                                display_path.push('/');
+                            }
                             Some(FileMatch {
                                 score: match_.score,
-                                path: PathBuf::from(relative_path),
+                                path: PathBuf::from(display_path),
                                 root: inner.search_directories[root_idx].clone(),
                                 indices,
                             })
@@ -986,7 +990,7 @@ mod tests {
             results
                 .matches
                 .iter()
-                .any(|m| m.path.as_path() == Path::new("docs/guides"))
+                .any(|m| m.path.to_string_lossy() == "docs/guides/")
         );
     }
 
