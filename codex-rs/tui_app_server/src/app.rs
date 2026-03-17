@@ -4523,14 +4523,15 @@ async fn fetch_all_mcp_server_statuses(
 /// per-server resource/template/auth maps). Test-only because the app-server TUI
 /// renders directly from `McpServerStatus` rather than these maps.
 #[cfg(test)]
-fn mcp_inventory_maps_from_statuses(
-    statuses: Vec<McpServerStatus>,
-) -> (
+type McpInventoryMaps = (
     HashMap<String, codex_protocol::mcp::Tool>,
     HashMap<String, Vec<codex_protocol::mcp::Resource>>,
     HashMap<String, Vec<codex_protocol::mcp::ResourceTemplate>>,
     HashMap<String, McpAuthStatus>,
-) {
+);
+
+#[cfg(test)]
+fn mcp_inventory_maps_from_statuses(statuses: Vec<McpServerStatus>) -> McpInventoryMaps {
     let mut tools = HashMap::new();
     let mut resources = HashMap::new();
     let mut resource_templates = HashMap::new();
