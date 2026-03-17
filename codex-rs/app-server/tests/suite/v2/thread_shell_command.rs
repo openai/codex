@@ -151,7 +151,7 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
     assert_eq!(source, &CommandExecutionSource::UserShell);
     assert_eq!(status, &CommandExecutionStatus::Completed);
     assert_eq!(aggregated_output.as_deref(), Some("hello from bang\n"));
-    assert_eq!(formatted_output, "hello from bang\n");
+    assert_eq!(formatted_output, "");
 
     Ok(())
 }

@@ -132,7 +132,7 @@ impl RolloutRecorderParams {
     }
 }
 
-const PERSISTED_EXEC_OUTPUT_MAX_BYTES: usize = 10_000;
+const PERSISTED_EXEC_AGGREGATED_OUTPUT_MAX_BYTES: usize = 10_000;
 
 fn sanitize_rollout_item_for_persistence(
     item: RolloutItem,
@@ -144,73 +144,18 @@ fn sanitize_rollout_item_for_persistence(
 
     match item {
         RolloutItem::EventMsg(EventMsg::ExecCommandEnd(mut event)) => {
-            // Persist only bounded summaries of command output that replay depends on.
+            // Persist only a bounded aggregated summary of command output.
             event.aggregated_output = truncate_text(
                 &event.aggregated_output,
-                TruncationPolicy::Bytes(PERSISTED_EXEC_OUTPUT_MAX_BYTES),
+                TruncationPolicy::Bytes(PERSISTED_EXEC_AGGREGATED_OUTPUT_MAX_BYTES),
             );
-            event.formatted_output = truncate_text(
-                &event.formatted_output,
-                TruncationPolicy::Bytes(PERSISTED_EXEC_OUTPUT_MAX_BYTES),
-            );
-            // Drop unnecessary raw streams from rollout storage once the replay summaries are kept.
+            // Drop unnecessary fields from rollout storage since aggregated_output is all we need.
             event.stdout.clear();
             event.stderr.clear();
+            event.formatted_output.clear();
             RolloutItem::EventMsg(EventMsg::ExecCommandEnd(event))
         }
         _ => item,
-    }
-}
-
-#[cfg(test)]
-mod recorder_tests {
-    use pretty_assertions::assert_eq;
-
-    use super::PERSISTED_EXEC_OUTPUT_MAX_BYTES;
-    use super::sanitize_rollout_item_for_persistence;
-    use crate::rollout::policy::EventPersistenceMode;
-    use codex_protocol::parse_command::ParsedCommand;
-    use codex_protocol::protocol::EventMsg;
-    use codex_protocol::protocol::ExecCommandEndEvent;
-    use codex_protocol::protocol::ExecCommandSource;
-    use codex_protocol::protocol::ExecCommandStatus;
-    use codex_protocol::protocol::RolloutItem;
-
-    #[test]
-    fn sanitize_rollout_item_preserves_formatted_exec_output() {
-        let formatted_output = "formatted output".repeat(1_000);
-        let item = RolloutItem::EventMsg(EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-            call_id: "call-123".to_string(),
-            process_id: Some("pid-123".to_string()),
-            turn_id: "turn-123".to_string(),
-            command: vec!["echo".to_string(), "hello".to_string()],
-            cwd: std::env::temp_dir(),
-            parsed_cmd: vec![ParsedCommand::Unknown {
-                cmd: "echo hello".to_string(),
-            }],
-            source: ExecCommandSource::UserShell,
-            interaction_input: None,
-            stdout: "stdout".repeat(1_000),
-            stderr: "stderr".repeat(1_000),
-            aggregated_output: "aggregated output".repeat(1_000),
-            exit_code: 0,
-            duration: std::time::Duration::from_secs(1),
-            formatted_output,
-            status: ExecCommandStatus::Completed,
-        }));
-
-        let sanitized = sanitize_rollout_item_for_persistence(item, EventPersistenceMode::Extended);
-
-        let RolloutItem::EventMsg(EventMsg::ExecCommandEnd(event)) = sanitized else {
-            panic!("expected exec command end event");
-        };
-
-        assert_eq!(event.stdout, "");
-        assert_eq!(event.stderr, "");
-        assert!(!event.aggregated_output.is_empty());
-        assert!(!event.formatted_output.is_empty());
-        assert!(event.aggregated_output.len() <= PERSISTED_EXEC_OUTPUT_MAX_BYTES);
-        assert!(event.formatted_output.len() <= PERSISTED_EXEC_OUTPUT_MAX_BYTES);
     }
 }
 
