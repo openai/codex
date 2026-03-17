@@ -75,6 +75,7 @@ use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONF
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
+use codex_protocol::approvals::ExecApprovalRequestEvent;
 use codex_protocol::config_types::Personality;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -183,12 +184,30 @@ fn command_execution_decision_to_review_decision(
     }
 }
 
-fn default_exec_approval_decisions() -> Vec<codex_protocol::protocol::ReviewDecision> {
-    vec![
-        codex_protocol::protocol::ReviewDecision::Approved,
-        codex_protocol::protocol::ReviewDecision::Denied,
-        codex_protocol::protocol::ReviewDecision::Abort,
-    ]
+fn convert_via_json<T, U>(value: T) -> Option<U>
+where
+    T: serde::Serialize,
+    U: serde::de::DeserializeOwned,
+{
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| serde_json::from_value(value).ok())
+}
+
+fn default_exec_approval_decisions(
+    network_approval_context: Option<&codex_protocol::protocol::NetworkApprovalContext>,
+    proposed_execpolicy_amendment: Option<&codex_protocol::approvals::ExecPolicyAmendment>,
+    proposed_network_policy_amendments: Option<
+        &[codex_protocol::approvals::NetworkPolicyAmendment],
+    >,
+    additional_permissions: Option<&codex_protocol::models::PermissionProfile>,
+) -> Vec<codex_protocol::protocol::ReviewDecision> {
+    ExecApprovalRequestEvent::default_available_decisions(
+        network_approval_context,
+        proposed_execpolicy_amendment,
+        proposed_network_policy_amendments,
+        additional_permissions,
+    )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1568,6 +1587,27 @@ impl App {
         let thread_label = Some(self.thread_label(thread_id));
         match request {
             ServerRequest::CommandExecutionRequestApproval { params, .. } => {
+                let network_approval_context = params
+                    .network_approval_context
+                    .clone()
+                    .and_then(convert_via_json);
+                let additional_permissions = params
+                    .additional_permissions
+                    .clone()
+                    .and_then(convert_via_json);
+                let proposed_execpolicy_amendment = params
+                    .proposed_execpolicy_amendment
+                    .clone()
+                    .map(codex_app_server_protocol::ExecPolicyAmendment::into_core);
+                let proposed_network_policy_amendments = params
+                    .proposed_network_policy_amendments
+                    .clone()
+                    .map(|amendments| {
+                        amendments
+                            .into_iter()
+                            .map(codex_app_server_protocol::NetworkPolicyAmendment::into_core)
+                            .collect::<Vec<_>>()
+                    });
                 Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Exec {
                     thread_id,
                     thread_label,
@@ -1586,21 +1626,16 @@ impl App {
                                 .map(command_execution_decision_to_review_decision)
                                 .collect()
                         })
-                        .unwrap_or_else(default_exec_approval_decisions),
-                    network_approval_context: params.network_approval_context.clone().and_then(
-                        |network_approval_context| {
-                            serde_json::to_value(network_approval_context)
-                                .ok()
-                                .and_then(|value| serde_json::from_value(value).ok())
-                        },
-                    ),
-                    additional_permissions: params.additional_permissions.clone().and_then(
-                        |additional_permissions| {
-                            serde_json::to_value(additional_permissions)
-                                .ok()
-                                .and_then(|value| serde_json::from_value(value).ok())
-                        },
-                    ),
+                        .unwrap_or_else(|| {
+                            default_exec_approval_decisions(
+                                network_approval_context.as_ref(),
+                                proposed_execpolicy_amendment.as_ref(),
+                                proposed_network_policy_amendments.as_deref(),
+                                additional_permissions.as_ref(),
+                            )
+                        }),
+                    network_approval_context,
+                    additional_permissions,
                 }))
             }
             ServerRequest::FileChangeRequestApproval { params, .. } => Some(
@@ -4940,6 +4975,8 @@ mod tests {
     use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
     use codex_app_server_protocol::NetworkApprovalContext as AppServerNetworkApprovalContext;
     use codex_app_server_protocol::NetworkApprovalProtocol as AppServerNetworkApprovalProtocol;
+    use codex_app_server_protocol::NetworkPolicyAmendment as AppServerNetworkPolicyAmendment;
+    use codex_app_server_protocol::NetworkPolicyRuleAction as AppServerNetworkPolicyRuleAction;
     use codex_app_server_protocol::RequestId as AppServerRequestId;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::ServerRequest;
@@ -6721,8 +6758,13 @@ guardian_approval = true
             file_system: None,
             macos: None,
         });
+        params.proposed_network_policy_amendments = Some(vec![AppServerNetworkPolicyAmendment {
+            host: "example.com".to_string(),
+            action: AppServerNetworkPolicyRuleAction::Allow,
+        }]);
 
         let Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Exec {
+            available_decisions,
             network_approval_context,
             additional_permissions,
             ..
@@ -6749,6 +6791,20 @@ guardian_approval = true
                 file_system: None,
                 macos: None,
             })
+        );
+        assert_eq!(
+            available_decisions,
+            vec![
+                codex_protocol::protocol::ReviewDecision::Approved,
+                codex_protocol::protocol::ReviewDecision::ApprovedForSession,
+                codex_protocol::protocol::ReviewDecision::NetworkPolicyAmendment {
+                    network_policy_amendment: codex_protocol::approvals::NetworkPolicyAmendment {
+                        host: "example.com".to_string(),
+                        action: codex_protocol::approvals::NetworkPolicyRuleAction::Allow,
+                    },
+                },
+                codex_protocol::protocol::ReviewDecision::Abort,
+            ]
         );
     }
 
