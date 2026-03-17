@@ -1594,17 +1594,15 @@ impl App {
     }
 
     fn clear_committed_mcp_inventory_loading(&mut self) {
-        let Some(last_cell) = self.transcript_cells.last() else {
+        let Some(index) = self
+            .transcript_cells
+            .iter()
+            .rposition(|cell| cell.as_any().is::<history_cell::McpInventoryLoadingCell>())
+        else {
             return;
         };
-        if !last_cell
-            .as_any()
-            .is::<history_cell::McpInventoryLoadingCell>()
-        {
-            return;
-        }
 
-        self.transcript_cells.pop();
+        self.transcript_cells.remove(index);
         if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
             overlay.replace_cells(self.transcript_cells.clone());
         }
