@@ -106,6 +106,18 @@ where
         queue!(writer, MoveTo(0, area.top()))?;
         queue!(writer, Clear(ClearType::FromCursorDown))?;
 
+        // When the top region is too short to show every history row, prefer
+        // keeping the last nonblank content over a trailing spacer line.
+        if wrapped_lines > area.top() {
+            while wrapped.len() > 1
+                && wrapped.last().is_some_and(|line| {
+                    line.spans.iter().all(|span| span.content.trim().is_empty())
+                })
+            {
+                wrapped.pop();
+            }
+        }
+
         let mut visible = Vec::new();
         let mut visible_rows = 0u16;
         for line in wrapped.into_iter().rev() {
@@ -616,6 +628,56 @@ mod tests {
         assert!(
             rendered.contains("prompt> hello"),
             "expected viewport prompt line to stay visible after tmux history insert:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn tmux_mode_keeps_user_prompt_text_visible_when_truncated() {
+        use crate::history_cell::HistoryCell;
+        use crate::history_cell::UserHistoryCell;
+        use ratatui::style::Style;
+
+        let width: u16 = 20;
+        let height: u16 = 3;
+        let backend = VT100Backend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        let viewport = Rect::new(0, height - 2, width, 2);
+        term.set_viewport_area(viewport);
+
+        let cell = UserHistoryCell {
+            message: "hello".to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        };
+        insert_history_lines_with_mode(
+            &mut term,
+            cell.display_lines(width),
+            ScrollRegionMode::Disabled,
+        )
+        .expect("insert history");
+
+        let render_ui = |frame: &mut crate::custom_terminal::Frame<'_>| {
+            let area = frame.area();
+            frame
+                .buffer_mut()
+                .set_string(area.x, area.y, "status: ready", Style::default());
+            frame
+                .buffer_mut()
+                .set_string(area.x, area.y + 1, "prompt> hello", Style::default());
+        };
+
+        term.draw(render_ui).expect("redraw after history");
+
+        insta::assert_snapshot!(
+            "tmux_mode_keeps_user_prompt_text_visible_when_truncated",
+            term.backend()
+        );
+
+        let rendered = term.backend().vt100().screen().contents();
+        assert!(
+            rendered.contains("› hello"),
+            "expected user prompt text to stay visible in tmux mode:\n{rendered}"
         );
     }
 

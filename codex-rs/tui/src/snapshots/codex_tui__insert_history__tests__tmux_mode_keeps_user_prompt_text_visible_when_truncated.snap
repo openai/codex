@@ -1,0 +1,7 @@
+---
+source: tui/src/insert_history.rs
+expression: term.backend()
+---
+› hello
+status: ready
+prompt> hello
