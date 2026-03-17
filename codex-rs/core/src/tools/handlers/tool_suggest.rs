@@ -23,6 +23,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::discoverable::DiscoverableTool;
 use crate::tools::discoverable::DiscoverableToolAction;
 use crate::tools::discoverable::DiscoverableToolType;
+use crate::tools::discoverable::filter_tool_suggest_discoverable_tools_for_client;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -101,6 +102,13 @@ impl ToolHandler for ToolSuggestHandler {
                 "tool suggestions currently support only action_type=\"install\"".to_string(),
             ));
         }
+        if args.tool_type == DiscoverableToolType::Plugin
+            && turn.app_server_client_name.as_deref() == Some("codex-tui")
+        {
+            return Err(FunctionCallError::RespondToModel(
+                "plugin tool suggestions are not available in codex-tui yet".to_string(),
+            ));
+        }
 
         let auth = session.services.auth_manager.auth().await;
         let manager = session.services.mcp_connection_manager.read().await;
@@ -116,6 +124,12 @@ impl ToolHandler for ToolSuggestHandler {
             &accessible_connectors,
         )
         .await
+        .map(|discoverable_tools| {
+            filter_tool_suggest_discoverable_tools_for_client(
+                discoverable_tools,
+                turn.app_server_client_name.as_deref(),
+            )
+        })
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!(
                 "tool suggestions are unavailable right now: {err}"

@@ -7,6 +7,10 @@ use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
+use crate::plugins::test_support::TEST_CURATED_PLUGIN_SHA;
+use crate::plugins::test_support::write_curated_plugin_sha_with as write_curated_plugin_sha;
+use crate::plugins::test_support::write_file;
+use crate::plugins::test_support::write_openai_curated_marketplace;
 use codex_app_server_protocol::ConfigLayerSource;
 use pretty_assertions::assert_eq;
 use std::fs;
@@ -19,13 +23,6 @@ use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
-
-fn write_file(path: &Path, contents: &str) {
-    fs::create_dir_all(path.parent().expect("file should have a parent")).unwrap();
-    fs::write(path, contents).unwrap();
-}
-
 fn write_plugin(root: &Path, dir_name: &str, manifest_name: &str) {
     let plugin_root = root.join(dir_name);
     fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
@@ -37,44 +34,6 @@ fn write_plugin(root: &Path, dir_name: &str, manifest_name: &str) {
     .unwrap();
     fs::write(plugin_root.join("skills/SKILL.md"), "skill").unwrap();
     fs::write(plugin_root.join(".mcp.json"), r#"{"mcpServers":{}}"#).unwrap();
-}
-
-fn write_openai_curated_marketplace(root: &Path, plugin_names: &[&str]) {
-    fs::create_dir_all(root.join(".agents/plugins")).unwrap();
-    let plugins = plugin_names
-        .iter()
-        .map(|plugin_name| {
-            format!(
-                r#"{{
-      "name": "{plugin_name}",
-      "source": {{
-        "source": "local",
-        "path": "./plugins/{plugin_name}"
-      }}
-    }}"#
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",\n");
-    fs::write(
-        root.join(".agents/plugins/marketplace.json"),
-        format!(
-            r#"{{
-  "name": "{OPENAI_CURATED_MARKETPLACE_NAME}",
-  "plugins": [
-{plugins}
-  ]
-}}"#
-        ),
-    )
-    .unwrap();
-    for plugin_name in plugin_names {
-        write_plugin(root, &format!("plugins/{plugin_name}"), plugin_name);
-    }
-}
-
-fn write_curated_plugin_sha(codex_home: &Path, sha: &str) {
-    write_file(&codex_home.join(".tmp/plugins.sha"), &format!("{sha}\n"));
 }
 
 fn plugin_config_toml(enabled: bool, plugins_feature_enabled: bool) -> String {

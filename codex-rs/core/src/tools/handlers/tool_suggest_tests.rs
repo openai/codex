@@ -1,107 +1,18 @@
 use super::*;
-use crate::config::CONFIG_TOML_FILE;
-use crate::config::ConfigBuilder;
-use crate::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::plugins::PluginInstallRequest;
 use crate::plugins::PluginsManager;
+use crate::plugins::test_support::load_plugins_config;
+use crate::plugins::test_support::write_curated_plugin_sha;
+use crate::plugins::test_support::write_openai_curated_marketplace;
+use crate::plugins::test_support::write_plugins_feature_config;
 use crate::tools::discoverable::DiscoverablePluginInfo;
+use crate::tools::discoverable::filter_tool_suggest_discoverable_tools_for_client;
 use codex_app_server_protocol::AppInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
-use std::fs;
-use std::path::Path;
 use tempfile::tempdir;
-
-fn write_file(path: &Path, contents: &str) {
-    fs::create_dir_all(path.parent().expect("file should have a parent")).unwrap();
-    fs::write(path, contents).unwrap();
-}
-
-fn write_curated_plugin(root: &Path, plugin_name: &str) {
-    let plugin_root = root.join("plugins").join(plugin_name);
-    write_file(
-        &plugin_root.join(".codex-plugin/plugin.json"),
-        &format!(
-            r#"{{
-  "name": "{plugin_name}",
-  "description": "Plugin that includes skills, MCP servers, and app connectors"
-}}"#
-        ),
-    );
-    write_file(
-        &plugin_root.join("skills/SKILL.md"),
-        "---\nname: sample\ndescription: sample\n---\n",
-    );
-    write_file(
-        &plugin_root.join(".mcp.json"),
-        r#"{
-  "mcpServers": {
-    "sample-docs": {
-      "type": "http",
-      "url": "https://sample.example/mcp"
-    }
-  }
-}"#,
-    );
-    write_file(
-        &plugin_root.join(".app.json"),
-        r#"{
-  "apps": {
-    "calendar": {
-      "id": "connector_calendar"
-    }
-  }
-}"#,
-    );
-}
-
-fn write_openai_curated_marketplace(root: &Path, plugin_name: &str) {
-    write_file(
-        &root.join(".agents/plugins/marketplace.json"),
-        &format!(
-            r#"{{
-  "name": "{OPENAI_CURATED_MARKETPLACE_NAME}",
-  "plugins": [
-    {{
-      "name": "{plugin_name}",
-      "source": {{
-        "source": "local",
-        "path": "./plugins/{plugin_name}"
-      }}
-    }}
-  ]
-}}"#
-        ),
-    );
-    write_curated_plugin(root, plugin_name);
-}
-
-fn write_curated_plugin_sha(codex_home: &Path) {
-    write_file(
-        &codex_home.join(".tmp/plugins.sha"),
-        "0123456789abcdef0123456789abcdef01234567\n",
-    );
-}
-
-fn write_plugins_feature_config(codex_home: &Path) {
-    write_file(
-        &codex_home.join(CONFIG_TOML_FILE),
-        r#"[features]
-plugins = true
-"#,
-    );
-}
-
-async fn load_plugin_config(codex_home: &Path) -> crate::config::Config {
-    ConfigBuilder::default()
-        .codex_home(codex_home.to_path_buf())
-        .fallback_cwd(Some(codex_home.to_path_buf()))
-        .build()
-        .await
-        .expect("config should load")
-}
 
 #[test]
 fn build_tool_suggestion_elicitation_request_uses_expected_shape() {
@@ -249,6 +160,54 @@ fn build_tool_suggestion_meta_uses_expected_shape() {
 }
 
 #[test]
+fn filter_tool_suggest_discoverable_tools_for_codex_tui_omits_plugins() {
+    let discoverable_tools = vec![
+        DiscoverableTool::Connector(Box::new(AppInfo {
+            id: "connector_google_calendar".to_string(),
+            name: "Google Calendar".to_string(),
+            description: Some("Plan events and schedules.".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some("https://example.test/google-calendar".to_string()),
+            is_accessible: false,
+            is_enabled: true,
+            plugin_display_names: Vec::new(),
+        })),
+        DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
+            id: "slack@openai-curated".to_string(),
+            name: "Slack".to_string(),
+            description: Some("Search Slack messages".to_string()),
+            has_skills: true,
+            mcp_server_names: vec!["slack".to_string()],
+            app_connector_ids: vec!["connector_slack".to_string()],
+        })),
+    ];
+
+    assert_eq!(
+        filter_tool_suggest_discoverable_tools_for_client(discoverable_tools, Some("codex-tui"),),
+        vec![DiscoverableTool::Connector(Box::new(AppInfo {
+            id: "connector_google_calendar".to_string(),
+            name: "Google Calendar".to_string(),
+            description: Some("Plan events and schedules.".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some("https://example.test/google-calendar".to_string()),
+            is_accessible: false,
+            is_enabled: true,
+            plugin_display_names: Vec::new(),
+        }))]
+    );
+}
+
+#[test]
 fn verified_connector_suggestion_completed_requires_accessible_connector() {
     let accessible_connectors = vec![AppInfo {
         id: "calendar".to_string(),
@@ -280,11 +239,11 @@ fn verified_connector_suggestion_completed_requires_accessible_connector() {
 async fn verified_plugin_suggestion_completed_requires_installed_plugin() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = crate::plugins::curated_plugins_repo_path(codex_home.path());
-    write_openai_curated_marketplace(&curated_root, "sample");
+    write_openai_curated_marketplace(&curated_root, &["sample"]);
     write_curated_plugin_sha(codex_home.path());
     write_plugins_feature_config(codex_home.path());
 
-    let config = load_plugin_config(codex_home.path()).await;
+    let config = load_plugins_config(codex_home.path()).await;
     let plugins_manager = PluginsManager::new(codex_home.path().to_path_buf());
 
     assert!(!verified_plugin_suggestion_completed(
@@ -304,7 +263,7 @@ async fn verified_plugin_suggestion_completed_requires_installed_plugin() {
         .await
         .expect("plugin should install");
 
-    let refreshed_config = load_plugin_config(codex_home.path()).await;
+    let refreshed_config = load_plugins_config(codex_home.path()).await;
     assert!(verified_plugin_suggestion_completed(
         "sample@openai-curated",
         &refreshed_config,

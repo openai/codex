@@ -1,8 +1,9 @@
 use crate::plugins::PluginCapabilitySummary;
-use crate::plugins::PluginDetailSummary;
 use codex_app_server_protocol::AppInfo;
 use serde::Deserialize;
 use serde::Serialize;
+
+const TUI_APP_SERVER_CLIENT_NAME: &str = "codex-tui";
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -91,6 +92,20 @@ impl From<DiscoverablePluginInfo> for DiscoverableTool {
     }
 }
 
+pub(crate) fn filter_tool_suggest_discoverable_tools_for_client(
+    discoverable_tools: Vec<DiscoverableTool>,
+    app_server_client_name: Option<&str>,
+) -> Vec<DiscoverableTool> {
+    if app_server_client_name != Some(TUI_APP_SERVER_CLIENT_NAME) {
+        return discoverable_tools;
+    }
+
+    discoverable_tools
+        .into_iter()
+        .filter(|tool| !matches!(tool, DiscoverableTool::Plugin(_)))
+        .collect()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DiscoverablePluginInfo {
     pub(crate) id: String,
@@ -111,23 +126,6 @@ impl From<PluginCapabilitySummary> for DiscoverablePluginInfo {
             mcp_server_names: value.mcp_server_names,
             app_connector_ids: value
                 .app_connector_ids
-                .into_iter()
-                .map(|connector_id| connector_id.0)
-                .collect(),
-        }
-    }
-}
-
-impl From<PluginDetailSummary> for DiscoverablePluginInfo {
-    fn from(value: PluginDetailSummary) -> Self {
-        Self {
-            id: value.id,
-            name: value.name,
-            description: value.description,
-            has_skills: !value.skills.is_empty(),
-            mcp_server_names: value.mcp_server_names,
-            app_connector_ids: value
-                .apps
                 .into_iter()
                 .map(|connector_id| connector_id.0)
                 .collect(),

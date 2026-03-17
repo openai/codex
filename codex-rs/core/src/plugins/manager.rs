@@ -219,6 +219,19 @@ impl PluginCapabilitySummary {
     }
 }
 
+impl From<PluginDetailSummary> for PluginCapabilitySummary {
+    fn from(value: PluginDetailSummary) -> Self {
+        Self {
+            config_name: value.id,
+            display_name: value.name,
+            description: prompt_safe_plugin_description(value.description.as_deref()),
+            has_skills: !value.skills.is_empty(),
+            mcp_server_names: value.mcp_server_names,
+            app_connector_ids: value.apps,
+        }
+    }
+}
+
 fn prompt_safe_plugin_description(description: Option<&str>) -> Option<String> {
     let description = description?
         .split_whitespace()
