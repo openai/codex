@@ -187,7 +187,7 @@ async fn http_connect_accept(
             client_addr(&req),
             Some("CONNECT".to_string()),
             NetworkProtocol::HttpsConnect,
-            None,
+            /*audit_endpoint_override*/ None,
         )
         .await);
     }
@@ -469,7 +469,7 @@ async fn http_plain_proxy(
             return Ok(proxy_disabled_response(
                 &app_state,
                 socket_path,
-                0,
+                /*port*/ 0,
                 client_addr(&req),
                 Some(req.method().as_str().to_string()),
                 NetworkProtocol::Http,
@@ -495,7 +495,11 @@ async fn http_plain_proxy(
             warn!(
                 "unix socket blocked by method policy (client={client}, method={method}, mode=limited, allowed_methods=GET, HEAD, OPTIONS)"
             );
-            return Ok(json_blocked("unix-socket", REASON_METHOD_NOT_ALLOWED, None));
+            return Ok(json_blocked(
+                "unix-socket",
+                REASON_METHOD_NOT_ALLOWED,
+                /*details*/ None,
+            ));
         }
 
         if !unix_socket_permissions_supported() {
@@ -560,7 +564,11 @@ async fn http_plain_proxy(
                 );
                 let client = client.as_deref().unwrap_or_default();
                 warn!("unix socket blocked (client={client}, path={socket_path})");
-                Ok(json_blocked("unix-socket", REASON_NOT_ALLOWED, None))
+                Ok(json_blocked(
+                    "unix-socket",
+                    REASON_NOT_ALLOWED,
+                    /*details*/ None,
+                ))
             }
             Err(err) => {
                 warn!("unix socket check failed: {err}");
@@ -610,7 +618,7 @@ async fn http_plain_proxy(
             client_addr(&req),
             Some(req.method().as_str().to_string()),
             NetworkProtocol::Http,
-            None,
+            /*audit_endpoint_override*/ None,
         )
         .await);
     }

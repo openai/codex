@@ -20,7 +20,7 @@ impl Display for RateLimitError {
 
 /// Parses the default Codex rate-limit header family into a `RateLimitSnapshot`.
 pub fn parse_default_rate_limit(headers: &HeaderMap) -> Option<RateLimitSnapshot> {
-    parse_rate_limit_for_limit(headers, None)
+    parse_rate_limit_for_limit(headers, /*limit_id*/ None)
 }
 
 /// Parses all known rate-limit header families into update records keyed by limit id.

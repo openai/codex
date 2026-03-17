@@ -12,7 +12,7 @@ pub(crate) fn selection_option_row(
     label: String,
     is_selected: bool,
 ) -> Box<dyn Renderable> {
-    selection_option_row_with_dim(index, label, is_selected, false)
+    selection_option_row_with_dim(index, label, is_selected, /*dim*/ false)
 }
 
 pub(crate) fn selection_option_row_with_dim(

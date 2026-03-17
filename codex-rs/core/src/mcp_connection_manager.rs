@@ -1585,7 +1585,9 @@ async fn list_tools_for_client_uncached(
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,
 ) -> Result<Vec<ToolInfo>> {
-    let resp = client.list_tools_with_connector_ids(None, timeout).await?;
+    let resp = client
+        .list_tools_with_connector_ids(/*params*/ None, timeout)
+        .await?;
     let tools = resp
         .tools
         .into_iter()

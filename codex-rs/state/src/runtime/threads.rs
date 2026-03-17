@@ -189,7 +189,7 @@ FROM threads
             model_providers,
             anchor,
             sort_key,
-            None,
+            /*search_term*/ None,
         );
         push_thread_order_and_limit(&mut builder, sort_key, limit);
 
@@ -204,7 +204,7 @@ FROM threads
 
     /// Insert or replace thread metadata directly.
     pub async fn upsert_thread(&self, metadata: &crate::ThreadMetadata) -> anyhow::Result<()> {
-        self.upsert_thread_with_creation_memory_mode(metadata, None)
+        self.upsert_thread_with_creation_memory_mode(metadata, /*creation_memory_mode*/ None)
             .await
     }
 

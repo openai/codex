@@ -317,7 +317,7 @@ async fn process_request(
                         "Missing authorization code. Sign-in could not be completed.",
                         io::ErrorKind::InvalidData,
                         Some("missing_authorization_code"),
-                        None,
+                        /*error_description*/ None,
                     );
                 }
             };
@@ -335,7 +335,7 @@ async fn process_request(
                             &message,
                             io::ErrorKind::PermissionDenied,
                             Some("workspace_restriction"),
-                            None,
+                            /*error_description*/ None,
                         );
                     }
                     // Obtain API key via token-exchange and persist
@@ -373,7 +373,7 @@ async fn process_request(
                             "Sign-in completed but redirecting back to Codex failed.",
                             io::ErrorKind::Other,
                             Some("redirect_failed"),
-                            None,
+                            /*error_description*/ None,
                         ),
                     }
                 }
@@ -384,7 +384,7 @@ async fn process_request(
                         &format!("Token exchange failed: {err}"),
                         io::ErrorKind::Other,
                         Some("token_exchange_failed"),
-                        None,
+                        /*error_description*/ None,
                     )
                 }
             }

@@ -105,12 +105,12 @@ async fn load_recent_threads(sess: &Session) -> Vec<ThreadMetadata> {
     match state_db
         .list_threads(
             MAX_RECENT_THREADS,
-            None,
+            /*anchor*/ None,
             SortKey::UpdatedAt,
             &[],
-            None,
-            false,
-            None,
+            /*model_providers*/ None,
+            /*archived_only*/ false,
+            /*search_term*/ None,
         )
         .await
     {
@@ -235,7 +235,7 @@ fn render_tree(root: &Path) -> Option<Vec<String>> {
     }
 
     let mut lines = Vec::new();
-    collect_tree_lines(root, 0, &mut lines);
+    collect_tree_lines(root, /*depth*/ 0, &mut lines);
     (!lines.is_empty()).then_some(lines)
 }
 

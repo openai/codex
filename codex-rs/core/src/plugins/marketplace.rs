@@ -28,6 +28,7 @@ pub struct ResolvedMarketplacePlugin {
 pub struct MarketplaceSummary {
     pub name: String,
     pub path: AbsolutePathBuf,
+    pub display_name: Option<String>,
     pub plugins: Vec<MarketplacePluginSummary>,
 }
 
@@ -212,6 +213,7 @@ pub(crate) fn load_marketplace_summary(
     Ok(MarketplaceSummary {
         name: marketplace.name,
         path: path.clone(),
+        display_name: marketplace.display_name,
         plugins,
     })
 }
@@ -367,6 +369,9 @@ fn marketplace_root_dir(
 #[derive(Debug, Deserialize)]
 struct MarketplaceFile {
     name: String,
+    #[serde(default)]
+    #[serde(alias = "displayName")]
+    display_name: Option<String>,
     plugins: Vec<MarketplacePlugin>,
 }
 

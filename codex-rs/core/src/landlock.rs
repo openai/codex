@@ -43,7 +43,7 @@ where
         network_sandbox_policy,
         sandbox_policy_cwd,
         use_legacy_landlock,
-        allow_network_for_proxy(false),
+        allow_network_for_proxy(/*enforce_managed_network*/ false),
     );
     let arg0 = Some("codex-linux-sandbox");
     spawn_child_async(SpawnChildRequest {

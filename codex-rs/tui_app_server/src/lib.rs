@@ -504,7 +504,10 @@ async fn lookup_session_target_with_app_server(
                 return Ok(None);
             }
         };
-        return match app_server.thread_read(thread_id, false).await {
+        return match app_server
+            .thread_read(thread_id, /*include_turns*/ false)
+            .await
+        {
             Ok(thread) => Ok(session_target_from_app_server_thread(thread)),
             Err(err) => {
                 warn!(
@@ -668,7 +671,7 @@ pub async fn run_main(
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
     let cloud_requirements = cloud_requirements_loader_for_storage(
         codex_home.to_path_buf(),
-        false,
+        /*enable_codex_api_key_env*/ false,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
         chatgpt_base_url,
     );
@@ -825,7 +828,12 @@ pub async fn run_main(
     }
 
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, true)
+        codex_core::otel_init::build_provider(
+            &config,
+            env!("CARGO_PKG_VERSION"),
+            /*service_name_override*/ None,
+            /*default_analytics_enabled*/ true,
+        )
     })) {
         Ok(Ok(otel)) => otel,
         Ok(Err(e)) => {
@@ -1004,7 +1012,7 @@ async fn run_ratatui_app(
         if show_login_screen && !remote_mode {
             cloud_requirements = cloud_requirements_loader_for_storage(
                 initial_config.codex_home.clone(),
-                false,
+                /*enable_codex_api_key_env*/ false,
                 initial_config.cli_auth_credentials_store_mode,
                 initial_config.chatgpt_base_url.clone(),
             );
@@ -1086,7 +1094,11 @@ async fn run_ratatui_app(
             let Some(app_server) = session_lookup_app_server.as_mut() else {
                 unreachable!("session lookup app server should be initialized for --fork --last");
             };
-            match lookup_latest_session_target_with_app_server(app_server, &config, None).await? {
+            match lookup_latest_session_target_with_app_server(
+                app_server, &config, /*cwd_filter*/ None,
+            )
+            .await?
+            {
                 Some(target_session) => resume_picker::SessionSelection::Fork(target_session),
                 None => resume_picker::SessionSelection::StartFresh,
             }
@@ -1475,8 +1487,13 @@ async fn load_config_or_exit(
     overrides: ConfigOverrides,
     cloud_requirements: CloudRequirementsLoader,
 ) -> Config {
-    load_config_or_exit_with_fallback_cwd(cli_kv_overrides, overrides, cloud_requirements, None)
-        .await
+    load_config_or_exit_with_fallback_cwd(
+        cli_kv_overrides,
+        overrides,
+        cloud_requirements,
+        /*fallback_cwd*/ None,
+    )
+    .await
 }
 
 async fn load_config_or_exit_with_fallback_cwd(
