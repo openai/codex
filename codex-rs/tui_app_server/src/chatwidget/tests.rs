@@ -8417,11 +8417,8 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
         .approval_policy
         .set(AskForApproval::Never)
         .expect("set approval policy");
-    chat.config
-        .permissions
-        .sandbox_policy
-        .set(SandboxPolicy::DangerFullAccess)
-        .expect("set sandbox policy");
+    chat.config.permissions.sandbox_policy =
+        Constrained::allow_any(SandboxPolicy::DangerFullAccess);
 
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, 120);

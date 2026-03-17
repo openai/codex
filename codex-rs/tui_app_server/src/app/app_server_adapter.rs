@@ -574,10 +574,10 @@ fn thread_item_to_core(item: &ThreadItem) -> Option<TurnItem> {
             phase,
             memory_citation,
         } => Some(TurnItem::AgentMessage(AgentMessageItem {
-            id,
-            content: vec![AgentMessageContent::Text { text }],
-            phase,
-            memory_citation: memory_citation.map(|citation| {
+            id: id.clone(),
+            content: vec![AgentMessageContent::Text { text: text.clone() }],
+            phase: phase.clone(),
+            memory_citation: memory_citation.clone().map(|citation| {
                 codex_protocol::memory_citation::MemoryCitation {
                     entries: citation
                         .entries
@@ -595,7 +595,10 @@ fn thread_item_to_core(item: &ThreadItem) -> Option<TurnItem> {
                 }
             }),
         })),
-        ThreadItem::Plan { id, text } => Some(TurnItem::Plan(PlanItem { id, text })),
+        ThreadItem::Plan { id, text } => Some(TurnItem::Plan(PlanItem {
+            id: id.clone(),
+            text: text.clone(),
+        })),
         ThreadItem::Reasoning {
             id,
             summary,
@@ -928,6 +931,7 @@ mod tests {
                                 id: "assistant-1".to_string(),
                                 text: "hi".to_string(),
                                 phase: Some(MessagePhase::FinalAnswer),
+                                memory_citation: None,
                             },
                         ],
                         status: TurnStatus::Completed,

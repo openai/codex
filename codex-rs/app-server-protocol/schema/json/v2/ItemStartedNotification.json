@@ -297,7 +297,7 @@
           },
           "type": "array"
         },
-        "rolloutIds": {
+        "threadIds": {
           "items": {
             "type": "string"
           },
@@ -306,7 +306,7 @@
       },
       "required": [
         "entries",
-        "rolloutIds"
+        "threadIds"
       ],
       "type": "object"
     },
