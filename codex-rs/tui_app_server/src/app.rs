@@ -44,7 +44,13 @@ use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
+use codex_app_server_client::AppServerRequestHandle;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::ListMcpServerStatusParams;
+use codex_app_server_protocol::ListMcpServerStatusResponse;
+use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::RequestId;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -74,6 +80,8 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FinalOutput;
 use codex_protocol::protocol::ListSkillsResponseEvent;
+#[cfg(test)]
+use codex_protocol::protocol::McpAuthStatus;
 #[cfg(test)]
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
@@ -111,6 +119,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
+use uuid::Uuid;
 mod agent_navigation;
 mod app_server_adapter;
 mod app_server_requests;
@@ -1533,6 +1542,42 @@ impl App {
 
         self.submit_op_to_thread(thread_id, op).await;
         Ok(())
+    }
+
+    fn fetch_mcp_inventory(&mut self, app_server: &AppServerSession) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = fetch_all_mcp_server_statuses(request_handle)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::McpInventoryLoaded { result });
+        });
+    }
+
+    fn handle_mcp_inventory_result(&mut self, result: Result<Vec<McpServerStatus>, String>) {
+        let config = self.chat_widget.config_ref().clone();
+        self.chat_widget.clear_mcp_inventory_loading();
+
+        let statuses = match result {
+            Ok(statuses) => statuses,
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to load MCP inventory: {err}"));
+                return;
+            }
+        };
+
+        if config.mcp_servers.get().is_empty() && statuses.is_empty() {
+            self.chat_widget
+                .add_to_history(history_cell::empty_mcp_output());
+            return;
+        }
+
+        self.chat_widget
+            .add_to_history(history_cell::new_mcp_tools_output_from_statuses(
+                &config, &statuses,
+            ));
     }
 
     async fn try_submit_active_thread_op_via_app_server(
@@ -2999,6 +3044,12 @@ impl App {
             AppEvent::RefreshConnectors { force_refetch } => {
                 self.chat_widget.refresh_connectors(force_refetch);
             }
+            AppEvent::FetchMcpInventory => {
+                self.fetch_mcp_inventory(app_server);
+            }
+            AppEvent::McpInventoryLoaded { result } => {
+                self.handle_mcp_inventory_result(result);
+            }
             AppEvent::StartFileSearch(query) => {
                 self.file_search.on_user_query(query);
             }
@@ -4421,6 +4472,70 @@ impl App {
     }
 }
 
+async fn fetch_all_mcp_server_statuses(
+    request_handle: AppServerRequestHandle,
+) -> Result<Vec<McpServerStatus>> {
+    let mut cursor = None;
+    let mut statuses = Vec::new();
+
+    loop {
+        let request_id = RequestId::String(format!("mcp-inventory-{}", Uuid::new_v4()));
+        let response: ListMcpServerStatusResponse = request_handle
+            .request_typed(ClientRequest::McpServerStatusList {
+                request_id,
+                params: ListMcpServerStatusParams {
+                    cursor: cursor.clone(),
+                    limit: Some(100),
+                },
+            })
+            .await
+            .wrap_err("mcpServerStatus/list failed in app-server TUI")?;
+        statuses.extend(response.data);
+        if let Some(next_cursor) = response.next_cursor {
+            cursor = Some(next_cursor);
+        } else {
+            break;
+        }
+    }
+
+    Ok(statuses)
+}
+
+#[cfg(test)]
+fn mcp_inventory_maps_from_statuses(
+    statuses: Vec<McpServerStatus>,
+) -> (
+    HashMap<String, codex_protocol::mcp::Tool>,
+    HashMap<String, Vec<codex_protocol::mcp::Resource>>,
+    HashMap<String, Vec<codex_protocol::mcp::ResourceTemplate>>,
+    HashMap<String, McpAuthStatus>,
+) {
+    let mut tools = HashMap::new();
+    let mut resources = HashMap::new();
+    let mut resource_templates = HashMap::new();
+    let mut auth_statuses = HashMap::new();
+
+    for status in statuses {
+        let server_name = status.name;
+        auth_statuses.insert(
+            server_name.clone(),
+            match status.auth_status {
+                codex_app_server_protocol::McpAuthStatus::Unsupported => McpAuthStatus::Unsupported,
+                codex_app_server_protocol::McpAuthStatus::NotLoggedIn => McpAuthStatus::NotLoggedIn,
+                codex_app_server_protocol::McpAuthStatus::BearerToken => McpAuthStatus::BearerToken,
+                codex_app_server_protocol::McpAuthStatus::OAuth => McpAuthStatus::OAuth,
+            },
+        );
+        resources.insert(server_name.clone(), status.resources);
+        resource_templates.insert(server_name.clone(), status.resource_templates);
+        for (tool_name, tool) in status.tools {
+            tools.insert(format!("mcp__{server_name}__{tool_name}"), tool);
+        }
+    }
+
+    (tools, resources, resource_templates, auth_statuses)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4446,11 +4561,13 @@ mod tests {
     use codex_protocol::config_types::CollaborationModeMask;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
+    use codex_protocol::mcp::Tool;
     use codex_protocol::openai_models::ModelAvailabilityNux;
     use codex_protocol::protocol::AgentMessageDeltaEvent;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::McpAuthStatus;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionConfiguredEvent;
     use codex_protocol::protocol::SessionSource;
@@ -4489,6 +4606,56 @@ mod tests {
             vec![base_cwd.join("rel")]
         );
         Ok(())
+    }
+
+    #[test]
+    fn mcp_inventory_maps_prefix_tool_names_by_server() {
+        let statuses = vec![
+            McpServerStatus {
+                name: "docs".to_string(),
+                tools: HashMap::from([(
+                    "list".to_string(),
+                    Tool {
+                        description: None,
+                        name: "list".to_string(),
+                        title: None,
+                        input_schema: serde_json::json!({"type": "object"}),
+                        output_schema: None,
+                        annotations: None,
+                        icons: None,
+                        meta: None,
+                    },
+                )]),
+                resources: Vec::new(),
+                resource_templates: Vec::new(),
+                auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+            },
+            McpServerStatus {
+                name: "disabled".to_string(),
+                tools: HashMap::new(),
+                resources: Vec::new(),
+                resource_templates: Vec::new(),
+                auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+            },
+        ];
+
+        let (tools, resources, resource_templates, auth_statuses) =
+            mcp_inventory_maps_from_statuses(statuses);
+        let mut resource_names = resources.keys().cloned().collect::<Vec<_>>();
+        resource_names.sort();
+        let mut template_names = resource_templates.keys().cloned().collect::<Vec<_>>();
+        template_names.sort();
+
+        assert_eq!(
+            tools.keys().cloned().collect::<Vec<_>>(),
+            vec!["mcp__docs__list".to_string()]
+        );
+        assert_eq!(resource_names, vec!["disabled", "docs"]);
+        assert_eq!(template_names, vec!["disabled", "docs"]);
+        assert_eq!(
+            auth_statuses.get("disabled"),
+            Some(&McpAuthStatus::Unsupported)
+        );
     }
 
     #[test]

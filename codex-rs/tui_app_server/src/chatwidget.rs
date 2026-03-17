@@ -67,7 +67,6 @@ use codex_core::find_thread_name_by_id;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::git_info::local_git_branches;
-use codex_core::mcp::McpManager;
 use codex_core::plugins::PluginsManager;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::skills::model::SkillMetadata;
@@ -8219,17 +8218,29 @@ impl ChatWidget {
     }
 
     pub(crate) fn add_mcp_output(&mut self) {
-        let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(
-            self.config.codex_home.clone(),
+        self.flush_answer_stream_with_separator();
+        self.flush_active_cell();
+        self.active_cell = Some(Box::new(history_cell::new_mcp_inventory_loading(
+            self.config.animations,
         )));
-        if mcp_manager
-            .effective_servers(&self.config, /*auth*/ None)
-            .is_empty()
+        self.bump_active_cell_revision();
+        self.request_redraw();
+        self.app_event_tx.send(AppEvent::FetchMcpInventory);
+    }
+
+    pub(crate) fn clear_mcp_inventory_loading(&mut self) {
+        let Some(active) = self.active_cell.as_ref() else {
+            return;
+        };
+        if !active
+            .as_any()
+            .is::<history_cell::McpInventoryLoadingCell>()
         {
-            self.add_to_history(history_cell::empty_mcp_output());
-        } else {
-            self.add_app_server_stub_message("MCP tool inventory");
+            return;
         }
+        self.active_cell = None;
+        self.bump_active_cell_revision();
+        self.request_redraw();
     }
 
     pub(crate) fn add_connectors_output(&mut self) {

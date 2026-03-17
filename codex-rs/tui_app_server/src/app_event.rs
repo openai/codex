@@ -10,6 +10,7 @@
 
 use std::path::PathBuf;
 
+use codex_app_server_protocol::McpServerStatus;
 use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
@@ -163,6 +164,14 @@ pub(crate) enum AppEvent {
     /// Refresh app connector state and mention bindings.
     RefreshConnectors {
         force_refetch: bool,
+    },
+
+    /// Fetch MCP inventory via app-server RPCs and render it into history.
+    FetchMcpInventory,
+
+    /// Result of fetching MCP inventory via app-server RPCs.
+    McpInventoryLoaded {
+        result: Result<Vec<McpServerStatus>, String>,
     },
 
     InsertHistoryCell(Box<dyn HistoryCell>),
