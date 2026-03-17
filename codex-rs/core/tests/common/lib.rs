@@ -263,54 +263,27 @@ pub fn sandbox_network_env_var() -> &'static str {
     codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
 }
 
-const REMOTE_ENV_AVAILABLE_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV_AVAILABLE";
-const REMOTE_ENV_HOST_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV_HOST";
-const REMOTE_ENV_PORT_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV_PORT";
-const REMOTE_ENV_USER_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV_USER";
-const REMOTE_ENV_KEY_PATH_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV_KEY_PATH";
+const REMOTE_ENV_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RemoteEnvConfig {
-    pub host: String,
-    pub port: u16,
-    pub user: String,
-    pub key_path: PathBuf,
+    pub container_name: String,
 }
 
 pub fn requires_remote_env() -> Option<RemoteEnvConfig> {
-    if std::env::var_os(REMOTE_ENV_AVAILABLE_ENV_VAR).is_none() {
-        eprintln!("Skipping test because {REMOTE_ENV_AVAILABLE_ENV_VAR} is not set.");
+    if std::env::var_os(REMOTE_ENV_ENV_VAR).is_none() {
+        eprintln!("Skipping test because {REMOTE_ENV_ENV_VAR} is not set.");
         return None;
     }
 
-    let host = std::env::var(REMOTE_ENV_HOST_ENV_VAR).unwrap_or_else(|_| {
-        panic!("{REMOTE_ENV_HOST_ENV_VAR} must be set when {REMOTE_ENV_AVAILABLE_ENV_VAR}=1")
-    });
-    let port_raw = std::env::var(REMOTE_ENV_PORT_ENV_VAR).unwrap_or_else(|_| {
-        panic!("{REMOTE_ENV_PORT_ENV_VAR} must be set when {REMOTE_ENV_AVAILABLE_ENV_VAR}=1")
-    });
-    let port = port_raw.parse::<u16>().unwrap_or_else(|err| {
-        panic!("{REMOTE_ENV_PORT_ENV_VAR} has invalid value {port_raw:?}: {err}")
-    });
-    let user = std::env::var(REMOTE_ENV_USER_ENV_VAR).unwrap_or_else(|_| {
-        panic!("{REMOTE_ENV_USER_ENV_VAR} must be set when {REMOTE_ENV_AVAILABLE_ENV_VAR}=1")
-    });
-    let key_path = std::env::var(REMOTE_ENV_KEY_PATH_ENV_VAR).unwrap_or_else(|_| {
-        panic!("{REMOTE_ENV_KEY_PATH_ENV_VAR} must be set when {REMOTE_ENV_AVAILABLE_ENV_VAR}=1")
-    });
-    let key_path = PathBuf::from(key_path);
+    let container_name = std::env::var(REMOTE_ENV_ENV_VAR)
+        .unwrap_or_else(|_| panic!("{REMOTE_ENV_ENV_VAR} must be set"));
     assert!(
-        key_path.is_file(),
-        "{REMOTE_ENV_KEY_PATH_ENV_VAR} path does not exist: {}",
-        key_path.display()
+        !container_name.trim().is_empty(),
+        "{REMOTE_ENV_ENV_VAR} must not be empty"
     );
 
-    Some(RemoteEnvConfig {
-        host,
-        port,
-        user,
-        key_path,
-    })
+    Some(RemoteEnvConfig { container_name })
 }
 
 pub fn format_with_current_shell(command: &str) -> Vec<String> {

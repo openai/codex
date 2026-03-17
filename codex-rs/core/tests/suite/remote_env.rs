@@ -49,47 +49,31 @@ rm -rf "${temp_dir}"
 }
 
 fn run_remote_script(remote_env: &RemoteEnvConfig, script: &str) -> Result<String> {
-    let user = &remote_env.user;
-    let host = &remote_env.host;
-    let ssh_target = format!("{user}@{host}");
-
-    let mut command = Command::new("ssh");
+    let mut command = Command::new("docker");
     command
+        .arg("exec")
         .arg("-i")
-        .arg(&remote_env.key_path)
-        .arg("-p")
-        .arg(remote_env.port.to_string())
-        .arg("-o")
-        .arg("BatchMode=yes")
-        .arg("-o")
-        .arg("StrictHostKeyChecking=no")
-        .arg("-o")
-        .arg("UserKnownHostsFile=/dev/null")
-        .arg("-o")
-        .arg("ConnectTimeout=10")
-        .arg(ssh_target)
+        .arg(&remote_env.container_name)
         .arg("bash")
         .arg("-s")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let mut child = command
-        .spawn()
-        .context("failed to spawn ssh to remote env")?;
+    let mut child = command.spawn().context("failed to spawn docker exec")?;
 
     let mut stdin = child
         .stdin
         .take()
-        .context("failed to open stdin for ssh command")?;
+        .context("failed to open stdin for docker exec command")?;
     stdin
         .write_all(script.as_bytes())
-        .context("failed to write remote script to ssh stdin")?;
+        .context("failed to write remote script to docker exec stdin")?;
     drop(stdin);
 
     let output = child
         .wait_with_output()
-        .context("failed to wait for ssh command")?;
+        .context("failed to wait for docker exec command")?;
 
     ensure!(
         output.status.success(),

@@ -1,86 +1,86 @@
 #!/usr/bin/env bash
-set -euo pipefail
 
-# Local harness for codex-rs remote_env integration tests.
-# Assumes a working Docker engine (Docker Desktop or Colima).
+# Remote-env test harness for codex-rs integration tests.
+#
+# Source mode (recommended when you want to prefix cargo test):
+#   source scripts/test-remote-env.sh
+#   cd codex-rs
+#   cargo test -p codex-core --test all remote_env_connects_creates_temp_dir_and_runs_sample_script
+#   codex_remote_env_cleanup
+#
+# Exec mode:
+#   ./scripts/test-remote-env.sh
+#   ./scripts/test-remote-env.sh bash -lc 'cd codex-rs && cargo test -p codex-core --test all remote_env_connects_creates_temp_dir_and_runs_sample_script'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-if ! command -v docker >/dev/null 2>&1; then
-  echo "docker is required (Colima or Docker Desktop)" >&2
-  exit 1
-fi
-
-if ! docker info >/dev/null 2>&1; then
-  echo "docker daemon is not reachable; for Colima run: colima start" >&2
-  exit 1
-fi
-
-remote_env_dir="$(mktemp -d "${TMPDIR:-/tmp}/codex-remote-env.XXXXXX")"
-ssh_key="${remote_env_dir}/id_ed25519"
-ssh_key_pub="${ssh_key}.pub"
-ssh-keygen -q -t ed25519 -N "" -f "${ssh_key}"
-chmod 600 "${ssh_key}"
-ssh_pub_key="$(cat "${ssh_key_pub}")"
-
-container_name="codex-remote-test-env-local-$(date +%s)-${RANDOM}"
-remote_port="${CODEX_TEST_REMOTE_ENV_LOCAL_PORT:-2222}"
-
-cleanup() {
-  docker rm -f "${container_name}" >/dev/null 2>&1 || true
-  rm -rf "${remote_env_dir}"
+is_sourced() {
+  [[ "${BASH_SOURCE[0]}" != "$0" ]]
 }
-trap cleanup EXIT
 
-docker run -d --name "${container_name}" -p "127.0.0.1:${remote_port}:22" ubuntu:24.04 bash -lc "
-  set -euo pipefail
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update
-  apt-get install -y --no-install-recommends openssh-server
-  mkdir -p /run/sshd
-  useradd -m -s /bin/bash codex
-  install -d -m 700 -o codex -g codex /home/codex/.ssh
-  printf '%s\\n' '${ssh_pub_key}' >/home/codex/.ssh/authorized_keys
-  chown codex:codex /home/codex/.ssh/authorized_keys
-  chmod 600 /home/codex/.ssh/authorized_keys
-  exec /usr/sbin/sshd -D -e
-"
-
-for attempt in {1..30}; do
-  if ssh \
-    -i "${ssh_key}" \
-    -o BatchMode=yes \
-    -o StrictHostKeyChecking=no \
-    -o UserKnownHostsFile=/dev/null \
-    -o ConnectTimeout=2 \
-    -p "${remote_port}" \
-    codex@127.0.0.1 \
-    true
-  then
-    break
+ensure_docker() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "docker is required (Colima or Docker Desktop)" >&2
+    return 1
   fi
 
-  if [[ "${attempt}" -eq 30 ]]; then
-    echo "remote env container did not become reachable over ssh" >&2
-    docker logs "${container_name}" || true
-    exit 1
+  if ! docker info >/dev/null 2>&1; then
+    echo "docker daemon is not reachable; for Colima run: colima start" >&2
+    return 1
   fi
+}
 
-  sleep 1
-done
+start_remote_env() {
+  local container_name
+  container_name="codex-remote-test-env-local-$(date +%s)-${RANDOM}"
+  docker run -d --name "${container_name}" ubuntu:24.04 sleep infinity >/dev/null
+  export CODEX_TEST_REMOTE_ENV="${container_name}"
+}
 
-export CODEX_TEST_REMOTE_ENV_AVAILABLE=1
-export CODEX_TEST_REMOTE_ENV_HOST=127.0.0.1
-export CODEX_TEST_REMOTE_ENV_PORT="${remote_port}"
-export CODEX_TEST_REMOTE_ENV_USER=codex
-export CODEX_TEST_REMOTE_ENV_KEY_PATH="${ssh_key}"
+codex_remote_env_cleanup() {
+  if [[ -n "${CODEX_TEST_REMOTE_ENV:-}" ]]; then
+    docker rm -f "${CODEX_TEST_REMOTE_ENV}" >/dev/null 2>&1 || true
+    unset CODEX_TEST_REMOTE_ENV
+  fi
+}
 
-if [[ "$#" -gt 0 ]]; then
-  "$@"
-else
+run_default_test() {
   (
     cd "${REPO_ROOT}/codex-rs"
     cargo test -p codex-core --test all remote_env_connects_creates_temp_dir_and_runs_sample_script
   )
+}
+
+main() {
+  ensure_docker
+  start_remote_env
+
+  echo "CODEX_TEST_REMOTE_ENV=${CODEX_TEST_REMOTE_ENV}"
+
+  if is_sourced; then
+    echo "Remote env ready. Run your command, then call: codex_remote_env_cleanup"
+  else
+    trap codex_remote_env_cleanup EXIT
+    if [[ "$#" -gt 0 ]]; then
+      "$@"
+    else
+      run_default_test
+    fi
+  fi
+}
+
+if is_sourced; then
+  old_shell_options="$(set +o)"
+  set -euo pipefail
+  if main "$@"; then
+    status=0
+  else
+    status=$?
+  fi
+  eval "${old_shell_options}"
+  return "${status}"
+else
+  set -euo pipefail
+  main "$@"
 fi
