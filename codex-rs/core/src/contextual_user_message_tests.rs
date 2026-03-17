@@ -91,7 +91,7 @@ fn detects_hook_prompt_fragment_and_roundtrips_escaping() {
         parsed.fragments,
         vec![HookPromptFragment {
             text: r#"Retry with "waves" & <tides>"#.to_string(),
-            hook_run_ids: vec!["hook-run-1".to_string()],
+            hook_run_id: "hook-run-1".to_string(),
         }],
     );
     assert!(!text.contains("&quot;waves&quot; & <tides>"));

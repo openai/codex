@@ -49,13 +49,12 @@ pub struct HookPromptItem {
 #[ts(rename_all = "camelCase")]
 pub struct HookPromptFragment {
     pub text: String,
-    pub hook_run_ids: Vec<String>,
+    pub hook_run_id: String,
 }
 
 const HOOK_PROMPT_OPEN_TAG_PREFIX: &str = "<hook_prompt";
 const HOOK_PROMPT_CLOSE_TAG: &str = "</hook_prompt>";
 const HOOK_PROMPT_RUN_ID_ATTR: &str = "hook_run_id";
-const HOOK_PROMPT_RUN_IDS_ATTR: &str = "hook_run_ids";
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 #[serde(tag = "type")]
@@ -232,7 +231,7 @@ impl HookPromptFragment {
     pub fn from_single_hook(text: impl Into<String>, hook_run_id: impl Into<String>) -> Self {
         Self {
             text: text.into(),
-            hook_run_ids: vec![hook_run_id.into()],
+            hook_run_id: hook_run_id.into(),
         }
     }
 }
@@ -240,9 +239,9 @@ impl HookPromptFragment {
 pub fn build_hook_prompt_message(fragments: &[HookPromptFragment]) -> Option<ResponseItem> {
     let content = fragments
         .iter()
-        .filter(|fragment| !fragment.hook_run_ids.is_empty())
+        .filter(|fragment| !fragment.hook_run_id.trim().is_empty())
         .filter_map(|fragment| {
-            serialize_hook_prompt_fragment(&fragment.text, &fragment.hook_run_ids)
+            serialize_hook_prompt_fragment(&fragment.text, &fragment.hook_run_id)
                 .map(|text| ContentItem::InputText { text })
         })
         .collect::<Vec<_>>();
@@ -291,8 +290,8 @@ pub fn parse_hook_prompt_fragment(text: &str) -> Option<HookPromptFragment> {
 
     let open_tag_end = trimmed.find('>')?;
     let open_tag = &trimmed[..=open_tag_end];
-    let hook_run_ids = parse_hook_prompt_hook_run_ids(open_tag)?;
-    if hook_run_ids.is_empty() {
+    let hook_run_id = parse_hook_prompt_hook_run_id(open_tag)?;
+    if hook_run_id.trim().is_empty() {
         return None;
     }
 
@@ -305,25 +304,16 @@ pub fn parse_hook_prompt_fragment(text: &str) -> Option<HookPromptFragment> {
 
     Some(HookPromptFragment {
         text: unescape_hook_prompt_xml(body),
-        hook_run_ids,
+        hook_run_id,
     })
 }
 
-fn serialize_hook_prompt_fragment(text: &str, hook_run_ids: &[String]) -> Option<String> {
+fn serialize_hook_prompt_fragment(text: &str, hook_run_id: &str) -> Option<String> {
     let escaped_text = escape_hook_prompt_xml(text);
-    match hook_run_ids {
-        [hook_run_id] => Some(format!(
-            r#"<hook_prompt {HOOK_PROMPT_RUN_ID_ATTR}="{hook_run_id}">{escaped_text}</hook_prompt>"#,
-            hook_run_id = escape_hook_prompt_xml(hook_run_id),
-        )),
-        _ => {
-            let encoded_hook_run_ids = serde_json::to_string(hook_run_ids).ok()?;
-            Some(format!(
-                r#"<hook_prompt {HOOK_PROMPT_RUN_IDS_ATTR}="{hook_run_ids}">{escaped_text}</hook_prompt>"#,
-                hook_run_ids = escape_hook_prompt_xml(&encoded_hook_run_ids),
-            ))
-        }
-    }
+    Some(format!(
+        r#"<hook_prompt {HOOK_PROMPT_RUN_ID_ATTR}="{hook_run_id}">{escaped_text}</hook_prompt>"#,
+        hook_run_id = escape_hook_prompt_xml(hook_run_id),
+    ))
 }
 
 fn parse_hook_prompt_attribute(open_tag: &str, attribute_name: &str) -> Option<String> {
@@ -335,25 +325,12 @@ fn parse_hook_prompt_attribute(open_tag: &str, attribute_name: &str) -> Option<S
     ))
 }
 
-fn parse_hook_prompt_hook_run_ids(open_tag: &str) -> Option<Vec<String>> {
-    if let Some(encoded_hook_run_ids) =
-        parse_hook_prompt_attribute(open_tag, HOOK_PROMPT_RUN_IDS_ATTR)
-    {
-        let hook_run_ids = serde_json::from_str::<Vec<String>>(&encoded_hook_run_ids).ok()?;
-        if hook_run_ids
-            .iter()
-            .any(|hook_run_id| hook_run_id.trim().is_empty())
-        {
-            return None;
-        }
-        return Some(hook_run_ids);
-    }
-
+fn parse_hook_prompt_hook_run_id(open_tag: &str) -> Option<String> {
     let hook_run_id = parse_hook_prompt_attribute(open_tag, HOOK_PROMPT_RUN_ID_ATTR)?;
     if hook_run_id.trim().is_empty() {
         return None;
     }
-    Some(vec![hook_run_id])
+    Some(hook_run_id)
 }
 
 fn escape_hook_prompt_xml(text: &str) -> String {
@@ -473,20 +450,19 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn hook_prompt_roundtrips_multiple_hook_run_ids() {
-        let original = HookPromptFragment {
-            text: "Retry with care & joy.".to_string(),
-            hook_run_ids: vec!["hook-run-1".to_string(), "hook-run-2".to_string()],
-        };
-        let message =
-            build_hook_prompt_message(std::slice::from_ref(&original)).expect("hook prompt");
+    fn hook_prompt_roundtrips_multiple_fragments() {
+        let original = vec![
+            HookPromptFragment::from_single_hook("Retry with care & joy.", "hook-run-1"),
+            HookPromptFragment::from_single_hook("Then summarize cleanly.", "hook-run-2"),
+        ];
+        let message = build_hook_prompt_message(&original).expect("hook prompt");
 
         let ResponseItem::Message { content, .. } = message else {
             panic!("expected hook prompt message");
         };
 
         let parsed = parse_hook_prompt_message(None, &content).expect("parsed hook prompt");
-        assert_eq!(parsed.fragments, vec![original]);
+        assert_eq!(parsed.fragments, original);
     }
 
     #[test]
@@ -500,7 +476,7 @@ mod tests {
             parsed,
             HookPromptFragment {
                 text: "Retry with tests.".to_string(),
-                hook_run_ids: vec!["hook-run-1".to_string()],
+                hook_run_id: "hook-run-1".to_string(),
             }
         );
     }

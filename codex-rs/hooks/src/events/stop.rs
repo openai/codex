@@ -390,7 +390,7 @@ mod tests {
                 block_reason: Some("retry with tests".to_string()),
                 continuation_fragments: vec![HookPromptFragment {
                     text: "retry with tests".to_string(),
-                    hook_run_ids: vec![parsed.completed.run.id.clone()],
+                    hook_run_id: parsed.completed.run.id.clone(),
                 }],
             }
         );
@@ -458,7 +458,7 @@ mod tests {
                 block_reason: Some("retry with tests".to_string()),
                 continuation_fragments: vec![HookPromptFragment {
                     text: "retry with tests".to_string(),
-                    hook_run_ids: vec![parsed.completed.run.id.clone()],
+                    hook_run_id: parsed.completed.run.id.clone(),
                 }],
             }
         );

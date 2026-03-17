@@ -227,7 +227,7 @@ fn parses_hook_prompt_message_as_distinct_turn_item() {
                 hook_prompt.fragments[0],
                 HookPromptFragment {
                     text: "Retry with exactly the phrase meow meow meow.".to_string(),
-                    hook_run_ids: vec!["hook-run-1".to_string()],
+                    hook_run_id: "hook-run-1".to_string(),
                 }
             );
         }
@@ -263,7 +263,7 @@ fn parses_hook_prompt_and_hides_other_contextual_fragments() {
                 hook_prompt.fragments,
                 vec![HookPromptFragment {
                     text: "Retry with care & joy.".to_string(),
-                    hook_run_ids: vec!["hook-run-1".to_string()],
+                    hook_run_id: "hook-run-1".to_string(),
                 }]
             );
         }

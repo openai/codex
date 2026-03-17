@@ -373,18 +373,15 @@
     },
     "HookPromptFragment": {
       "properties": {
-        "hookRunIds": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
+        "hookRunId": {
+          "type": "string"
         },
         "text": {
           "type": "string"
         }
       },
       "required": [
-        "hookRunIds",
+        "hookRunId",
         "text"
       ],
       "type": "object"

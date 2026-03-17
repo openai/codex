@@ -4268,7 +4268,7 @@ pub enum ThreadItem {
 #[ts(rename_all = "camelCase", export_to = "v2/")]
 pub struct HookPromptFragment {
     pub text: String,
-    pub hook_run_ids: Vec<String>,
+    pub hook_run_id: String,
 }
 
 impl ThreadItem {
@@ -4438,7 +4438,7 @@ impl From<codex_protocol::items::HookPromptFragment> for HookPromptFragment {
     fn from(value: codex_protocol::items::HookPromptFragment) -> Self {
         Self {
             text: value.text,
-            hook_run_ids: value.hook_run_ids,
+            hook_run_id: value.hook_run_id,
         }
     }
 }

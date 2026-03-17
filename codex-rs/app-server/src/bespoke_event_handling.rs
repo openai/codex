@@ -3878,11 +3878,11 @@ mod tests {
                         fragments: vec![
                             codex_app_server_protocol::HookPromptFragment {
                                 text: "Retry with tests.".into(),
-                                hook_run_ids: vec!["hook-run-1".into()],
+                                hook_run_id: "hook-run-1".into(),
                             },
                             codex_app_server_protocol::HookPromptFragment {
                                 text: "Then summarize cleanly.".into(),
-                                hook_run_ids: vec!["hook-run-2".into()],
+                                hook_run_id: "hook-run-2".into(),
                             },
                         ],
                     }

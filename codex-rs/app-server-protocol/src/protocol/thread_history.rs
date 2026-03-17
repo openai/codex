@@ -2676,11 +2676,11 @@ mod tests {
                 fragments: vec![
                     crate::protocol::v2::HookPromptFragment {
                         text: "Retry with tests.".into(),
-                        hook_run_ids: vec!["hook-run-1".into()],
+                        hook_run_id: "hook-run-1".into(),
                     },
                     crate::protocol::v2::HookPromptFragment {
                         text: "Then summarize cleanly.".into(),
-                        hook_run_ids: vec!["hook-run-2".into()],
+                        hook_run_id: "hook-run-2".into(),
                     },
                 ],
             }
