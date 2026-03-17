@@ -181,6 +181,41 @@ jobs:
           account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
 
+      - name: Setup Python for runtime packaging
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Build Python runtime wheel
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+
+          version="${RELEASE_TAG#rust-v}"
+          staging_dir="${RUNNER_TEMP}/codex-cli-bin-${TARGET}"
+          out_dir="${GITHUB_WORKSPACE}/dist-python/${TARGET}"
+
+          python -m pip install --upgrade pip
+          python -m pip install build hatchling
+
+          python sdk/python/scripts/update_sdk_artifacts.py \
+            stage-runtime \
+            "${staging_dir}" \
+            "codex-rs/target/${TARGET}/release/codex.exe" \
+            --runtime-version "${version}"
+
+          python -m build --wheel --outdir "${out_dir}" "${staging_dir}"
+
+      - name: Upload Python runtime wheel
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-runtime-${{ matrix.target }}
+          path: dist-python/${{ matrix.target }}/*
+
       - name: Stage artifacts
         shell: bash
         run: |

@@ -47,6 +47,7 @@ from .retry import retry_on_overload
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 ApprovalHandler = Callable[[str, JsonObject | None], JsonObject]
+BUNDLED_SDK_PKG_NAME = "codex-app-server-sdk"
 RUNTIME_PKG_NAME = "codex-cli-bin"
 
 
@@ -82,9 +83,9 @@ def _installed_codex_path() -> Path:
         from codex_cli_bin import bundled_codex_path
     except ImportError as exc:
         raise FileNotFoundError(
-            "Unable to locate the pinned Codex runtime. Install the published SDK build "
-            f"with its {RUNTIME_PKG_NAME} dependency, or set AppServerConfig.codex_bin "
-            "explicitly."
+            "Unable to locate the Codex runtime. Install the published "
+            f"{BUNDLED_SDK_PKG_NAME} package, install {RUNTIME_PKG_NAME} "
+            "alongside the core SDK, or set AppServerConfig.codex_bin explicitly."
         ) from exc
 
     return bundled_codex_path()

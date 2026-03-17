@@ -15,7 +15,12 @@ import types
 import typing
 from dataclasses import dataclass
 from pathlib import Path
+from textwrap import dedent
 from typing import Any, Callable, Sequence, get_args, get_origin
+
+CORE_SDK_PKG_NAME = "codex-app-server-sdk-core"
+BUNDLED_SDK_PKG_NAME = "codex-app-server-sdk"
+RUNTIME_PKG_NAME = "codex-cli-bin"
 
 
 def repo_root() -> Path:
@@ -110,23 +115,7 @@ def _rewrite_project_version(pyproject_text: str, version: str) -> str:
     return updated
 
 
-def _rewrite_sdk_runtime_dependency(pyproject_text: str, runtime_version: str) -> str:
-    match = re.search(r"^dependencies = \[(.*?)\]$", pyproject_text, flags=re.MULTILINE)
-    if match is None:
-        raise RuntimeError(
-            "Could not find dependencies array in sdk/python/pyproject.toml"
-        )
-
-    raw_items = [item.strip() for item in match.group(1).split(",") if item.strip()]
-    raw_items = [item for item in raw_items if "codex-cli-bin" not in item]
-    raw_items.append(f'"codex-cli-bin=={runtime_version}"')
-    replacement = "dependencies = [\n  " + ",\n  ".join(raw_items) + ",\n]"
-    return pyproject_text[: match.start()] + replacement + pyproject_text[match.end() :]
-
-
-def stage_python_sdk_package(
-    staging_dir: Path, sdk_version: str, runtime_version: str
-) -> Path:
+def stage_python_core_sdk_package(staging_dir: Path, sdk_version: str) -> Path:
     _copy_package_tree(sdk_root(), staging_dir)
     sdk_bin_dir = staging_dir / "src" / "codex_app_server" / "bin"
     if sdk_bin_dir.exists():
@@ -135,8 +124,70 @@ def stage_python_sdk_package(
     pyproject_path = staging_dir / "pyproject.toml"
     pyproject_text = pyproject_path.read_text()
     pyproject_text = _rewrite_project_version(pyproject_text, sdk_version)
-    pyproject_text = _rewrite_sdk_runtime_dependency(pyproject_text, runtime_version)
     pyproject_path.write_text(pyproject_text)
+    return staging_dir
+
+
+def stage_python_sdk_package(
+    staging_dir: Path, sdk_version: str, runtime_version: str
+) -> Path:
+    if staging_dir.exists():
+        if staging_dir.is_dir():
+            shutil.rmtree(staging_dir)
+        else:
+            staging_dir.unlink()
+
+    package_dir = staging_dir / "src" / "codex_app_server_sdk_meta"
+    package_dir.mkdir(parents=True, exist_ok=True)
+    (package_dir / "__init__.py").write_text(
+        '"""Bundled Codex app-server SDK package metadata."""\n'
+    )
+
+    pyproject = dedent(
+        f"""
+        [build-system]
+        requires = ["hatchling>=1.24.0"]
+        build-backend = "hatchling.build"
+
+        [project]
+        name = "{BUNDLED_SDK_PKG_NAME}"
+        version = "{sdk_version}"
+        description = "Bundled Python SDK for Codex app-server v2"
+        readme = "README.md"
+        requires-python = ">=3.10"
+        license = {{ text = "Apache-2.0" }}
+        authors = [{{ name = "OpenClaw Assistant" }}]
+        dependencies = [
+          "{CORE_SDK_PKG_NAME}=={sdk_version}",
+          "{RUNTIME_PKG_NAME}=={runtime_version}",
+        ]
+
+        [project.urls]
+        Homepage = "https://github.com/openai/codex"
+        Repository = "https://github.com/openai/codex"
+        Issues = "https://github.com/openai/codex/issues"
+
+        [tool.hatch.build.targets.wheel]
+        packages = ["src/codex_app_server_sdk_meta"]
+
+        [tool.hatch.build.targets.sdist]
+        include = ["src/codex_app_server_sdk_meta/**", "README.md", "pyproject.toml"]
+        """
+    ).lstrip()
+    (staging_dir / "pyproject.toml").write_text(pyproject)
+    (staging_dir / "README.md").write_text(
+        "\n".join(
+            [
+                "# Codex App Server Python SDK",
+                "",
+                "Bundled metapackage for the Codex app-server Python SDK.",
+                f"It depends on `{CORE_SDK_PKG_NAME}` and `{RUNTIME_PKG_NAME}`",
+                "at the same version so a regular install includes both the SDK",
+                "and the packaged Codex runtime binary.",
+                "",
+            ]
+        )
+    )
     return staging_dir
 
 
@@ -558,6 +609,7 @@ class PublicFieldSpec:
 @dataclass(frozen=True)
 class CliOps:
     generate_types: Callable[[], None]
+    stage_python_core_sdk_package: Callable[[Path, str], Path]
     stage_python_sdk_package: Callable[[Path, str, str], Path]
     stage_python_runtime_package: Callable[[Path, str, Path], Path]
     current_sdk_version: Callable[[], str]
@@ -916,23 +968,37 @@ def build_parser() -> argparse.ArgumentParser:
         "generate-types", help="Regenerate Python protocol-derived types"
     )
 
+    stage_sdk_core_parser = subparsers.add_parser(
+        "stage-sdk-core",
+        help="Stage a releasable core SDK package without a bundled runtime",
+    )
+    stage_sdk_core_parser.add_argument(
+        "staging_dir",
+        type=Path,
+        help="Output directory for the staged core SDK package",
+    )
+    stage_sdk_core_parser.add_argument(
+        "--sdk-version",
+        help="Version to write into the staged core SDK package (defaults to sdk/python current version)",
+    )
+
     stage_sdk_parser = subparsers.add_parser(
         "stage-sdk",
-        help="Stage a releasable SDK package pinned to a runtime version",
+        help="Stage a releasable bundled SDK metapackage pinned to a runtime version",
     )
     stage_sdk_parser.add_argument(
         "staging_dir",
         type=Path,
-        help="Output directory for the staged SDK package",
+        help="Output directory for the staged bundled SDK package",
     )
     stage_sdk_parser.add_argument(
         "--runtime-version",
         required=True,
-        help="Pinned codex-cli-bin version for the staged SDK package",
+        help="Pinned codex-cli-bin version for the staged bundled SDK package",
     )
     stage_sdk_parser.add_argument(
         "--sdk-version",
-        help="Version to write into the staged SDK package (defaults to sdk/python current version)",
+        help="Version to write into the staged bundled SDK package (defaults to sdk/python current version)",
     )
 
     stage_runtime_parser = subparsers.add_parser(
@@ -964,6 +1030,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def default_cli_ops() -> CliOps:
     return CliOps(
         generate_types=generate_types,
+        stage_python_core_sdk_package=stage_python_core_sdk_package,
         stage_python_sdk_package=stage_python_sdk_package,
         stage_python_runtime_package=stage_python_runtime_package,
         current_sdk_version=current_sdk_version,
@@ -973,6 +1040,12 @@ def default_cli_ops() -> CliOps:
 def run_command(args: argparse.Namespace, ops: CliOps) -> None:
     if args.command == "generate-types":
         ops.generate_types()
+    elif args.command == "stage-sdk-core":
+        ops.generate_types()
+        ops.stage_python_core_sdk_package(
+            args.staging_dir,
+            args.sdk_version or ops.current_sdk_version(),
+        )
     elif args.command == "stage-sdk":
         ops.generate_types()
         ops.stage_python_sdk_package(
