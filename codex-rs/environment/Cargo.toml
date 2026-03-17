@@ -13,7 +13,8 @@ workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
-tokio = { workspace = true, features = ["fs", "rt"] }
+codex-utils-absolute-path = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "rt"] }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

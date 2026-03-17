@@ -1,10 +1,13 @@
 use async_trait::async_trait;
-use std::io;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+use tokio::io;
+
+const MAX_READ_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CreateDirectoryOptions {
@@ -41,26 +44,29 @@ pub type FileSystemResult<T> = io::Result<T>;
 
 #[async_trait]
 pub trait FileSystem: Send + Sync {
-    async fn read_file(&self, path: &Path) -> FileSystemResult<Vec<u8>>;
+    async fn read_file(&self, path: &AbsolutePathBuf) -> FileSystemResult<Vec<u8>>;
 
-    async fn write_file(&self, path: &Path, contents: Vec<u8>) -> FileSystemResult<()>;
+    async fn write_file(&self, path: &AbsolutePathBuf, contents: Vec<u8>) -> FileSystemResult<()>;
 
     async fn create_directory(
         &self,
-        path: &Path,
+        path: &AbsolutePathBuf,
         options: CreateDirectoryOptions,
     ) -> FileSystemResult<()>;
 
-    async fn get_metadata(&self, path: &Path) -> FileSystemResult<FileMetadata>;
+    async fn get_metadata(&self, path: &AbsolutePathBuf) -> FileSystemResult<FileMetadata>;
 
-    async fn read_directory(&self, path: &Path) -> FileSystemResult<Vec<ReadDirectoryEntry>>;
+    async fn read_directory(
+        &self,
+        path: &AbsolutePathBuf,
+    ) -> FileSystemResult<Vec<ReadDirectoryEntry>>;
 
-    async fn remove(&self, path: &Path, options: RemoveOptions) -> FileSystemResult<()>;
+    async fn remove(&self, path: &AbsolutePathBuf, options: RemoveOptions) -> FileSystemResult<()>;
 
     async fn copy(
         &self,
-        source_path: &Path,
-        destination_path: &Path,
+        source_path: &AbsolutePathBuf,
+        destination_path: &AbsolutePathBuf,
         options: CopyOptions,
     ) -> FileSystemResult<()>;
 }
@@ -70,29 +76,36 @@ pub(crate) struct LocalFileSystem;
 
 #[async_trait]
 impl FileSystem for LocalFileSystem {
-    async fn read_file(&self, path: &Path) -> FileSystemResult<Vec<u8>> {
-        tokio::fs::read(path).await
+    async fn read_file(&self, path: &AbsolutePathBuf) -> FileSystemResult<Vec<u8>> {
+        let metadata = tokio::fs::metadata(path.as_path()).await?;
+        if metadata.len() > MAX_READ_FILE_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("file is too large to read: limit is {MAX_READ_FILE_BYTES} bytes"),
+            ));
+        }
+        tokio::fs::read(path.as_path()).await
     }
 
-    async fn write_file(&self, path: &Path, contents: Vec<u8>) -> FileSystemResult<()> {
-        tokio::fs::write(path, contents).await
+    async fn write_file(&self, path: &AbsolutePathBuf, contents: Vec<u8>) -> FileSystemResult<()> {
+        tokio::fs::write(path.as_path(), contents).await
     }
 
     async fn create_directory(
         &self,
-        path: &Path,
+        path: &AbsolutePathBuf,
         options: CreateDirectoryOptions,
     ) -> FileSystemResult<()> {
         if options.recursive {
-            tokio::fs::create_dir_all(path).await?;
+            tokio::fs::create_dir_all(path.as_path()).await?;
         } else {
-            tokio::fs::create_dir(path).await?;
+            tokio::fs::create_dir(path.as_path()).await?;
         }
         Ok(())
     }
 
-    async fn get_metadata(&self, path: &Path) -> FileSystemResult<FileMetadata> {
-        let metadata = tokio::fs::metadata(path).await?;
+    async fn get_metadata(&self, path: &AbsolutePathBuf) -> FileSystemResult<FileMetadata> {
+        let metadata = tokio::fs::metadata(path.as_path()).await?;
         Ok(FileMetadata {
             is_directory: metadata.is_dir(),
             is_file: metadata.is_file(),
@@ -101,9 +114,12 @@ impl FileSystem for LocalFileSystem {
         })
     }
 
-    async fn read_directory(&self, path: &Path) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
+    async fn read_directory(
+        &self,
+        path: &AbsolutePathBuf,
+    ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
         let mut entries = Vec::new();
-        let mut read_dir = tokio::fs::read_dir(path).await?;
+        let mut read_dir = tokio::fs::read_dir(path.as_path()).await?;
         while let Some(entry) = read_dir.next_entry().await? {
             let metadata = tokio::fs::metadata(entry.path()).await?;
             entries.push(ReadDirectoryEntry {
@@ -115,18 +131,18 @@ impl FileSystem for LocalFileSystem {
         Ok(entries)
     }
 
-    async fn remove(&self, path: &Path, options: RemoveOptions) -> FileSystemResult<()> {
-        match tokio::fs::symlink_metadata(path).await {
+    async fn remove(&self, path: &AbsolutePathBuf, options: RemoveOptions) -> FileSystemResult<()> {
+        match tokio::fs::symlink_metadata(path.as_path()).await {
             Ok(metadata) => {
                 let file_type = metadata.file_type();
                 if file_type.is_dir() {
                     if options.recursive {
-                        tokio::fs::remove_dir_all(path).await?;
+                        tokio::fs::remove_dir_all(path.as_path()).await?;
                     } else {
-                        tokio::fs::remove_dir(path).await?;
+                        tokio::fs::remove_dir(path.as_path()).await?;
                     }
                 } else {
-                    tokio::fs::remove_file(path).await?;
+                    tokio::fs::remove_file(path.as_path()).await?;
                 }
                 Ok(())
             }
@@ -137,8 +153,8 @@ impl FileSystem for LocalFileSystem {
 
     async fn copy(
         &self,
-        source_path: &Path,
-        destination_path: &Path,
+        source_path: &AbsolutePathBuf,
+        destination_path: &AbsolutePathBuf,
         options: CopyOptions,
     ) -> FileSystemResult<()> {
         let source_path = source_path.to_path_buf();

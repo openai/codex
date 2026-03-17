@@ -46,7 +46,7 @@ impl FsApi {
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
         let bytes = self
             .file_system
-            .read_file(params.path.as_path())
+            .read_file(&params.path)
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadFileResponse {
@@ -64,7 +64,7 @@ impl FsApi {
             ))
         })?;
         self.file_system
-            .write_file(params.path.as_path(), bytes)
+            .write_file(&params.path, bytes)
             .await
             .map_err(map_fs_error)?;
         Ok(FsWriteFileResponse {})
@@ -76,7 +76,7 @@ impl FsApi {
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
         self.file_system
             .create_directory(
-                params.path.as_path(),
+                &params.path,
                 CreateDirectoryOptions {
                     recursive: params.recursive.unwrap_or(true),
                 },
@@ -92,7 +92,7 @@ impl FsApi {
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
         let metadata = self
             .file_system
-            .get_metadata(params.path.as_path())
+            .get_metadata(&params.path)
             .await
             .map_err(map_fs_error)?;
         Ok(FsGetMetadataResponse {
@@ -109,7 +109,7 @@ impl FsApi {
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
         let entries = self
             .file_system
-            .read_directory(params.path.as_path())
+            .read_directory(&params.path)
             .await
             .map_err(map_fs_error)?;
         Ok(FsReadDirectoryResponse {
@@ -130,7 +130,7 @@ impl FsApi {
     ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
         self.file_system
             .remove(
-                params.path.as_path(),
+                &params.path,
                 RemoveOptions {
                     recursive: params.recursive.unwrap_or(true),
                     force: params.force.unwrap_or(true),
@@ -147,8 +147,8 @@ impl FsApi {
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
         self.file_system
             .copy(
-                params.source_path.as_path(),
-                params.destination_path.as_path(),
+                &params.source_path,
+                &params.destination_path,
                 CopyOptions {
                     recursive: params.recursive,
                 },
