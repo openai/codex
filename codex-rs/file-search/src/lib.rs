@@ -41,7 +41,8 @@ pub use cli::Cli;
 /// A single match result returned from the search.
 ///
 /// * `score` – Relevance score returned by `nucleo`.
-/// * `path`  – Path to the matched file (relative to the search directory).
+/// * `path`  – Path to the matched entry (file or directory), relative to the
+///   search directory.
 /// * `indices` – Optional list of character indices that matched the query.
 ///   These are only filled when the caller of [`run`] sets
 ///   `options.compute_indices` to `true`. The indices vector follows the
@@ -386,7 +387,7 @@ fn get_file_path<'a>(path: &'a Path, search_directories: &[PathBuf]) -> Option<(
     rel_path.to_str().map(|p| (root_idx, p))
 }
 
-/// Walks the search directories and feeds discovered file paths into `nucleo`
+/// Walks the search directories and feeds discovered paths into `nucleo`
 /// via the injector.
 ///
 /// The walker uses `require_git(true)` to match git's own ignore semantics:
@@ -448,14 +449,13 @@ fn walker_worker(
                 Ok(entry) => entry,
                 Err(_) => return ignore::WalkState::Continue,
             };
-            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
-                return ignore::WalkState::Continue;
-            }
             let path = entry.path();
             let Some(full_path) = path.to_str() else {
                 return ignore::WalkState::Continue;
             };
-            if let Some((_, relative_path)) = get_file_path(path, &search_directories) {
+            if let Some((_, relative_path)) = get_file_path(path, &search_directories)
+                && !relative_path.is_empty()
+            {
                 injector.push(Arc::from(full_path), |_, cols| {
                     cols[0] = Utf32String::from(relative_path);
                 });
@@ -958,6 +958,35 @@ mod tests {
                 .matches
                 .iter()
                 .any(|m| m.path.to_string_lossy().contains("file-0000.txt"))
+        );
+    }
+
+    #[test]
+    fn run_returns_directory_matches_for_query() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("docs/guides")).unwrap();
+        fs::write(dir.path().join("docs/guides/intro.md"), "intro").unwrap();
+        fs::write(dir.path().join("docs/readme.md"), "readme").unwrap();
+
+        let results = run(
+            "guides",
+            vec![dir.path().to_path_buf()],
+            FileSearchOptions {
+                limit: NonZero::new(20).unwrap(),
+                exclude: Vec::new(),
+                threads: NonZero::new(2).unwrap(),
+                compute_indices: false,
+                respect_gitignore: true,
+            },
+            None,
+        )
+        .expect("run ok");
+
+        assert!(
+            results
+                .matches
+                .iter()
+                .any(|m| m.path.as_path() == Path::new("docs/guides"))
         );
     }
 
