@@ -5,7 +5,6 @@ use codex_cloud_requirements::cloud_requirements_loader;
 use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
-use codex_core::config::push_missing_system_bwrap_startup_warning;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
@@ -436,7 +435,7 @@ pub async fn run_main_with_transport(
     };
     let loader_overrides_for_config_api = loader_overrides.clone();
     let mut config_warnings = Vec::new();
-    let mut config = match ConfigBuilder::default()
+    let config = match ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides.clone())
         .loader_overrides(loader_overrides)
         .cloud_requirements(cloud_requirements.clone())
@@ -455,8 +454,6 @@ pub async fn run_main_with_transport(
             })?
         }
     };
-
-    push_missing_system_bwrap_startup_warning(&mut config.startup_warnings);
 
     if let Ok(Some(err)) = check_execpolicy_for_warnings(&config.config_layer_stack).await {
         let (path, range) = exec_policy_warning_location(&err);

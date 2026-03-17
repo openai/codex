@@ -30,6 +30,7 @@ use pretty_assertions::assert_eq;
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -5492,6 +5493,34 @@ shell_tool = true
         "{:?}",
         config.startup_warnings
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn missing_system_bwrap_warning_is_added_during_config_load() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    let has_warning = config.startup_warnings.iter().any(|warning| {
+        warning.contains("Codex could not find system bubblewrap at /usr/bin/bwrap")
+    });
+
+    #[cfg(target_os = "linux")]
+    assert_eq!(
+        has_warning,
+        !Path::new("/usr/bin/bwrap").is_file(),
+        "{:?}",
+        config.startup_warnings
+    );
+
+    #[cfg(not(target_os = "linux"))]
+    assert!(!has_warning, "{:?}", config.startup_warnings);
 
     Ok(())
 }

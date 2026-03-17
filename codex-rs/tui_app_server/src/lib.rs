@@ -28,7 +28,6 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
-use codex_core::config::push_missing_system_bwrap_startup_warning;
 use codex_core::config::resolve_oss_provider;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLoadError;
@@ -399,8 +398,6 @@ where
     F: FnOnce(InProcessClientStartArgs) -> Fut,
     Fut: Future<Output = std::io::Result<InProcessAppServerClient>>,
 {
-    push_missing_system_bwrap_startup_warning(&mut config.startup_warnings);
-
     let config_warnings = config
         .startup_warnings
         .iter()
@@ -1514,10 +1511,7 @@ async fn load_config_or_exit_with_fallback_cwd(
         .build()
         .await
     {
-        Ok(mut config) => {
-            push_missing_system_bwrap_startup_warning(&mut config.startup_warnings);
-            config
-        }
+        Ok(config) => config,
         Err(err) => {
             eprintln!("Error loading configuration: {err}");
             std::process::exit(1);
