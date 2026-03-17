@@ -38,6 +38,7 @@ use crate::multi_agents::format_agent_picker_item_name;
 use crate::multi_agents::next_agent_shortcut_matches;
 use crate::multi_agents::previous_agent_shortcut_matches;
 use crate::pager_overlay::Overlay;
+use crate::read_session_model;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
@@ -1952,6 +1953,9 @@ impl App {
         thread_id: ThreadId,
         notification: ServerNotification,
     ) -> Result<()> {
+        let inferred_session = self
+            .infer_session_for_thread_notification(thread_id, &notification)
+            .await;
         let (sender, store) = {
             let channel = self.ensure_thread_channel(thread_id);
             (channel.sender.clone(), Arc::clone(&channel.store))
@@ -1960,8 +1964,7 @@ impl App {
         let should_send = {
             let mut guard = store.lock().await;
             if guard.session.is_none()
-                && let Some(session) =
-                    self.infer_session_for_thread_notification(thread_id, &notification)
+                && let Some(session) = inferred_session
             {
                 guard.session = Some(session);
             }
@@ -1988,7 +1991,7 @@ impl App {
         Ok(())
     }
 
-    fn infer_session_for_thread_notification(
+    async fn infer_session_for_thread_notification(
         &mut self,
         thread_id: ThreadId,
         notification: &ServerNotification,
@@ -2001,6 +2004,11 @@ impl App {
         session.thread_name = notification.thread.name.clone();
         session.model_provider_id = notification.thread.model_provider.clone();
         session.cwd = notification.thread.cwd.clone();
+        if let Some(model) =
+            read_session_model(&self.config, thread_id, notification.thread.path.as_deref()).await
+        {
+            session.model = model;
+        }
         session.history_log_id = 0;
         session.history_entry_count = 0;
         session.rollout_path = notification.thread.path.clone();
@@ -4823,9 +4831,12 @@ mod tests {
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::McpAuthStatus;
+    use codex_protocol::protocol::RolloutItem;
+    use codex_protocol::protocol::RolloutLine;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionConfiguredEvent;
     use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::TurnContextItem;
     use codex_protocol::user_input::TextElement;
     use codex_protocol::user_input::UserInput;
     use crossterm::event::KeyModifiers;
@@ -6581,6 +6592,7 @@ guardian_approval = true
     #[tokio::test]
     async fn inactive_thread_started_notification_initializes_replay_session() -> Result<()> {
         let mut app = make_test_app().await;
+        let temp_dir = tempdir()?;
         let main_thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000101").expect("valid thread");
         let agent_thread_id =
@@ -6599,7 +6611,35 @@ guardian_approval = true
             ThreadEventChannel::new_with_session(4, primary_session.clone(), Vec::new()),
         );
 
-        let rollout_path = PathBuf::from("/tmp/agent-rollout.jsonl");
+        let rollout_path = temp_dir.path().join("agent-rollout.jsonl");
+        let turn_context = TurnContextItem {
+            turn_id: None,
+            trace_id: None,
+            cwd: PathBuf::from("/tmp/agent"),
+            current_date: None,
+            timezone: None,
+            approval_policy: primary_session.approval_policy,
+            sandbox_policy: primary_session.sandbox_policy.clone(),
+            network: None,
+            model: "gpt-agent".to_string(),
+            personality: None,
+            collaboration_mode: None,
+            realtime_active: Some(false),
+            effort: primary_session.reasoning_effort,
+            summary: app.config.model_reasoning_summary.unwrap_or_default(),
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: None,
+        };
+        let rollout = RolloutLine {
+            timestamp: "t0".to_string(),
+            item: RolloutItem::TurnContext(turn_context),
+        };
+        std::fs::write(
+            &rollout_path,
+            format!("{}\n", serde_json::to_string(&rollout)?),
+        )?;
         app.enqueue_thread_notification(
             agent_thread_id,
             ServerNotification::ThreadStarted(ThreadStartedNotification {
@@ -6637,7 +6677,7 @@ guardian_approval = true
 
         assert_eq!(session.thread_id, agent_thread_id);
         assert_eq!(session.thread_name, Some("agent thread".to_string()));
-        assert_eq!(session.model, primary_session.model);
+        assert_eq!(session.model, "gpt-agent");
         assert_eq!(session.model_provider_id, "agent-provider");
         assert_eq!(session.approval_policy, primary_session.approval_policy);
         assert_eq!(session.cwd, PathBuf::from("/tmp/agent"));
