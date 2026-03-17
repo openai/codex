@@ -25,8 +25,8 @@ pub mod zsh_fork;
 
 #[ctor]
 fn enable_deterministic_unified_exec_process_ids_for_tests() {
-    codex_core::test_support::set_thread_manager_test_mode(true);
-    codex_core::test_support::set_deterministic_process_ids(true);
+    codex_core::test_support::set_thread_manager_test_mode(/*enabled*/ true);
+    codex_core::test_support::set_deterministic_process_ids(/*enabled*/ true);
 }
 
 #[ctor]
@@ -79,7 +79,7 @@ pub fn test_path_buf_with_windows(unix_path: &str, windows_path: Option<&str>) -
 }
 
 pub fn test_path_buf(unix_path: &str) -> PathBuf {
-    test_path_buf_with_windows(unix_path, None)
+    test_path_buf_with_windows(unix_path, /*windows_path*/ None)
 }
 
 pub fn test_absolute_path_with_windows(
@@ -91,7 +91,7 @@ pub fn test_absolute_path_with_windows(
 }
 
 pub fn test_absolute_path(unix_path: &str) -> AbsolutePathBuf {
-    test_absolute_path_with_windows(unix_path, None)
+    test_absolute_path_with_windows(unix_path, /*windows_path*/ None)
 }
 
 pub fn test_tmp_path() -> AbsolutePathBuf {
@@ -264,7 +264,7 @@ pub fn sandbox_network_env_var() -> &'static str {
 }
 
 pub fn format_with_current_shell(command: &str) -> Vec<String> {
-    codex_core::shell::default_user_shell().derive_exec_args(command, true)
+    codex_core::shell::default_user_shell().derive_exec_args(command, /*use_login_shell*/ true)
 }
 
 pub fn format_with_current_shell_display(command: &str) -> String {
@@ -273,7 +273,8 @@ pub fn format_with_current_shell_display(command: &str) -> String {
 }
 
 pub fn format_with_current_shell_non_login(command: &str) -> Vec<String> {
-    codex_core::shell::default_user_shell().derive_exec_args(command, false)
+    codex_core::shell::default_user_shell()
+        .derive_exec_args(command, /*use_login_shell*/ false)
 }
 
 pub fn format_with_current_shell_display_non_login(command: &str) -> String {
@@ -471,6 +472,42 @@ macro_rules! skip_if_no_network {
                 "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
             );
             return $return_value;
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! codex_linux_sandbox_exe_or_skip {
+    () => {{
+        #[cfg(target_os = "linux")]
+        {
+            match codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox") {
+                Ok(path) => Some(path),
+                Err(err) => {
+                    eprintln!("codex-linux-sandbox binary not available, skipping test: {err}");
+                    return;
+                }
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
+        }
+    }};
+    ($return_value:expr $(,)?) => {{
+        #[cfg(target_os = "linux")]
+        {
+            match codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox") {
+                Ok(path) => Some(path),
+                Err(err) => {
+                    eprintln!("codex-linux-sandbox binary not available, skipping test: {err}");
+                    return $return_value;
+                }
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
         }
     }};
 }

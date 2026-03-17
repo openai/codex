@@ -14,7 +14,7 @@ use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::StreamOutput;
-use crate::exec::execute_exec_env;
+use crate::exec::execute_exec_request;
 use crate::exec_env::create_env;
 use crate::parse_command::parse_command;
 use crate::protocol::EventMsg;
@@ -36,6 +36,8 @@ use super::SessionTaskContext;
 use crate::codex::Session;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 
 const USER_SHELL_TIMEOUT_MS: u64 = 60 * 60 * 1000; // 1 hour
 
@@ -98,8 +100,8 @@ pub(crate) async fn execute_user_shell_command(
 ) {
     session
         .services
-        .otel_manager
-        .counter("codex.task.user_shell", 1, &[]);
+        .session_telemetry
+        .counter("codex.task.user_shell", /*inc*/ 1, &[]);
 
     if mode == UserShellCommandMode::StandaloneTurn {
         // Auxiliary mode runs within an existing active turn. That turn already
@@ -165,8 +167,14 @@ pub(crate) async fn execute_user_shell_command(
         expiration: USER_SHELL_TIMEOUT_MS.into(),
         sandbox: SandboxType::None,
         windows_sandbox_level: turn_context.windows_sandbox_level,
+        windows_sandbox_private_desktop: turn_context
+            .config
+            .permissions
+            .windows_sandbox_private_desktop,
         sandbox_permissions: SandboxPermissions::UseDefault,
         sandbox_policy: sandbox_policy.clone(),
+        file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
+        network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
         justification: None,
         arg0: None,
     };
@@ -177,9 +185,14 @@ pub(crate) async fn execute_user_shell_command(
         tx_event: session.get_tx_event(),
     });
 
-    let exec_result = execute_exec_env(exec_env, &sandbox_policy, stdout_stream)
-        .or_cancel(&cancellation_token)
-        .await;
+    let exec_result = execute_exec_request(
+        exec_env,
+        &sandbox_policy,
+        stdout_stream,
+        /*after_spawn*/ None,
+    )
+    .or_cancel(&cancellation_token)
+    .await;
 
     match exec_result {
         Err(CancelErr::Cancelled) => {

@@ -1,7 +1,7 @@
 //! Tracing log export into the state SQLite database.
 //!
 //! This module provides a `tracing_subscriber::Layer` that captures events and
-//! inserts them into the `logs` table in `state.sqlite`. The writer runs in a
+//! inserts them into the dedicated `logs` SQLite database. The writer runs in a
 //! background task and batches inserts to keep logging overhead low.
 //!
 //! ## Usage
@@ -41,9 +41,9 @@ use crate::LogEntry;
 use crate::StateRuntime;
 
 const LOG_QUEUE_CAPACITY: usize = 512;
-const LOG_BATCH_SIZE: usize = 64;
-const LOG_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
-const LOG_RETENTION_DAYS: i64 = 90;
+const LOG_BATCH_SIZE: usize = 128;
+const LOG_FLUSH_INTERVAL: Duration = Duration::from_secs(2);
+const LOG_RETENTION_DAYS: i64 = 10;
 
 pub struct LogDbLayer {
     sender: mpsc::Sender<LogDbCommand>,
@@ -392,7 +392,7 @@ mod tests {
     async fn sqlite_feedback_logs_match_feedback_formatter_shape() {
         let codex_home =
             std::env::temp_dir().join(format!("codex-state-log-db-{}", Uuid::new_v4()));
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
         let writer = SharedWriter::default();
@@ -420,11 +420,23 @@ mod tests {
 
         drop(guard);
 
-        // TODO(ccunningham): Store enough span metadata in SQLite to reproduce span
-        // prefixes like `feedback-thread{thread_id="thread-1"}:` in feedback exports.
+        // SQLite exports now include timestamps, while this test writer has
+        // `.without_time()`. Compare bodies after stripping the SQLite prefix.
         let feedback_logs = writer
             .snapshot()
             .replace("feedback-thread{thread_id=\"thread-1\"}: ", "");
+        let strip_sqlite_timestamp = |logs: &str| {
+            logs.lines()
+                .map(|line| {
+                    line.split_once(' ')
+                        .map_or_else(|| line.to_string(), |(_, rest)| rest.to_string())
+                })
+                .collect::<Vec<_>>()
+        };
+        let feedback_lines = feedback_logs
+            .lines()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             let sqlite_logs = String::from_utf8(
@@ -434,7 +446,7 @@ mod tests {
                     .expect("query feedback logs"),
             )
             .expect("valid utf-8");
-            if sqlite_logs == feedback_logs {
+            if strip_sqlite_timestamp(&sqlite_logs) == feedback_lines {
                 break;
             }
             assert!(
@@ -451,7 +463,7 @@ mod tests {
     async fn flush_persists_logs_for_query() {
         let codex_home =
             std::env::temp_dir().join(format!("codex-state-log-db-{}", Uuid::new_v4()));
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("initialize runtime");
         let layer = start(runtime.clone());

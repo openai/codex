@@ -43,6 +43,7 @@ opentelemetry-otlp = { workspace = true, features = [
 ]}
 opentelemetry-semantic-conventions = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = [
+    "experimental_trace_batch_span_processor_with_async_runtime",
     "experimental_metrics_custom_reader",
     "logs",
     "metrics",

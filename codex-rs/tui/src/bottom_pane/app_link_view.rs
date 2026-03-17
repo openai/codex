@@ -1,3 +1,7 @@
+use codex_protocol::ThreadId;
+use codex_protocol::approvals::ElicitationAction;
+use codex_protocol::mcp::RequestId as McpRequestId;
+use codex_protocol::protocol::Op;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -34,6 +38,19 @@ enum AppLinkScreen {
     InstallConfirmation,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AppLinkSuggestionType {
+    Install,
+    Enable,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AppLinkElicitationTarget {
+    pub(crate) thread_id: ThreadId,
+    pub(crate) server_name: String,
+    pub(crate) request_id: McpRequestId,
+}
+
 pub(crate) struct AppLinkViewParams {
     pub(crate) app_id: String,
     pub(crate) title: String,
@@ -42,6 +59,9 @@ pub(crate) struct AppLinkViewParams {
     pub(crate) url: String,
     pub(crate) is_installed: bool,
     pub(crate) is_enabled: bool,
+    pub(crate) suggest_reason: Option<String>,
+    pub(crate) suggestion_type: Option<AppLinkSuggestionType>,
+    pub(crate) elicitation_target: Option<AppLinkElicitationTarget>,
 }
 
 pub(crate) struct AppLinkView {
@@ -52,6 +72,9 @@ pub(crate) struct AppLinkView {
     url: String,
     is_installed: bool,
     is_enabled: bool,
+    suggest_reason: Option<String>,
+    suggestion_type: Option<AppLinkSuggestionType>,
+    elicitation_target: Option<AppLinkElicitationTarget>,
     app_event_tx: AppEventSender,
     screen: AppLinkScreen,
     selected_action: usize,
@@ -68,6 +91,9 @@ impl AppLinkView {
             url,
             is_installed,
             is_enabled,
+            suggest_reason,
+            suggestion_type,
+            elicitation_target,
         } = params;
         Self {
             app_id,
@@ -77,6 +103,9 @@ impl AppLinkView {
             url,
             is_installed,
             is_enabled,
+            suggest_reason,
+            suggestion_type,
+            elicitation_target,
             app_event_tx,
             screen: AppLinkScreen::Link,
             selected_action: 0,
@@ -113,6 +142,31 @@ impl AppLinkView {
         self.selected_action = (self.selected_action + 1).min(self.action_labels().len() - 1);
     }
 
+    fn is_tool_suggestion(&self) -> bool {
+        self.elicitation_target.is_some()
+    }
+
+    fn resolve_elicitation(&self, decision: ElicitationAction) {
+        let Some(target) = self.elicitation_target.as_ref() else {
+            return;
+        };
+        self.app_event_tx.send(AppEvent::SubmitThreadOp {
+            thread_id: target.thread_id,
+            op: Op::ResolveElicitation {
+                server_name: target.server_name.clone(),
+                request_id: target.request_id.clone(),
+                decision,
+                content: None,
+                meta: None,
+            },
+        });
+    }
+
+    fn decline_tool_suggestion(&mut self) {
+        self.resolve_elicitation(ElicitationAction::Decline);
+        self.complete = true;
+    }
+
     fn open_chatgpt_link(&mut self) {
         self.app_event_tx.send(AppEvent::OpenUrlInBrowser {
             url: self.url.clone(),
@@ -127,6 +181,9 @@ impl AppLinkView {
         self.app_event_tx.send(AppEvent::RefreshConnectors {
             force_refetch: true,
         });
+        if self.is_tool_suggestion() {
+            self.resolve_elicitation(ElicitationAction::Accept);
+        }
         self.complete = true;
     }
 
@@ -141,9 +198,40 @@ impl AppLinkView {
             id: self.app_id.clone(),
             enabled: self.is_enabled,
         });
+        if self.is_tool_suggestion() {
+            self.resolve_elicitation(ElicitationAction::Accept);
+            self.complete = true;
+        }
     }
 
     fn activate_selected_action(&mut self) {
+        if self.is_tool_suggestion() {
+            match self.suggestion_type {
+                Some(AppLinkSuggestionType::Enable) => match self.screen {
+                    AppLinkScreen::Link => match self.selected_action {
+                        0 => self.open_chatgpt_link(),
+                        1 if self.is_installed => self.toggle_enabled(),
+                        _ => self.decline_tool_suggestion(),
+                    },
+                    AppLinkScreen::InstallConfirmation => match self.selected_action {
+                        0 => self.refresh_connectors_and_close(),
+                        _ => self.decline_tool_suggestion(),
+                    },
+                },
+                Some(AppLinkSuggestionType::Install) | None => match self.screen {
+                    AppLinkScreen::Link => match self.selected_action {
+                        0 => self.open_chatgpt_link(),
+                        _ => self.decline_tool_suggestion(),
+                    },
+                    AppLinkScreen::InstallConfirmation => match self.selected_action {
+                        0 => self.refresh_connectors_and_close(),
+                        _ => self.decline_tool_suggestion(),
+                    },
+                },
+            }
+            return;
+        }
+
         match self.screen {
             AppLinkScreen::Link => match self.selected_action {
                 0 => self.open_chatgpt_link(),
@@ -181,6 +269,17 @@ impl AppLinkView {
         }
 
         lines.push(Line::from(""));
+        if let Some(suggest_reason) = self
+            .suggest_reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|suggest_reason| !suggest_reason.is_empty())
+        {
+            for line in wrap(suggest_reason, usable_width) {
+                lines.push(Line::from(line.into_owned().italic()));
+            }
+            lines.push(Line::from(""));
+        }
         if self.is_installed {
             for line in wrap("Use $ to insert this app into the prompt.", usable_width) {
                 lines.push(Line::from(line.into_owned()));
@@ -366,6 +465,9 @@ impl BottomPaneView for AppLinkView {
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
+        if self.is_tool_suggestion() {
+            self.resolve_elicitation(ElicitationAction::Decline);
+        }
         self.complete = true;
         CancellationEvent::Handled
     }
@@ -404,7 +506,7 @@ impl crate::render::renderable::Renderable for AppLinkView {
         ])
         .areas(area);
 
-        let inner = content_area.inset(Insets::vh(1, 2));
+        let inner = content_area.inset(Insets::vh(/*v*/ 1, /*h*/ 2));
         let content_width = inner.width.max(1);
         let lines = self.content_lines(content_width);
         Paragraph::new(lines)
@@ -447,7 +549,39 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::render::renderable::Renderable;
+    use insta::assert_snapshot;
     use tokio::sync::mpsc::unbounded_channel;
+
+    fn suggestion_target() -> AppLinkElicitationTarget {
+        AppLinkElicitationTarget {
+            thread_id: ThreadId::try_from("00000000-0000-0000-0000-000000000001")
+                .expect("valid thread id"),
+            server_name: "codex_apps".to_string(),
+            request_id: McpRequestId::String("request-1".to_string()),
+        }
+    }
+
+    fn render_snapshot(view: &AppLinkView, area: Rect) -> String {
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| {
+                        let symbol = buf[(x, y)].symbol();
+                        if symbol.is_empty() {
+                            ' '
+                        } else {
+                            symbol.chars().next().unwrap_or(' ')
+                        }
+                    })
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 
     #[test]
     fn installed_app_has_toggle_action() {
@@ -462,6 +596,9 @@ mod tests {
                 url: "https://example.test/notion".to_string(),
                 is_installed: true,
                 is_enabled: true,
+                suggest_reason: None,
+                suggestion_type: None,
+                elicitation_target: None,
             },
             tx,
         );
@@ -485,6 +622,9 @@ mod tests {
                 url: "https://example.test/notion".to_string(),
                 is_installed: true,
                 is_enabled: true,
+                suggest_reason: None,
+                suggestion_type: None,
+                elicitation_target: None,
             },
             tx,
         );
@@ -521,6 +661,9 @@ mod tests {
                 url: url_like.to_string(),
                 is_installed: true,
                 is_enabled: true,
+                suggest_reason: None,
+                suggestion_type: None,
+                elicitation_target: None,
             },
             tx,
         );
@@ -561,6 +704,9 @@ mod tests {
                 url: url.to_string(),
                 is_installed: true,
                 is_enabled: true,
+                suggest_reason: None,
+                suggestion_type: None,
+                elicitation_target: None,
             },
             tx,
         );
@@ -591,6 +737,208 @@ mod tests {
         assert!(
             rendered_blob.contains("tail42"),
             "expected wrapped setup URL tail to remain visible in narrow pane, got:\n{rendered_blob}"
+        );
+    }
+
+    #[test]
+    fn install_tool_suggestion_resolves_elicitation_after_confirmation() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = AppLinkView::new(
+            AppLinkViewParams {
+                app_id: "connector_google_calendar".to_string(),
+                title: "Google Calendar".to_string(),
+                description: Some("Plan events and schedules.".to_string()),
+                instructions: "Install this app in your browser, then return here.".to_string(),
+                url: "https://example.test/google-calendar".to_string(),
+                is_installed: false,
+                is_enabled: false,
+                suggest_reason: Some("Plan and reference events from your calendar".to_string()),
+                suggestion_type: Some(AppLinkSuggestionType::Install),
+                elicitation_target: Some(suggestion_target()),
+            },
+            tx,
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match rx.try_recv() {
+            Ok(AppEvent::OpenUrlInBrowser { url }) => {
+                assert_eq!(url, "https://example.test/google-calendar".to_string());
+            }
+            Ok(other) => panic!("unexpected app event: {other:?}"),
+            Err(err) => panic!("missing app event: {err}"),
+        }
+        assert_eq!(view.screen, AppLinkScreen::InstallConfirmation);
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match rx.try_recv() {
+            Ok(AppEvent::RefreshConnectors { force_refetch }) => {
+                assert!(force_refetch);
+            }
+            Ok(other) => panic!("unexpected app event: {other:?}"),
+            Err(err) => panic!("missing app event: {err}"),
+        }
+        match rx.try_recv() {
+            Ok(AppEvent::SubmitThreadOp { thread_id, op }) => {
+                assert_eq!(thread_id, suggestion_target().thread_id);
+                assert_eq!(
+                    op,
+                    Op::ResolveElicitation {
+                        server_name: "codex_apps".to_string(),
+                        request_id: McpRequestId::String("request-1".to_string()),
+                        decision: ElicitationAction::Accept,
+                        content: None,
+                        meta: None,
+                    }
+                );
+            }
+            Ok(other) => panic!("unexpected app event: {other:?}"),
+            Err(err) => panic!("missing app event: {err}"),
+        }
+        assert!(view.is_complete());
+    }
+
+    #[test]
+    fn declined_tool_suggestion_resolves_elicitation_decline() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = AppLinkView::new(
+            AppLinkViewParams {
+                app_id: "connector_google_calendar".to_string(),
+                title: "Google Calendar".to_string(),
+                description: None,
+                instructions: "Install this app in your browser, then return here.".to_string(),
+                url: "https://example.test/google-calendar".to_string(),
+                is_installed: false,
+                is_enabled: false,
+                suggest_reason: Some("Plan and reference events from your calendar".to_string()),
+                suggestion_type: Some(AppLinkSuggestionType::Install),
+                elicitation_target: Some(suggestion_target()),
+            },
+            tx,
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+
+        match rx.try_recv() {
+            Ok(AppEvent::SubmitThreadOp { thread_id, op }) => {
+                assert_eq!(thread_id, suggestion_target().thread_id);
+                assert_eq!(
+                    op,
+                    Op::ResolveElicitation {
+                        server_name: "codex_apps".to_string(),
+                        request_id: McpRequestId::String("request-1".to_string()),
+                        decision: ElicitationAction::Decline,
+                        content: None,
+                        meta: None,
+                    }
+                );
+            }
+            Ok(other) => panic!("unexpected app event: {other:?}"),
+            Err(err) => panic!("missing app event: {err}"),
+        }
+        assert!(view.is_complete());
+    }
+
+    #[test]
+    fn enable_tool_suggestion_resolves_elicitation_after_enable() {
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = AppLinkView::new(
+            AppLinkViewParams {
+                app_id: "connector_google_calendar".to_string(),
+                title: "Google Calendar".to_string(),
+                description: Some("Plan events and schedules.".to_string()),
+                instructions: "Enable this app to use it for the current request.".to_string(),
+                url: "https://example.test/google-calendar".to_string(),
+                is_installed: true,
+                is_enabled: false,
+                suggest_reason: Some("Plan and reference events from your calendar".to_string()),
+                suggestion_type: Some(AppLinkSuggestionType::Enable),
+                elicitation_target: Some(suggestion_target()),
+            },
+            tx,
+        );
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+
+        match rx.try_recv() {
+            Ok(AppEvent::SetAppEnabled { id, enabled }) => {
+                assert_eq!(id, "connector_google_calendar");
+                assert!(enabled);
+            }
+            Ok(other) => panic!("unexpected app event: {other:?}"),
+            Err(err) => panic!("missing app event: {err}"),
+        }
+        match rx.try_recv() {
+            Ok(AppEvent::SubmitThreadOp { thread_id, op }) => {
+                assert_eq!(thread_id, suggestion_target().thread_id);
+                assert_eq!(
+                    op,
+                    Op::ResolveElicitation {
+                        server_name: "codex_apps".to_string(),
+                        request_id: McpRequestId::String("request-1".to_string()),
+                        decision: ElicitationAction::Accept,
+                        content: None,
+                        meta: None,
+                    }
+                );
+            }
+            Ok(other) => panic!("unexpected app event: {other:?}"),
+            Err(err) => panic!("missing app event: {err}"),
+        }
+        assert!(view.is_complete());
+    }
+
+    #[test]
+    fn install_suggestion_with_reason_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let view = AppLinkView::new(
+            AppLinkViewParams {
+                app_id: "connector_google_calendar".to_string(),
+                title: "Google Calendar".to_string(),
+                description: Some("Plan events and schedules.".to_string()),
+                instructions: "Install this app in your browser, then return here.".to_string(),
+                url: "https://example.test/google-calendar".to_string(),
+                is_installed: false,
+                is_enabled: false,
+                suggest_reason: Some("Plan and reference events from your calendar".to_string()),
+                suggestion_type: Some(AppLinkSuggestionType::Install),
+                elicitation_target: Some(suggestion_target()),
+            },
+            tx,
+        );
+
+        assert_snapshot!(
+            "app_link_view_install_suggestion_with_reason",
+            render_snapshot(&view, Rect::new(0, 0, 72, view.desired_height(72)))
+        );
+    }
+
+    #[test]
+    fn enable_suggestion_with_reason_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let view = AppLinkView::new(
+            AppLinkViewParams {
+                app_id: "connector_google_calendar".to_string(),
+                title: "Google Calendar".to_string(),
+                description: Some("Plan events and schedules.".to_string()),
+                instructions: "Enable this app to use it for the current request.".to_string(),
+                url: "https://example.test/google-calendar".to_string(),
+                is_installed: true,
+                is_enabled: false,
+                suggest_reason: Some("Plan and reference events from your calendar".to_string()),
+                suggestion_type: Some(AppLinkSuggestionType::Enable),
+                elicitation_target: Some(suggestion_target()),
+            },
+            tx,
+        );
+
+        assert_snapshot!(
+            "app_link_view_enable_suggestion_with_reason",
+            render_snapshot(&view, Rect::new(0, 0, 72, view.desired_height(72)))
         );
     }
 }

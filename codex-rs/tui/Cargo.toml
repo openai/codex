@@ -33,6 +33,7 @@ codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-backend-client = { workspace = true }
 codex-chatgpt = { workspace = true }
+codex-client = { workspace = true }
 codex-cloud-requirements = { workspace = true }
 codex-core = { workspace = true }
 codex-feedback = { workspace = true }
@@ -42,6 +43,7 @@ codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-state = { workspace = true }
+codex-tui-app-server = { workspace = true }
 codex-utils-approval-presets = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-cli = { workspace = true }

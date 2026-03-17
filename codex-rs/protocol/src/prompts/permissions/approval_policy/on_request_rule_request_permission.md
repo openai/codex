@@ -4,12 +4,15 @@ Commands may require user approval before execution. Prefer requesting sandboxed
 
 ## Preferred request mode
 
-When you need extra filesystem access for one command, use:
+When you need extra sandboxed permissions for one command, use:
 
 - `sandbox_permissions: "with_additional_permissions"`
-- `additional_permissions` with one or both fields:
+- `additional_permissions` with one or more of:
+  - `network.enabled`: set to `true` to enable network access
   - `file_system.read`: list of paths that need read access
   - `file_system.write`: list of paths that need write access
+
+When using the `request_permissions` tool directly, only request `network` and `file_system` permissions.
 
 This keeps execution inside the current sandbox policy, while adding only the requested permissions for that command, unless an exec-policy allow rule applies and authorizes running the command outside the sandbox.
 

@@ -33,6 +33,9 @@ sandbox_mode = "danger-full-access"
 
 model_provider = "mock_provider"
 
+[features]
+shell_snapshot = false
+
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "http://127.0.0.1:0/v1"
@@ -53,6 +56,9 @@ fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
 model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
+
+[features]
+shell_snapshot = false
 "#,
     )
 }
@@ -65,6 +71,9 @@ model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
 forced_login_method = "{forced_method}"
+
+[features]
+shell_snapshot = false
 "#
     );
     std::fs::write(config_toml, contents)

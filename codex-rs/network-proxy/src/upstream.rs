@@ -88,7 +88,7 @@ fn read_proxy_env(keys: &[&str]) -> Option<ProxyAddress> {
 }
 
 pub(crate) fn proxy_for_connect() -> Option<ProxyAddress> {
-    ProxyConfig::from_env().proxy_for_protocol(true)
+    ProxyConfig::from_env().proxy_for_protocol(/*is_secure*/ true)
 }
 
 #[derive(Clone)]

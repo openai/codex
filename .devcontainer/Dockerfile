@@ -11,7 +11,7 @@ RUN apt-get update && \
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential curl git ca-certificates \
-    pkg-config clang musl-tools libssl-dev just && \
+    pkg-config libcap-dev clang musl-tools libssl-dev just && \
     rm -rf /var/lib/apt/lists/*
 
 # Ubuntu 24.04 ships with user 'ubuntu' already created with UID 1000.

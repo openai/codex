@@ -14,35 +14,41 @@ use tokio::time::timeout;
 
 const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Executes artifact build and render commands against a resolved runtime.
 #[derive(Clone, Debug)]
 pub struct ArtifactsClient {
     runtime_source: RuntimeSource,
 }
 
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 enum RuntimeSource {
     Managed(ArtifactRuntimeManager),
     Installed(InstalledArtifactRuntime),
 }
 
 impl ArtifactsClient {
+    /// Creates a client that lazily resolves or downloads the runtime on demand.
     pub fn from_runtime_manager(runtime_manager: ArtifactRuntimeManager) -> Self {
         Self {
             runtime_source: RuntimeSource::Managed(runtime_manager),
         }
     }
 
+    /// Creates a client pinned to an already loaded runtime.
     pub fn from_installed_runtime(runtime: InstalledArtifactRuntime) -> Self {
         Self {
             runtime_source: RuntimeSource::Installed(runtime),
         }
     }
 
+    /// Executes artifact-building JavaScript against the configured runtime.
     pub async fn execute_build(
         &self,
         request: ArtifactBuildRequest,
     ) -> Result<ArtifactCommandOutput, ArtifactsError> {
         let runtime = self.resolve_runtime().await?;
+        let js_runtime = runtime.resolve_js_runtime()?;
         let staging_dir = TempDir::new().map_err(|source| ArtifactsError::Io {
             context: "failed to create build staging directory".to_string(),
             source,
@@ -56,7 +62,7 @@ impl ArtifactsClient {
                 source,
             })?;
 
-        let mut command = Command::new(runtime.node_path());
+        let mut command = Command::new(js_runtime.executable_path());
         command
             .arg(&script_path)
             .current_dir(&request.cwd)
@@ -67,6 +73,9 @@ impl ArtifactsClient {
             )
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if js_runtime.requires_electron_run_as_node() {
+            command.env("ELECTRON_RUN_AS_NODE", "1");
+        }
         for (key, value) in &request.env {
             command.env(key, value);
         }
@@ -78,18 +87,23 @@ impl ArtifactsClient {
         .await
     }
 
+    /// Executes the artifact render CLI against the configured runtime.
     pub async fn execute_render(
         &self,
         request: ArtifactRenderCommandRequest,
     ) -> Result<ArtifactCommandOutput, ArtifactsError> {
         let runtime = self.resolve_runtime().await?;
-        let mut command = Command::new(runtime.node_path());
+        let js_runtime = runtime.resolve_js_runtime()?;
+        let mut command = Command::new(js_runtime.executable_path());
         command
             .arg(runtime.render_cli_path())
             .args(request.target.to_args())
             .current_dir(&request.cwd)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if js_runtime.requires_electron_run_as_node() {
+            command.env("ELECTRON_RUN_AS_NODE", "1");
+        }
         for (key, value) in &request.env {
             command.env(key, value);
         }
@@ -109,6 +123,7 @@ impl ArtifactsClient {
     }
 }
 
+/// Request payload for the artifact build command.
 #[derive(Clone, Debug, Default)]
 pub struct ArtifactBuildRequest {
     pub source: String,
@@ -117,6 +132,7 @@ pub struct ArtifactBuildRequest {
     pub env: BTreeMap<String, String>,
 }
 
+/// Request payload for the artifact render CLI.
 #[derive(Clone, Debug)]
 pub struct ArtifactRenderCommandRequest {
     pub cwd: PathBuf,
@@ -125,6 +141,7 @@ pub struct ArtifactRenderCommandRequest {
     pub target: ArtifactRenderTarget,
 }
 
+/// Render targets supported by the packaged artifact runtime.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ArtifactRenderTarget {
     Presentation(PresentationRenderTarget),
@@ -132,6 +149,7 @@ pub enum ArtifactRenderTarget {
 }
 
 impl ArtifactRenderTarget {
+    /// Converts a render target to the CLI args expected by `render_cli.mjs`.
     pub fn to_args(&self) -> Vec<String> {
         match self {
             Self::Presentation(target) => {
@@ -167,6 +185,7 @@ impl ArtifactRenderTarget {
     }
 }
 
+/// Presentation render request parameters.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PresentationRenderTarget {
     pub input_path: PathBuf,
@@ -174,6 +193,7 @@ pub struct PresentationRenderTarget {
     pub slide_number: u32,
 }
 
+/// Spreadsheet render request parameters.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpreadsheetRenderTarget {
     pub input_path: PathBuf,
@@ -182,6 +202,7 @@ pub struct SpreadsheetRenderTarget {
     pub range: Option<String>,
 }
 
+/// Captured stdout, stderr, and exit status from an artifact subprocess.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArtifactCommandOutput {
     pub exit_code: Option<i32>,
@@ -190,11 +211,13 @@ pub struct ArtifactCommandOutput {
 }
 
 impl ArtifactCommandOutput {
+    /// Returns whether the subprocess exited successfully.
     pub fn success(&self) -> bool {
         self.exit_code == Some(0)
     }
 }
 
+/// Errors raised while spawning or awaiting artifact subprocesses.
 #[derive(Debug, Error)]
 pub enum ArtifactsError {
     #[error(transparent)]
@@ -293,154 +316,4 @@ async fn run_command(
         stdout: String::from_utf8_lossy(&stdout_bytes).into_owned(),
         stderr: String::from_utf8_lossy(&stderr_bytes).into_owned(),
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[cfg(unix)]
-    use crate::ArtifactRuntimePlatform;
-    #[cfg(unix)]
-    use crate::ExtractedRuntimeManifest;
-    #[cfg(unix)]
-    use crate::RuntimeEntrypoints;
-    #[cfg(unix)]
-    use crate::RuntimePathEntry;
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
-
-    #[test]
-    fn wrapped_build_script_exposes_artifact_tool_surface() {
-        let wrapped = build_wrapped_script("console.log(Object.keys(artifactTool).length);");
-        assert!(wrapped.contains("const artifactTool = await import("));
-        assert!(wrapped.contains("globalThis.artifactTool = artifactTool;"));
-        assert!(wrapped.contains("globalThis.artifacts = artifactTool;"));
-        assert!(wrapped.contains("globalThis.codexArtifacts = artifactTool;"));
-        assert!(wrapped.contains("Object.entries(artifactTool)"));
-        assert!(wrapped.contains("globalThis[name] = value;"));
-    }
-
-    #[test]
-    fn presentation_render_target_builds_expected_args() {
-        let args = ArtifactRenderTarget::Presentation(PresentationRenderTarget {
-            input_path: PathBuf::from("deck.pptx"),
-            output_path: PathBuf::from("slide.png"),
-            slide_number: 2,
-        })
-        .to_args();
-
-        assert_eq!(
-            args,
-            vec![
-                "pptx",
-                "render",
-                "--in",
-                "deck.pptx",
-                "--slide",
-                "2",
-                "--out",
-                "slide.png"
-            ]
-        );
-    }
-
-    #[test]
-    fn spreadsheet_render_target_builds_expected_args() {
-        let args = ArtifactRenderTarget::Spreadsheet(SpreadsheetRenderTarget {
-            input_path: PathBuf::from("book.xlsx"),
-            output_path: PathBuf::from("sheet.png"),
-            sheet_name: "Summary".to_string(),
-            range: Some("A1:C3".to_string()),
-        })
-        .to_args();
-
-        assert_eq!(
-            args,
-            vec![
-                "xlsx",
-                "render",
-                "--in",
-                "book.xlsx",
-                "--sheet",
-                "Summary",
-                "--out",
-                "sheet.png",
-                "--range",
-                "A1:C3"
-            ]
-        );
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn execute_build_invokes_runtime_node_with_expected_environment() {
-        let temp = TempDir::new().unwrap_or_else(|error| panic!("{error}"));
-        let cwd = temp.path().join("cwd");
-        fs::create_dir_all(&cwd)
-            .await
-            .unwrap_or_else(|error| panic!("{error}"));
-        let log_path = temp.path().join("build.log");
-        let fake_node = temp.path().join("fake-node.sh");
-        let build_entrypoint = temp.path().join("artifact_tool.mjs");
-        let render_entrypoint = temp.path().join("render_cli.mjs");
-        fs::write(
-            &fake_node,
-            format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$1\" > \"{}\"\nprintf '%s\\n' \"$CODEX_ARTIFACT_BUILD_ENTRYPOINT\" >> \"{}\"\n",
-                log_path.display(),
-                log_path.display()
-            ),
-        )
-        .await
-        .unwrap_or_else(|error| panic!("{error}"));
-        std::fs::set_permissions(&fake_node, std::fs::Permissions::from_mode(0o755))
-            .unwrap_or_else(|error| panic!("{error}"));
-
-        let runtime = InstalledArtifactRuntime::new(
-            temp.path().join("runtime"),
-            "0.1.0".to_string(),
-            ArtifactRuntimePlatform::LinuxX64,
-            sample_manifest("0.1.0"),
-            fake_node.clone(),
-            build_entrypoint.clone(),
-            render_entrypoint,
-        );
-        let client = ArtifactsClient::from_installed_runtime(runtime);
-
-        let output = client
-            .execute_build(ArtifactBuildRequest {
-                source: "console.log('hello');".to_string(),
-                cwd: cwd.clone(),
-                timeout: Some(Duration::from_secs(5)),
-                env: BTreeMap::new(),
-            })
-            .await
-            .unwrap_or_else(|error| panic!("{error}"));
-
-        assert!(output.success());
-        let logged = fs::read_to_string(&log_path)
-            .await
-            .unwrap_or_else(|error| panic!("{error}"));
-        assert!(logged.contains("artifact-build.mjs"));
-        assert!(logged.contains(&build_entrypoint.display().to_string()));
-    }
-
-    #[cfg(unix)]
-    fn sample_manifest(runtime_version: &str) -> ExtractedRuntimeManifest {
-        ExtractedRuntimeManifest {
-            schema_version: 1,
-            runtime_version: runtime_version.to_string(),
-            node: RuntimePathEntry {
-                relative_path: "node/bin/node".to_string(),
-            },
-            entrypoints: RuntimeEntrypoints {
-                build_js: RuntimePathEntry {
-                    relative_path: "artifact-tool/dist/artifact_tool.mjs".to_string(),
-                },
-                render_cli: RuntimePathEntry {
-                    relative_path: "granola-render/dist/cli.mjs".to_string(),
-                },
-            },
-        }
-    }
 }

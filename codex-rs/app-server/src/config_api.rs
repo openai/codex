@@ -1,5 +1,6 @@
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+use async_trait::async_trait;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
@@ -11,6 +12,8 @@ use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::SandboxMode;
+use codex_core::AnalyticsEventsClient;
+use codex_core::ThreadManager;
 use codex_core::config::ConfigService;
 use codex_core::config::ConfigServiceError;
 use codex_core::config_loader::CloudRequirementsLoader;
@@ -18,12 +21,37 @@ use codex_core::config_loader::ConfigRequirementsToml;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::ResidencyRequirement as CoreResidencyRequirement;
 use codex_core::config_loader::SandboxModeRequirement as CoreSandboxModeRequirement;
+use codex_core::plugins::PluginId;
+use codex_core::plugins::collect_plugin_enabled_candidates;
+use codex_core::plugins::installed_plugin_telemetry_metadata;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::protocol::Op;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 use toml::Value as TomlValue;
+use tracing::warn;
+
+#[async_trait]
+pub(crate) trait UserConfigReloader: Send + Sync {
+    async fn reload_user_config(&self);
+}
+
+#[async_trait]
+impl UserConfigReloader for ThreadManager {
+    async fn reload_user_config(&self) {
+        let thread_ids = self.list_thread_ids().await;
+        for thread_id in thread_ids {
+            let Ok(thread) = self.get_thread(thread_id).await else {
+                continue;
+            };
+            if let Err(err) = thread.submit(Op::ReloadUserConfig).await {
+                warn!("failed to request user config reload: {err}");
+            }
+        }
+    }
+}
 
 #[derive(Clone)]
 pub(crate) struct ConfigApi {
@@ -31,6 +59,8 @@ pub(crate) struct ConfigApi {
     cli_overrides: Vec<(String, TomlValue)>,
     loader_overrides: LoaderOverrides,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
+    user_config_reloader: Arc<dyn UserConfigReloader>,
+    analytics_events_client: AnalyticsEventsClient,
 }
 
 impl ConfigApi {
@@ -39,12 +69,16 @@ impl ConfigApi {
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
         cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
+        user_config_reloader: Arc<dyn UserConfigReloader>,
+        analytics_events_client: AnalyticsEventsClient,
     ) -> Self {
         Self {
             codex_home,
             cli_overrides,
             loader_overrides,
             cloud_requirements,
+            user_config_reloader,
+            analytics_events_client,
         }
     }
 
@@ -86,20 +120,53 @@ impl ConfigApi {
         &self,
         params: ConfigValueWriteParams,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
-        self.config_service()
+        let pending_changes =
+            collect_plugin_enabled_candidates([(&params.key_path, &params.value)].into_iter());
+        let response = self
+            .config_service()
             .write_value(params)
             .await
-            .map_err(map_error)
+            .map_err(map_error)?;
+        self.emit_plugin_toggle_events(pending_changes);
+        Ok(response)
     }
 
     pub(crate) async fn batch_write(
         &self,
         params: ConfigBatchWriteParams,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
-        self.config_service()
+        let reload_user_config = params.reload_user_config;
+        let pending_changes = collect_plugin_enabled_candidates(
+            params
+                .edits
+                .iter()
+                .map(|edit| (&edit.key_path, &edit.value)),
+        );
+        let response = self
+            .config_service()
             .batch_write(params)
             .await
-            .map_err(map_error)
+            .map_err(map_error)?;
+        self.emit_plugin_toggle_events(pending_changes);
+        if reload_user_config {
+            self.user_config_reloader.reload_user_config().await;
+        }
+        Ok(response)
+    }
+
+    fn emit_plugin_toggle_events(&self, pending_changes: std::collections::BTreeMap<String, bool>) {
+        for (plugin_id, enabled) in pending_changes {
+            let Ok(plugin_id) = PluginId::parse(&plugin_id) else {
+                continue;
+            };
+            let metadata =
+                installed_plugin_telemetry_metadata(self.codex_home.as_path(), &plugin_id);
+            if enabled {
+                self.analytics_events_client.track_plugin_enabled(metadata);
+            } else {
+                self.analytics_events_client.track_plugin_disabled(metadata);
+            }
+        }
     }
 }
 
@@ -163,7 +230,6 @@ fn map_network_requirements_to_api(
         socks_port: network.socks_port,
         allow_upstream_proxy: network.allow_upstream_proxy,
         dangerously_allow_non_loopback_proxy: network.dangerously_allow_non_loopback_proxy,
-        dangerously_allow_non_loopback_admin: network.dangerously_allow_non_loopback_admin,
         dangerously_allow_all_unix_sockets: network.dangerously_allow_all_unix_sockets,
         allowed_domains: network.allowed_domains,
         denied_domains: network.denied_domains,
@@ -197,9 +263,26 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_core::AnalyticsEventsClient;
     use codex_core::config_loader::NetworkRequirementsToml as CoreNetworkRequirementsToml;
     use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use tempfile::TempDir;
+
+    #[derive(Default)]
+    struct RecordingUserConfigReloader {
+        call_count: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl UserConfigReloader for RecordingUserConfigReloader {
+        async fn reload_user_config(&self) {
+            self.call_count.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 
     #[test]
     fn map_requirements_toml_to_api_converts_core_enums() {
@@ -222,6 +305,7 @@ mod tests {
                 ]),
             }),
             mcp_servers: None,
+            apps: None,
             rules: None,
             enforce_residency: Some(CoreResidencyRequirement::Us),
             network: Some(CoreNetworkRequirementsToml {
@@ -230,9 +314,9 @@ mod tests {
                 socks_port: Some(1080),
                 allow_upstream_proxy: Some(false),
                 dangerously_allow_non_loopback_proxy: Some(false),
-                dangerously_allow_non_loopback_admin: Some(false),
                 dangerously_allow_all_unix_sockets: Some(true),
                 allowed_domains: Some(vec!["api.openai.com".to_string()]),
+                managed_allowed_domains_only: Some(false),
                 denied_domains: Some(vec!["example.com".to_string()]),
                 allow_unix_sockets: Some(vec!["/tmp/proxy.sock".to_string()]),
                 allow_local_binding: Some(true),
@@ -275,7 +359,6 @@ mod tests {
                 socks_port: Some(1080),
                 allow_upstream_proxy: Some(false),
                 dangerously_allow_non_loopback_proxy: Some(false),
-                dangerously_allow_non_loopback_admin: Some(false),
                 dangerously_allow_all_unix_sockets: Some(true),
                 allowed_domains: Some(vec!["api.openai.com".to_string()]),
                 denied_domains: Some(vec!["example.com".to_string()]),
@@ -293,6 +376,7 @@ mod tests {
             allowed_web_search_modes: Some(Vec::new()),
             feature_requirements: None,
             mcp_servers: None,
+            apps: None,
             rules: None,
             enforce_residency: None,
             network: None,
@@ -304,5 +388,64 @@ mod tests {
             mapped.allowed_web_search_modes,
             Some(vec![WebSearchMode::Disabled])
         );
+    }
+
+    #[tokio::test]
+    async fn batch_write_reloads_user_config_when_requested() {
+        let codex_home = TempDir::new().expect("create temp dir");
+        let user_config_path = codex_home.path().join("config.toml");
+        std::fs::write(&user_config_path, "").expect("write config");
+        let reloader = Arc::new(RecordingUserConfigReloader::default());
+        let analytics_config = Arc::new(
+            codex_core::config::ConfigBuilder::default()
+                .build()
+                .await
+                .expect("load analytics config"),
+        );
+        let config_api = ConfigApi::new(
+            codex_home.path().to_path_buf(),
+            Vec::new(),
+            LoaderOverrides::default(),
+            Arc::new(RwLock::new(CloudRequirementsLoader::default())),
+            reloader.clone(),
+            AnalyticsEventsClient::new(
+                analytics_config,
+                codex_core::test_support::auth_manager_from_auth(
+                    codex_core::CodexAuth::from_api_key("test"),
+                ),
+            ),
+        );
+
+        let response = config_api
+            .batch_write(ConfigBatchWriteParams {
+                edits: vec![codex_app_server_protocol::ConfigEdit {
+                    key_path: "model".to_string(),
+                    value: json!("gpt-5"),
+                    merge_strategy: codex_app_server_protocol::MergeStrategy::Replace,
+                }],
+                file_path: Some(user_config_path.display().to_string()),
+                expected_version: None,
+                reload_user_config: true,
+            })
+            .await
+            .expect("batch write should succeed");
+
+        assert_eq!(
+            response,
+            ConfigWriteResponse {
+                status: codex_app_server_protocol::WriteStatus::Ok,
+                version: response.version.clone(),
+                file_path: codex_utils_absolute_path::AbsolutePathBuf::try_from(
+                    user_config_path.clone()
+                )
+                .expect("absolute config path"),
+                overridden_metadata: None,
+            }
+        );
+        assert_eq!(
+            std::fs::read_to_string(user_config_path).unwrap(),
+            "model = \"gpt-5\"\n"
+        );
+        assert_eq!(reloader.call_count.load(Ordering::Relaxed), 1);
     }
 }

@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+fd-lock = { workspace = true }
 flate2 = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
 serde = { workspace = true, features = ["derive"] }
@@ -12,7 +13,7 @@ sha2 = { workspace = true }
 tar = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["fs", "rt", "sync"] }
+tokio = { workspace = true, features = ["fs", "rt", "sync", "time"] }
 url = { workspace = true }
 zip = { workspace = true }
 

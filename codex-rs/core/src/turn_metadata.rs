@@ -104,7 +104,7 @@ pub async fn build_turn_metadata_header(cwd: &Path, sandbox: Option<&str>) -> Op
     }
 
     build_turn_metadata_bag(
-        None,
+        /*turn_id*/ None,
         sandbox.map(ToString::to_string),
         repo_root,
         Some(WorkspaceGitMetadata {
@@ -132,18 +132,15 @@ impl TurnMetadataState {
         cwd: PathBuf,
         sandbox_policy: &SandboxPolicy,
         windows_sandbox_level: WindowsSandboxLevel,
-        use_linux_sandbox_bwrap: bool,
     ) -> Self {
         let repo_root = get_git_repo_root(&cwd).map(|root| root.to_string_lossy().into_owned());
-        let sandbox = Some(
-            sandbox_tag(
-                sandbox_policy,
-                windows_sandbox_level,
-                use_linux_sandbox_bwrap,
-            )
-            .to_string(),
+        let sandbox = Some(sandbox_tag(sandbox_policy, windows_sandbox_level).to_string());
+        let base_metadata = build_turn_metadata_bag(
+            Some(turn_id),
+            sandbox,
+            /*repo_root*/ None,
+            /*workspace_git_metadata*/ None,
         );
-        let base_metadata = build_turn_metadata_bag(Some(turn_id), sandbox, None, None);
         let base_header = base_metadata
             .to_header_value()
             .unwrap_or_else(|| "{}".to_string());
@@ -236,114 +233,5 @@ impl TurnMetadataState {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    use serde_json::Value;
-    use tempfile::TempDir;
-    use tokio::process::Command;
-
-    #[tokio::test]
-    async fn build_turn_metadata_header_includes_has_changes_for_clean_repo() {
-        let temp_dir = TempDir::new().expect("temp dir");
-        let repo_path = temp_dir.path().join("repo");
-        std::fs::create_dir_all(&repo_path).expect("create repo");
-
-        Command::new("git")
-            .args(["init"])
-            .current_dir(&repo_path)
-            .output()
-            .await
-            .expect("git init");
-        Command::new("git")
-            .args(["config", "user.name", "Test User"])
-            .current_dir(&repo_path)
-            .output()
-            .await
-            .expect("git config user.name");
-        Command::new("git")
-            .args(["config", "user.email", "test@example.com"])
-            .current_dir(&repo_path)
-            .output()
-            .await
-            .expect("git config user.email");
-
-        std::fs::write(repo_path.join("README.md"), "hello").expect("write file");
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(&repo_path)
-            .output()
-            .await
-            .expect("git add");
-        Command::new("git")
-            .args(["commit", "-m", "initial"])
-            .current_dir(&repo_path)
-            .output()
-            .await
-            .expect("git commit");
-
-        let header = build_turn_metadata_header(&repo_path, Some("none"))
-            .await
-            .expect("header");
-        let parsed: Value = serde_json::from_str(&header).expect("valid json");
-        let workspace = parsed
-            .get("workspaces")
-            .and_then(Value::as_object)
-            .and_then(|workspaces| workspaces.values().next())
-            .cloned()
-            .expect("workspace");
-
-        assert_eq!(
-            workspace.get("has_changes").and_then(Value::as_bool),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn turn_metadata_state_respects_linux_bubblewrap_toggle() {
-        let temp_dir = TempDir::new().expect("temp dir");
-        let cwd = temp_dir.path().to_path_buf();
-        let sandbox_policy = SandboxPolicy::new_read_only_policy();
-
-        let without_bubblewrap = TurnMetadataState::new(
-            "turn-a".to_string(),
-            cwd.clone(),
-            &sandbox_policy,
-            WindowsSandboxLevel::Disabled,
-            false,
-        );
-        let with_bubblewrap = TurnMetadataState::new(
-            "turn-b".to_string(),
-            cwd,
-            &sandbox_policy,
-            WindowsSandboxLevel::Disabled,
-            true,
-        );
-
-        let without_bubblewrap_header = without_bubblewrap
-            .current_header_value()
-            .expect("without_bubblewrap_header");
-        let with_bubblewrap_header = with_bubblewrap
-            .current_header_value()
-            .expect("with_bubblewrap_header");
-
-        let without_bubblewrap_json: Value =
-            serde_json::from_str(&without_bubblewrap_header).expect("without_bubblewrap_json");
-        let with_bubblewrap_json: Value =
-            serde_json::from_str(&with_bubblewrap_header).expect("with_bubblewrap_json");
-
-        let without_bubblewrap_sandbox = without_bubblewrap_json
-            .get("sandbox")
-            .and_then(Value::as_str);
-        let with_bubblewrap_sandbox = with_bubblewrap_json.get("sandbox").and_then(Value::as_str);
-
-        let expected_with_bubblewrap =
-            sandbox_tag(&sandbox_policy, WindowsSandboxLevel::Disabled, true);
-        assert_eq!(with_bubblewrap_sandbox, Some(expected_with_bubblewrap));
-
-        if cfg!(target_os = "linux") {
-            assert_eq!(with_bubblewrap_sandbox, Some("linux_bubblewrap"));
-            assert_ne!(with_bubblewrap_sandbox, without_bubblewrap_sandbox);
-        }
-    }
-}
+#[path = "turn_metadata_tests.rs"]
+mod tests;

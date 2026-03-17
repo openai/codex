@@ -133,7 +133,6 @@ async fn run_linux_sandbox_direct(
         cwd.to_string_lossy().to_string(),
         "--sandbox-policy".to_string(),
         policy_json,
-        "--use-bwrap-sandbox".to_string(),
     ];
     if allow_network_for_proxy {
         args.push("--allow-network-for-proxy".to_string());

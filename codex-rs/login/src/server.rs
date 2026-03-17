@@ -1,6 +1,16 @@
 //! Local OAuth callback server for CLI login.
 //!
 //! This module runs the short-lived localhost server used by interactive sign-in.
+//!
+//! The callback flow has two competing responsibilities:
+//!
+//! - preserve enough backend and transport detail for developers, sysadmins, and support
+//!   engineers to diagnose failed sign-ins
+//! - avoid persisting secrets or sensitive URL/query data into normal application logs
+//!
+//! This module therefore keeps the user-facing error path and the structured-log path separate.
+//! Returned `io::Error` values still carry the detail needed by CLI/browser callers, while
+//! structured logs only emit explicitly reviewed fields plus redacted URL/error values.
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
@@ -18,6 +28,7 @@ use crate::pkce::generate_pkce;
 use base64::Engine;
 use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
+use codex_client::build_reqwest_client_with_custom_ca;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::AuthDotJson;
 use codex_core::auth::save_auth;
@@ -31,6 +42,9 @@ use tiny_http::Request;
 use tiny_http::Response;
 use tiny_http::Server;
 use tiny_http::StatusCode;
+use tracing::error;
+use tracing::info;
+use tracing::warn;
 
 const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 const DEFAULT_PORT: u16 = 1455;
@@ -146,10 +160,13 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
         let server = server.clone();
         thread::spawn(move || -> io::Result<()> {
             while let Ok(request) = server.recv() {
-                tx.blocking_send(request).map_err(|e| {
-                    eprintln!("Failed to send request to channel: {e}");
-                    io::Error::other("Failed to send request to channel")
-                })?;
+                match tx.blocking_send(request) {
+                    Ok(()) => {}
+                    Err(error) => {
+                        eprintln!("Failed to send request to channel: {error}");
+                        return Err(io::Error::other("Failed to send request to channel"));
+                    }
+                }
             }
             Ok(())
         })
@@ -253,7 +270,26 @@ async fn process_request(
         "/auth/callback" => {
             let params: std::collections::HashMap<String, String> =
                 parsed_url.query_pairs().into_owned().collect();
-            if params.get("state").map(String::as_str) != Some(state) {
+            let has_code = params.get("code").is_some_and(|code| !code.is_empty());
+            let has_state = params.get("state").is_some_and(|state| !state.is_empty());
+            let has_error = params.get("error").is_some_and(|error| !error.is_empty());
+            let state_valid = params.get("state").map(String::as_str) == Some(state);
+            info!(
+                path = %path,
+                has_code,
+                has_state,
+                has_error,
+                state_valid,
+                "received login callback"
+            );
+            if !state_valid {
+                warn!(
+                    path = %path,
+                    has_code,
+                    has_state,
+                    has_error,
+                    "login callback state mismatch"
+                );
                 return HandledRequest::Response(
                     Response::from_string("State mismatch").with_status_code(400),
                 );
@@ -262,6 +298,11 @@ async fn process_request(
                 let error_description = params.get("error_description").map(String::as_str);
                 let message = oauth_callback_error_message(error_code, error_description);
                 eprintln!("OAuth callback error: {message}");
+                warn!(
+                    error_code,
+                    has_error_description = error_description.is_some_and(|s| !s.trim().is_empty()),
+                    "oauth callback returned error"
+                );
                 return login_error_response(
                     &message,
                     io::ErrorKind::PermissionDenied,
@@ -276,7 +317,7 @@ async fn process_request(
                         "Missing authorization code. Sign-in could not be completed.",
                         io::ErrorKind::InvalidData,
                         Some("missing_authorization_code"),
-                        None,
+                        /*error_description*/ None,
                     );
                 }
             };
@@ -294,7 +335,7 @@ async fn process_request(
                             &message,
                             io::ErrorKind::PermissionDenied,
                             Some("workspace_restriction"),
-                            None,
+                            /*error_description*/ None,
                         );
                     }
                     // Obtain API key via token-exchange and persist
@@ -332,17 +373,18 @@ async fn process_request(
                             "Sign-in completed but redirecting back to Codex failed.",
                             io::ErrorKind::Other,
                             Some("redirect_failed"),
-                            None,
+                            /*error_description*/ None,
                         ),
                     }
                 }
                 Err(err) => {
                     eprintln!("Token exchange error: {err}");
+                    error!("login callback token exchange failed");
                     login_error_response(
                         &format!("Token exchange failed: {err}"),
                         io::ErrorKind::Other,
                         Some("token_exchange_failed"),
-                        None,
+                        /*error_description*/ None,
                     )
                 }
             }
@@ -533,7 +575,109 @@ pub(crate) struct ExchangedTokens {
     pub refresh_token: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TokenEndpointErrorDetail {
+    error_code: Option<String>,
+    error_message: Option<String>,
+    display_message: String,
+}
+
+impl std::fmt::Display for TokenEndpointErrorDetail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.display_message.fmt(f)
+    }
+}
+
+const REDACTED_URL_VALUE: &str = "<redacted>";
+const SENSITIVE_URL_QUERY_KEYS: &[&str] = &[
+    "access_token",
+    "api_key",
+    "client_secret",
+    "code",
+    "code_verifier",
+    "id_token",
+    "key",
+    "refresh_token",
+    "requested_token",
+    "state",
+    "subject_token",
+    "token",
+];
+
+fn redact_sensitive_query_value(key: &str, value: &str) -> String {
+    if SENSITIVE_URL_QUERY_KEYS
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(key))
+    {
+        REDACTED_URL_VALUE.to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+/// Redacts URL components that commonly carry auth secrets while preserving the host/path shape.
+///
+/// This keeps developer-facing logs useful for debugging transport failures without persisting
+/// tokens, callback codes, fragments, or embedded credentials.
+fn redact_sensitive_url_parts(url: &mut url::Url) {
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_fragment(None);
+
+    let query_pairs = url
+        .query_pairs()
+        .map(|(key, value)| {
+            let key = key.into_owned();
+            let value = value.into_owned();
+            (key.clone(), redact_sensitive_query_value(&key, &value))
+        })
+        .collect::<Vec<_>>();
+
+    if query_pairs.is_empty() {
+        url.set_query(None);
+        return;
+    }
+
+    let redacted_query = query_pairs
+        .into_iter()
+        .fold(
+            url::form_urlencoded::Serializer::new(String::new()),
+            |mut serializer, (key, value)| {
+                serializer.append_pair(&key, &value);
+                serializer
+            },
+        )
+        .finish();
+    url.set_query(Some(&redacted_query));
+}
+
+/// Redacts any URL attached to a reqwest transport error before it is logged or returned.
+fn redact_sensitive_error_url(mut err: reqwest::Error) -> reqwest::Error {
+    if let Some(url) = err.url_mut() {
+        redact_sensitive_url_parts(url);
+    }
+    err
+}
+
+/// Sanitizes a free-form URL string for structured logging.
+///
+/// This is used for caller-supplied issuer values, which may contain credentials or query
+/// parameters on non-default deployments.
+fn sanitize_url_for_logging(url: &str) -> String {
+    match url::Url::parse(url) {
+        Ok(mut url) => {
+            redact_sensitive_url_parts(&mut url);
+            url.to_string()
+        }
+        Err(_) => "<invalid-url>".to_string(),
+    }
+}
 /// Exchanges an authorization code for tokens.
+///
+/// The returned error remains suitable for user-facing CLI/browser surfaces, so backend-provided
+/// non-JSON error text is preserved there. Structured logging stays narrower: it logs reviewed
+/// fields from parsed token responses and redacted transport errors, but does not log the final
+/// callback-layer `%err` string.
 pub(crate) async fn exchange_code_for_tokens(
     issuer: &str,
     client_id: &str,
@@ -548,7 +692,12 @@ pub(crate) async fn exchange_code_for_tokens(
         refresh_token: String,
     }
 
-    let client = reqwest::Client::new();
+    let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
+    info!(
+        issuer = %sanitize_url_for_logging(issuer),
+        redirect_uri = %redirect_uri,
+        "starting oauth token exchange"
+    );
     let resp = client
         .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -560,19 +709,39 @@ pub(crate) async fn exchange_code_for_tokens(
             urlencoding::encode(&pkce.code_verifier)
         ))
         .send()
-        .await
-        .map_err(io::Error::other)?;
+        .await;
+    let resp = match resp {
+        Ok(resp) => resp,
+        Err(error) => {
+            let error = redact_sensitive_error_url(error);
+            error!(
+                is_timeout = error.is_timeout(),
+                is_connect = error.is_connect(),
+                is_request = error.is_request(),
+                error = %error,
+                "oauth token exchange transport failure"
+            );
+            return Err(io::Error::other(error));
+        }
+    };
 
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.map_err(io::Error::other)?;
         let detail = parse_token_endpoint_error(&body);
+        warn!(
+            %status,
+            error_code = detail.error_code.as_deref().unwrap_or("unknown"),
+            error_message = detail.error_message.as_deref().unwrap_or("unknown"),
+            "oauth token exchange returned non-success status"
+        );
         return Err(io::Error::other(format!(
             "token endpoint returned status {status}: {detail}"
         )));
     }
 
     let tokens: TokenResponse = resp.json().await.map_err(io::Error::other)?;
+    info!(%status, "oauth token exchange succeeded");
     Ok(ExchangedTokens {
         id_token: tokens.id_token,
         access_token: tokens.access_token,
@@ -760,34 +929,73 @@ fn oauth_callback_error_message(error_code: &str, error_description: Option<&str
     format!("Sign-in failed: {error_code}")
 }
 
-/// Extracts a readable error from token endpoint responses.
-fn parse_token_endpoint_error(body: &str) -> String {
+/// Extracts token endpoint error detail for both structured logging and caller-visible errors.
+///
+/// Parsed JSON fields are safe to log individually. If the response is not JSON, the raw body is
+/// preserved only for the returned error path so the CLI/browser can still surface the backend
+/// detail, while the structured log path continues to use the explicitly parsed safe fields above.
+fn parse_token_endpoint_error(body: &str) -> TokenEndpointErrorDetail {
     let trimmed = body.trim();
     if trimmed.is_empty() {
-        return "unknown error".to_string();
+        return TokenEndpointErrorDetail {
+            error_code: None,
+            error_message: None,
+            display_message: "unknown error".to_string(),
+        };
     }
 
     let parsed = serde_json::from_str::<JsonValue>(trimmed).ok();
     if let Some(json) = parsed {
+        let error_code = json
+            .get("error")
+            .and_then(JsonValue::as_str)
+            .filter(|error_code| !error_code.trim().is_empty())
+            .map(ToString::to_string)
+            .or_else(|| {
+                json.get("error")
+                    .and_then(JsonValue::as_object)
+                    .and_then(|error_obj| error_obj.get("code"))
+                    .and_then(JsonValue::as_str)
+                    .filter(|code| !code.trim().is_empty())
+                    .map(ToString::to_string)
+            });
         if let Some(description) = json.get("error_description").and_then(JsonValue::as_str)
             && !description.trim().is_empty()
         {
-            return description.to_string();
+            return TokenEndpointErrorDetail {
+                error_code,
+                error_message: Some(description.to_string()),
+                display_message: description.to_string(),
+            };
         }
         if let Some(error_obj) = json.get("error")
             && let Some(message) = error_obj.get("message").and_then(JsonValue::as_str)
             && !message.trim().is_empty()
         {
-            return message.to_string();
+            return TokenEndpointErrorDetail {
+                error_code,
+                error_message: Some(message.to_string()),
+                display_message: message.to_string(),
+            };
         }
-        if let Some(error_code) = json.get("error").and_then(JsonValue::as_str)
-            && !error_code.trim().is_empty()
-        {
-            return error_code.to_string();
+        if let Some(error_code) = error_code {
+            return TokenEndpointErrorDetail {
+                display_message: error_code.clone(),
+                error_code: Some(error_code),
+                error_message: None,
+            };
         }
     }
 
-    trimmed.to_string()
+    // Preserve non-JSON token-endpoint bodies for the returned error so CLI/browser flows still
+    // surface the backend detail users and admins need, but keep that text out of structured logs
+    // by only logging explicitly parsed fields above and avoiding `%err` logging at the callback
+    // layer.
+    TokenEndpointErrorDetail {
+        error_code: None,
+        error_message: None,
+        display_message: trimmed.to_string(),
+    }
 }
 
 /// Renders the branded error page used by callback failures.
@@ -853,7 +1061,7 @@ pub(crate) async fn obtain_api_key(
     struct ExchangeResp {
         access_token: String,
     }
-    let client = reqwest::Client::new();
+    let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
     let resp = client
         .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -876,4 +1084,112 @@ pub(crate) async fn obtain_api_key(
     }
     let body: ExchangeResp = resp.json().await.map_err(io::Error::other)?;
     Ok(body.access_token)
+}
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::TokenEndpointErrorDetail;
+    use super::parse_token_endpoint_error;
+    use super::redact_sensitive_query_value;
+    use super::redact_sensitive_url_parts;
+    use super::sanitize_url_for_logging;
+
+    #[test]
+    fn parse_token_endpoint_error_prefers_error_description() {
+        let detail = parse_token_endpoint_error(
+            r#"{"error":"invalid_grant","error_description":"refresh token expired"}"#,
+        );
+
+        assert_eq!(
+            detail,
+            TokenEndpointErrorDetail {
+                error_code: Some("invalid_grant".to_string()),
+                error_message: Some("refresh token expired".to_string()),
+                display_message: "refresh token expired".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_token_endpoint_error_reads_nested_error_message_and_code() {
+        let detail = parse_token_endpoint_error(
+            r#"{"error":{"code":"proxy_auth_required","message":"proxy authentication required"}}"#,
+        );
+
+        assert_eq!(
+            detail,
+            TokenEndpointErrorDetail {
+                error_code: Some("proxy_auth_required".to_string()),
+                error_message: Some("proxy authentication required".to_string()),
+                display_message: "proxy authentication required".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_token_endpoint_error_falls_back_to_error_code() {
+        let detail = parse_token_endpoint_error(r#"{"error":"temporarily_unavailable"}"#);
+
+        assert_eq!(
+            detail,
+            TokenEndpointErrorDetail {
+                error_code: Some("temporarily_unavailable".to_string()),
+                error_message: None,
+                display_message: "temporarily_unavailable".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_token_endpoint_error_preserves_plain_text_for_display() {
+        let detail = parse_token_endpoint_error("service unavailable");
+
+        assert_eq!(
+            detail,
+            TokenEndpointErrorDetail {
+                error_code: None,
+                error_message: None,
+                display_message: "service unavailable".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn redact_sensitive_query_value_only_scrubs_known_keys() {
+        assert_eq!(
+            redact_sensitive_query_value("code", "abc123"),
+            "<redacted>".to_string()
+        );
+        assert_eq!(
+            redact_sensitive_query_value("redirect_uri", "http://localhost:1455/auth/callback"),
+            "http://localhost:1455/auth/callback".to_string()
+        );
+    }
+
+    #[test]
+    fn redact_sensitive_url_parts_preserves_safe_url_shape() {
+        let mut url = url::Url::parse(
+            "https://user:pass@auth.openai.com/oauth/token?code=abc123&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback#frag",
+        )
+        .expect("valid url");
+
+        redact_sensitive_url_parts(&mut url);
+
+        assert_eq!(
+            url.as_str(),
+            "https://auth.openai.com/oauth/token?code=%3Credacted%3E&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"
+        );
+    }
+
+    #[test]
+    fn sanitize_url_for_logging_redacts_sensitive_issuer_parts() {
+        let redacted =
+            sanitize_url_for_logging("https://user:pass@example.com/base?token=abc123&env=prod");
+
+        assert_eq!(
+            redacted,
+            "https://example.com/base?token=%3Credacted%3E&env=prod".to_string()
+        );
+    }
 }

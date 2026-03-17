@@ -339,8 +339,7 @@ async fn build_test_codex(server: &wiremock::MockServer, home: Arc<TempDir>) -> 
 
 async fn init_state_db(home: &Arc<TempDir>) -> Result<Arc<codex_state::StateRuntime>> {
     let db =
-        codex_state::StateRuntime::init(home.path().to_path_buf(), "test-provider".into(), None)
-            .await?;
+        codex_state::StateRuntime::init(home.path().to_path_buf(), "test-provider".into()).await?;
     db.mark_backfill_complete(None).await?;
     Ok(db)
 }

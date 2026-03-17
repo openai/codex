@@ -88,6 +88,34 @@ pub(crate) fn resolve_helper_for_launch(
     }
 }
 
+pub fn resolve_current_exe_for_launch(
+    codex_home: &Path,
+    fallback_executable: &str,
+) -> PathBuf {
+    let source = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(_) => return PathBuf::from(fallback_executable),
+    };
+    let Some(file_name) = source.file_name() else {
+        return source;
+    };
+    let destination = helper_bin_dir(codex_home).join(file_name);
+    match copy_from_source_if_needed(&source, &destination) {
+        Ok(_) => destination,
+        Err(err) => {
+            let sandbox_log_dir = crate::sandbox_dir(codex_home);
+            log_note(
+                &format!(
+                    "helper copy failed for current executable: {err:#}; falling back to legacy path {}",
+                    source.display()
+                ),
+                Some(&sandbox_log_dir),
+            );
+            source
+        }
+    }
+}
+
 pub(crate) fn copy_helper_if_needed(
     kind: HelperExecutable,
     codex_home: &Path,
@@ -349,3 +377,4 @@ mod tests {
         );
     }
 }
+

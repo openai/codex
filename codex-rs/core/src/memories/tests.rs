@@ -474,7 +474,6 @@ mod phase2 {
             let state_db = codex_state::StateRuntime::init(
                 config.codex_home.clone(),
                 config.model_provider_id.clone(),
-                None,
             )
             .await
             .expect("initialize state db");
@@ -548,10 +547,12 @@ mod phase2 {
         }
 
         async fn shutdown_threads(&self) {
-            self.manager
-                .remove_and_close_all_threads()
-                .await
-                .expect("shutdown spawned threads");
+            let report = self
+                .manager
+                .shutdown_all_threads_bounded(std::time::Duration::from_secs(10))
+                .await;
+            assert!(report.submit_failed.is_empty());
+            assert!(report.timed_out.is_empty());
         }
 
         fn user_input_ops_count(&self) -> usize {
@@ -857,7 +858,6 @@ mod phase2 {
         let state_db = codex_state::StateRuntime::init(
             config.codex_home.clone(),
             config.model_provider_id.clone(),
-            None,
         )
         .await
         .expect("initialize state db");

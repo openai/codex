@@ -103,37 +103,21 @@ pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
         .any(|definition| definition.matches_text(text))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn detects_environment_context_fragment() {
-        assert!(is_contextual_user_fragment(&ContentItem::InputText {
-            text: "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>".to_string(),
-        }));
-    }
-
-    #[test]
-    fn detects_agents_instructions_fragment() {
-        assert!(is_contextual_user_fragment(&ContentItem::InputText {
-            text: "# AGENTS.md instructions for /tmp\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
-                .to_string(),
-        }));
-    }
-
-    #[test]
-    fn detects_subagent_notification_fragment_case_insensitively() {
-        assert!(
-            SUBAGENT_NOTIFICATION_FRAGMENT
-                .matches_text("<SUBAGENT_NOTIFICATION>{}</subagent_notification>")
-        );
-    }
-
-    #[test]
-    fn ignores_regular_user_text() {
-        assert!(!is_contextual_user_fragment(&ContentItem::InputText {
-            text: "hello".to_string(),
-        }));
-    }
+/// Returns whether a contextual user fragment should be omitted from memory
+/// stage-1 inputs.
+///
+/// We exclude injected `AGENTS.md` instructions and skill payloads because
+/// they are prompt scaffolding rather than conversation content, so they do
+/// not improve the resulting memory. We keep environment context and
+/// subagent notifications because they can carry useful execution context or
+/// subtask outcomes that should remain visible to memory generation.
+pub(crate) fn is_memory_excluded_contextual_user_fragment(content_item: &ContentItem) -> bool {
+    let ContentItem::InputText { text } = content_item else {
+        return false;
+    };
+    AGENTS_MD_FRAGMENT.matches_text(text) || SKILL_FRAGMENT.matches_text(text)
 }
+
+#[cfg(test)]
+#[path = "contextual_user_message_tests.rs"]
+mod tests;

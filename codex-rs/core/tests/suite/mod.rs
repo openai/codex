@@ -65,6 +65,7 @@ mod auth_refresh;
 mod cli_stream;
 mod client;
 mod client_websockets;
+mod code_mode;
 mod codex_delegate;
 mod collaboration_instructions;
 mod compact;
@@ -76,6 +77,8 @@ mod exec_policy;
 mod fork_thread;
 mod grep_files;
 mod hierarchical_agents;
+#[cfg(not(target_os = "windows"))]
+mod hooks;
 mod image_rollout;
 mod items;
 mod js_repl;
@@ -104,6 +107,8 @@ mod remote_models;
 mod request_compression;
 #[cfg(not(target_os = "windows"))]
 mod request_permissions;
+#[cfg(not(target_os = "windows"))]
+mod request_permissions_tool;
 mod request_user_input;
 mod resume;
 mod resume_warning;
@@ -118,6 +123,7 @@ mod shell_serialization;
 mod shell_snapshot;
 mod skill_approval;
 mod skills;
+mod spawn_agent_description;
 mod sqlite_state;
 mod stream_error_allows_next_turn;
 mod stream_no_completed;

@@ -270,10 +270,13 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
     let server = start_mock_server().await;
 
     let TestCodex { codex, .. } = test_codex().build(&server).await?;
+    let call_id = "ig_image_saved_to_temp_dir_default";
+    let expected_saved_path = std::env::temp_dir().join(format!("{call_id}.png"));
+    let _ = std::fs::remove_file(&expected_saved_path);
 
     let first_response = sse(vec![
         ev_response_created("resp-1"),
-        ev_image_generation_call("ig_123", "completed", "A tiny blue square", "Zm9v"),
+        ev_image_generation_call(call_id, "completed", "A tiny blue square", "Zm9v"),
         ev_completed("resp-1"),
     ]);
     mount_sse_once(&server, first_response).await;
@@ -299,11 +302,66 @@ async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
     })
     .await;
 
-    assert_eq!(begin.call_id, "ig_123");
-    assert_eq!(end.call_id, "ig_123");
+    assert_eq!(begin.call_id, call_id);
+    assert_eq!(end.call_id, call_id);
     assert_eq!(end.status, "completed");
     assert_eq!(end.revised_prompt, Some("A tiny blue square".to_string()));
     assert_eq!(end.result, "Zm9v");
+    assert_eq!(
+        end.saved_path,
+        Some(expected_saved_path.to_string_lossy().into_owned())
+    );
+    assert_eq!(std::fs::read(&expected_saved_path)?, b"foo");
+    let _ = std::fs::remove_file(&expected_saved_path);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn image_generation_call_event_is_emitted_when_image_save_fails() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let TestCodex { codex, .. } = test_codex().build(&server).await?;
+    let expected_saved_path = std::env::temp_dir().join("ig_invalid.png");
+    let _ = std::fs::remove_file(&expected_saved_path);
+
+    let first_response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_image_generation_call("ig_invalid", "completed", "broken payload", "_-8"),
+        ev_completed("resp-1"),
+    ]);
+    mount_sse_once(&server, first_response).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "generate an image".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let begin = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ImageGenerationBegin(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    let end = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ImageGenerationEnd(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+
+    assert_eq!(begin.call_id, "ig_invalid");
+    assert_eq!(end.call_id, "ig_invalid");
+    assert_eq!(end.status, "completed");
+    assert_eq!(end.revised_prompt, Some("broken payload".to_string()));
+    assert_eq!(end.result, "_-8");
+    assert_eq!(end.saved_path, None);
+    assert!(!expected_saved_path.exists());
 
     Ok(())
 }

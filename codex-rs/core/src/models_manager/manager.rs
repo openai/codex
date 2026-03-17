@@ -3,6 +3,7 @@ use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
 use crate::auth::AuthManager;
 use crate::auth::AuthMode;
+use crate::auth::CodexAuth;
 use crate::config::Config;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
@@ -11,13 +12,21 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::models_manager::model_info;
+use crate::response_debug_context::extract_response_debug_context;
+use crate::response_debug_context::telemetry_transport_error_message;
+use crate::util::FeedbackRequestTags;
+use crate::util::emit_feedback_request_tags;
 use codex_api::ModelsClient;
+use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
+use codex_api::TransportError;
+use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelsResponse;
 use http::HeaderMap;
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,10 +35,87 @@ use tokio::sync::TryLockError;
 use tokio::time::timeout;
 use tracing::error;
 use tracing::info;
+use tracing::instrument;
 
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const DEFAULT_MODEL_CACHE_TTL: Duration = Duration::from_secs(300);
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
+const MODELS_ENDPOINT: &str = "/models";
+#[derive(Clone)]
+struct ModelsRequestTelemetry {
+    auth_mode: Option<String>,
+    auth_header_attached: bool,
+    auth_header_name: Option<&'static str>,
+}
+
+impl RequestTelemetry for ModelsRequestTelemetry {
+    fn on_request(
+        &self,
+        attempt: u64,
+        status: Option<http::StatusCode>,
+        error: Option<&TransportError>,
+        duration: Duration,
+    ) {
+        let success = status.is_some_and(|code| code.is_success()) && error.is_none();
+        let error_message = error.map(telemetry_transport_error_message);
+        let response_debug = error
+            .map(extract_response_debug_context)
+            .unwrap_or_default();
+        let status = status.map(|status| status.as_u16());
+        tracing::event!(
+            target: "codex_otel.log_only",
+            tracing::Level::INFO,
+            event.name = "codex.api_request",
+            duration_ms = %duration.as_millis(),
+            http.response.status_code = status,
+            success = success,
+            error.message = error_message.as_deref(),
+            attempt = attempt,
+            endpoint = MODELS_ENDPOINT,
+            auth.header_attached = self.auth_header_attached,
+            auth.header_name = self.auth_header_name,
+            auth.request_id = response_debug.request_id.as_deref(),
+            auth.cf_ray = response_debug.cf_ray.as_deref(),
+            auth.error = response_debug.auth_error.as_deref(),
+            auth.error_code = response_debug.auth_error_code.as_deref(),
+            auth.mode = self.auth_mode.as_deref(),
+        );
+        tracing::event!(
+            target: "codex_otel.trace_safe",
+            tracing::Level::INFO,
+            event.name = "codex.api_request",
+            duration_ms = %duration.as_millis(),
+            http.response.status_code = status,
+            success = success,
+            error.message = error_message.as_deref(),
+            attempt = attempt,
+            endpoint = MODELS_ENDPOINT,
+            auth.header_attached = self.auth_header_attached,
+            auth.header_name = self.auth_header_name,
+            auth.request_id = response_debug.request_id.as_deref(),
+            auth.cf_ray = response_debug.cf_ray.as_deref(),
+            auth.error = response_debug.auth_error.as_deref(),
+            auth.error_code = response_debug.auth_error_code.as_deref(),
+            auth.mode = self.auth_mode.as_deref(),
+        );
+        emit_feedback_request_tags(&FeedbackRequestTags {
+            endpoint: MODELS_ENDPOINT,
+            auth_header_attached: self.auth_header_attached,
+            auth_header_name: self.auth_header_name,
+            auth_mode: self.auth_mode.as_deref(),
+            auth_retry_after_unauthorized: None,
+            auth_recovery_mode: None,
+            auth_recovery_phase: None,
+            auth_connection_reused: None,
+            auth_request_id: response_debug.request_id.as_deref(),
+            auth_cf_ray: response_debug.cf_ray.as_deref(),
+            auth_error: response_debug.auth_error.as_deref(),
+            auth_error_code: response_debug.auth_error_code.as_deref(),
+            auth_recovery_followup_success: None,
+            auth_recovery_followup_status: None,
+        });
+    }
+}
 
 /// Strategy for refreshing available models.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +126,22 @@ pub enum RefreshStrategy {
     Offline,
     /// Use cache if available and fresh, otherwise fetch from the network.
     OnlineIfUncached,
+}
+
+impl RefreshStrategy {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Online => "online",
+            Self::Offline => "offline",
+            Self::OnlineIfUncached => "online_if_uncached",
+        }
+    }
+}
+
+impl fmt::Display for RefreshStrategy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// How the manager's base catalog is sourced for the lifetime of the process.
@@ -75,6 +177,23 @@ impl ModelsManager {
         model_catalog: Option<ModelsResponse>,
         collaboration_modes_config: CollaborationModesConfig,
     ) -> Self {
+        Self::new_with_provider(
+            codex_home,
+            auth_manager,
+            model_catalog,
+            collaboration_modes_config,
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+        )
+    }
+
+    /// Construct a manager with an explicit provider used for remote model refreshes.
+    pub fn new_with_provider(
+        codex_home: PathBuf,
+        auth_manager: Arc<AuthManager>,
+        model_catalog: Option<ModelsResponse>,
+        collaboration_modes_config: CollaborationModesConfig,
+        provider: ModelProviderInfo,
+    ) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
         let catalog_mode = if model_catalog.is_some() {
@@ -95,13 +214,18 @@ impl ModelsManager {
             auth_manager,
             etag: RwLock::new(None),
             cache_manager,
-            provider: ModelProviderInfo::create_openai_provider(),
+            provider,
         }
     }
 
     /// List all available models, refreshing according to the specified strategy.
     ///
     /// Returns model presets sorted by priority and filtered by auth mode and visibility.
+    #[instrument(
+        level = "info",
+        skip(self),
+        fields(refresh_strategy = %refresh_strategy)
+    )]
     pub async fn list_models(&self, refresh_strategy: RefreshStrategy) -> Vec<ModelPreset> {
         if let Err(err) = self.refresh_available_models(refresh_strategy).await {
             error!("failed to refresh available models: {err}");
@@ -137,6 +261,14 @@ impl ModelsManager {
     ///
     /// If `model` is provided, returns it directly. Otherwise selects the default based on
     /// auth mode and available models.
+    #[instrument(
+        level = "info",
+        skip(self, model),
+        fields(
+            model.provided = model.is_some(),
+            refresh_strategy = %refresh_strategy
+        )
+    )]
     pub async fn get_default_model(
         &self,
         model: &Option<String>,
@@ -160,6 +292,7 @@ impl ModelsManager {
 
     // todo(aibrahim): look if we can tighten it to pub(crate)
     /// Look up model metadata, applying remote overrides and config adjustments.
+    #[instrument(level = "info", skip(self, config), fields(model = model))]
     pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
         let remote_models = self.get_remote_models().await;
         Self::construct_model_info_from_candidates(model, &remote_models, config)
@@ -281,11 +414,17 @@ impl ModelsManager {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
         let auth = self.auth_manager.auth().await;
-        let auth_mode = self.auth_manager.auth_mode();
+        let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
         let api_provider = self.provider.to_api_provider(auth_mode)?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;
         let transport = ReqwestTransport::new(build_reqwest_client());
-        let client = ModelsClient::new(transport, api_provider, api_auth);
+        let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
+            auth_mode: auth_mode.map(|mode| TelemetryAuthMode::from(mode).to_string()),
+            auth_header_attached: api_auth.auth_header_attached(),
+            auth_header_name: api_auth.auth_header_name(),
+        });
+        let client = ModelsClient::new(transport, api_provider, api_auth)
+            .with_telemetry(Some(request_telemetry));
 
         let client_version = crate::models_manager::client_version_to_whole();
         let (models, etag) = timeout(
@@ -381,20 +520,13 @@ impl ModelsManager {
         auth_manager: Arc<AuthManager>,
         provider: ModelProviderInfo,
     ) -> Self {
-        let cache_path = codex_home.join(MODEL_CACHE_FILE);
-        let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
-        Self {
-            remote_models: RwLock::new(
-                Self::load_remote_models_from_file()
-                    .unwrap_or_else(|err| panic!("failed to load bundled models.json: {err}")),
-            ),
-            catalog_mode: CatalogMode::Default,
-            collaboration_modes_config: CollaborationModesConfig::default(),
+        Self::new_with_provider(
+            codex_home,
             auth_manager,
-            etag: RwLock::new(None),
-            cache_manager,
+            /*model_catalog*/ None,
+            CollaborationModesConfig::default(),
             provider,
-        }
+        )
     }
 
     /// Get model identifier without consulting remote state or cache.
@@ -428,584 +560,5 @@ impl ModelsManager {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::CodexAuth;
-    use crate::auth::AuthCredentialsStoreMode;
-    use crate::config::ConfigBuilder;
-    use crate::model_provider_info::WireApi;
-    use chrono::Utc;
-    use codex_protocol::openai_models::ModelsResponse;
-    use core_test_support::responses::mount_models_once;
-    use pretty_assertions::assert_eq;
-    use serde_json::json;
-    use tempfile::tempdir;
-    use wiremock::MockServer;
-
-    fn remote_model(slug: &str, display: &str, priority: i32) -> ModelInfo {
-        remote_model_with_visibility(slug, display, priority, "list")
-    }
-
-    fn remote_model_with_visibility(
-        slug: &str,
-        display: &str,
-        priority: i32,
-        visibility: &str,
-    ) -> ModelInfo {
-        serde_json::from_value(json!({
-            "slug": slug,
-            "display_name": display,
-            "description": format!("{display} desc"),
-            "default_reasoning_level": "medium",
-            "supported_reasoning_levels": [{"effort": "low", "description": "low"}, {"effort": "medium", "description": "medium"}],
-            "shell_type": "shell_command",
-            "visibility": visibility,
-            "minimal_client_version": [0, 1, 0],
-            "supported_in_api": true,
-            "priority": priority,
-            "upgrade": null,
-            "base_instructions": "base instructions",
-            "supports_reasoning_summaries": false,
-            "support_verbosity": false,
-            "default_verbosity": null,
-            "apply_patch_tool_type": null,
-            "truncation_policy": {"mode": "bytes", "limit": 10_000},
-            "supports_parallel_tool_calls": false,
-            "supports_image_detail_original": false,
-            "context_window": 272_000,
-            "experimental_supported_tools": [],
-        }))
-        .expect("valid model")
-    }
-
-    fn assert_models_contain(actual: &[ModelInfo], expected: &[ModelInfo]) {
-        for model in expected {
-            assert!(
-                actual.iter().any(|candidate| candidate.slug == model.slug),
-                "expected model {} in cached list",
-                model.slug
-            );
-        }
-    }
-
-    fn provider_for(base_url: String) -> ModelProviderInfo {
-        ModelProviderInfo {
-            name: "mock".into(),
-            base_url: Some(base_url),
-            env_key: None,
-            env_key_instructions: None,
-            experimental_bearer_token: None,
-            wire_api: WireApi::Responses,
-            query_params: None,
-            http_headers: None,
-            env_http_headers: None,
-            request_max_retries: Some(0),
-            stream_max_retries: Some(0),
-            stream_idle_timeout_ms: Some(5_000),
-            requires_openai_auth: false,
-            supports_websockets: false,
-        }
-    }
-
-    #[tokio::test]
-    async fn get_model_info_tracks_fallback_usage() {
-        let codex_home = tempdir().expect("temp dir");
-        let config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
-            .build()
-            .await
-            .expect("load default test config");
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
-            auth_manager,
-            None,
-            CollaborationModesConfig::default(),
-        );
-        let known_slug = manager
-            .get_remote_models()
-            .await
-            .first()
-            .expect("bundled models should include at least one model")
-            .slug
-            .clone();
-
-        let known = manager.get_model_info(known_slug.as_str(), &config).await;
-        assert!(!known.used_fallback_model_metadata);
-        assert_eq!(known.slug, known_slug);
-
-        let unknown = manager
-            .get_model_info("model-that-does-not-exist", &config)
-            .await;
-        assert!(unknown.used_fallback_model_metadata);
-        assert_eq!(unknown.slug, "model-that-does-not-exist");
-    }
-
-    #[tokio::test]
-    async fn get_model_info_uses_custom_catalog() {
-        let codex_home = tempdir().expect("temp dir");
-        let config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
-            .build()
-            .await
-            .expect("load default test config");
-        let mut overlay = remote_model("gpt-overlay", "Overlay", 0);
-        overlay.supports_image_detail_original = true;
-
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
-            auth_manager,
-            Some(ModelsResponse {
-                models: vec![overlay],
-            }),
-            CollaborationModesConfig::default(),
-        );
-
-        let model_info = manager
-            .get_model_info("gpt-overlay-experiment", &config)
-            .await;
-
-        assert_eq!(model_info.slug, "gpt-overlay-experiment");
-        assert_eq!(model_info.display_name, "Overlay");
-        assert_eq!(model_info.context_window, Some(272_000));
-        assert!(model_info.supports_image_detail_original);
-        assert!(!model_info.supports_parallel_tool_calls);
-        assert!(!model_info.used_fallback_model_metadata);
-    }
-
-    #[tokio::test]
-    async fn get_model_info_matches_namespaced_suffix() {
-        let codex_home = tempdir().expect("temp dir");
-        let config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
-            .build()
-            .await
-            .expect("load default test config");
-        let mut remote = remote_model("gpt-image", "Image", 0);
-        remote.supports_image_detail_original = true;
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
-            auth_manager,
-            Some(ModelsResponse {
-                models: vec![remote],
-            }),
-            CollaborationModesConfig::default(),
-        );
-        let namespaced_model = "custom/gpt-image".to_string();
-
-        let model_info = manager.get_model_info(&namespaced_model, &config).await;
-
-        assert_eq!(model_info.slug, namespaced_model);
-        assert!(model_info.supports_image_detail_original);
-        assert!(!model_info.used_fallback_model_metadata);
-    }
-
-    #[tokio::test]
-    async fn get_model_info_rejects_multi_segment_namespace_suffix_matching() {
-        let codex_home = tempdir().expect("temp dir");
-        let config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
-            .build()
-            .await
-            .expect("load default test config");
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let manager = ModelsManager::new(
-            codex_home.path().to_path_buf(),
-            auth_manager,
-            None,
-            CollaborationModesConfig::default(),
-        );
-        let known_slug = manager
-            .get_remote_models()
-            .await
-            .first()
-            .expect("bundled models should include at least one model")
-            .slug
-            .clone();
-        let namespaced_model = format!("ns1/ns2/{known_slug}");
-
-        let model_info = manager.get_model_info(&namespaced_model, &config).await;
-
-        assert_eq!(model_info.slug, namespaced_model);
-        assert!(model_info.used_fallback_model_metadata);
-    }
-
-    #[tokio::test]
-    async fn refresh_available_models_sorts_by_priority() {
-        let server = MockServer::start().await;
-        let remote_models = vec![
-            remote_model("priority-low", "Low", 1),
-            remote_model("priority-high", "High", 0),
-        ];
-        let models_mock = mount_models_once(
-            &server,
-            ModelsResponse {
-                models: remote_models.clone(),
-            },
-        )
-        .await;
-
-        let codex_home = tempdir().expect("temp dir");
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-        let provider = provider_for(server.uri());
-        let manager = ModelsManager::with_provider_for_tests(
-            codex_home.path().to_path_buf(),
-            auth_manager,
-            provider,
-        );
-
-        manager
-            .refresh_available_models(RefreshStrategy::OnlineIfUncached)
-            .await
-            .expect("refresh succeeds");
-        let cached_remote = manager.get_remote_models().await;
-        assert_models_contain(&cached_remote, &remote_models);
-
-        let available = manager.list_models(RefreshStrategy::OnlineIfUncached).await;
-        let high_idx = available
-            .iter()
-            .position(|model| model.model == "priority-high")
-            .expect("priority-high should be listed");
-        let low_idx = available
-            .iter()
-            .position(|model| model.model == "priority-low")
-            .expect("priority-low should be listed");
-        assert!(
-            high_idx < low_idx,
-            "higher priority should be listed before lower priority"
-        );
-        assert_eq!(
-            models_mock.requests().len(),
-            1,
-            "expected a single /models request"
-        );
-    }
-
-    #[tokio::test]
-    async fn refresh_available_models_uses_cache_when_fresh() {
-        let server = MockServer::start().await;
-        let remote_models = vec![remote_model("cached", "Cached", 5)];
-        let models_mock = mount_models_once(
-            &server,
-            ModelsResponse {
-                models: remote_models.clone(),
-            },
-        )
-        .await;
-
-        let codex_home = tempdir().expect("temp dir");
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-        let provider = provider_for(server.uri());
-        let manager = ModelsManager::with_provider_for_tests(
-            codex_home.path().to_path_buf(),
-            auth_manager,
-            provider,
-        );
-
-        manager
-            .refresh_available_models(RefreshStrategy::OnlineIfUncached)
-            .await
-            .expect("first refresh succeeds");
-        assert_models_contain(&manager.get_remote_models().await, &remote_models);
-
-        // Second call should read from cache and avoid the network.
-        manager
-            .refresh_available_models(RefreshStrategy::OnlineIfUncached)
-            .await
-            .expect("cached refresh succeeds");
-        assert_models_contain(&manager.get_remote_models().await, &remote_models);
-        assert_eq!(
-            models_mock.requests().len(),
-            1,
-            "cache hit should avoid a second /models request"
-        );
-    }
-
-    #[tokio::test]
-    async fn refresh_available_models_refetches_when_cache_stale() {
-        let server = MockServer::start().await;
-        let initial_models = vec![remote_model("stale", "Stale", 1)];
-        let initial_mock = mount_models_once(
-            &server,
-            ModelsResponse {
-                models: initial_models.clone(),
-            },
-        )
-        .await;
-
-        let codex_home = tempdir().expect("temp dir");
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-        let provider = provider_for(server.uri());
-        let manager = ModelsManager::with_provider_for_tests(
-            codex_home.path().to_path_buf(),
-            auth_manager,
-            provider,
-        );
-
-        manager
-            .refresh_available_models(RefreshStrategy::OnlineIfUncached)
-            .await
-            .expect("initial refresh succeeds");
-
-        // Rewrite cache with an old timestamp so it is treated as stale.
-        manager
-            .cache_manager
-            .manipulate_cache_for_test(|fetched_at| {
-                *fetched_at = Utc::now() - chrono::Duration::hours(1);
-            })
-            .await
-            .expect("cache manipulation succeeds");
-
-        let updated_models = vec![remote_model("fresh", "Fresh", 9)];
-        server.reset().await;
-        let refreshed_mock = mount_models_once(
-            &server,
-            ModelsResponse {
-                models: updated_models.clone(),
-            },
-        )
-        .await;
-
-        manager
-            .refresh_available_models(RefreshStrategy::OnlineIfUncached)
-            .await
-            .expect("second refresh succeeds");
-        assert_models_contain(&manager.get_remote_models().await, &updated_models);
-        assert_eq!(
-            initial_mock.requests().len(),
-            1,
-            "initial refresh should only hit /models once"
-        );
-        assert_eq!(
-            refreshed_mock.requests().len(),
-            1,
-            "stale cache refresh should fetch /models once"
-        );
-    }
-
-    #[tokio::test]
-    async fn refresh_available_models_refetches_when_version_mismatch() {
-        let server = MockServer::start().await;
-        let initial_models = vec![remote_model("old", "Old", 1)];
-        let initial_mock = mount_models_once(
-            &server,
-            ModelsResponse {
-                models: initial_models.clone(),
-            },
-        )
-        .await;
-
-        let codex_home = tempdir().expect("temp dir");
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-        let provider = provider_for(server.uri());
-        let manager = ModelsManager::with_provider_for_tests(
-            codex_home.path().to_path_buf(),
-            auth_manager,
-            provider,
-        );
-
-        manager
-            .refresh_available_models(RefreshStrategy::OnlineIfUncached)
-            .await
-            .expect("initial refresh succeeds");
-
-        manager
-            .cache_manager
-            .mutate_cache_for_test(|cache| {
-                let client_version = crate::models_manager::client_version_to_whole();
-                cache.client_version = Some(format!("{client_version}-mismatch"));
-            })
-            .await
-            .expect("cache mutation succeeds");
-
-        let updated_models = vec![remote_model("new", "New", 2)];
-        server.reset().await;
-        let refreshed_mock = mount_models_once(
-            &server,
-            ModelsResponse {
-                models: updated_models.clone(),
-            },
-        )
-        .await;
-
-        manager
-            .refresh_available_models(RefreshStrategy::OnlineIfUncached)
-            .await
-            .expect("second refresh succeeds");
-        assert_models_contain(&manager.get_remote_models().await, &updated_models);
-        assert_eq!(
-            initial_mock.requests().len(),
-            1,
-            "initial refresh should only hit /models once"
-        );
-        assert_eq!(
-            refreshed_mock.requests().len(),
-            1,
-            "version mismatch should fetch /models once"
-        );
-    }
-
-    #[tokio::test]
-    async fn refresh_available_models_drops_removed_remote_models() {
-        let server = MockServer::start().await;
-        let initial_models = vec![remote_model("remote-old", "Remote Old", 1)];
-        let initial_mock = mount_models_once(
-            &server,
-            ModelsResponse {
-                models: initial_models,
-            },
-        )
-        .await;
-
-        let codex_home = tempdir().expect("temp dir");
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-        let provider = provider_for(server.uri());
-        let mut manager = ModelsManager::with_provider_for_tests(
-            codex_home.path().to_path_buf(),
-            auth_manager,
-            provider,
-        );
-        manager.cache_manager.set_ttl(Duration::ZERO);
-
-        manager
-            .refresh_available_models(RefreshStrategy::OnlineIfUncached)
-            .await
-            .expect("initial refresh succeeds");
-
-        server.reset().await;
-        let refreshed_models = vec![remote_model("remote-new", "Remote New", 1)];
-        let refreshed_mock = mount_models_once(
-            &server,
-            ModelsResponse {
-                models: refreshed_models,
-            },
-        )
-        .await;
-
-        manager
-            .refresh_available_models(RefreshStrategy::OnlineIfUncached)
-            .await
-            .expect("second refresh succeeds");
-
-        let available = manager
-            .try_list_models()
-            .expect("models should be available");
-        assert!(
-            available.iter().any(|preset| preset.model == "remote-new"),
-            "new remote model should be listed"
-        );
-        assert!(
-            !available.iter().any(|preset| preset.model == "remote-old"),
-            "removed remote model should not be listed"
-        );
-        assert_eq!(
-            initial_mock.requests().len(),
-            1,
-            "initial refresh should only hit /models once"
-        );
-        assert_eq!(
-            refreshed_mock.requests().len(),
-            1,
-            "second refresh should only hit /models once"
-        );
-    }
-
-    #[tokio::test]
-    async fn refresh_available_models_skips_network_without_chatgpt_auth() {
-        let server = MockServer::start().await;
-        let dynamic_slug = "dynamic-model-only-for-test-noauth";
-        let models_mock = mount_models_once(
-            &server,
-            ModelsResponse {
-                models: vec![remote_model(dynamic_slug, "No Auth", 1)],
-            },
-        )
-        .await;
-
-        let codex_home = tempdir().expect("temp dir");
-        let auth_manager = Arc::new(AuthManager::new(
-            codex_home.path().to_path_buf(),
-            false,
-            AuthCredentialsStoreMode::File,
-        ));
-        let provider = provider_for(server.uri());
-        let manager = ModelsManager::with_provider_for_tests(
-            codex_home.path().to_path_buf(),
-            auth_manager,
-            provider,
-        );
-
-        manager
-            .refresh_available_models(RefreshStrategy::Online)
-            .await
-            .expect("refresh should no-op without chatgpt auth");
-        let cached_remote = manager.get_remote_models().await;
-        assert!(
-            !cached_remote
-                .iter()
-                .any(|candidate| candidate.slug == dynamic_slug),
-            "remote refresh should be skipped without chatgpt auth"
-        );
-        assert_eq!(
-            models_mock.requests().len(),
-            0,
-            "no auth should avoid /models requests"
-        );
-    }
-
-    #[test]
-    fn build_available_models_picks_default_after_hiding_hidden_models() {
-        let codex_home = tempdir().expect("temp dir");
-        let auth_manager =
-            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-        let provider = provider_for("http://example.test".to_string());
-        let manager = ModelsManager::with_provider_for_tests(
-            codex_home.path().to_path_buf(),
-            auth_manager,
-            provider,
-        );
-
-        let hidden_model = remote_model_with_visibility("hidden", "Hidden", 0, "hide");
-        let visible_model = remote_model_with_visibility("visible", "Visible", 1, "list");
-
-        let expected_hidden = ModelPreset::from(hidden_model.clone());
-        let mut expected_visible = ModelPreset::from(visible_model.clone());
-        expected_visible.is_default = true;
-
-        let available = manager.build_available_models(vec![hidden_model, visible_model]);
-
-        assert_eq!(available, vec![expected_hidden, expected_visible]);
-    }
-
-    #[test]
-    fn bundled_models_json_roundtrips() {
-        let file_contents = include_str!("../../models.json");
-        let response: ModelsResponse =
-            serde_json::from_str(file_contents).expect("bundled models.json should deserialize");
-
-        let serialized =
-            serde_json::to_string(&response).expect("bundled models.json should serialize");
-        let roundtripped: ModelsResponse =
-            serde_json::from_str(&serialized).expect("serialized models.json should deserialize");
-
-        assert_eq!(
-            response, roundtripped,
-            "bundled models.json should round trip through serde"
-        );
-        assert!(
-            !response.models.is_empty(),
-            "bundled models.json should contain at least one model"
-        );
-    }
-}
+#[path = "manager_tests.rs"]
+mod tests;

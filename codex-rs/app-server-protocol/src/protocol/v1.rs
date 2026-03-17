@@ -5,28 +5,21 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnAbortReason;
-use codex_protocol::user_input::ByteRange as CoreByteRange;
-use codex_protocol::user_input::TextElement as CoreTextElement;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
-use uuid::Uuid;
 
-// Reuse shared types defined in `common.rs`.
 use crate::protocol::common::AuthMode;
 use crate::protocol::common::GitSha;
 
@@ -54,7 +47,7 @@ pub struct InitializeCapabilities {
     #[serde(default)]
     pub experimental_api: bool,
     /// Exact notification method names that should be suppressed for this
-    /// connection (for example `codex/event/session_configured`).
+    /// connection (for example `thread/started`).
     #[ts(optional = nullable)]
     pub opt_out_notification_methods: Option<Vec<String>>,
 }
@@ -63,51 +56,12 @@ pub struct InitializeCapabilities {
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResponse {
     pub user_agent: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct NewConversationParams {
-    pub model: Option<String>,
-    pub model_provider: Option<String>,
-    pub profile: Option<String>,
-    pub cwd: Option<String>,
-    pub approval_policy: Option<AskForApproval>,
-    pub sandbox: Option<SandboxMode>,
-    pub config: Option<HashMap<String, serde_json::Value>>,
-    pub base_instructions: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub developer_instructions: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compact_prompt: Option<String>,
-    pub include_apply_patch_tool: Option<bool>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct NewConversationResponse {
-    pub conversation_id: ThreadId,
-    pub model: String,
-    pub reasoning_effort: Option<ReasoningEffort>,
-    pub rollout_path: PathBuf,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ResumeConversationResponse {
-    pub conversation_id: ThreadId,
-    pub model: String,
-    pub initial_messages: Option<Vec<EventMsg>>,
-    pub rollout_path: PathBuf,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ForkConversationResponse {
-    pub conversation_id: ThreadId,
-    pub model: String,
-    pub initial_messages: Option<Vec<EventMsg>>,
-    pub rollout_path: PathBuf,
+    /// Platform family for the running app-server target, for example
+    /// `"unix"` or `"windows"`.
+    pub platform_family: String,
+    /// Operating system for the running app-server target, for example
+    /// `"macos"`, `"linux"`, or `"windows"`.
+    pub platform_os: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -127,14 +81,6 @@ pub enum GetConversationSummaryParams {
 #[serde(rename_all = "camelCase")]
 pub struct GetConversationSummaryResponse {
     pub summary: ConversationSummary,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ListConversationsParams {
-    pub page_size: Option<usize>,
-    pub cursor: Option<String>,
-    pub model_providers: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -162,66 +108,8 @@ pub struct ConversationGitInfo {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ListConversationsResponse {
-    pub items: Vec<ConversationSummary>,
-    pub next_cursor: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ResumeConversationParams {
-    pub path: Option<PathBuf>,
-    pub conversation_id: Option<ThreadId>,
-    pub history: Option<Vec<ResponseItem>>,
-    pub overrides: Option<NewConversationParams>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ForkConversationParams {
-    pub path: Option<PathBuf>,
-    pub conversation_id: Option<ThreadId>,
-    pub overrides: Option<NewConversationParams>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct AddConversationSubscriptionResponse {
-    #[schemars(with = "String")]
-    pub subscription_id: Uuid,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ArchiveConversationParams {
-    pub conversation_id: ThreadId,
-    pub rollout_path: PathBuf,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ArchiveConversationResponse {}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct RemoveConversationSubscriptionResponse {}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
 pub struct LoginApiKeyParams {
     pub api_key: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct LoginApiKeyResponse {}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct LoginChatGptResponse {
-    #[schemars(with = "String")]
-    pub login_id: Uuid,
-    pub auth_url: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -274,28 +162,9 @@ pub struct ExecCommandApprovalResponse {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct CancelLoginChatGptParams {
-    #[schemars(with = "String")]
-    pub login_id: Uuid,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
 pub struct GitDiffToRemoteParams {
     pub cwd: PathBuf,
 }
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct CancelLoginChatGptResponse {}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct LogoutChatGptParams {}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct LogoutChatGptResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -315,48 +184,11 @@ pub struct ExecOneOffCommandParams {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ExecOneOffCommandResponse {
-    pub exit_code: i32,
-    pub stdout: String,
-    pub stderr: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
 pub struct GetAuthStatusResponse {
     pub auth_method: Option<AuthMode>,
     pub auth_token: Option<String>,
     pub requires_openai_auth: Option<bool>,
 }
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct GetUserAgentResponse {
-    pub user_agent: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct UserInfoResponse {
-    pub alleged_user_email: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct GetUserSavedConfigResponse {
-    pub config: UserSavedConfig,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct SetDefaultModelParams {
-    pub model: Option<String>,
-    pub reasoning_effort: Option<ReasoningEffort>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct SetDefaultModelResponse {}
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -404,195 +236,8 @@ pub struct SandboxSettings {
     pub exclude_slash_tmp: Option<bool>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct SendUserMessageParams {
-    pub conversation_id: ThreadId,
-    pub items: Vec<InputItem>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct SendUserTurnParams {
-    pub conversation_id: ThreadId,
-    pub items: Vec<InputItem>,
-    pub cwd: PathBuf,
-    pub approval_policy: AskForApproval,
-    pub sandbox_policy: SandboxPolicy,
-    pub model: String,
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_double_option",
-        serialize_with = "super::serde_helpers::serialize_double_option",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub service_tier: Option<Option<ServiceTier>>,
-    pub effort: Option<ReasoningEffort>,
-    pub summary: ReasoningSummary,
-    /// Optional JSON Schema used to constrain the final assistant message for this turn.
-    pub output_schema: Option<serde_json::Value>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct SendUserTurnResponse {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-    use std::path::PathBuf;
-
-    #[test]
-    fn send_user_turn_params_preserve_explicit_null_service_tier() {
-        let params = SendUserTurnParams {
-            conversation_id: ThreadId::new(),
-            items: vec![],
-            cwd: PathBuf::from("/tmp"),
-            approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            model: "gpt-4.1".to_string(),
-            service_tier: Some(None),
-            effort: None,
-            summary: ReasoningSummary::Auto,
-            output_schema: None,
-        };
-
-        let serialized = serde_json::to_value(&params).expect("params should serialize");
-        assert_eq!(
-            serialized.get("serviceTier"),
-            Some(&serde_json::Value::Null)
-        );
-
-        let roundtrip: SendUserTurnParams =
-            serde_json::from_value(serialized).expect("params should deserialize");
-        assert_eq!(roundtrip.service_tier, Some(None));
-
-        let without_override = SendUserTurnParams {
-            conversation_id: ThreadId::new(),
-            items: vec![],
-            cwd: PathBuf::from("/tmp"),
-            approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
-            model: "gpt-4.1".to_string(),
-            service_tier: None,
-            effort: None,
-            summary: ReasoningSummary::Auto,
-            output_schema: None,
-        };
-        let serialized_without_override =
-            serde_json::to_value(&without_override).expect("params should serialize");
-        assert_eq!(serialized_without_override.get("serviceTier"), None);
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct InterruptConversationParams {
-    pub conversation_id: ThreadId,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InterruptConversationResponse {
     pub abort_reason: TurnAbortReason,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct SendUserMessageResponse {}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct AddConversationListenerParams {
-    pub conversation_id: ThreadId,
-    #[serde(default)]
-    pub experimental_raw_events: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct RemoveConversationListenerParams {
-    #[schemars(with = "String")]
-    pub subscription_id: Uuid,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[serde(tag = "type", content = "data")]
-pub enum InputItem {
-    Text {
-        text: String,
-        /// UI-defined spans within `text` used to render or persist special elements.
-        #[serde(default)]
-        text_elements: Vec<V1TextElement>,
-    },
-    Image {
-        image_url: String,
-    },
-    LocalImage {
-        path: PathBuf,
-    },
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename = "ByteRange")]
-pub struct V1ByteRange {
-    /// Start byte offset (inclusive) within the UTF-8 text buffer.
-    pub start: usize,
-    /// End byte offset (exclusive) within the UTF-8 text buffer.
-    pub end: usize,
-}
-
-impl From<CoreByteRange> for V1ByteRange {
-    fn from(value: CoreByteRange) -> Self {
-        Self {
-            start: value.start,
-            end: value.end,
-        }
-    }
-}
-
-impl From<V1ByteRange> for CoreByteRange {
-    fn from(value: V1ByteRange) -> Self {
-        Self {
-            start: value.start,
-            end: value.end,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename = "TextElement")]
-pub struct V1TextElement {
-    /// Byte range in the parent `text` buffer that this element occupies.
-    pub byte_range: V1ByteRange,
-    /// Optional human-readable placeholder for the element, displayed in the UI.
-    pub placeholder: Option<String>,
-}
-
-impl From<CoreTextElement> for V1TextElement {
-    fn from(value: CoreTextElement) -> Self {
-        Self {
-            byte_range: value.byte_range.into(),
-            placeholder: value._placeholder_for_conversion_only().map(str::to_string),
-        }
-    }
-}
-
-impl From<V1TextElement> for CoreTextElement {
-    fn from(value: V1TextElement) -> Self {
-        Self::new(value.byte_range.into(), value.placeholder)
-    }
-}
-
-impl InputItem {
-    pub fn text_char_count(&self) -> usize {
-        match self {
-            InputItem::Text { text, .. } => text.chars().count(),
-            InputItem::Image { .. } | InputItem::LocalImage { .. } => 0,
-        }
-    }
 }

@@ -342,6 +342,7 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         default_verbosity: None,
         availability_nux: None,
         apply_patch_tool_type: None,
+        web_search_tool_type: Default::default(),
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
@@ -351,5 +352,6 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
+        supports_search_tool: false,
     }
 }

@@ -4,6 +4,7 @@ members = [
     "ansi-escape",
     "async-utils",
     "app-server",
+    "app-server-client",
     "app-server-protocol",
     "app-server-test-client",
     "debug-client",
@@ -15,6 +16,7 @@ members = [
     "cloud-tasks",
     "cloud-tasks-client",
     "cli",
+    "connectors",
     "config",
     "shell-command",
     "shell-escalation",
@@ -40,6 +42,7 @@ members = [
     "stdio-to-uds",
     "otel",
     "tui",
+    "tui_app_server",
     "utils/absolute-path",
     "utils/cargo-bin",
     "utils/git",
@@ -86,6 +89,7 @@ codex-api = { path = "codex-api" }
 codex-artifacts = { path = "artifacts" }
 codex-package-manager = { path = "package-manager" }
 codex-app-server = { path = "app-server" }
+codex-app-server-client = { path = "app-server-client" }
 codex-app-server-protocol = { path = "app-server-protocol" }
 codex-app-server-test-client = { path = "app-server-test-client" }
 codex-apply-patch = { path = "apply-patch" }
@@ -96,6 +100,7 @@ codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli" }
 codex-client = { path = "codex-client" }
 codex-cloud-requirements = { path = "cloud-requirements" }
+codex-connectors = { path = "connectors" }
 codex-config = { path = "config" }
 codex-core = { path = "core" }
 codex-exec = { path = "exec" }
@@ -125,6 +130,7 @@ codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-test-macros = { path = "test-macros" }
 codex-tui = { path = "tui" }
+codex-tui-app-server = { path = "tui_app_server" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-approval-presets = { path = "utils/approval-presets" }
 codex-utils-cache = { path = "utils/cache" }
@@ -178,6 +184,7 @@ dirs = "6"
 dotenvy = "0.15.7"
 dunce = "1.0.4"
 encoding_rs = "0.8.35"
+fd-lock = "4.0.4"
 env-flags = "0.1.1"
 env_logger = "0.11.9"
 eventsource-stream = "0.2.3"
@@ -235,6 +242,8 @@ rustls = { version = "0.23", default-features = false, features = [
     "ring",
     "std",
 ] }
+rustls-native-certs = "0.8.3"
+rustls-pki-types = "1.14.0"
 schemars = "0.8.22"
 seccompiler = "0.5.0"
 semver = "1.0"

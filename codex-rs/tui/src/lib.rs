@@ -24,6 +24,7 @@ use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::resolve_oss_provider;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLoadError;
+use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::format_config_error_with_source;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::find_thread_path_by_id_str;
@@ -62,6 +63,7 @@ mod app;
 mod app_backtrack;
 mod app_event;
 mod app_event_sender;
+mod app_server_tui_dispatch;
 mod ascii_animation;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 mod audio_device;
@@ -131,6 +133,7 @@ mod voice {
     use std::sync::Mutex;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::AtomicU16;
+    use std::sync::atomic::AtomicUsize;
 
     pub struct RecordedAudio {
         pub data: Vec<i16>,
@@ -149,7 +152,11 @@ mod voice {
             Err("voice input is unavailable in this build".to_string())
         }
 
-        pub fn start_realtime(_config: &Config, _tx: AppEventSender) -> Result<Self, String> {
+        pub fn start_realtime(
+            _config: &Config,
+            _tx: AppEventSender,
+            _playback_queued_samples: Arc<AtomicUsize>,
+        ) -> Result<Self, String> {
             Err("voice input is unavailable in this build".to_string())
         }
 
@@ -189,7 +196,10 @@ mod voice {
     }
 
     impl RealtimeAudioPlayer {
-        pub(crate) fn start(_config: &Config) -> Result<Self, String> {
+        pub(crate) fn start(
+            _config: &Config,
+            _queued_samples: Arc<AtomicUsize>,
+        ) -> Result<Self, String> {
             Err("voice output is unavailable in this build".to_string())
         }
 
@@ -212,6 +222,7 @@ mod voice {
         });
     }
 }
+
 mod wrapping;
 
 #[cfg(test)]
@@ -220,6 +231,7 @@ pub mod test_backend;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::tui::Tui;
+pub use app_server_tui_dispatch::should_use_app_server_tui;
 pub use cli::Cli;
 use codex_arg0::Arg0DispatchPaths;
 pub use markdown_render::render_markdown_text;
@@ -227,7 +239,11 @@ pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
 // (tests access modules directly within the crate)
 
-pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::Result<AppExitInfo> {
+pub async fn run_main(
+    mut cli: Cli,
+    arg0_paths: Arg0DispatchPaths,
+    _loader_overrides: LoaderOverrides,
+) -> std::io::Result<AppExitInfo> {
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
             Some(SandboxMode::WorkspaceWrite),
@@ -318,7 +334,7 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
 
     let cloud_auth_manager = AuthManager::shared(
         codex_home.to_path_buf(),
-        false,
+        /*enable_codex_api_key_env*/ false,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
     );
     let chatgpt_base_url = config_toml
@@ -481,7 +497,12 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
     }
 
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, true)
+        codex_core::otel_init::build_provider(
+            &config,
+            env!("CARGO_PKG_VERSION"),
+            /*service_name_override*/ None,
+            /*default_analytics_enabled*/ true,
+        )
     })) {
         Ok(Ok(otel)) => otel,
         Ok(Err(e)) => {
@@ -504,7 +525,7 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let log_db_layer = codex_core::state_db::get_state_db(&config, None)
+    let log_db_layer = codex_core::state_db::get_state_db(&config)
         .await
         .map(|db| log_db::start(db).with_filter(env_filter()));
 
@@ -529,6 +550,7 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
     .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_ratatui_app(
     cli: Cli,
     initial_config: Config,
@@ -582,7 +604,7 @@ async fn run_ratatui_app(
 
     let auth_manager = AuthManager::shared(
         initial_config.codex_home.clone(),
-        false,
+        /*enable_codex_api_key_env*/ false,
         initial_config.cli_auth_credentials_store_mode,
     );
     let login_status = get_login_status(&initial_config);
@@ -689,19 +711,24 @@ async fn run_ratatui_app(
             let provider_filter = vec![config.model_provider_id.clone()];
             match RolloutRecorder::list_threads(
                 &config,
-                1,
-                None,
+                /*page_size*/ 1,
+                /*cursor*/ None,
                 ThreadSortKey::UpdatedAt,
                 INTERACTIVE_SESSION_SOURCES,
                 Some(provider_filter.as_slice()),
                 &config.model_provider_id,
-                None,
+                /*search_term*/ None,
             )
             .await
             {
                 Ok(page) => match page.items.first() {
                     Some(item) => {
-                        match resolve_session_thread_id(item.path.as_path(), None).await {
+                        match resolve_session_thread_id(
+                            item.path.as_path(),
+                            /*id_str_if_uuid*/ None,
+                        )
+                        .await
+                        {
                             Some(thread_id) => resume_picker::SessionSelection::Fork(
                                 resume_picker::SessionTarget {
                                     path: item.path.clone(),
@@ -784,8 +811,8 @@ async fn run_ratatui_app(
         };
         match RolloutRecorder::find_latest_thread_path(
             &config,
-            1,
-            None,
+            /*page_size*/ 1,
+            /*cursor*/ None,
             ThreadSortKey::UpdatedAt,
             INTERACTIVE_SESSION_SOURCES,
             Some(provider_filter.as_slice()),
@@ -794,30 +821,34 @@ async fn run_ratatui_app(
         )
         .await
         {
-            Ok(Some(path)) => match resolve_session_thread_id(path.as_path(), None).await {
-                Some(thread_id) => {
-                    resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
-                        path,
-                        thread_id,
-                    })
+            Ok(Some(path)) => {
+                match resolve_session_thread_id(path.as_path(), /*id_str_if_uuid*/ None).await {
+                    Some(thread_id) => {
+                        resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
+                            path,
+                            thread_id,
+                        })
+                    }
+                    None => {
+                        let rollout_path = path.display();
+                        error!(
+                            "Error reading session metadata from latest rollout: {rollout_path}"
+                        );
+                        restore();
+                        session_log::log_session_end();
+                        let _ = tui.terminal.clear();
+                        return Ok(AppExitInfo {
+                            token_usage: codex_protocol::protocol::TokenUsage::default(),
+                            thread_id: None,
+                            thread_name: None,
+                            update_action: None,
+                            exit_reason: ExitReason::Fatal(format!(
+                                "Found latest saved session at {rollout_path}, but failed to read its metadata. Run `codex resume` to choose from existing sessions."
+                            )),
+                        });
+                    }
                 }
-                None => {
-                    let rollout_path = path.display();
-                    error!("Error reading session metadata from latest rollout: {rollout_path}");
-                    restore();
-                    session_log::log_session_end();
-                    let _ = tui.terminal.clear();
-                    return Ok(AppExitInfo {
-                        token_usage: codex_protocol::protocol::TokenUsage::default(),
-                        thread_id: None,
-                        thread_name: None,
-                        update_action: None,
-                        exit_reason: ExitReason::Fatal(format!(
-                            "Found latest saved session at {rollout_path}, but failed to read its metadata. Run `codex resume` to choose from existing sessions."
-                        )),
-                    });
-                }
-            },
+            }
             _ => resume_picker::SessionSelection::StartFresh,
         }
     } else if cli.resume_picker {
@@ -961,7 +992,7 @@ pub(crate) async fn read_session_cwd(
     thread_id: ThreadId,
     path: &Path,
 ) -> Option<PathBuf> {
-    if let Some(state_db_ctx) = get_state_db(config, None).await
+    if let Some(state_db_ctx) = get_state_db(config).await
         && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
     {
         return Some(metadata.cwd);
@@ -1121,8 +1152,13 @@ async fn load_config_or_exit(
     overrides: ConfigOverrides,
     cloud_requirements: CloudRequirementsLoader,
 ) -> Config {
-    load_config_or_exit_with_fallback_cwd(cli_kv_overrides, overrides, cloud_requirements, None)
-        .await
+    load_config_or_exit_with_fallback_cwd(
+        cli_kv_overrides,
+        overrides,
+        cloud_requirements,
+        /*fallback_cwd*/ None,
+    )
+    .await
 }
 
 async fn load_config_or_exit_with_fallback_cwd(
@@ -1148,15 +1184,8 @@ async fn load_config_or_exit_with_fallback_cwd(
     }
 }
 
-/// Determine if user has configured a sandbox / approval policy,
-/// or if the current cwd project is already trusted. If not, we need to
-/// show the trust screen.
+/// Determine if the user has decided whether to trust the current directory.
 fn should_show_trust_screen(config: &Config) -> bool {
-    if config.did_user_set_custom_approval_policy_or_sandbox_mode {
-        // Respect explicit approval/sandbox overrides made by the user.
-        return false;
-    }
-    // otherwise, show only if no trust decision has been made
     config.active_project.trust_level.is_none()
 }
 
@@ -1189,7 +1218,6 @@ mod tests {
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ProjectConfig;
     use codex_core::features::Feature;
-    use codex_protocol::ThreadId;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::RolloutLine;
@@ -1197,6 +1225,7 @@ mod tests {
     use codex_protocol::protocol::SessionMetaLine;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::TurnContextItem;
+    use pretty_assertions::assert_eq;
     use serial_test::serial;
     use tempfile::TempDir;
 
@@ -1212,7 +1241,6 @@ mod tests {
     async fn windows_shows_trust_prompt_without_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
-        config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
         config.set_windows_sandbox_enabled(false);
 
@@ -1223,12 +1251,12 @@ mod tests {
         );
         Ok(())
     }
+
     #[tokio::test]
     #[serial]
     async fn windows_shows_trust_prompt_with_sandbox() -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
-        config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig { trust_level: None };
         config.set_windows_sandbox_enabled(true);
 
@@ -1251,7 +1279,6 @@ mod tests {
         use codex_protocol::config_types::TrustLevel;
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
-        config.did_user_set_custom_approval_policy_or_sandbox_mode = false;
         config.active_project = ProjectConfig {
             trust_level: Some(TrustLevel::Untrusted),
         };
@@ -1271,6 +1298,7 @@ mod tests {
             .unwrap_or_else(|| "gpt-5.1".to_string());
         TurnContextItem {
             turn_id: None,
+            trace_id: None,
             cwd,
             current_date: None,
             timezone: None,
@@ -1528,7 +1556,6 @@ trust_level = "untrusted"
         let runtime = codex_state::StateRuntime::init(
             config.codex_home.clone(),
             config.model_provider_id.clone(),
-            None,
         )
         .await
         .map_err(std::io::Error::other)?;

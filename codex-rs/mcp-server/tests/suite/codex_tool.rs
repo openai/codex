@@ -54,23 +54,26 @@ async fn test_shell_command_approval_triggers_elicitation() {
 async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     // Use a simple, untrusted command that creates a file so we can
     // observe a side-effect.
-    //
-    // Cross‑platform approach: run a tiny Python snippet to touch the file
-    // using `python3 -c ...` on all platforms.
     let workdir_for_shell_function_call = TempDir::new()?;
     let created_filename = "created_by_shell_tool.txt";
     let created_file = workdir_for_shell_function_call
         .path()
         .join(created_filename);
 
-    let shell_command = vec![
-        "python3".to_string(),
-        "-c".to_string(),
-        format!("import pathlib; pathlib.Path('{created_filename}').touch()"),
-    ];
-    let expected_shell_command = format_with_current_shell(&format!(
-        "python3 -c \"import pathlib; pathlib.Path('{created_filename}').touch()\""
-    ));
+    let shell_command = if cfg!(windows) {
+        vec![
+            "New-Item".to_string(),
+            "-ItemType".to_string(),
+            "File".to_string(),
+            "-Path".to_string(),
+            created_filename.to_string(),
+            "-Force".to_string(),
+        ]
+    } else {
+        vec!["touch".to_string(), created_filename.to_string()]
+    };
+    let expected_shell_command =
+        format_with_current_shell(&shlex::try_join(shell_command.iter().map(String::as_str))?);
 
     let McpHandle {
         process: mut mcp_process,

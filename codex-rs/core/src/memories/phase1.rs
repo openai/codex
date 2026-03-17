@@ -4,14 +4,16 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::config::types::MemoriesConfig;
+use crate::contextual_user_message::is_memory_excluded_contextual_user_fragment;
 use crate::error::CodexErr;
 use crate::memories::metrics;
 use crate::memories::phase_one;
+use crate::memories::phase_one::PRUNE_BATCH_SIZE;
 use crate::memories::prompts::build_stage_one_input_message;
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use crate::rollout::policy::should_persist_response_item_for_memories;
 use codex_api::ResponseEvent;
-use codex_otel::OtelManager;
+use codex_otel::SessionTelemetry;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::BaseInstructions;
@@ -34,7 +36,7 @@ use tracing::warn;
 #[derive(Clone, Debug)]
 pub(in crate::memories) struct RequestContext {
     pub(in crate::memories) model_info: ModelInfo,
-    pub(in crate::memories) otel_manager: OtelManager,
+    pub(in crate::memories) session_telemetry: SessionTelemetry,
     pub(in crate::memories) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(in crate::memories) reasoning_summary: ReasoningSummaryConfig,
     pub(in crate::memories) service_tier: Option<ServiceTier>,
@@ -84,7 +86,7 @@ struct StageOneOutput {
 pub(in crate::memories) async fn run(session: &Arc<Session>, config: &Config) {
     let _phase_one_e2e_timer = session
         .services
-        .otel_manager
+        .session_telemetry
         .start_timer(metrics::MEMORY_PHASE_ONE_E2E_MS, &[])
         .ok();
 
@@ -93,9 +95,9 @@ pub(in crate::memories) async fn run(session: &Arc<Session>, config: &Config) {
         return;
     };
     if claimed_candidates.is_empty() {
-        session.services.otel_manager.counter(
+        session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_ONE_JOBS,
-            1,
+            /*inc*/ 1,
             &[("status", "skipped_no_candidates")],
         );
         return;
@@ -118,6 +120,30 @@ pub(in crate::memories) async fn run(session: &Arc<Session>, config: &Config) {
         counts.succeeded_no_output,
         counts.failed
     );
+}
+
+/// Prune old un-used "dead" raw memories.
+pub(in crate::memories) async fn prune(session: &Arc<Session>, config: &Config) {
+    if let Some(db) = session.services.state_db.as_deref() {
+        let max_unused_days = config.memories.max_unused_days;
+        match db
+            .prune_stage1_outputs_for_retention(max_unused_days, PRUNE_BATCH_SIZE)
+            .await
+        {
+            Ok(pruned) => {
+                if pruned > 0 {
+                    info!(
+                        "memory startup pruned {pruned} stale stage-1 output row(s) older than {max_unused_days} days"
+                    );
+                }
+            }
+            Err(err) => {
+                warn!(
+                    "state db prune_stage1_outputs_for_retention failed during memories startup: {err}"
+                );
+            }
+        }
+    }
 }
 
 /// JSON schema used to constrain phase-1 model output.
@@ -143,7 +169,7 @@ impl RequestContext {
         Self {
             model_info,
             turn_metadata_header,
-            otel_manager: turn_context.otel_manager.clone(),
+            session_telemetry: turn_context.session_telemetry.clone(),
             reasoning_effort: Some(phase_one::REASONING_EFFORT),
             reasoning_summary: turn_context.reasoning_summary,
             service_tier: turn_context.config.service_tier,
@@ -183,9 +209,9 @@ async fn claim_startup_jobs(
         Ok(claims) => Some(claims),
         Err(err) => {
             warn!("state db claim_stage1_jobs_for_startup failed during memories startup: {err}");
-            session.services.otel_manager.counter(
+            session.services.session_telemetry.counter(
                 metrics::MEMORY_PHASE_ONE_JOBS,
-                1,
+                /*inc*/ 1,
                 &[("status", "failed_claim")],
             );
             None
@@ -322,7 +348,7 @@ mod job {
             .stream(
                 &prompt,
                 &stage_one_context.model_info,
-                &stage_one_context.otel_manager,
+                &stage_one_context.session_telemetry,
                 stage_one_context.reasoning_effort,
                 stage_one_context.reasoning_summary,
                 stage_one_context.service_tier,
@@ -438,16 +464,14 @@ mod job {
     }
 
     /// Serializes filtered stage-1 memory items for prompt inclusion.
-    fn serialize_filtered_rollout_response_items(
+    pub(super) fn serialize_filtered_rollout_response_items(
         items: &[RolloutItem],
     ) -> crate::error::Result<String> {
         let filtered = items
             .iter()
             .filter_map(|item| {
-                if let RolloutItem::ResponseItem(item) = item
-                    && should_persist_response_item_for_memories(item)
-                {
-                    Some(item.clone())
+                if let RolloutItem::ResponseItem(item) = item {
+                    sanitize_response_item_for_memories(item)
                 } else {
                     None
                 }
@@ -455,6 +479,44 @@ mod job {
             .collect::<Vec<_>>();
         serde_json::to_string(&filtered).map_err(|err| {
             CodexErr::InvalidRequest(format!("failed to serialize rollout memory: {err}"))
+        })
+    }
+
+    fn sanitize_response_item_for_memories(item: &ResponseItem) -> Option<ResponseItem> {
+        let ResponseItem::Message {
+            id,
+            role,
+            content,
+            end_turn,
+            phase,
+        } = item
+        else {
+            return should_persist_response_item_for_memories(item).then(|| item.clone());
+        };
+
+        if role == "developer" {
+            return None;
+        }
+
+        if role != "user" {
+            return Some(item.clone());
+        }
+
+        let content = content
+            .iter()
+            .filter(|content_item| !is_memory_excluded_contextual_user_fragment(content_item))
+            .cloned()
+            .collect::<Vec<_>>();
+        if content.is_empty() {
+            return None;
+        }
+
+        Some(ResponseItem::Message {
+            id: id.clone(),
+            role: role.clone(),
+            content,
+            end_turn: *end_turn,
+            phase: phase.clone(),
         })
     }
 }
@@ -491,60 +553,60 @@ fn aggregate_stats(outcomes: Vec<JobResult>) -> Stats {
 
 fn emit_metrics(session: &Session, counts: &Stats) {
     if counts.claimed > 0 {
-        session.services.otel_manager.counter(
+        session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_ONE_JOBS,
             counts.claimed as i64,
             &[("status", "claimed")],
         );
     }
     if counts.succeeded_with_output > 0 {
-        session.services.otel_manager.counter(
+        session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_ONE_JOBS,
             counts.succeeded_with_output as i64,
             &[("status", "succeeded")],
         );
-        session.services.otel_manager.counter(
+        session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_ONE_OUTPUT,
             counts.succeeded_with_output as i64,
             &[],
         );
     }
     if counts.succeeded_no_output > 0 {
-        session.services.otel_manager.counter(
+        session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_ONE_JOBS,
             counts.succeeded_no_output as i64,
             &[("status", "succeeded_no_output")],
         );
     }
     if counts.failed > 0 {
-        session.services.otel_manager.counter(
+        session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_ONE_JOBS,
             counts.failed as i64,
             &[("status", "failed")],
         );
     }
     if let Some(token_usage) = counts.total_token_usage.as_ref() {
-        session.services.otel_manager.histogram(
+        session.services.session_telemetry.histogram(
             metrics::MEMORY_PHASE_ONE_TOKEN_USAGE,
             token_usage.total_tokens.max(0),
             &[("token_type", "total")],
         );
-        session.services.otel_manager.histogram(
+        session.services.session_telemetry.histogram(
             metrics::MEMORY_PHASE_ONE_TOKEN_USAGE,
             token_usage.input_tokens.max(0),
             &[("token_type", "input")],
         );
-        session.services.otel_manager.histogram(
+        session.services.session_telemetry.histogram(
             metrics::MEMORY_PHASE_ONE_TOKEN_USAGE,
             token_usage.cached_input(),
             &[("token_type", "cached_input")],
         );
-        session.services.otel_manager.histogram(
+        session.services.session_telemetry.histogram(
             metrics::MEMORY_PHASE_ONE_TOKEN_USAGE,
             token_usage.output_tokens.max(0),
             &[("token_type", "output")],
         );
-        session.services.otel_manager.histogram(
+        session.services.session_telemetry.histogram(
             metrics::MEMORY_PHASE_ONE_TOKEN_USAGE,
             token_usage.reasoning_output_tokens.max(0),
             &[("token_type", "reasoning_output")],
@@ -553,72 +615,5 @@ fn emit_metrics(session: &Session, counts: &Stats) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::JobOutcome;
-    use super::JobResult;
-    use super::aggregate_stats;
-    use codex_protocol::protocol::TokenUsage;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn count_outcomes_sums_token_usage_across_all_jobs() {
-        let counts = aggregate_stats(vec![
-            JobResult {
-                outcome: JobOutcome::SucceededWithOutput,
-                token_usage: Some(TokenUsage {
-                    input_tokens: 10,
-                    cached_input_tokens: 2,
-                    output_tokens: 3,
-                    reasoning_output_tokens: 1,
-                    total_tokens: 13,
-                }),
-            },
-            JobResult {
-                outcome: JobOutcome::SucceededNoOutput,
-                token_usage: Some(TokenUsage {
-                    input_tokens: 7,
-                    cached_input_tokens: 1,
-                    output_tokens: 2,
-                    reasoning_output_tokens: 0,
-                    total_tokens: 9,
-                }),
-            },
-            JobResult {
-                outcome: JobOutcome::Failed,
-                token_usage: None,
-            },
-        ]);
-
-        assert_eq!(counts.claimed, 3);
-        assert_eq!(counts.succeeded_with_output, 1);
-        assert_eq!(counts.succeeded_no_output, 1);
-        assert_eq!(counts.failed, 1);
-        assert_eq!(
-            counts.total_token_usage,
-            Some(TokenUsage {
-                input_tokens: 17,
-                cached_input_tokens: 3,
-                output_tokens: 5,
-                reasoning_output_tokens: 1,
-                total_tokens: 22,
-            })
-        );
-    }
-
-    #[test]
-    fn count_outcomes_keeps_usage_empty_when_no_job_reports_it() {
-        let counts = aggregate_stats(vec![
-            JobResult {
-                outcome: JobOutcome::SucceededWithOutput,
-                token_usage: None,
-            },
-            JobResult {
-                outcome: JobOutcome::Failed,
-                token_usage: None,
-            },
-        ]);
-
-        assert_eq!(counts.claimed, 2);
-        assert_eq!(counts.total_token_usage, None);
-    }
-}
+#[path = "phase1_tests.rs"]
+mod tests;

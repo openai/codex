@@ -1,6 +1,6 @@
-use codex_otel::OtelManager;
 use codex_otel::RuntimeMetricTotals;
 use codex_otel::RuntimeMetricsSummary;
+use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
@@ -20,7 +20,7 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         MetricsConfig::in_memory("test", "codex-cli", env!("CARGO_PKG_VERSION"), exporter)
             .with_runtime_reader(),
     )?;
-    let manager = OtelManager::new(
+    let manager = SessionTelemetry::new(
         ThreadId::new(),
         "gpt-5.1",
         "gpt-5.1",
@@ -47,8 +47,23 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         None,
         None,
     );
-    manager.record_api_request(1, Some(200), None, Duration::from_millis(300));
-    manager.record_websocket_request(Duration::from_millis(400), None);
+    manager.record_api_request(
+        1,
+        Some(200),
+        None,
+        Duration::from_millis(300),
+        false,
+        None,
+        false,
+        None,
+        None,
+        "/responses",
+        None,
+        None,
+        None,
+        None,
+    );
+    manager.record_websocket_request(Duration::from_millis(400), None, false);
     let sse_response: std::result::Result<
         Option<std::result::Result<StreamEvent, eventsource_stream::EventStreamError<&str>>>,
         tokio::time::error::Elapsed,
@@ -74,6 +89,16 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
             .into(),
     ))));
     manager.record_websocket_event(&ws_timing_response, Duration::from_millis(20));
+    manager.record_duration(
+        "codex.turn.ttft.duration_ms",
+        Duration::from_millis(95),
+        &[],
+    );
+    manager.record_duration(
+        "codex.turn.ttfm.duration_ms",
+        Duration::from_millis(180),
+        &[],
+    );
 
     let summary = manager
         .runtime_metrics_summary()
@@ -105,6 +130,8 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         responses_api_engine_service_ttft_ms: 233,
         responses_api_engine_iapi_tbt_ms: 377,
         responses_api_engine_service_tbt_ms: 399,
+        turn_ttft_ms: 95,
+        turn_ttfm_ms: 180,
     };
     assert_eq!(summary, expected);
 

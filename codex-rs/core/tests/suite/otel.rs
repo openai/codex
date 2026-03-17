@@ -14,6 +14,7 @@ use core_test_support::responses::ev_local_shell_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_reasoning_item;
+use core_test_support::responses::ev_reasoning_item_added;
 use core_test_support::responses::ev_reasoning_summary_text_delta;
 use core_test_support::responses::ev_reasoning_text_delta;
 use core_test_support::responses::ev_response_created;
@@ -629,20 +630,35 @@ async fn record_responses_sets_span_fields_for_response_events() {
 
     let sse_body = sse(vec![
         ev_response_created("resp-1"),
-        ev_function_call("call-1", "fn", "{\"value\":1}"),
-        ev_custom_tool_call("custom-1", "custom_tool", "{\"key\":\"value\"}"),
+        serde_json::json!({
+            "type": "response.output_item.added",
+            "item": {
+                "type": "function_call",
+                "call_id": "call-1",
+                "name": "fn",
+                "arguments": "{\"value\":1}"
+            }
+        }),
         ev_message_item_added("msg-added", "hi there"),
+        ev_reasoning_item_added("reasoning-1", &["summary"]),
         ev_output_text_delta("delta"),
         ev_reasoning_summary_text_delta("summary-delta"),
         ev_reasoning_text_delta("raw-delta"),
         ev_function_call("call-1", "fn", "{\"key\":\"value\"}"),
-        ev_custom_tool_call("custom-1", "custom_tool", "{\"key\":\"value\"}"),
         ev_assistant_message("msg-1", "agent"),
         ev_reasoning_item("reasoning-1", &["summary"], &[]),
         ev_completed("resp-1"),
     ]);
 
     mount_response_once(&server, sse_response(sse_body)).await;
+    mount_response_once(
+        &server,
+        sse_response(sse(vec![
+            ev_assistant_message("msg-2", "follow-up complete"),
+            ev_completed("resp-2"),
+        ])),
+    )
+    .await;
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {

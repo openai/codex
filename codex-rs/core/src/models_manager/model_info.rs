@@ -6,6 +6,7 @@ use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::openai_models::default_input_modalities;
 
 use crate::config::Config;
@@ -78,7 +79,8 @@ pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
         support_verbosity: false,
         default_verbosity: None,
         apply_patch_tool_type: None,
-        truncation_policy: TruncationPolicyConfig::bytes(10_000),
+        web_search_tool_type: WebSearchToolType::Text,
+        truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
         context_window: Some(272_000),
@@ -87,6 +89,7 @@ pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: true, // this is the fallback model metadata
+        supports_search_tool: false,
     }
 }
 
@@ -107,44 +110,5 @@ fn local_personality_messages_for_slug(slug: &str) -> Option<ModelMessages> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::test_config;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn reasoning_summaries_override_true_enables_support() {
-        let model = model_info_from_slug("unknown-model");
-        let mut config = test_config();
-        config.model_supports_reasoning_summaries = Some(true);
-
-        let updated = with_config_overrides(model.clone(), &config);
-        let mut expected = model;
-        expected.supports_reasoning_summaries = true;
-
-        assert_eq!(updated, expected);
-    }
-
-    #[test]
-    fn reasoning_summaries_override_false_does_not_disable_support() {
-        let mut model = model_info_from_slug("unknown-model");
-        model.supports_reasoning_summaries = true;
-        let mut config = test_config();
-        config.model_supports_reasoning_summaries = Some(false);
-
-        let updated = with_config_overrides(model.clone(), &config);
-
-        assert_eq!(updated, model);
-    }
-
-    #[test]
-    fn reasoning_summaries_override_false_is_noop_when_model_is_false() {
-        let model = model_info_from_slug("unknown-model");
-        let mut config = test_config();
-        config.model_supports_reasoning_summaries = Some(false);
-
-        let updated = with_config_overrides(model.clone(), &config);
-
-        assert_eq!(updated, model);
-    }
-}
+#[path = "model_info_tests.rs"]
+mod tests;

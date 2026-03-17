@@ -36,6 +36,7 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
 
 #[tokio::test]
 async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
@@ -50,7 +51,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         vec![],
         vec![
             json!({
-                "type": "conversation.output_audio.delta",
+                "type": "response.output_audio.delta",
                 "delta": "AQID",
                 "sample_rate": 24_000,
                 "channels": 1,
@@ -69,6 +70,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
                 "message": "upstream boom"
             }),
         ],
+        vec![],
     ]])
     .await;
 
@@ -114,6 +116,18 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     assert_eq!(started.thread_id, thread_start.thread.id);
     assert!(started.session_id.is_some());
 
+    let startup_context_request = realtime_server.wait_for_request(0, 0).await;
+    assert_eq!(
+        startup_context_request.body_json()["type"].as_str(),
+        Some("session.update")
+    );
+    assert!(
+        startup_context_request.body_json()["session"]["instructions"]
+            .as_str()
+            .context("expected startup context instructions")?
+            .contains(STARTUP_CONTEXT_HEADER)
+    );
+
     let audio_append_request_id = mcp
         .send_thread_realtime_append_audio_request(ThreadRealtimeAppendAudioParams {
             thread_id: started.thread_id.clone(),
@@ -122,6 +136,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
                 sample_rate: 24_000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
+                item_id: None,
             },
         })
         .await?;
@@ -178,10 +193,16 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     let connections = realtime_server.connections();
     assert_eq!(connections.len(), 1);
     let connection = &connections[0];
-    assert_eq!(connection.len(), 3);
+    assert_eq!(connection.len(), 4);
     assert_eq!(
         connection[0].body_json()["type"].as_str(),
         Some("session.update")
+    );
+    assert!(
+        connection[0].body_json()["session"]["instructions"]
+            .as_str()
+            .context("expected startup context instructions")?
+            .contains(STARTUP_CONTEXT_HEADER)
     );
     let mut request_types = [
         connection[1].body_json()["type"]
@@ -192,6 +213,10 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             .as_str()
             .context("expected websocket request type")?
             .to_string(),
+        connection[3].body_json()["type"]
+            .as_str()
+            .context("expected websocket request type")?
+            .to_string(),
     ];
     request_types.sort();
     assert_eq!(
@@ -199,6 +224,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         [
             "conversation.item.create".to_string(),
             "input_audio_buffer.append".to_string(),
+            "response.create".to_string(),
         ]
     );
 
@@ -383,6 +409,10 @@ approval_policy = "never"
 sandbox_mode = "read-only"
 model_provider = "mock_provider"
 experimental_realtime_ws_base_url = "{realtime_server_uri}"
+
+[realtime]
+version = "v2"
+type = "conversational"
 
 [features]
 {realtime_feature_key} = {realtime_enabled}
