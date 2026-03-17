@@ -140,6 +140,10 @@ struct ResumeArgsRaw {
     #[arg(long = "all", default_value_t = false)]
     all: bool,
 
+    /// Show sessions from all model providers (disables provider filtering).
+    #[arg(long = "all-providers", default_value_t = false)]
+    all_providers: bool,
+
     /// Optional image(s) to attach to the prompt sent after resuming.
     #[arg(
         long = "image",
@@ -167,6 +171,9 @@ pub struct ResumeArgs {
     /// Show all sessions (disables cwd filtering).
     pub all: bool,
 
+    /// Show sessions from all model providers (disables provider filtering).
+    pub all_providers: bool,
+
     /// Optional image(s) to attach to the prompt sent after resuming.
     pub images: Vec<PathBuf>,
 
@@ -187,6 +194,7 @@ impl From<ResumeArgsRaw> for ResumeArgs {
             session_id,
             last: raw.last,
             all: raw.all,
+            all_providers: raw.all_providers,
             images: raw.images,
             prompt,
         }

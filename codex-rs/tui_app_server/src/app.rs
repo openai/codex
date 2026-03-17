@@ -2722,6 +2722,7 @@ impl App {
                     tui,
                     &self.config,
                     /*show_all*/ false,
+                    /*show_all_providers*/ false,
                     picker_app_server,
                 )
                 .await?

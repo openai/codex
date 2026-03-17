@@ -32,6 +32,10 @@ pub struct Cli {
     #[clap(skip)]
     pub resume_show_all: bool,
 
+    /// Internal: show sessions from all model providers (disables provider filtering).
+    #[clap(skip)]
+    pub resume_show_all_providers: bool,
+
     // Internal controls set by the top-level `codex fork` subcommand.
     // These are not exposed as user flags on the base `codex` command.
     #[clap(skip)]
@@ -48,6 +52,10 @@ pub struct Cli {
     /// Internal: show all sessions (disables cwd filtering and shows CWD column).
     #[clap(skip)]
     pub fork_show_all: bool,
+
+    /// Internal: show sessions from all model providers (disables provider filtering).
+    #[clap(skip)]
+    pub fork_show_all_providers: bool,
 
     /// Model the agent should use.
     #[arg(long, short = 'm')]

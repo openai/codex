@@ -1400,7 +1400,8 @@ async fn resolve_resume_path(
     args: &crate::cli::ResumeArgs,
 ) -> anyhow::Result<Option<PathBuf>> {
     if args.last {
-        let default_provider_filter = vec![config.model_provider_id.clone()];
+        let default_provider_filter =
+            (!args.all_providers).then(|| vec![config.model_provider_id.clone()]);
         let filter_cwd = if args.all {
             None
         } else {
@@ -1412,7 +1413,7 @@ async fn resolve_resume_path(
             /*cursor*/ None,
             codex_core::ThreadSortKey::UpdatedAt,
             &[],
-            Some(default_provider_filter.as_slice()),
+            default_provider_filter.as_deref(),
             &config.model_provider_id,
             filter_cwd,
         )

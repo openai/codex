@@ -207,6 +207,10 @@ struct ResumeCommand {
     #[arg(long = "all", default_value_t = false)]
     all: bool,
 
+    /// Show sessions from all model providers (disables provider filtering).
+    #[arg(long = "all-providers", default_value_t = false)]
+    all_providers: bool,
+
     #[clap(flatten)]
     remote: InteractiveRemoteOptions,
 
@@ -228,6 +232,10 @@ struct ForkCommand {
     /// Show all sessions (disables cwd filtering and shows CWD column).
     #[arg(long = "all", default_value_t = false)]
     all: bool,
+
+    /// Show sessions from all model providers (disables provider filtering).
+    #[arg(long = "all-providers", default_value_t = false)]
+    all_providers: bool,
 
     #[clap(flatten)]
     remote: InteractiveRemoteOptions,
@@ -675,6 +683,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             session_id,
             last,
             all,
+            all_providers,
             remote,
             config_overrides,
         })) => {
@@ -684,6 +693,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 session_id,
                 last,
                 all,
+                all_providers,
                 config_overrides,
             );
             let exit_info = run_interactive_tui(
@@ -698,6 +708,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             session_id,
             last,
             all,
+            all_providers,
             remote,
             config_overrides,
         })) => {
@@ -707,6 +718,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 session_id,
                 last,
                 all,
+                all_providers,
                 config_overrides,
             );
             let exit_info = run_interactive_tui(
@@ -1089,10 +1101,12 @@ fn into_app_server_tui_cli(cli: TuiCli) -> codex_tui_app_server::Cli {
         resume_last: cli.resume_last,
         resume_session_id: cli.resume_session_id,
         resume_show_all: cli.resume_show_all,
+        resume_show_all_providers: cli.resume_show_all_providers,
         fork_picker: cli.fork_picker,
         fork_last: cli.fork_last,
         fork_session_id: cli.fork_session_id,
         fork_show_all: cli.fork_show_all,
+        fork_show_all_providers: cli.fork_show_all_providers,
         model: cli.model,
         oss: cli.oss,
         oss_provider: cli.oss_provider,
@@ -1156,6 +1170,7 @@ fn finalize_resume_interactive(
     session_id: Option<String>,
     last: bool,
     show_all: bool,
+    show_all_providers: bool,
     resume_cli: TuiCli,
 ) -> TuiCli {
     // Start with the parsed interactive CLI so resume shares the same
@@ -1165,6 +1180,7 @@ fn finalize_resume_interactive(
     interactive.resume_last = last;
     interactive.resume_session_id = resume_session_id;
     interactive.resume_show_all = show_all;
+    interactive.resume_show_all_providers = show_all_providers;
 
     // Merge resume-scoped flags and overrides with highest precedence.
     merge_interactive_cli_flags(&mut interactive, resume_cli);
@@ -1182,6 +1198,7 @@ fn finalize_fork_interactive(
     session_id: Option<String>,
     last: bool,
     show_all: bool,
+    show_all_providers: bool,
     fork_cli: TuiCli,
 ) -> TuiCli {
     // Start with the parsed interactive CLI so fork shares the same
@@ -1191,6 +1208,7 @@ fn finalize_fork_interactive(
     interactive.fork_last = last;
     interactive.fork_session_id = fork_session_id;
     interactive.fork_show_all = show_all;
+    interactive.fork_show_all_providers = show_all_providers;
 
     // Merge fork-scoped flags and overrides with highest precedence.
     merge_interactive_cli_flags(&mut interactive, fork_cli);
@@ -1277,6 +1295,7 @@ mod tests {
             session_id,
             last,
             all,
+            all_providers,
             remote: _,
             config_overrides: resume_cli,
         }) = subcommand.expect("resume present")
@@ -1290,6 +1309,7 @@ mod tests {
             session_id,
             last,
             all,
+            all_providers,
             resume_cli,
         )
     }
@@ -1308,6 +1328,7 @@ mod tests {
             session_id,
             last,
             all,
+            all_providers,
             remote: _,
             config_overrides: fork_cli,
         }) = subcommand.expect("fork present")
@@ -1315,7 +1336,15 @@ mod tests {
             unreachable!()
         };
 
-        finalize_fork_interactive(interactive, root_overrides, session_id, last, all, fork_cli)
+        finalize_fork_interactive(
+            interactive,
+            root_overrides,
+            session_id,
+            last,
+            all,
+            all_providers,
+            fork_cli,
+        )
     }
 
     #[test]
@@ -1458,6 +1487,7 @@ mod tests {
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
         assert!(!interactive.resume_show_all);
+        assert!(!interactive.resume_show_all_providers);
     }
 
     #[test]
@@ -1467,6 +1497,7 @@ mod tests {
         assert!(interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
         assert!(!interactive.resume_show_all);
+        assert!(!interactive.resume_show_all_providers);
     }
 
     #[test]
@@ -1476,6 +1507,7 @@ mod tests {
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id.as_deref(), Some("1234"));
         assert!(!interactive.resume_show_all);
+        assert!(!interactive.resume_show_all_providers);
     }
 
     #[test]
@@ -1483,6 +1515,14 @@ mod tests {
         let interactive = finalize_resume_from_args(["codex", "resume", "--all"].as_ref());
         assert!(interactive.resume_picker);
         assert!(interactive.resume_show_all);
+    }
+
+    #[test]
+    fn resume_all_providers_flag_sets_show_all_providers() {
+        let interactive =
+            finalize_resume_from_args(["codex", "resume", "--all-providers"].as_ref());
+        assert!(interactive.resume_picker);
+        assert!(interactive.resume_show_all_providers);
     }
 
     #[test]
@@ -1565,6 +1605,7 @@ mod tests {
         assert!(!interactive.fork_last);
         assert_eq!(interactive.fork_session_id, None);
         assert!(!interactive.fork_show_all);
+        assert!(!interactive.fork_show_all_providers);
     }
 
     #[test]
@@ -1574,6 +1615,7 @@ mod tests {
         assert!(interactive.fork_last);
         assert_eq!(interactive.fork_session_id, None);
         assert!(!interactive.fork_show_all);
+        assert!(!interactive.fork_show_all_providers);
     }
 
     #[test]
@@ -1583,6 +1625,7 @@ mod tests {
         assert!(!interactive.fork_last);
         assert_eq!(interactive.fork_session_id.as_deref(), Some("1234"));
         assert!(!interactive.fork_show_all);
+        assert!(!interactive.fork_show_all_providers);
     }
 
     #[test]
@@ -1590,6 +1633,13 @@ mod tests {
         let interactive = finalize_fork_from_args(["codex", "fork", "--all"].as_ref());
         assert!(interactive.fork_picker);
         assert!(interactive.fork_show_all);
+    }
+
+    #[test]
+    fn fork_all_providers_flag_sets_show_all_providers() {
+        let interactive = finalize_fork_from_args(["codex", "fork", "--all-providers"].as_ref());
+        assert!(interactive.fork_picker);
+        assert!(interactive.fork_show_all_providers);
     }
 
     #[test]

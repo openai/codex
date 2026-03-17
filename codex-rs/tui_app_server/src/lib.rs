@@ -527,12 +527,14 @@ async fn lookup_latest_session_target_with_app_server(
     app_server: &mut AppServerSession,
     config: &Config,
     cwd_filter: Option<&Path>,
+    show_all_providers: bool,
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
     let response = app_server
         .thread_list(latest_session_lookup_params(
             app_server.is_remote(),
             config,
             cwd_filter,
+            show_all_providers,
         ))
         .await?;
     Ok(response
@@ -545,12 +547,13 @@ fn latest_session_lookup_params(
     is_remote: bool,
     config: &Config,
     cwd_filter: Option<&Path>,
+    show_all_providers: bool,
 ) -> ThreadListParams {
     ThreadListParams {
         cursor: None,
         limit: Some(1),
         sort_key: Some(AppServerThreadSortKey::UpdatedAt),
-        model_providers: if is_remote {
+        model_providers: if is_remote || show_all_providers {
             None
         } else {
             Some(vec![config.model_provider_id.clone()])
@@ -1095,7 +1098,10 @@ async fn run_ratatui_app(
                 unreachable!("session lookup app server should be initialized for --fork --last");
             };
             match lookup_latest_session_target_with_app_server(
-                app_server, &config, /*cwd_filter*/ None,
+                app_server,
+                &config,
+                /*cwd_filter*/ None,
+                cli.fork_show_all_providers,
             )
             .await?
             {
@@ -1110,6 +1116,7 @@ async fn run_ratatui_app(
                 &mut tui,
                 &config,
                 cli.fork_show_all,
+                cli.fork_show_all_providers,
                 app_server,
             )
             .await?
@@ -1150,7 +1157,14 @@ async fn run_ratatui_app(
         let Some(app_server) = session_lookup_app_server.as_mut() else {
             unreachable!("session lookup app server should be initialized for --resume --last");
         };
-        match lookup_latest_session_target_with_app_server(app_server, &config, filter_cwd).await? {
+        match lookup_latest_session_target_with_app_server(
+            app_server,
+            &config,
+            filter_cwd,
+            cli.resume_show_all_providers,
+        )
+        .await?
+        {
             Some(target_session) => resume_picker::SessionSelection::Resume(target_session),
             None => resume_picker::SessionSelection::StartFresh,
         }
@@ -1162,6 +1176,7 @@ async fn run_ratatui_app(
             &mut tui,
             &config,
             cli.resume_show_all,
+            cli.resume_show_all_providers,
             app_server,
         )
         .await?
@@ -1658,7 +1673,7 @@ mod tests {
         let config = build_config(&temp_dir).await?;
         let cwd = temp_dir.path().join("project");
 
-        let params = latest_session_lookup_params(false, &config, Some(cwd.as_path()));
+        let params = latest_session_lookup_params(false, &config, Some(cwd.as_path()), false);
 
         assert_eq!(params.model_providers, Some(vec![config.model_provider_id]));
         assert_eq!(params.cwd, Some(cwd.to_string_lossy().to_string()));
@@ -1672,7 +1687,7 @@ mod tests {
         let config = build_config(&temp_dir).await?;
         let cwd = temp_dir.path().join("project");
 
-        let params = latest_session_lookup_params(true, &config, Some(cwd.as_path()));
+        let params = latest_session_lookup_params(true, &config, Some(cwd.as_path()), false);
 
         assert_eq!(params.model_providers, None);
         assert_eq!(params.cwd, None);

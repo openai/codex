@@ -2427,6 +2427,7 @@ impl App {
                     tui,
                     &self.config,
                     /*show_all*/ false,
+                    /*show_all_providers*/ false,
                 )
                 .await?
                 {

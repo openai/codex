@@ -775,14 +775,15 @@ async fn run_ratatui_app(
                 None => return missing_session_exit(id_str, "fork"),
             }
         } else if cli.fork_last {
-            let provider_filter = vec![config.model_provider_id.clone()];
+            let provider_filter =
+                (!cli.fork_show_all_providers).then(|| vec![config.model_provider_id.clone()]);
             match RolloutRecorder::list_threads(
                 &config,
                 /*page_size*/ 1,
                 /*cursor*/ None,
                 ThreadSortKey::UpdatedAt,
                 INTERACTIVE_SESSION_SOURCES,
-                Some(provider_filter.as_slice()),
+                provider_filter.as_deref(),
                 &config.model_provider_id,
                 /*search_term*/ None,
             )
@@ -827,7 +828,14 @@ async fn run_ratatui_app(
                 Err(_) => resume_picker::SessionSelection::StartFresh,
             }
         } else if cli.fork_picker {
-            match resume_picker::run_fork_picker(&mut tui, &config, cli.fork_show_all).await? {
+            match resume_picker::run_fork_picker(
+                &mut tui,
+                &config,
+                cli.fork_show_all,
+                cli.fork_show_all_providers,
+            )
+            .await?
+            {
                 resume_picker::SessionSelection::Exit => {
                     restore();
                     session_log::log_session_end();
@@ -870,7 +878,8 @@ async fn run_ratatui_app(
             None => return missing_session_exit(id_str, "resume"),
         }
     } else if cli.resume_last {
-        let provider_filter = vec![config.model_provider_id.clone()];
+        let provider_filter =
+            (!cli.resume_show_all_providers).then(|| vec![config.model_provider_id.clone()]);
         let filter_cwd = if cli.resume_show_all {
             None
         } else {
@@ -882,7 +891,7 @@ async fn run_ratatui_app(
             /*cursor*/ None,
             ThreadSortKey::UpdatedAt,
             INTERACTIVE_SESSION_SOURCES,
-            Some(provider_filter.as_slice()),
+            provider_filter.as_deref(),
             &config.model_provider_id,
             filter_cwd,
         )
@@ -919,7 +928,14 @@ async fn run_ratatui_app(
             _ => resume_picker::SessionSelection::StartFresh,
         }
     } else if cli.resume_picker {
-        match resume_picker::run_resume_picker(&mut tui, &config, cli.resume_show_all).await? {
+        match resume_picker::run_resume_picker(
+            &mut tui,
+            &config,
+            cli.resume_show_all,
+            cli.resume_show_all_providers,
+        )
+        .await?
+        {
             resume_picker::SessionSelection::Exit => {
                 restore();
                 session_log::log_session_end();

@@ -104,6 +104,7 @@ struct PageLoadRequest {
     cursor: Option<PageCursor>,
     request_token: usize,
     search_token: Option<usize>,
+    default_provider: String,
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
 }
@@ -112,6 +113,19 @@ struct PageLoadRequest {
 enum ProviderFilter {
     Any,
     MatchDefault(String),
+}
+
+impl ProviderFilter {
+    fn is_all(&self) -> bool {
+        matches!(self, ProviderFilter::Any)
+    }
+
+    fn label(&self) -> &str {
+        match self {
+            ProviderFilter::Any => "all",
+            ProviderFilter::MatchDefault(provider) => provider.as_str(),
+        }
+    }
 }
 
 type PageLoader = Arc<dyn Fn(PageLoadRequest) + Send + Sync>;
@@ -159,14 +173,23 @@ pub async fn run_resume_picker(
     tui: &mut Tui,
     config: &Config,
     show_all: bool,
+    show_all_providers: bool,
 ) -> Result<SessionSelection> {
-    run_session_picker(tui, config, show_all, SessionPickerAction::Resume).await
+    run_session_picker(
+        tui,
+        config,
+        show_all,
+        show_all_providers,
+        SessionPickerAction::Resume,
+    )
+    .await
 }
 
 pub async fn run_resume_picker_with_app_server(
     tui: &mut Tui,
     config: &Config,
     show_all: bool,
+    show_all_providers: bool,
     app_server: AppServerSession,
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
@@ -175,6 +198,7 @@ pub async fn run_resume_picker_with_app_server(
         tui,
         config,
         show_all,
+        show_all_providers,
         SessionPickerAction::Resume,
         is_remote,
         spawn_app_server_page_loader(app_server, bg_tx),
@@ -187,6 +211,7 @@ pub async fn run_fork_picker_with_app_server(
     tui: &mut Tui,
     config: &Config,
     show_all: bool,
+    show_all_providers: bool,
     app_server: AppServerSession,
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
@@ -195,6 +220,7 @@ pub async fn run_fork_picker_with_app_server(
         tui,
         config,
         show_all,
+        show_all_providers,
         SessionPickerAction::Fork,
         is_remote,
         spawn_app_server_page_loader(app_server, bg_tx),
@@ -208,6 +234,7 @@ async fn run_session_picker(
     tui: &mut Tui,
     config: &Config,
     show_all: bool,
+    show_all_providers: bool,
     action: SessionPickerAction,
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
@@ -215,6 +242,7 @@ async fn run_session_picker(
         tui,
         config,
         show_all,
+        show_all_providers,
         action,
         /*is_remote*/ false,
         spawn_rollout_page_loader(config, bg_tx),
@@ -227,17 +255,19 @@ async fn run_session_picker_with_loader(
     tui: &mut Tui,
     config: &Config,
     show_all: bool,
+    show_all_providers: bool,
     action: SessionPickerAction,
     is_remote: bool,
     page_loader: PageLoader,
     bg_rx: mpsc::UnboundedReceiver<BackgroundEvent>,
 ) -> Result<SessionSelection> {
     let alt = AltScreenGuard::enter(tui);
-    let provider_filter = if is_remote {
+    let provider_filter = if is_remote || show_all_providers {
         ProviderFilter::Any
     } else {
         ProviderFilter::MatchDefault(config.model_provider_id.to_string())
     };
+    let default_provider = config.model_provider_id.to_string();
     let codex_home = config.codex_home.as_path();
     let filter_cwd = if show_all || is_remote {
         // Remote sessions live in the server's filesystem namespace, so the client
@@ -252,7 +282,9 @@ async fn run_session_picker_with_loader(
         codex_home.to_path_buf(),
         alt.tui.frame_requester(),
         page_loader,
+        default_provider,
         provider_filter,
+        /*allow_provider_toggle*/ !is_remote,
         show_all,
         filter_cwd,
         action,
@@ -308,9 +340,9 @@ fn spawn_rollout_page_loader(
         let tx = loader_tx.clone();
         let config = config.clone();
         tokio::spawn(async move {
-            let default_provider = match request.provider_filter {
+            let provider_filter = match request.provider_filter {
                 ProviderFilter::Any => None,
-                ProviderFilter::MatchDefault(default_provider) => Some(default_provider),
+                ProviderFilter::MatchDefault(default_provider) => Some(vec![default_provider]),
             };
             let cursor = match request.cursor.as_ref() {
                 Some(PageCursor::Rollout(cursor)) => Some(cursor),
@@ -323,8 +355,8 @@ fn spawn_rollout_page_loader(
                 cursor,
                 request.sort_key,
                 INTERACTIVE_SESSION_SOURCES,
-                default_provider.as_ref().map(std::slice::from_ref),
-                default_provider.as_deref().unwrap_or_default(),
+                provider_filter.as_deref(),
+                request.default_provider.as_str(),
                 /*search_term*/ None,
             )
             .await
@@ -416,7 +448,9 @@ struct PickerState {
     next_search_token: usize,
     page_loader: PageLoader,
     view_rows: Option<usize>,
+    default_provider: String,
     provider_filter: ProviderFilter,
+    allow_provider_toggle: bool,
     show_all: bool,
     filter_cwd: Option<PathBuf>,
     action: SessionPickerAction,
@@ -504,6 +538,7 @@ struct Row {
     preview: String,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
+    model_provider: Option<String>,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
     cwd: Option<PathBuf>,
@@ -537,6 +572,11 @@ impl Row {
         {
             return true;
         }
+        if let Some(provider) = self.model_provider.as_ref()
+            && provider.to_lowercase().contains(query)
+        {
+            return true;
+        }
         false
     }
 }
@@ -546,7 +586,9 @@ impl PickerState {
         codex_home: PathBuf,
         requester: FrameRequester,
         page_loader: PageLoader,
+        default_provider: String,
         provider_filter: ProviderFilter,
+        allow_provider_toggle: bool,
         show_all: bool,
         filter_cwd: Option<PathBuf>,
         action: SessionPickerAction,
@@ -571,7 +613,9 @@ impl PickerState {
             next_search_token: 0,
             page_loader,
             view_rows: None,
+            default_provider,
             provider_filter,
+            allow_provider_toggle,
             show_all,
             filter_cwd,
             action,
@@ -663,6 +707,9 @@ impl PickerState {
                 self.toggle_sort_key();
                 self.request_frame();
             }
+            KeyCode::Char('p') | KeyCode::Char('P') => {
+                self.toggle_provider_filter();
+            }
             KeyCode::Backspace => {
                 let mut new_query = self.query.clone();
                 new_query.pop();
@@ -712,6 +759,7 @@ impl PickerState {
             cursor: None,
             request_token,
             search_token,
+            default_provider: self.default_provider.clone(),
             provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
         });
@@ -988,6 +1036,7 @@ impl PickerState {
             cursor: Some(cursor),
             request_token,
             search_token,
+            default_provider: self.default_provider.clone(),
             provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
         });
@@ -1014,6 +1063,18 @@ impl PickerState {
         self.sort_key = match self.sort_key {
             ThreadSortKey::CreatedAt => ThreadSortKey::UpdatedAt,
             ThreadSortKey::UpdatedAt => ThreadSortKey::CreatedAt,
+        };
+        self.start_initial_load();
+    }
+
+    fn toggle_provider_filter(&mut self) {
+        if !self.allow_provider_toggle {
+            return;
+        }
+        self.provider_filter = if self.provider_filter.is_all() {
+            ProviderFilter::MatchDefault(self.default_provider.clone())
+        } else {
+            ProviderFilter::Any
         };
         self.start_initial_load();
     }
@@ -1056,6 +1117,7 @@ fn head_to_row(item: &ThreadItem) -> Row {
         preview,
         thread_id: item.thread_id,
         thread_name: None,
+        model_provider: item.model_provider.clone(),
         created_at,
         updated_at,
         cwd: item.cwd.clone(),
@@ -1081,6 +1143,7 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
         },
         thread_id: Some(thread_id),
         thread_name: thread.name,
+        model_provider: Some(thread.model_provider),
         created_at: chrono::DateTime::from_timestamp(thread.created_at, 0)
             .map(|dt| dt.with_timezone(&Utc)),
         updated_at: chrono::DateTime::from_timestamp(thread.updated_at, 0)
@@ -1151,6 +1214,10 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             "Sort:".dim(),
             " ".into(),
             sort_key_label(state.sort_key).magenta(),
+            "  ".into(),
+            "Provider:".dim(),
+            " ".into(),
+            state.provider_filter.label().magenta(),
         ]
         .into();
         frame.render_widget_ref(header_line, header);
@@ -1158,7 +1225,11 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         // Search line
         frame.render_widget_ref(search_line(state), search);
 
-        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
+        let metrics = calculate_column_metrics(
+            &state.filtered_rows,
+            state.show_all,
+            state.provider_filter.is_all(),
+        );
 
         // Column headers and list
         render_column_headers(frame, columns, &metrics, state.sort_key);
@@ -1166,7 +1237,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
 
         // Hint line
         let action_label = state.action.action_label();
-        let hint_line: Line = vec![
+        let mut hint_spans: Vec<Span> = vec![
             key_hint::plain(KeyCode::Enter).into(),
             format!(" to {action_label} ").dim(),
             "    ".dim(),
@@ -1178,13 +1249,20 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
             "    ".dim(),
             key_hint::plain(KeyCode::Tab).into(),
             " to toggle sort ".dim(),
+        ];
+        if state.allow_provider_toggle {
+            hint_spans.push("    ".dim());
+            hint_spans.push(key_hint::plain(KeyCode::Char('p')).into());
+            hint_spans.push(" to toggle providers ".dim());
+        }
+        hint_spans.extend([
             "    ".dim(),
             key_hint::plain(KeyCode::Up).into(),
             "/".dim(),
             key_hint::plain(KeyCode::Down).into(),
             " to browse".dim(),
-        ]
-        .into();
+        ]);
+        let hint_line: Line = hint_spans.into();
         frame.render_widget_ref(hint_line, hint);
     })
 }
@@ -1225,13 +1303,15 @@ fn render_list(
     let visibility = column_visibility(area.width, metrics, state.sort_key);
     let max_created_width = metrics.max_created_width;
     let max_updated_width = metrics.max_updated_width;
+    let max_provider_width = metrics.max_provider_width;
     let max_branch_width = metrics.max_branch_width;
     let max_cwd_width = metrics.max_cwd_width;
 
-    for (idx, (row, (created_label, updated_label, branch_label, cwd_label))) in rows[start..end]
-        .iter()
-        .zip(labels[start..end].iter())
-        .enumerate()
+    for (idx, (row, (created_label, updated_label, provider_label, branch_label, cwd_label))) in
+        rows[start..end]
+            .iter()
+            .zip(labels[start..end].iter())
+            .enumerate()
     {
         let is_sel = start + idx == state.selected;
         let marker = if is_sel { "> ".bold() } else { "  ".into() };
@@ -1243,6 +1323,11 @@ fn render_list(
         };
         let updated_span = if visibility.show_updated {
             Some(Span::from(format!("{updated_label:<max_updated_width$}")).dim())
+        } else {
+            None
+        };
+        let provider_span = if visibility.show_provider {
+            Some(Span::from(format!("{provider_label:<max_provider_width$}")).magenta())
         } else {
             None
         };
@@ -1283,6 +1368,9 @@ fn render_list(
         if visibility.show_updated {
             preview_width = preview_width.saturating_sub(max_updated_width + 2);
         }
+        if visibility.show_provider {
+            preview_width = preview_width.saturating_sub(max_provider_width + 2);
+        }
         if visibility.show_branch {
             preview_width = preview_width.saturating_sub(max_branch_width + 2);
         }
@@ -1291,6 +1379,7 @@ fn render_list(
         }
         let add_leading_gap = !visibility.show_created
             && !visibility.show_updated
+            && !visibility.show_provider
             && !visibility.show_branch
             && !visibility.show_cwd;
         if add_leading_gap {
@@ -1304,6 +1393,10 @@ fn render_list(
         }
         if let Some(updated) = updated_span {
             spans.push(updated);
+            spans.push("  ".into());
+        }
+        if let Some(provider) = provider_span {
+            spans.push(provider);
             spans.push("  ".into());
         }
         if let Some(branch) = branch_span {
@@ -1440,6 +1533,15 @@ fn render_column_headers(
         spans.push(Span::from(label).bold());
         spans.push("  ".into());
     }
+    if visibility.show_provider {
+        let label = format!(
+            "{text:<width$}",
+            text = "Provider",
+            width = metrics.max_provider_width
+        );
+        spans.push(Span::from(label).bold());
+        spans.push("  ".into());
+    }
     if visibility.show_branch {
         let label = format!(
             "{text:<width$}",
@@ -1469,10 +1571,11 @@ fn render_column_headers(
 struct ColumnMetrics {
     max_created_width: usize,
     max_updated_width: usize,
+    max_provider_width: usize,
     max_branch_width: usize,
     max_cwd_width: usize,
-    /// (created_label, updated_label, branch_label, cwd_label) per row.
-    labels: Vec<(String, String, String, String)>,
+    /// (created_label, updated_label, provider_label, branch_label, cwd_label) per row.
+    labels: Vec<(String, String, String, String, String)>,
 }
 
 /// Determines which columns to render given available terminal width.
@@ -1484,11 +1587,16 @@ struct ColumnMetrics {
 struct ColumnVisibility {
     show_created: bool,
     show_updated: bool,
+    show_provider: bool,
     show_branch: bool,
     show_cwd: bool,
 }
 
-fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
+fn calculate_column_metrics(
+    rows: &[Row],
+    include_cwd: bool,
+    include_provider: bool,
+) -> ColumnMetrics {
     fn right_elide(s: &str, max: usize) -> String {
         if s.chars().count() <= max {
             return s.to_string();
@@ -1508,9 +1616,14 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
         format!("…{tail}")
     }
 
-    let mut labels: Vec<(String, String, String, String)> = Vec::with_capacity(rows.len());
+    let mut labels: Vec<(String, String, String, String, String)> = Vec::with_capacity(rows.len());
     let mut max_created_width = UnicodeWidthStr::width("Created at");
     let mut max_updated_width = UnicodeWidthStr::width("Updated at");
+    let mut max_provider_width = if include_provider {
+        UnicodeWidthStr::width("Provider")
+    } else {
+        0
+    };
     let mut max_branch_width = UnicodeWidthStr::width("Branch");
     let mut max_cwd_width = if include_cwd {
         UnicodeWidthStr::width("CWD")
@@ -1521,6 +1634,15 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
     for row in rows {
         let created = format_created_label(row);
         let updated = format_updated_label(row);
+        let provider = if include_provider {
+            let provider_raw = row
+                .model_provider
+                .clone()
+                .unwrap_or_else(|| "-".to_string());
+            right_elide(&provider_raw, /*max*/ 16)
+        } else {
+            String::new()
+        };
         let branch_raw = row.git_branch.clone().unwrap_or_default();
         let branch = right_elide(&branch_raw, /*max*/ 24);
         let cwd = if include_cwd {
@@ -1535,14 +1657,16 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
         };
         max_created_width = max_created_width.max(UnicodeWidthStr::width(created.as_str()));
         max_updated_width = max_updated_width.max(UnicodeWidthStr::width(updated.as_str()));
+        max_provider_width = max_provider_width.max(UnicodeWidthStr::width(provider.as_str()));
         max_branch_width = max_branch_width.max(UnicodeWidthStr::width(branch.as_str()));
         max_cwd_width = max_cwd_width.max(UnicodeWidthStr::width(cwd.as_str()));
-        labels.push((created, updated, branch, cwd));
+        labels.push((created, updated, provider, branch, cwd));
     }
 
     ColumnMetrics {
         max_created_width,
         max_updated_width,
+        max_provider_width,
         max_branch_width,
         max_cwd_width,
         labels,
@@ -1563,6 +1687,7 @@ fn column_visibility(
 
     let show_branch = metrics.max_branch_width > 0;
     let show_cwd = metrics.max_cwd_width > 0;
+    let show_provider = metrics.max_provider_width > 0;
 
     // Calculate remaining width after all optional columns.
     let mut preview_width = area_width as usize;
@@ -1572,6 +1697,9 @@ fn column_visibility(
     }
     if metrics.max_updated_width > 0 {
         preview_width = preview_width.saturating_sub(metrics.max_updated_width + 2);
+    }
+    if show_provider {
+        preview_width = preview_width.saturating_sub(metrics.max_provider_width + 2);
     }
     if show_branch {
         preview_width = preview_width.saturating_sub(metrics.max_branch_width + 2);
@@ -1596,6 +1724,7 @@ fn column_visibility(
     ColumnVisibility {
         show_created,
         show_updated,
+        show_provider,
         show_branch,
         show_cwd,
     }
@@ -1813,6 +1942,7 @@ mod tests {
             preview: String::from("first message"),
             thread_id: None,
             thread_name: Some(String::from("My session")),
+            model_provider: None,
             created_at: None,
             updated_at: None,
             cwd: None,
@@ -1845,7 +1975,9 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            String::from("openai"),
             ProviderFilter::Any,
+            false,
             false,
             None,
             SessionPickerAction::Resume,
@@ -1855,6 +1987,7 @@ mod tests {
             preview: String::from("remote session"),
             thread_id: Some(ThreadId::new()),
             thread_name: None,
+            model_provider: Some(String::from("remote-provider")),
             created_at: None,
             updated_at: None,
             cwd: Some(PathBuf::from("/srv/remote-project")),
@@ -1876,7 +2009,9 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
-            ProviderFilter::MatchDefault(String::from("openai")),
+            String::from("openai"),
+            ProviderFilter::Any,
+            true,
             true,
             None,
             SessionPickerAction::Resume,
@@ -1889,6 +2024,7 @@ mod tests {
                 preview: String::from("Fix resume picker timestamps"),
                 thread_id: None,
                 thread_name: None,
+                model_provider: Some(String::from("openai")),
                 created_at: Some(now - Duration::minutes(16)),
                 updated_at: Some(now - Duration::seconds(42)),
                 cwd: None,
@@ -1899,6 +2035,7 @@ mod tests {
                 preview: String::from("Investigate lazy pagination cap"),
                 thread_id: None,
                 thread_name: None,
+                model_provider: Some(String::from("ollama")),
                 created_at: Some(now - Duration::hours(1)),
                 updated_at: Some(now - Duration::minutes(35)),
                 cwd: None,
@@ -1909,6 +2046,7 @@ mod tests {
                 preview: String::from("Explain the codebase"),
                 thread_id: None,
                 thread_name: None,
+                model_provider: Some(String::from("openai-proxy")),
                 created_at: Some(now - Duration::hours(2)),
                 updated_at: Some(now - Duration::hours(2)),
                 cwd: None,
@@ -1922,7 +2060,11 @@ mod tests {
         state.scroll_top = 0;
         state.update_view_rows(3);
 
-        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
+        let metrics = calculate_column_metrics(
+            &state.filtered_rows,
+            state.show_all,
+            state.provider_filter.is_all(),
+        );
 
         let width: u16 = 80;
         let height: u16 = 6;
@@ -1954,7 +2096,9 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            String::from("openai"),
             ProviderFilter::MatchDefault(String::from("openai")),
+            true,
             true,
             None,
             SessionPickerAction::Resume,
@@ -2190,7 +2334,9 @@ mod tests {
             tempdir.path().to_path_buf(),
             FrameRequester::test_dummy(),
             loader,
-            ProviderFilter::MatchDefault(String::from("openai")),
+            String::from("openai"),
+            ProviderFilter::Any,
+            true,
             true,
             None,
             SessionPickerAction::Resume,
@@ -2203,6 +2349,7 @@ mod tests {
                 preview: String::from("First message preview"),
                 thread_id: Some(id1),
                 thread_name: None,
+                model_provider: Some(String::from("openai")),
                 created_at: None,
                 updated_at: Some(now - Duration::days(2)),
                 cwd: None,
@@ -2213,6 +2360,7 @@ mod tests {
                 preview: String::from("Second message preview"),
                 thread_id: Some(id2),
                 thread_name: None,
+                model_provider: Some(String::from("ollama")),
                 created_at: None,
                 updated_at: Some(now - Duration::days(3)),
                 cwd: None,
@@ -2228,7 +2376,11 @@ mod tests {
 
         state.update_thread_names().await;
 
-        let metrics = calculate_column_metrics(&state.filtered_rows, state.show_all);
+        let metrics = calculate_column_metrics(
+            &state.filtered_rows,
+            state.show_all,
+            state.provider_filter.is_all(),
+        );
 
         let width: u16 = 80;
         let height: u16 = 5;
@@ -2257,7 +2409,9 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            String::from("openai"),
             ProviderFilter::MatchDefault(String::from("openai")),
+            true,
             true,
             None,
             SessionPickerAction::Resume,
@@ -2326,7 +2480,9 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            String::from("openai"),
             ProviderFilter::MatchDefault(String::from("openai")),
+            true,
             true,
             None,
             SessionPickerAction::Resume,
@@ -2356,6 +2512,7 @@ mod tests {
         let metrics = ColumnMetrics {
             max_created_width: 8,
             max_updated_width: 12,
+            max_provider_width: 0,
             max_branch_width: 0,
             max_cwd_width: 0,
             labels: Vec::new(),
@@ -2367,6 +2524,7 @@ mod tests {
             ColumnVisibility {
                 show_created: true,
                 show_updated: false,
+                show_provider: false,
                 show_branch: false,
                 show_cwd: false,
             }
@@ -2378,6 +2536,7 @@ mod tests {
             ColumnVisibility {
                 show_created: false,
                 show_updated: true,
+                show_provider: false,
                 show_branch: false,
                 show_cwd: false,
             }
@@ -2389,6 +2548,7 @@ mod tests {
             ColumnVisibility {
                 show_created: true,
                 show_updated: true,
+                show_provider: false,
                 show_branch: false,
                 show_cwd: false,
             }
@@ -2407,7 +2567,9 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            String::from("openai"),
             ProviderFilter::MatchDefault(String::from("openai")),
+            true,
             true,
             None,
             SessionPickerAction::Resume,
@@ -2437,7 +2599,9 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            String::from("openai"),
             ProviderFilter::MatchDefault(String::from("openai")),
+            true,
             true,
             None,
             SessionPickerAction::Resume,
@@ -2482,7 +2646,9 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            String::from("openai"),
             ProviderFilter::MatchDefault(String::from("openai")),
+            true,
             true,
             None,
             SessionPickerAction::Resume,
@@ -2493,6 +2659,7 @@ mod tests {
             preview: String::from("missing metadata"),
             thread_id: None,
             thread_name: None,
+            model_provider: None,
             created_at: None,
             updated_at: None,
             cwd: None,
@@ -2522,7 +2689,9 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            String::from("openai"),
             ProviderFilter::MatchDefault(String::from("openai")),
+            true,
             true,
             None,
             SessionPickerAction::Resume,
@@ -2533,6 +2702,7 @@ mod tests {
             preview: String::from("pathless thread"),
             thread_id: Some(thread_id),
             thread_name: None,
+            model_provider: None,
             created_at: None,
             updated_at: None,
             cwd: None,
@@ -2591,7 +2761,9 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            String::from("openai"),
             ProviderFilter::MatchDefault(String::from("openai")),
+            true,
             true,
             None,
             SessionPickerAction::Resume,
@@ -2636,7 +2808,9 @@ mod tests {
             PathBuf::from("/tmp"),
             FrameRequester::test_dummy(),
             loader,
+            String::from("openai"),
             ProviderFilter::MatchDefault(String::from("openai")),
+            true,
             true,
             None,
             SessionPickerAction::Resume,
