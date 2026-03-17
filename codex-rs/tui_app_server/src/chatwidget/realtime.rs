@@ -25,6 +25,7 @@ pub(super) struct RealtimeConversationUiState {
     requested_close: bool,
     session_id: Option<String>,
     warned_audio_only_submission: bool,
+    #[cfg(not(target_os = "linux"))]
     pub(super) meter_placeholder_id: Option<String>,
     #[cfg(not(target_os = "linux"))]
     capture_stop_flag: Option<Arc<AtomicBool>>,
@@ -44,6 +45,7 @@ impl RealtimeConversationUiState {
         )
     }
 
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     pub(super) fn is_active(&self) -> bool {
         matches!(self.phase, RealtimeConversationPhase::Active)
     }
@@ -435,9 +437,7 @@ impl ChatWidget {
     }
 
     #[cfg(target_os = "linux")]
-    fn stop_realtime_local_audio(&mut self) {
-        self.realtime_conversation.meter_placeholder_id = None;
-    }
+    fn stop_realtime_local_audio(&mut self) {}
 
     #[cfg(not(target_os = "linux"))]
     fn stop_realtime_microphone(&mut self) {

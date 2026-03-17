@@ -4,6 +4,7 @@ use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
+#[cfg(not(target_os = "linux"))]
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeEvent;
 #[cfg(not(target_os = "linux"))]
@@ -23,10 +24,12 @@ pub(super) enum RealtimeConversationPhase {
 #[derive(Default)]
 pub(super) struct RealtimeConversationUiState {
     pub(super) phase: RealtimeConversationPhase,
+    #[cfg(not(target_os = "linux"))]
     audio_behavior: RealtimeAudioBehavior,
     requested_close: bool,
     session_id: Option<String>,
     warned_audio_only_submission: bool,
+    #[cfg(not(target_os = "linux"))]
     pub(super) meter_placeholder_id: Option<String>,
     #[cfg(not(target_os = "linux"))]
     capture_stop_flag: Option<Arc<AtomicBool>>,
@@ -40,6 +43,7 @@ pub(super) struct RealtimeConversationUiState {
     playback_queued_samples: Arc<AtomicUsize>,
 }
 
+#[cfg(not(target_os = "linux"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum RealtimeAudioBehavior {
     #[default]
@@ -47,6 +51,7 @@ enum RealtimeAudioBehavior {
     PlaybackAware,
 }
 
+#[cfg(not(target_os = "linux"))]
 impl RealtimeAudioBehavior {
     fn from_version(version: RealtimeConversationVersion) -> Self {
         match version {
@@ -79,6 +84,7 @@ impl RealtimeConversationUiState {
         )
     }
 
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     pub(super) fn is_active(&self) -> bool {
         matches!(self.phase, RealtimeConversationPhase::Active)
     }
@@ -233,6 +239,7 @@ impl ChatWidget {
         self.realtime_conversation.phase = RealtimeConversationPhase::Starting;
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.session_id = None;
+        #[cfg(not(target_os = "linux"))]
         self.realtime_conversation.audio_behavior = RealtimeAudioBehavior::Legacy;
         self.realtime_conversation.warned_audio_only_submission = false;
         self.set_footer_hint_override(Some(vec![(
@@ -273,6 +280,7 @@ impl ChatWidget {
         self.realtime_conversation.phase = RealtimeConversationPhase::Inactive;
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.session_id = None;
+        #[cfg(not(target_os = "linux"))]
         self.realtime_conversation.audio_behavior = RealtimeAudioBehavior::Legacy;
         self.realtime_conversation.warned_audio_only_submission = false;
     }
@@ -297,6 +305,7 @@ impl ChatWidget {
         }
         self.realtime_conversation.phase = RealtimeConversationPhase::Active;
         self.realtime_conversation.session_id = ev.session_id;
+        #[cfg(not(target_os = "linux"))]
         self.realtime_conversation.audio_behavior = RealtimeAudioBehavior::from_version(ev.version);
         self.realtime_conversation.warned_audio_only_submission = false;
         self.set_footer_hint_override(Some(vec![(
@@ -487,9 +496,7 @@ impl ChatWidget {
     }
 
     #[cfg(target_os = "linux")]
-    fn stop_realtime_local_audio(&mut self) {
-        self.realtime_conversation.meter_placeholder_id = None;
-    }
+    fn stop_realtime_local_audio(&mut self) {}
 
     #[cfg(not(target_os = "linux"))]
     fn stop_realtime_microphone(&mut self) {
