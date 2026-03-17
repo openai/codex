@@ -13,6 +13,8 @@ use crate::protocol::WebSearchEndEvent;
 use crate::user_input::ByteRange;
 use crate::user_input::TextElement;
 use crate::user_input::UserInput;
+use quick_xml::de::from_str as from_xml_str;
+use quick_xml::se::to_string as to_xml_string;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -52,9 +54,14 @@ pub struct HookPromptFragment {
     pub hook_run_id: String,
 }
 
-const HOOK_PROMPT_OPEN_TAG_PREFIX: &str = "<hook_prompt";
-const HOOK_PROMPT_CLOSE_TAG: &str = "</hook_prompt>";
-const HOOK_PROMPT_RUN_ID_ATTR: &str = "hook_run_id";
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename = "hook_prompt")]
+struct HookPromptXml {
+    #[serde(rename = "@hook_run_id")]
+    hook_run_id: String,
+    #[serde(rename = "$text")]
+    text: String,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 #[serde(tag = "type")]
@@ -282,71 +289,23 @@ pub fn parse_hook_prompt_message(
 
 pub fn parse_hook_prompt_fragment(text: &str) -> Option<HookPromptFragment> {
     let trimmed = text.trim();
-    if !trimmed.starts_with(HOOK_PROMPT_OPEN_TAG_PREFIX)
-        || !trimmed.ends_with(HOOK_PROMPT_CLOSE_TAG)
-    {
-        return None;
-    }
-
-    let open_tag_end = trimmed.find('>')?;
-    let open_tag = &trimmed[..=open_tag_end];
-    let hook_run_id = parse_hook_prompt_hook_run_id(open_tag)?;
+    let HookPromptXml { text, hook_run_id } = from_xml_str::<HookPromptXml>(trimmed).ok()?;
     if hook_run_id.trim().is_empty() {
         return None;
     }
 
-    let body_start = open_tag_end + 1;
-    let body_end = trimmed.len().checked_sub(HOOK_PROMPT_CLOSE_TAG.len())?;
-    if body_end < body_start {
-        return None;
-    }
-    let body = &trimmed[body_start..body_end];
-
-    Some(HookPromptFragment {
-        text: unescape_hook_prompt_xml(body),
-        hook_run_id,
-    })
+    Some(HookPromptFragment { text, hook_run_id })
 }
 
 fn serialize_hook_prompt_fragment(text: &str, hook_run_id: &str) -> Option<String> {
-    let escaped_text = escape_hook_prompt_xml(text);
-    Some(format!(
-        r#"<hook_prompt {HOOK_PROMPT_RUN_ID_ATTR}="{hook_run_id}">{escaped_text}</hook_prompt>"#,
-        hook_run_id = escape_hook_prompt_xml(hook_run_id),
-    ))
-}
-
-fn parse_hook_prompt_attribute(open_tag: &str, attribute_name: &str) -> Option<String> {
-    let marker = format!(r#"{attribute_name}=""#);
-    let start = open_tag.find(&marker)? + marker.len();
-    let value_end = open_tag[start..].find('"')?;
-    Some(unescape_hook_prompt_xml(
-        &open_tag[start..start + value_end],
-    ))
-}
-
-fn parse_hook_prompt_hook_run_id(open_tag: &str) -> Option<String> {
-    let hook_run_id = parse_hook_prompt_attribute(open_tag, HOOK_PROMPT_RUN_ID_ATTR)?;
     if hook_run_id.trim().is_empty() {
         return None;
     }
-    Some(hook_run_id)
-}
-
-fn escape_hook_prompt_xml(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
-
-fn unescape_hook_prompt_xml(text: &str) -> String {
-    text.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
+    to_xml_string(&HookPromptXml {
+        text: text.to_string(),
+        hook_run_id: hook_run_id.to_string(),
+    })
+    .ok()
 }
 
 impl AgentMessageItem {
