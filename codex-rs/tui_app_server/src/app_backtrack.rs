@@ -36,12 +36,6 @@ use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_protocol::ThreadId;
-#[cfg(test)]
-use codex_protocol::protocol::CodexErrorInfo;
-#[cfg(test)]
-use codex_protocol::protocol::ErrorEvent;
-#[cfg(test)]
-use codex_protocol::protocol::EventMsg;
 use codex_protocol::user_input::TextElement;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
@@ -463,39 +457,6 @@ impl App {
     ) {
         self.apply_backtrack_rollback(selection);
         tui.frame_requester().schedule_frame();
-    }
-
-    #[cfg(test)]
-    #[cfg_attr(test, allow(dead_code))]
-    pub(crate) fn handle_backtrack_event(&mut self, event: &EventMsg) {
-        match event {
-            EventMsg::ThreadRolledBack(rollback) => {
-                // `pending_rollback` is set only after this UI sends `Op::ThreadRollback`
-                // from the backtrack flow. In that case, finish immediately using the
-                // stored selection (nth user message) so local trim matches the exact
-                // backtrack target.
-                //
-                // When it is `None`, rollback came from replay or another source. We
-                // queue an AppEvent so rollback trim runs in FIFO order with
-                // `InsertHistoryCell` events, avoiding races with in-flight transcript
-                // inserts.
-                if self.backtrack.pending_rollback.is_some() {
-                    self.finish_pending_backtrack();
-                } else {
-                    self.app_event_tx.send(AppEvent::ApplyThreadRollback {
-                        num_turns: rollback.num_turns,
-                    });
-                }
-            }
-            EventMsg::Error(ErrorEvent {
-                codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
-                ..
-            }) => {
-                // Core rejected the rollback; clear the guard so the user can retry.
-                self.backtrack.pending_rollback = None;
-            }
-            _ => {}
-        }
     }
 
     pub(crate) fn handle_backtrack_rollback_succeeded(&mut self, num_turns: u32) {
