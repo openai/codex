@@ -850,7 +850,7 @@ fn started_thread_from_start_response(
         .map_err(color_eyre::eyre::Report::msg)?;
     Ok(AppServerStartedThread {
         session,
-        turns: response.thread.turns.clone(),
+        turns: response.thread.turns,
     })
 }
 

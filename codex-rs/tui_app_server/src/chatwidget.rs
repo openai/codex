@@ -1731,15 +1731,14 @@ impl ChatWidget {
         self.suppress_initial_user_message_submit = suppressed;
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_initial_user_message_for_test(&mut self, user_message: Option<UserMessage>) {
-        self.initial_user_message = user_message;
-    }
-
     pub(crate) fn submit_initial_user_message_if_pending(&mut self) {
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
+    }
+
+    pub(crate) fn handle_thread_session(&mut self, session: ThreadSessionState) {
+        self.on_session_configured(thread_session_state_to_legacy_event(session));
     }
 
     fn emit_forked_thread_event(&self, forked_from_id: ThreadId) {

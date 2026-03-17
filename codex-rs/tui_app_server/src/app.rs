@@ -129,7 +129,6 @@ mod pending_interactive_replay;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
-use self::app_server_adapter::thread_snapshot_events;
 use self::app_server_requests::PendingAppServerRequests;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 
@@ -4743,7 +4742,7 @@ mod tests {
     use crate::app_backtrack::BacktrackSelection;
     use crate::app_backtrack::BacktrackState;
     use crate::app_backtrack::user_count;
-    use crate::app_server_session::AppServerStartedThread;
+
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use crate::chatwidget::tests::set_chatgpt_auth;
     use crate::file_search::FileSearchManager;
