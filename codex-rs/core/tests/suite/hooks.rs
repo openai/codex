@@ -6,18 +6,30 @@ use anyhow::Result;
 use codex_core::features::Feature;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_message_item_added;
+use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
+use std::time::Duration;
+use tokio::sync::oneshot;
+use tokio::time::sleep;
 
 const FIRST_CONTINUATION_PROMPT: &str = "Retry with exactly the phrase meow meow meow.";
 const SECOND_CONTINUATION_PROMPT: &str = "Now tighten it to just: meow.";
@@ -141,6 +153,40 @@ fn read_stop_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).context("parse stop hook log line"))
+        .collect()
+}
+
+fn ev_message_item_done(id: &str, text: &str) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "message",
+            "role": "assistant",
+            "id": id,
+            "content": [{"type": "output_text", "text": text}]
+        }
+    })
+}
+
+fn sse_event(event: Value) -> String {
+    sse(vec![event])
+}
+
+fn request_message_input_texts(body: &[u8], role: &str) -> Vec<String> {
+    let body: Value = match serde_json::from_slice(body) {
+        Ok(body) => body,
+        Err(error) => panic!("parse request body: {error}"),
+    };
+    body.get("input")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("message"))
+        .filter(|item| item.get("role").and_then(Value::as_str) == Some(role))
+        .filter_map(|item| item.get("content").and_then(Value::as_array))
+        .flatten()
+        .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_text"))
+        .filter_map(|span| span.get("text").and_then(Value::as_str).map(str::to_owned))
         .collect()
 }
 
@@ -371,5 +417,122 @@ async fn blocked_user_prompt_submit_persists_additional_context_for_next_turn() 
         "second request should include the accepted prompt",
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (gate_completed_tx, gate_completed_rx) = oneshot::channel();
+    let first_chunks = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_response_created("resp-1")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_message_item_added("msg-1", "")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_output_text_delta("first ")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_message_item_done("msg-1", "first response")),
+        },
+        StreamingSseChunk {
+            gate: Some(gate_completed_rx),
+            body: sse_event(ev_completed("resp-1")),
+        },
+    ];
+    let second_chunks = vec![StreamingSseChunk {
+        gate: None,
+        body: sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-2", "accepted queued prompt handled"),
+            ev_completed("resp-2"),
+        ]),
+    }];
+    let (server, _completions) =
+        start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.1")
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_user_prompt_submit_hook(home, "blocked queued prompt", BLOCKED_PROMPT_CONTEXT)
+            {
+                panic!("failed to write user prompt submit hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build_with_streaming_server(&server).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "initial prompt".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::AgentMessageContentDelta(_))
+    })
+    .await;
+
+    for text in ["accepted queued prompt", "blocked queued prompt"] {
+        test.codex
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: text.to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+            })
+            .await?;
+    }
+
+    sleep(Duration::from_millis(100)).await;
+    let _ = gate_completed_tx.send(());
+
+    let requests = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let requests = server.requests().await;
+            if requests.len() >= 2 {
+                break requests;
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("second request should arrive")
+    .into_iter()
+    .collect::<Vec<_>>();
+
+    sleep(Duration::from_millis(100)).await;
+
+    assert_eq!(requests.len(), 2);
+
+    let second_user_texts = request_message_input_texts(&requests[1], "user");
+    assert!(
+        second_user_texts.contains(&"accepted queued prompt".to_string()),
+        "second request should include the accepted queued prompt",
+    );
+    assert!(
+        !second_user_texts.contains(&"blocked queued prompt".to_string()),
+        "second request should not include the blocked queued prompt",
+    );
+
+    server.shutdown().await;
     Ok(())
 }

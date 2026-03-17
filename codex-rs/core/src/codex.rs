@@ -205,7 +205,10 @@ use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
 use crate::git_info::get_git_repo_root;
 use crate::guardian::GuardianReviewSessionManager;
+use crate::hook_runtime::PendingInputHookDisposition;
+use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
+use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_user_prompt_submit_hooks;
 use crate::instructions::UserInstructions;
@@ -5727,49 +5730,43 @@ pub(crate) async fn run_turn(
         // may support this, the model might not.
         let pending_input = sess.get_pending_input().await;
 
-        let mut should_stop_for_user_prompt_submit = false;
+        let mut blocked_pending_input = false;
+        let mut blocked_pending_input_contexts = Vec::new();
+        let mut requeued_pending_input = false;
+        let mut accepted_pending_input = Vec::new();
         if !pending_input.is_empty() {
             let mut pending_input_iter = pending_input.into_iter();
             while let Some(pending_input_item) = pending_input_iter.next() {
-                let response_item = ResponseItem::from(pending_input_item);
-                if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
-                    // todo(aibrahim): move pending input to be UserInput only to keep TextElements. context: https://github.com/openai/codex/pull/10656#discussion_r2765522480
-                    let user_prompt_submit_outcome =
-                        run_user_prompt_submit_hooks(&sess, &turn_context, user_message.message())
-                            .await;
-                    if user_prompt_submit_outcome.should_stop {
+                match inspect_pending_input(&sess, &turn_context, pending_input_item).await {
+                    PendingInputHookDisposition::Accepted(pending_input) => {
+                        accepted_pending_input.push(*pending_input);
+                    }
+                    PendingInputHookDisposition::Blocked {
+                        additional_contexts,
+                    } => {
                         let remaining_pending_input = pending_input_iter.collect::<Vec<_>>();
                         if !remaining_pending_input.is_empty() {
                             let _ = sess.prepend_pending_input(remaining_pending_input).await;
+                            requeued_pending_input = true;
                         }
-                        record_additional_contexts(
-                            &sess,
-                            &turn_context,
-                            user_prompt_submit_outcome.additional_contexts,
-                        )
-                        .await;
-                        should_stop_for_user_prompt_submit = true;
+                        blocked_pending_input_contexts = additional_contexts;
+                        blocked_pending_input = true;
                         break;
                     }
-                    let additional_contexts = user_prompt_submit_outcome.additional_contexts;
-                    sess.record_user_prompt_and_emit_turn_item(
-                        turn_context.as_ref(),
-                        &user_message.content,
-                        response_item,
-                    )
-                    .await;
-                    record_additional_contexts(&sess, &turn_context, additional_contexts).await;
-                } else {
-                    sess.record_conversation_items(
-                        &turn_context,
-                        std::slice::from_ref(&response_item),
-                    )
-                    .await;
                 }
             }
         }
 
-        if should_stop_for_user_prompt_submit {
+        let has_accepted_pending_input = !accepted_pending_input.is_empty();
+        for pending_input in accepted_pending_input {
+            record_pending_input(&sess, &turn_context, pending_input).await;
+        }
+        record_additional_contexts(&sess, &turn_context, blocked_pending_input_contexts).await;
+
+        if blocked_pending_input && !has_accepted_pending_input {
+            if requeued_pending_input {
+                continue;
+            }
             break;
         }
 
