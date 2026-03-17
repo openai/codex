@@ -1,5 +1,4 @@
 use super::*;
-use crate::auth_env_telemetry::AuthEnvSource;
 use crate::auth_env_telemetry::AuthEnvTelemetry;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -93,15 +92,14 @@ fn emit_feedback_request_tags_records_sentry_feedback_fields() {
         .with(TagCollectorLayer { tags: tags.clone() })
         .set_default();
 
-    let auth_env = AuthEnvTelemetry::new(
-        [
-            AuthEnvSource::OpenAiApiKey,
-            AuthEnvSource::ProviderEnvKey,
-            AuthEnvSource::RefreshTokenUrlOverride,
-        ],
-        true,
-        true,
-    );
+    let auth_env = AuthEnvTelemetry {
+        openai_api_key_env_present: true,
+        codex_api_key_env_present: false,
+        codex_api_key_env_enabled: true,
+        provider_env_key_name: Some("configured".to_string()),
+        provider_env_key_present: Some(true),
+        refresh_token_url_override_present: true,
+    };
 
     emit_feedback_request_tags_with_auth_env(
         &FeedbackRequestTags {
@@ -318,16 +316,14 @@ fn emit_feedback_request_tags_preserves_auth_env_fields_for_legacy_emitters() {
         .with(TagCollectorLayer { tags: tags.clone() })
         .set_default();
 
-    let auth_env = AuthEnvTelemetry::new(
-        [
-            AuthEnvSource::OpenAiApiKey,
-            AuthEnvSource::CodexApiKey,
-            AuthEnvSource::ProviderEnvKey,
-            AuthEnvSource::RefreshTokenUrlOverride,
-        ],
-        true,
-        true,
-    );
+    let auth_env = AuthEnvTelemetry {
+        openai_api_key_env_present: true,
+        codex_api_key_env_present: true,
+        codex_api_key_env_enabled: true,
+        provider_env_key_name: Some("configured".to_string()),
+        provider_env_key_present: Some(true),
+        refresh_token_url_override_present: true,
+    };
 
     emit_feedback_request_tags_with_auth_env(
         &FeedbackRequestTags {
