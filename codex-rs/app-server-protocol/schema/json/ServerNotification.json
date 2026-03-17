@@ -2857,10 +2857,14 @@
         },
         "threadId": {
           "type": "string"
+        },
+        "version": {
+          "type": "string"
         }
       },
       "required": [
-        "threadId"
+        "threadId",
+        "version"
       ],
       "type": "object"
     },

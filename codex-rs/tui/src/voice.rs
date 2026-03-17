@@ -44,6 +44,14 @@ const REALTIME_INTERRUPT_INPUT_PEAK_THRESHOLD: u16 = 4_000;
 // callbacks so trailing syllables are not chopped up between chunks.
 const REALTIME_INTERRUPT_GRACE_PERIOD: Duration = Duration::from_millis(900);
 
+#[derive(Clone)]
+pub(crate) enum RealtimeInputBehavior {
+    Ungated,
+    PlaybackAware {
+        playback_queued_samples: Arc<AtomicUsize>,
+    },
+}
+
 struct TranscriptionAuthContext {
     mode: AuthMode,
     bearer_token: String,
@@ -94,7 +102,7 @@ impl VoiceCapture {
     pub fn start_realtime(
         config: &Config,
         tx: AppEventSender,
-        playback_queued_samples: Arc<AtomicUsize>,
+        input_behavior: RealtimeInputBehavior,
     ) -> Result<Self, String> {
         let (device, config) = select_configured_input_device_and_config(config)?;
 
@@ -110,7 +118,7 @@ impl VoiceCapture {
             sample_rate,
             channels,
             tx,
-            playback_queued_samples,
+            input_behavior,
             last_peak.clone(),
         )?;
         stream
@@ -354,7 +362,7 @@ fn build_realtime_input_stream(
     sample_rate: u32,
     channels: u16,
     tx: AppEventSender,
-    playback_queued_samples: Arc<AtomicUsize>,
+    input_behavior: RealtimeInputBehavior,
     last_peak: Arc<AtomicU16>,
 ) -> Result<cpal::Stream, String> {
     match config.sample_format() {
@@ -362,7 +370,7 @@ fn build_realtime_input_stream(
             .build_input_stream(
                 &config.clone().into(),
                 {
-                    let playback_queued_samples = Arc::clone(&playback_queued_samples);
+                    let input_behavior = input_behavior.clone();
                     let last_peak = Arc::clone(&last_peak);
                     let tx = tx;
                     let mut allow_input_until = None;
@@ -370,9 +378,8 @@ fn build_realtime_input_stream(
                         let peak = peak_f32(input);
                         if !should_send_realtime_input(
                             peak,
-                            &playback_queued_samples,
+                            &input_behavior,
                             &mut allow_input_until,
-                            Instant::now(),
                         ) {
                             last_peak.store(0, Ordering::Relaxed);
                             return;
@@ -390,7 +397,7 @@ fn build_realtime_input_stream(
             .build_input_stream(
                 &config.clone().into(),
                 {
-                    let playback_queued_samples = Arc::clone(&playback_queued_samples);
+                    let input_behavior = input_behavior.clone();
                     let last_peak = Arc::clone(&last_peak);
                     let tx = tx;
                     let mut allow_input_until = None;
@@ -398,9 +405,8 @@ fn build_realtime_input_stream(
                         let peak = peak_i16(input);
                         if !should_send_realtime_input(
                             peak,
-                            &playback_queued_samples,
+                            &input_behavior,
                             &mut allow_input_until,
-                            Instant::now(),
                         ) {
                             last_peak.store(0, Ordering::Relaxed);
                             return;
@@ -417,7 +423,7 @@ fn build_realtime_input_stream(
             .build_input_stream(
                 &config.clone().into(),
                 {
-                    let playback_queued_samples = Arc::clone(&playback_queued_samples);
+                    let input_behavior = input_behavior.clone();
                     let last_peak = Arc::clone(&last_peak);
                     let tx = tx;
                     let mut allow_input_until = None;
@@ -426,9 +432,8 @@ fn build_realtime_input_stream(
                         let peak = convert_u16_to_i16_and_peak(input, &mut samples);
                         if !should_send_realtime_input(
                             peak,
-                            &playback_queued_samples,
+                            &input_behavior,
                             &mut allow_input_until,
-                            Instant::now(),
                         ) {
                             last_peak.store(0, Ordering::Relaxed);
                             return;
@@ -739,10 +744,22 @@ fn fill_output_u16(
 /// utterance reaches the server.
 fn should_send_realtime_input(
     peak: u16,
-    playback_queued_samples: &Arc<AtomicUsize>,
+    input_behavior: &RealtimeInputBehavior,
     allow_input_until: &mut Option<Instant>,
-    now: Instant,
 ) -> bool {
+    if matches!(input_behavior, RealtimeInputBehavior::Ungated) {
+        *allow_input_until = None;
+        return true;
+    }
+
+    let now = Instant::now();
+    let RealtimeInputBehavior::PlaybackAware {
+        playback_queued_samples,
+    } = input_behavior
+    else {
+        unreachable!("ungated realtime input should return early");
+    };
+
     if playback_queued_samples.load(Ordering::Relaxed) == 0 {
         *allow_input_until = None;
         return true;
@@ -1021,11 +1038,18 @@ async fn transcribe_bytes(
 
 #[cfg(test)]
 mod tests {
+    use super::RealtimeInputBehavior;
     use super::RecordedAudio;
     use super::convert_pcm16;
     use super::encode_wav_normalized;
+    use super::should_send_realtime_input;
     use pretty_assertions::assert_eq;
     use std::io::Cursor;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    use std::time::Instant;
 
     #[test]
     fn convert_pcm16_downmixes_and_resamples_for_model_input() {
@@ -1053,5 +1077,40 @@ mod tests {
         assert_eq!(spec.channels, 1);
         assert_eq!(spec.sample_rate, 24_000);
         assert_eq!(samples, vec![8_426, 29_490]);
+    }
+
+    #[test]
+    fn ungated_realtime_input_ignores_playback_backlog() {
+        let mut allow_input_until = Some(Instant::now() + Duration::from_secs(1));
+        let playback_queued_samples = Arc::new(AtomicUsize::new(1024));
+
+        assert!(should_send_realtime_input(
+            0,
+            &RealtimeInputBehavior::Ungated,
+            &mut allow_input_until,
+        ));
+        assert_eq!(allow_input_until, None);
+        assert_eq!(playback_queued_samples.load(Ordering::Relaxed), 1024);
+    }
+
+    #[test]
+    fn playback_aware_realtime_input_requires_an_interrupt_peak() {
+        let mut allow_input_until = None;
+        let playback_queued_samples = Arc::new(AtomicUsize::new(1024));
+        let input_behavior = RealtimeInputBehavior::PlaybackAware {
+            playback_queued_samples: Arc::clone(&playback_queued_samples),
+        };
+
+        assert!(!should_send_realtime_input(
+            100,
+            &input_behavior,
+            &mut allow_input_until,
+        ));
+        assert!(should_send_realtime_input(
+            5_000,
+            &input_behavior,
+            &mut allow_input_until,
+        ));
+        assert!(allow_input_until.is_some());
     }
 }

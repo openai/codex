@@ -5,4 +5,4 @@
 /**
  * EXPERIMENTAL - emitted when thread realtime startup is accepted.
  */
-export type ThreadRealtimeStartedNotification = { threadId: string, sessionId: string | null, };
+export type ThreadRealtimeStartedNotification = { threadId: string, sessionId: string | null, version: string, };

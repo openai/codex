@@ -1628,6 +1628,7 @@ mod tests {
             ServerNotification::ThreadRealtimeStarted(v2::ThreadRealtimeStartedNotification {
                 thread_id: "thr_123".to_string(),
                 session_id: Some("sess_456".to_string()),
+                version: "v1".to_string(),
             });
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&notification);
         assert_eq!(reason, Some("thread/realtime/started"));

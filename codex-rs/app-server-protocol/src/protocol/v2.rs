@@ -3775,6 +3775,7 @@ pub struct ThreadRealtimeStopResponse {}
 pub struct ThreadRealtimeStartedNotification {
     pub thread_id: String,
     pub session_id: Option<String>,
+    pub version: String,
 }
 
 /// EXPERIMENTAL - raw non-audio thread realtime item emitted by the backend.

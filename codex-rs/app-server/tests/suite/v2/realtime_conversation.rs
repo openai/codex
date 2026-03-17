@@ -115,6 +115,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             .await?;
     assert_eq!(started.thread_id, thread_start.thread.id);
     assert!(started.session_id.is_some());
+    assert_eq!(started.version, "v1");
 
     let startup_context_request = realtime_server.wait_for_request(0, 0).await;
     assert_eq!(

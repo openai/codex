@@ -12925,10 +12925,14 @@
           },
           "threadId": {
             "type": "string"
+          },
+          "version": {
+            "type": "string"
           }
         },
         "required": [
-          "threadId"
+          "threadId",
+          "version"
         ],
         "title": "ThreadRealtimeStartedNotification",
         "type": "object"
