@@ -64,6 +64,33 @@ pub fn thread_manager_with_models_provider_and_home(
     ThreadManager::with_models_provider_and_home_for_tests(auth, provider, codex_home)
 }
 
+pub async fn start_thread_with_user_shell_override(
+    thread_manager: &ThreadManager,
+    config: Config,
+    user_shell_override: crate::shell::Shell,
+) -> crate::error::Result<crate::NewThread> {
+    thread_manager
+        .start_thread_with_user_shell_override_for_tests(config, user_shell_override)
+        .await
+}
+
+pub async fn resume_thread_from_rollout_with_user_shell_override(
+    thread_manager: &ThreadManager,
+    config: Config,
+    rollout_path: PathBuf,
+    auth_manager: Arc<AuthManager>,
+    user_shell_override: crate::shell::Shell,
+) -> crate::error::Result<crate::NewThread> {
+    thread_manager
+        .resume_thread_from_rollout_with_user_shell_override_for_tests(
+            config,
+            rollout_path,
+            auth_manager,
+            user_shell_override,
+        )
+        .await
+}
+
 pub fn models_manager_with_provider(
     codex_home: PathBuf,
     auth_manager: Arc<AuthManager>,

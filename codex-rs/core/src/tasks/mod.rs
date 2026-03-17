@@ -384,7 +384,6 @@ impl Session {
         turn.add_task(task);
         *active = Some(turn);
     }
-
     async fn take_active_turn(&self) -> Option<ActiveTurn> {
         let mut active = self.active_turn.lock().await;
         active.take()

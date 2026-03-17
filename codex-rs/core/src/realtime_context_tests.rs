@@ -26,6 +26,8 @@ fn thread_metadata(cwd: &str, title: &str, first_user_message: &str) -> ThreadMe
         agent_nickname: None,
         agent_role: None,
         model_provider: "test-provider".to_string(),
+        model: Some("gpt-5".to_string()),
+        reasoning_effort: None,
         cwd: PathBuf::from(cwd),
         cli_version: "test".to_string(),
         title: title.to_string(),

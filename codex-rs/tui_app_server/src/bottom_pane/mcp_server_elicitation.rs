@@ -149,7 +149,7 @@ pub(crate) struct ToolSuggestionRequest {
     pub(crate) suggest_reason: String,
     pub(crate) tool_id: String,
     pub(crate) tool_name: String,
-    pub(crate) install_url: String,
+    pub(crate) install_url: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -373,8 +373,8 @@ fn parse_tool_suggestion_request(meta: Option<&Value>) -> Option<ToolSuggestionR
         tool_name: meta.get(TOOL_NAME_KEY).and_then(Value::as_str)?.to_string(),
         install_url: meta
             .get(TOOL_SUGGEST_INSTALL_URL_KEY)
-            .and_then(Value::as_str)?
-            .to_string(),
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
     })
 }
 
@@ -1939,7 +1939,39 @@ mod tests {
                 suggest_reason: "Plan and reference events from your calendar".to_string(),
                 tool_id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
                 tool_name: "Google Calendar".to_string(),
-                install_url: "https://example.test/google-calendar".to_string(),
+                install_url: Some("https://example.test/google-calendar".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn plugin_tool_suggestion_meta_without_install_url_is_parsed_into_request_payload() {
+        let request = McpServerElicitationFormRequest::from_event(
+            ThreadId::default(),
+            form_request(
+                "Suggest Slack",
+                empty_object_schema(),
+                Some(serde_json::json!({
+                    "codex_approval_kind": "tool_suggestion",
+                    "tool_type": "plugin",
+                    "suggest_type": "install",
+                    "suggest_reason": "Install the Slack plugin to search messages",
+                    "tool_id": "slack@openai-curated",
+                    "tool_name": "Slack",
+                })),
+            ),
+        )
+        .expect("expected tool suggestion form");
+
+        assert_eq!(
+            request.tool_suggestion(),
+            Some(&ToolSuggestionRequest {
+                tool_type: ToolSuggestionToolType::Plugin,
+                suggest_type: ToolSuggestionType::Install,
+                suggest_reason: "Install the Slack plugin to search messages".to_string(),
+                tool_id: "slack@openai-curated".to_string(),
+                tool_name: "Slack".to_string(),
+                install_url: None,
             })
         );
     }

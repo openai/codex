@@ -877,6 +877,12 @@
           "description": "Whether this provider supports the Responses API WebSocket transport.",
           "type": "boolean"
         },
+        "websocket_connect_timeout_ms": {
+          "description": "Maximum time (in milliseconds) to wait for a websocket connection attempt before treating it as failed.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "wire_api": {
           "allOf": [
             {

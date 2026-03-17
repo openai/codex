@@ -15,6 +15,7 @@ use crate::exec::ExecToolCallOutput;
 use crate::exec::StreamOutput;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
+use crate::packages::versions;
 use crate::protocol::ExecCommandSource;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -28,7 +29,6 @@ use crate::tools::registry::ToolKind;
 
 const ARTIFACTS_TOOL_NAME: &str = "artifacts";
 const ARTIFACTS_PRAGMA_PREFIXES: [&str; 2] = ["// codex-artifacts:", "// codex-artifact-tool:"];
-pub(crate) const PINNED_ARTIFACT_RUNTIME_VERSION: &str = "2.4.0";
 const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct ArtifactsHandler;
@@ -216,7 +216,7 @@ fn parse_pragma_prefix(line: &str) -> Option<&str> {
 fn default_runtime_manager(codex_home: std::path::PathBuf) -> ArtifactRuntimeManager {
     ArtifactRuntimeManager::new(ArtifactRuntimeManagerConfig::with_default_release(
         codex_home,
-        PINNED_ARTIFACT_RUNTIME_VERSION,
+        versions::ARTIFACT_RUNTIME,
     ))
 }
 
