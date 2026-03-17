@@ -271,6 +271,7 @@ use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
 use codex_state::StateRuntime;
+use codex_state::ThreadMetadata;
 use codex_state::ThreadMetadataBuilder;
 use codex_state::log_db::LogDbLayer;
 use codex_utils_json_to_toml::json_to_toml;
@@ -3387,30 +3388,13 @@ impl CodexMessageProcessor {
             developer_instructions,
             personality,
         );
-        let should_use_persisted_model = typesafe_overrides.model.is_none();
-        let should_use_persisted_reasoning_effort = !request_overrides
-            .as_ref()
-            .is_some_and(|overrides| overrides.contains_key("model_reasoning_effort"));
-        if (should_use_persisted_model || should_use_persisted_reasoning_effort)
-            && let codex_protocol::protocol::InitialHistory::Resumed(resumed_history) =
-                &thread_history
-            && let Some(state_db_ctx) = get_state_db(&self.config).await
-            && let Ok(Some(metadata)) = state_db_ctx
-                .get_thread(resumed_history.conversation_id)
-                .await
-        {
-            if should_use_persisted_model && let Some(model) = metadata.model {
-                typesafe_overrides.model = Some(model);
-            }
-            if should_use_persisted_reasoning_effort
-                && let Some(reasoning_effort) = metadata.reasoning_effort
-            {
-                request_overrides.get_or_insert_with(HashMap::new).insert(
-                    "model_reasoning_effort".to_string(),
-                    serde_json::Value::String(reasoning_effort.to_string()),
-                );
-            }
-        }
+        let persisted_resume_metadata = self
+            .load_and_apply_persisted_resume_metadata(
+                &thread_history,
+                &mut request_overrides,
+                &mut typesafe_overrides,
+            )
+            .await;
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let cloud_requirements = self.current_cloud_requirements();
@@ -3474,18 +3458,22 @@ impl CodexMessageProcessor {
                     "thread",
                 );
 
-                let Some(mut thread) = self
+                let mut thread = match self
                     .load_thread_from_resume_source_or_send_internal(
-                        request_id.clone(),
                         thread_id,
                         thread.as_ref(),
                         &response_history,
                         rollout_path.as_path(),
                         fallback_model_provider.as_str(),
+                        persisted_resume_metadata.as_ref(),
                     )
                     .await
-                else {
-                    return;
+                {
+                    Ok(thread) => thread,
+                    Err(message) => {
+                        self.send_internal_error(request_id, message).await;
+                        return;
+                    }
                 };
 
                 self.thread_watch_manager
@@ -3526,6 +3514,25 @@ impl CodexMessageProcessor {
                 self.outgoing.send_error(request_id, error).await;
             }
         }
+    }
+
+    async fn load_and_apply_persisted_resume_metadata(
+        &self,
+        thread_history: &InitialHistory,
+        request_overrides: &mut Option<HashMap<String, serde_json::Value>>,
+        typesafe_overrides: &mut ConfigOverrides,
+    ) -> Option<ThreadMetadata> {
+        let InitialHistory::Resumed(resumed_history) = thread_history else {
+            return None;
+        };
+        let state_db_ctx = get_state_db(&self.config).await?;
+        let persisted_metadata = state_db_ctx
+            .get_thread(resumed_history.conversation_id)
+            .await
+            .ok()
+            .flatten()?;
+        merge_persisted_resume_metadata(request_overrides, typesafe_overrides, &persisted_metadata);
+        Some(persisted_metadata)
     }
 
     async fn resume_running_thread(
@@ -3644,6 +3651,7 @@ impl CodexMessageProcessor {
                 existing_thread_id,
                 rollout_path.as_path(),
                 config_snapshot.model_provider_id.as_str(),
+                /*persisted_metadata*/ None,
             )
             .await
             {
@@ -3775,13 +3783,13 @@ impl CodexMessageProcessor {
 
     async fn load_thread_from_resume_source_or_send_internal(
         &self,
-        request_id: ConnectionRequestId,
         thread_id: ThreadId,
         thread: &CodexThread,
         thread_history: &InitialHistory,
         rollout_path: &Path,
         fallback_provider: &str,
-    ) -> Option<Thread> {
+        persisted_resume_metadata: Option<&ThreadMetadata>,
+    ) -> std::result::Result<Thread, String> {
         let thread = match thread_history {
             InitialHistory::Resumed(resumed) => {
                 load_thread_summary_for_rollout(
@@ -3789,6 +3797,7 @@ impl CodexMessageProcessor {
                     resumed.conversation_id,
                     resumed.rollout_path.as_path(),
                     fallback_provider,
+                    persisted_resume_metadata,
                 )
                 .await
             }
@@ -3806,28 +3815,18 @@ impl CodexMessageProcessor {
                 "failed to build resume response for thread {thread_id}: initial history missing"
             )),
         };
-        let mut thread = match thread {
-            Ok(thread) => thread,
-            Err(message) => {
-                self.send_internal_error(request_id, message).await;
-                return None;
-            }
-        };
+        let mut thread = thread?;
         thread.id = thread_id.to_string();
         thread.path = Some(rollout_path.to_path_buf());
         let history_items = thread_history.get_rollout_items();
-        if let Err(message) = populate_thread_turns(
+        populate_thread_turns(
             &mut thread,
             ThreadTurnSource::HistoryItems(&history_items),
             /*active_turn*/ None,
         )
-        .await
-        {
-            self.send_internal_error(request_id, message).await;
-            return None;
-        }
+        .await?;
         self.attach_thread_name(thread_id, &mut thread).await;
-        Some(thread)
+        Ok(thread)
     }
 
     async fn attach_thread_name(&self, thread_id: ThreadId, thread: &mut Thread) {
@@ -7437,6 +7436,26 @@ fn collect_resume_override_mismatches(
     mismatch_details
 }
 
+fn merge_persisted_resume_metadata(
+    request_overrides: &mut Option<HashMap<String, serde_json::Value>>,
+    typesafe_overrides: &mut ConfigOverrides,
+    persisted_metadata: &ThreadMetadata,
+) {
+    if typesafe_overrides.model.is_none() {
+        typesafe_overrides.model = persisted_metadata.model.clone();
+    }
+    if !request_overrides
+        .as_ref()
+        .is_some_and(|overrides| overrides.contains_key("model_reasoning_effort"))
+        && let Some(reasoning_effort) = persisted_metadata.reasoning_effort
+    {
+        request_overrides.get_or_insert_with(HashMap::new).insert(
+            "model_reasoning_effort".to_string(),
+            serde_json::Value::String(reasoning_effort.to_string()),
+        );
+    }
+}
+
 fn skills_to_info(
     skills: &[codex_core::skills::SkillMetadata],
     disabled_paths: &std::collections::HashSet<PathBuf>,
@@ -7751,26 +7770,7 @@ async fn read_summary_from_state_db_context_by_thread_id(
         Ok(Some(metadata)) => metadata,
         Ok(None) | Err(_) => return None,
     };
-    Some(summary_from_state_db_metadata(
-        metadata.id,
-        metadata.rollout_path,
-        metadata.first_user_message,
-        metadata
-            .created_at
-            .to_rfc3339_opts(SecondsFormat::Secs, true),
-        metadata
-            .updated_at
-            .to_rfc3339_opts(SecondsFormat::Secs, true),
-        metadata.model_provider,
-        metadata.cwd,
-        metadata.cli_version,
-        metadata.source,
-        metadata.agent_nickname,
-        metadata.agent_role,
-        metadata.git_sha,
-        metadata.git_branch,
-        metadata.git_origin_url,
-    ))
+    Some(summary_from_thread_metadata(&metadata))
 }
 
 async fn summary_from_thread_list_item(
@@ -7879,6 +7879,29 @@ fn summary_from_state_db_metadata(
         source,
         git_info,
     }
+}
+
+fn summary_from_thread_metadata(metadata: &ThreadMetadata) -> ConversationSummary {
+    summary_from_state_db_metadata(
+        metadata.id,
+        metadata.rollout_path.clone(),
+        metadata.first_user_message.clone(),
+        metadata
+            .created_at
+            .to_rfc3339_opts(SecondsFormat::Secs, true),
+        metadata
+            .updated_at
+            .to_rfc3339_opts(SecondsFormat::Secs, true),
+        metadata.model_provider.clone(),
+        metadata.cwd.clone(),
+        metadata.cli_version.clone(),
+        metadata.source.clone(),
+        metadata.agent_nickname.clone(),
+        metadata.agent_role.clone(),
+        metadata.git_sha.clone(),
+        metadata.git_branch.clone(),
+        metadata.git_origin_url.clone(),
+    )
 }
 
 pub(crate) async fn read_summary_from_rollout(
@@ -8028,6 +8051,7 @@ async fn load_thread_summary_for_rollout(
     thread_id: ThreadId,
     rollout_path: &Path,
     fallback_provider: &str,
+    persisted_metadata: Option<&ThreadMetadata>,
 ) -> std::result::Result<Thread, String> {
     let mut thread = read_summary_from_rollout(rollout_path, fallback_provider)
         .await
@@ -8038,7 +8062,12 @@ async fn load_thread_summary_for_rollout(
                 rollout_path.display()
             )
         })?;
-    if let Some(summary) = read_summary_from_state_db_by_thread_id(config, thread_id).await {
+    if let Some(persisted_metadata) = persisted_metadata {
+        merge_mutable_thread_metadata(
+            &mut thread,
+            summary_to_thread(summary_from_thread_metadata(persisted_metadata)),
+        );
+    } else if let Some(summary) = read_summary_from_state_db_by_thread_id(config, thread_id).await {
         merge_mutable_thread_metadata(&mut thread, summary_to_thread(summary));
     }
     Ok(thread)
@@ -8190,6 +8219,7 @@ mod tests {
     use anyhow::Result;
     use codex_app_server_protocol::ServerRequestPayload;
     use codex_app_server_protocol::ToolRequestUserInputParams;
+    use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
     use pretty_assertions::assert_eq;
@@ -8319,6 +8349,99 @@ mod tests {
             collect_resume_override_mismatches(&request, &config_snapshot),
             vec!["service_tier requested=Some(Fast) active=Some(Flex)".to_string()]
         );
+    }
+
+    fn test_thread_metadata(
+        model: Option<&str>,
+        reasoning_effort: Option<ReasoningEffort>,
+    ) -> Result<ThreadMetadata> {
+        let thread_id = ThreadId::from_string("3f941c35-29b3-493b-b0a4-e25800d9aeb0")?;
+        let mut builder = ThreadMetadataBuilder::new(
+            thread_id,
+            PathBuf::from("/tmp/rollout.jsonl"),
+            Utc::now(),
+            codex_protocol::protocol::SessionSource::default(),
+        );
+        builder.model_provider = Some("mock_provider".to_string());
+        let mut metadata = builder.build("mock_provider");
+        metadata.model = model.map(ToString::to_string);
+        metadata.reasoning_effort = reasoning_effort;
+        Ok(metadata)
+    }
+
+    #[test]
+    fn merge_persisted_resume_metadata_prefers_persisted_model_and_reasoning_effort() -> Result<()>
+    {
+        let mut request_overrides = None;
+        let mut typesafe_overrides = ConfigOverrides::default();
+        let persisted_metadata =
+            test_thread_metadata(Some("gpt-5.1-codex-max"), Some(ReasoningEffort::High))?;
+
+        merge_persisted_resume_metadata(
+            &mut request_overrides,
+            &mut typesafe_overrides,
+            &persisted_metadata,
+        );
+
+        assert_eq!(
+            typesafe_overrides.model,
+            Some("gpt-5.1-codex-max".to_string())
+        );
+        assert_eq!(
+            request_overrides,
+            Some(HashMap::from([(
+                "model_reasoning_effort".to_string(),
+                serde_json::Value::String("high".to_string()),
+            )]))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn merge_persisted_resume_metadata_preserves_explicit_overrides() -> Result<()> {
+        let mut request_overrides = Some(HashMap::from([(
+            "model_reasoning_effort".to_string(),
+            serde_json::Value::String("low".to_string()),
+        )]));
+        let mut typesafe_overrides = ConfigOverrides {
+            model: Some("gpt-5.2-codex".to_string()),
+            ..Default::default()
+        };
+        let persisted_metadata =
+            test_thread_metadata(Some("gpt-5.1-codex-max"), Some(ReasoningEffort::High))?;
+
+        merge_persisted_resume_metadata(
+            &mut request_overrides,
+            &mut typesafe_overrides,
+            &persisted_metadata,
+        );
+
+        assert_eq!(typesafe_overrides.model, Some("gpt-5.2-codex".to_string()));
+        assert_eq!(
+            request_overrides,
+            Some(HashMap::from([(
+                "model_reasoning_effort".to_string(),
+                serde_json::Value::String("low".to_string()),
+            )]))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn merge_persisted_resume_metadata_skips_missing_values() -> Result<()> {
+        let mut request_overrides = None;
+        let mut typesafe_overrides = ConfigOverrides::default();
+        let persisted_metadata = test_thread_metadata(None, None)?;
+
+        merge_persisted_resume_metadata(
+            &mut request_overrides,
+            &mut typesafe_overrides,
+            &persisted_metadata,
+        );
+
+        assert_eq!(typesafe_overrides.model, None);
+        assert_eq!(request_overrides, None);
+        Ok(())
     }
 
     #[test]

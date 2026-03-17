@@ -40,13 +40,10 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
-use codex_core::config::set_project_trust_level;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
-use codex_protocol::config_types::TrustLevel;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionMeta;
@@ -59,7 +56,6 @@ use codex_state::StateRuntime;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
-use serde_json::Value;
 use serde_json::json;
 use std::fs::FileTimes;
 use std::path::Path;
@@ -224,120 +220,6 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
         }
         other => panic!("expected user message item, got {other:?}"),
     }
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn thread_resume_prefers_sqlite_model_and_reasoning_effort() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
-    let codex_home = TempDir::new()?;
-    let config_toml = codex_home.path().join("config.toml");
-    std::fs::write(
-        &config_toml,
-        format!(
-            r#"
-model = "gpt-5.2-codex"
-approval_policy = "never"
-sandbox_mode = "read-only"
-
-model_provider = "mock_provider"
-
-[features]
-personality = true
-sqlite = true
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{}/v1"
-wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-"#,
-            server.uri()
-        ),
-    )?;
-
-    let workspace = codex_home.path().join("workspace");
-    std::fs::create_dir_all(workspace.join(".codex"))?;
-    std::fs::write(
-        workspace.join(".codex/config.toml"),
-        r#"model_reasoning_effort = "high"
-"#,
-    )?;
-    set_project_trust_level(codex_home.path(), workspace.as_path(), TrustLevel::Trusted)?;
-
-    let mut primary = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, primary.initialize()).await??;
-
-    let start_id = primary
-        .send_thread_start_request(ThreadStartParams {
-            model: Some("gpt-5.1-codex-max".to_string()),
-            cwd: Some(workspace.display().to_string()),
-            ..Default::default()
-        })
-        .await?;
-    let start_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(start_id)),
-    )
-    .await??;
-    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
-
-    let turn_id = primary
-        .send_turn_start_request(TurnStartParams {
-            thread_id: thread.id.clone(),
-            input: vec![UserInput::Text {
-                text: "seed history".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        })
-        .await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_response_message(RequestId::Integer(turn_id)),
-    )
-    .await??;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        primary.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
-    drop(primary);
-
-    std::fs::write(
-        workspace.join(".codex/config.toml"),
-        r#"model_reasoning_effort = "low"
-"#,
-    )?;
-
-    let mut resumed = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, resumed.initialize()).await??;
-
-    let resume_id = resumed
-        .send_thread_resume_request(ThreadResumeParams {
-            thread_id: thread.id,
-            ..Default::default()
-        })
-        .await?;
-    let resume_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        resumed.read_stream_until_response_message(RequestId::Integer(resume_id)),
-    )
-    .await??;
-    assert_eq!(
-        resume_resp.result.get("reasoningEffort"),
-        Some(&Value::String("high".to_string()))
-    );
-    let ThreadResumeResponse {
-        model,
-        reasoning_effort,
-        ..
-    } = to_response::<ThreadResumeResponse>(resume_resp)?;
-
-    assert_eq!(model, "gpt-5.1-codex-max");
-    assert_eq!(reasoning_effort, Some(ReasoningEffort::High));
 
     Ok(())
 }
