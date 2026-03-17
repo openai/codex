@@ -316,7 +316,11 @@ fn server_notification_thread_events(
         ServerNotification::TurnCompleted(notification) => {
             let thread_id = ThreadId::from_string(&notification.thread_id).ok()?;
             let mut events = Vec::new();
-            append_terminal_turn_events(&mut events, &notification.turn);
+            append_terminal_turn_events(
+                &mut events,
+                &notification.turn,
+                /*include_failed_error*/ false,
+            );
             Some((thread_id, events))
         }
         ServerNotification::ItemStarted(notification) => Some((
@@ -469,7 +473,7 @@ fn turn_snapshot_events(thread_id: ThreadId, turn: &Turn) -> Vec<Event> {
         })
     }));
 
-    append_terminal_turn_events(&mut events, turn);
+    append_terminal_turn_events(&mut events, turn, /*include_failed_error*/ true);
 
     events
 }
@@ -484,7 +488,7 @@ fn turn_snapshot_events(thread_id: ThreadId, turn: &Turn) -> Vec<Event> {
 /// - `Interrupted` → `TurnAborted { reason: Interrupted }`
 /// - `Failed` → `Error` (if present) then `TurnComplete`
 /// - `InProgress` → no events (the turn is still running)
-fn append_terminal_turn_events(events: &mut Vec<Event>, turn: &Turn) {
+fn append_terminal_turn_events(events: &mut Vec<Event>, turn: &Turn, include_failed_error: bool) {
     match turn.status {
         TurnStatus::Completed => events.push(Event {
             id: String::new(),
@@ -501,7 +505,7 @@ fn append_terminal_turn_events(events: &mut Vec<Event>, turn: &Turn) {
             }),
         }),
         TurnStatus::Failed => {
-            if let Some(error) = &turn.error {
+            if include_failed_error && let Some(error) = &turn.error {
                 events.push(Event {
                     id: String::new(),
                     msg: EventMsg::Error(ErrorEvent {
@@ -785,17 +789,9 @@ mod tests {
             actual_thread_id,
             ThreadId::from_string(&thread_id).expect("valid thread id")
         );
-        let [error_event, complete_event] = events.as_slice() else {
-            panic!("expected error and completion events");
+        let [complete_event] = events.as_slice() else {
+            panic!("expected turn completion only");
         };
-        let EventMsg::Error(error) = &error_event.msg else {
-            panic!("expected error event");
-        };
-        assert_eq!(error.message, "request failed");
-        assert_eq!(
-            error.codex_error_info,
-            Some(codex_protocol::protocol::CodexErrorInfo::Other)
-        );
         let EventMsg::TurnComplete(completed) = &complete_event.msg else {
             panic!("expected turn complete event");
         };
@@ -890,10 +886,20 @@ mod tests {
                     status: TurnStatus::Interrupted,
                     error: None,
                 },
+                Turn {
+                    id: "turn-failed".to_string(),
+                    items: Vec::new(),
+                    status: TurnStatus::Failed,
+                    error: Some(TurnError {
+                        message: "request failed".to_string(),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                        additional_details: None,
+                    }),
+                },
             ],
         });
 
-        assert_eq!(events.len(), 6);
+        assert_eq!(events.len(), 9);
         assert!(matches!(events[0].msg, EventMsg::TurnStarted(_)));
         assert!(matches!(events[1].msg, EventMsg::ItemCompleted(_)));
         assert!(matches!(events[2].msg, EventMsg::ItemCompleted(_)));
@@ -904,5 +910,15 @@ mod tests {
         };
         assert_eq!(turn_id.as_deref(), Some("turn-interrupted"));
         assert_eq!(*reason, TurnAbortReason::Interrupted);
+        assert!(matches!(events[6].msg, EventMsg::TurnStarted(_)));
+        let EventMsg::Error(error) = &events[7].msg else {
+            panic!("expected failed turn error replay");
+        };
+        assert_eq!(error.message, "request failed");
+        assert_eq!(
+            error.codex_error_info,
+            Some(codex_protocol::protocol::CodexErrorInfo::Other)
+        );
+        assert!(matches!(events[8].msg, EventMsg::TurnComplete(_)));
     }
 }
