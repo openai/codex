@@ -11,6 +11,20 @@ V8_STATIC_LIBRARY_FEATURES = [
     "-validate-static-library",
 ]
 
+LLVM_AR_TOOLS = [
+    "@llvm//tools:llvm-ar",
+    "@llvm//tools:llvm-ranlib",
+]
+
+CARGO_READY_RUNTIME_LIBS = [
+    "@llvm//runtimes/libcxx:libcxx.static",
+    "@llvm//runtimes/libcxx:libcxxabi.static",
+    "@llvm//runtimes/libunwind:libunwind.static",
+]
+
+# The released archive is consumed by Cargo outside Bazel, so we merge in the
+# LLVM C++ runtime pieces we know our downstream usage expects.
+
 genrule(
     name = "binding_cc",
     srcs = ["@v8_crate_146_4_0//:binding_cc"],
@@ -57,15 +71,59 @@ cc_static_library(
 )
 
 cc_static_library(
-    name = "v8_146_4_0_aarch64_unknown_linux_gnu",
+    name = "v8_146_4_0_aarch64_unknown_linux_gnu_base",
     deps = [":v8_146_4_0_binding"],
     features = V8_STATIC_LIBRARY_FEATURES,
 )
 
+genrule(
+    name = "v8_146_4_0_aarch64_unknown_linux_gnu",
+    srcs = [
+        ":v8_146_4_0_aarch64_unknown_linux_gnu_base",
+    ] + CARGO_READY_RUNTIME_LIBS,
+    tools = LLVM_AR_TOOLS,
+    outs = ["libv8_146_4_0_aarch64_unknown_linux_gnu.a"],
+    cmd = """
+      cat > "$(@D)/merge.mri" <<'EOF'
+create $@
+addlib $(location :v8_146_4_0_aarch64_unknown_linux_gnu_base)
+addlib $(location @llvm//runtimes/libcxx:libcxx.static)
+addlib $(location @llvm//runtimes/libcxx:libcxxabi.static)
+addlib $(location @llvm//runtimes/libunwind:libunwind.static)
+save
+end
+EOF
+      $(location @llvm//tools:llvm-ar) -M < "$(@D)/merge.mri"
+      $(location @llvm//tools:llvm-ranlib) "$@"
+    """,
+)
+
 cc_static_library(
-    name = "v8_146_4_0_x86_64_unknown_linux_gnu",
+    name = "v8_146_4_0_x86_64_unknown_linux_gnu_base",
     deps = [":v8_146_4_0_binding"],
     features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+genrule(
+    name = "v8_146_4_0_x86_64_unknown_linux_gnu",
+    srcs = [
+        ":v8_146_4_0_x86_64_unknown_linux_gnu_base",
+    ] + CARGO_READY_RUNTIME_LIBS,
+    tools = LLVM_AR_TOOLS,
+    outs = ["libv8_146_4_0_x86_64_unknown_linux_gnu.a"],
+    cmd = """
+      cat > "$(@D)/merge.mri" <<'EOF'
+create $@
+addlib $(location :v8_146_4_0_x86_64_unknown_linux_gnu_base)
+addlib $(location @llvm//runtimes/libcxx:libcxx.static)
+addlib $(location @llvm//runtimes/libcxx:libcxxabi.static)
+addlib $(location @llvm//runtimes/libunwind:libunwind.static)
+save
+end
+EOF
+      $(location @llvm//tools:llvm-ar) -M < "$(@D)/merge.mri"
+      $(location @llvm//tools:llvm-ranlib) "$@"
+    """,
 )
 
 cc_static_library(
@@ -79,17 +137,17 @@ genrule(
     srcs = [
         ":v8_146_4_0_aarch64_unknown_linux_musl_base",
         "@llvm//runtimes/compiler-rt:clang_rt.builtins.static",
-    ],
-    tools = [
-        "@llvm//tools:llvm-ar",
-        "@llvm//tools:llvm-ranlib",
-    ],
+    ] + CARGO_READY_RUNTIME_LIBS,
+    tools = LLVM_AR_TOOLS,
     outs = ["libv8_146_4_0_aarch64_unknown_linux_musl.a"],
     cmd = """
       cat > "$(@D)/merge.mri" <<'EOF'
 create $@
 addlib $(location :v8_146_4_0_aarch64_unknown_linux_musl_base)
 addlib $(location @llvm//runtimes/compiler-rt:clang_rt.builtins.static)
+addlib $(location @llvm//runtimes/libcxx:libcxx.static)
+addlib $(location @llvm//runtimes/libcxx:libcxxabi.static)
+addlib $(location @llvm//runtimes/libunwind:libunwind.static)
 save
 end
 EOF
@@ -99,21 +157,89 @@ EOF
 )
 
 cc_static_library(
+    name = "v8_146_4_0_x86_64_unknown_linux_musl_base",
+    deps = [":v8_146_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+genrule(
     name = "v8_146_4_0_x86_64_unknown_linux_musl",
+    srcs = [
+        ":v8_146_4_0_x86_64_unknown_linux_musl_base",
+        "@llvm//runtimes/compiler-rt:clang_rt.builtins.static",
+    ] + CARGO_READY_RUNTIME_LIBS,
+    tools = LLVM_AR_TOOLS,
+    outs = ["libv8_146_4_0_x86_64_unknown_linux_musl.a"],
+    cmd = """
+      cat > "$(@D)/merge.mri" <<'EOF'
+create $@
+addlib $(location :v8_146_4_0_x86_64_unknown_linux_musl_base)
+addlib $(location @llvm//runtimes/compiler-rt:clang_rt.builtins.static)
+addlib $(location @llvm//runtimes/libcxx:libcxx.static)
+addlib $(location @llvm//runtimes/libcxx:libcxxabi.static)
+addlib $(location @llvm//runtimes/libunwind:libunwind.static)
+save
+end
+EOF
+      $(location @llvm//tools:llvm-ar) -M < "$(@D)/merge.mri"
+      $(location @llvm//tools:llvm-ranlib) "$@"
+    """,
+)
+
+cc_static_library(
+    name = "v8_146_4_0_aarch64_pc_windows_gnullvm_base",
     deps = [":v8_146_4_0_binding"],
     features = V8_STATIC_LIBRARY_FEATURES,
 )
 
-cc_static_library(
+genrule(
     name = "v8_146_4_0_aarch64_pc_windows_gnullvm",
+    srcs = [
+        ":v8_146_4_0_aarch64_pc_windows_gnullvm_base",
+    ] + CARGO_READY_RUNTIME_LIBS,
+    tools = LLVM_AR_TOOLS,
+    outs = ["libv8_146_4_0_aarch64_pc_windows_gnullvm.a"],
+    cmd = """
+      cat > "$(@D)/merge.mri" <<'EOF'
+create $@
+addlib $(location :v8_146_4_0_aarch64_pc_windows_gnullvm_base)
+addlib $(location @llvm//runtimes/libcxx:libcxx.static)
+addlib $(location @llvm//runtimes/libcxx:libcxxabi.static)
+addlib $(location @llvm//runtimes/libunwind:libunwind.static)
+save
+end
+EOF
+      $(location @llvm//tools:llvm-ar) -M < "$(@D)/merge.mri"
+      $(location @llvm//tools:llvm-ranlib) "$@"
+    """,
+)
+
+cc_static_library(
+    name = "v8_146_4_0_x86_64_pc_windows_gnullvm_base",
     deps = [":v8_146_4_0_binding"],
     features = V8_STATIC_LIBRARY_FEATURES,
 )
 
-cc_static_library(
+genrule(
     name = "v8_146_4_0_x86_64_pc_windows_gnullvm",
-    deps = [":v8_146_4_0_binding"],
-    features = V8_STATIC_LIBRARY_FEATURES,
+    srcs = [
+        ":v8_146_4_0_x86_64_pc_windows_gnullvm_base",
+    ] + CARGO_READY_RUNTIME_LIBS,
+    tools = LLVM_AR_TOOLS,
+    outs = ["libv8_146_4_0_x86_64_pc_windows_gnullvm.a"],
+    cmd = """
+      cat > "$(@D)/merge.mri" <<'EOF'
+create $@
+addlib $(location :v8_146_4_0_x86_64_pc_windows_gnullvm_base)
+addlib $(location @llvm//runtimes/libcxx:libcxx.static)
+addlib $(location @llvm//runtimes/libcxx:libcxxabi.static)
+addlib $(location @llvm//runtimes/libunwind:libunwind.static)
+save
+end
+EOF
+      $(location @llvm//tools:llvm-ar) -M < "$(@D)/merge.mri"
+      $(location @llvm//tools:llvm-ranlib) "$@"
+    """,
 )
 
 filegroup(
