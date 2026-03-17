@@ -519,11 +519,10 @@ fn build_auth_status_observation(
     refresh_token_requested: bool,
 ) -> AppServerAuthStatusObservation {
     let requires_openai_auth = response.requires_openai_auth.unwrap_or(true);
-    let auth_token_present = response.auth_method.is_some()
-        || response
-            .auth_token
-            .as_ref()
-            .is_some_and(|token| !token.is_empty());
+    let auth_token_present = response
+        .auth_token
+        .as_ref()
+        .is_some_and(|token| !token.is_empty());
     let decision_state = if !requires_openai_auth || auth_token_present {
         "connected"
     } else {
@@ -8852,6 +8851,24 @@ mod tests {
         assert_eq!(observation.decision_state, "connected");
         assert_eq!(observation.auth_method, "none");
         assert_eq!(observation.requires_openai_auth, false);
+    }
+
+    #[test]
+    fn build_auth_status_observation_requires_real_token_for_auth_token_present() {
+        let observation = build_auth_status_observation(
+            "openai",
+            &GetAuthStatusResponse {
+                auth_method: Some(AuthMode::Chatgpt),
+                auth_token: None,
+                requires_openai_auth: Some(true),
+            },
+            false,
+            false,
+        );
+
+        assert_eq!(observation.auth_method, "chatgpt");
+        assert!(!observation.auth_token_present);
+        assert_eq!(observation.decision_state, "unauthed");
     }
 
     #[test]
