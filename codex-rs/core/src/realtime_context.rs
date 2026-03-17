@@ -1,11 +1,11 @@
 use crate::codex::Session;
+use crate::compact::content_items_to_text;
+use crate::event_mapping::is_contextual_user_message_content;
 use crate::git_info::resolve_root_git_project_for_trust;
-use crate::guardian::GuardianTranscriptEntry;
-use crate::guardian::GuardianTranscriptEntryKind;
-use crate::guardian::collect_transcript_entries;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
 use chrono::Utc;
+use codex_protocol::models::ResponseItem;
 use codex_state::SortKey;
 use codex_state::ThreadMetadata;
 use dirs::home_dir;
@@ -55,8 +55,7 @@ pub(crate) async fn build_realtime_startup_context(
     let config = sess.get_config().await;
     let cwd = config.cwd.clone();
     let history = sess.clone_history().await;
-    let transcript_entries = collect_transcript_entries(history.raw_items());
-    let current_thread_section = build_recent_turns_section(transcript_entries.as_slice());
+    let current_thread_section = build_current_thread_section(history.raw_items());
     let recent_threads = load_recent_threads(sess).await;
     let recent_work_section = build_recent_work_section(&cwd, &recent_threads);
     let workspace_section = build_workspace_section_with_user_root(&cwd, home_dir());
@@ -187,31 +186,44 @@ fn build_recent_work_section(cwd: &Path, recent_threads: &[ThreadMetadata]) -> O
     (!sections.is_empty()).then(|| sections.join("\n\n"))
 }
 
-fn build_recent_turns_section(entries: &[GuardianTranscriptEntry]) -> Option<String> {
+fn build_current_thread_section(items: &[ResponseItem]) -> Option<String> {
     let mut turns = Vec::new();
     let mut current_user = Vec::new();
     let mut current_assistant = Vec::new();
 
-    for entry in entries {
-        match &entry.kind {
-            GuardianTranscriptEntryKind::User => {
-                let text = entry.text.trim();
+    for item in items {
+        match item {
+            ResponseItem::Message { role, content, .. } if role == "user" => {
+                if is_contextual_user_message_content(content) {
+                    continue;
+                }
+                let Some(text) = content_items_to_text(content)
+                    .map(|text| text.trim().to_string())
+                    .filter(|text| !text.is_empty())
+                else {
+                    continue;
+                };
                 if !current_user.is_empty() || !current_assistant.is_empty() {
                     turns.push((
                         std::mem::take(&mut current_user),
                         std::mem::take(&mut current_assistant),
                     ));
                 }
-                current_user.push(text.to_string());
+                current_user.push(text);
             }
-            GuardianTranscriptEntryKind::Assistant => {
-                let text = entry.text.trim();
+            ResponseItem::Message { role, content, .. } if role == "assistant" => {
+                let Some(text) = content_items_to_text(content)
+                    .map(|text| text.trim().to_string())
+                    .filter(|text| !text.is_empty())
+                else {
+                    continue;
+                };
                 if current_user.is_empty() && current_assistant.is_empty() {
                     continue;
                 }
-                current_assistant.push(text.to_string());
+                current_assistant.push(text);
             }
-            GuardianTranscriptEntryKind::Tool(_) => {}
+            _ => {}
         }
     }
 

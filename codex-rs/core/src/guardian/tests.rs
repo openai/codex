@@ -121,7 +121,7 @@ fn guardian_snapshot_options() -> ContextSnapshotOptions {
 }
 
 #[test]
-fn render_transcript_entries_keeps_original_numbering() {
+fn build_guardian_transcript_keeps_original_numbering() {
     let entries = [
         GuardianTranscriptEntry {
             kind: GuardianTranscriptEntryKind::User,
@@ -137,7 +137,7 @@ fn render_transcript_entries_keeps_original_numbering() {
         },
     ];
 
-    let (transcript, omission) = render_transcript_entries(&entries[..2]);
+    let (transcript, omission) = render_guardian_transcript_entries(&entries[..2]);
 
     assert_eq!(
         transcript,
@@ -150,7 +150,7 @@ fn render_transcript_entries_keeps_original_numbering() {
 }
 
 #[test]
-fn collect_transcript_entries_skips_contextual_user_messages() {
+fn collect_guardian_transcript_entries_skips_contextual_user_messages() {
     let items = vec![
         ResponseItem::Message {
             id: None,
@@ -172,7 +172,7 @@ fn collect_transcript_entries_skips_contextual_user_messages() {
         },
     ];
 
-    let entries = collect_transcript_entries(&items);
+    let entries = collect_guardian_transcript_entries(&items);
 
     assert_eq!(entries.len(), 1);
     assert_eq!(
@@ -185,7 +185,7 @@ fn collect_transcript_entries_skips_contextual_user_messages() {
 }
 
 #[test]
-fn collect_transcript_entries_includes_recent_tool_calls_and_output() {
+fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
     let items = vec![
         ResponseItem::Message {
             id: None,
@@ -220,7 +220,7 @@ fn collect_transcript_entries_includes_recent_tool_calls_and_output() {
         },
     ];
 
-    let entries = collect_transcript_entries(&items);
+    let entries = collect_guardian_transcript_entries(&items);
 
     assert_eq!(entries.len(), 4);
     assert_eq!(
@@ -444,7 +444,7 @@ fn build_guardian_transcript_reserves_separate_budget_for_tool_evidence() {
         text: repeated.clone(),
     }));
 
-    let (transcript, omission) = render_transcript_entries(&entries);
+    let (transcript, omission) = render_guardian_transcript_entries(&entries);
 
     assert!(
         transcript

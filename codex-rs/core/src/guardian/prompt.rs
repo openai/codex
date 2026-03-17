@@ -67,11 +67,11 @@ pub(crate) async fn build_guardian_prompt_items(
     request: GuardianApprovalRequest,
 ) -> serde_json::Result<Vec<UserInput>> {
     let history = session.clone_history().await;
-    let transcript_entries = collect_transcript_entries(history.raw_items());
+    let transcript_entries = collect_guardian_transcript_entries(history.raw_items());
     let planned_action_json = format_guardian_action_pretty(&request)?;
 
     let (transcript_entries, omission_note) =
-        render_transcript_entries(transcript_entries.as_slice());
+        render_guardian_transcript_entries(transcript_entries.as_slice());
     let mut items = Vec::new();
     let mut push_text = |text: String| {
         items.push(UserInput::Text {
@@ -117,7 +117,7 @@ pub(crate) async fn build_guardian_prompt_items(
 ///   conversation
 ///
 /// User messages are never dropped unless the entire transcript must be omitted.
-pub(crate) fn render_transcript_entries(
+pub(crate) fn render_guardian_transcript_entries(
     entries: &[GuardianTranscriptEntry],
 ) -> (Vec<String>, Option<String>) {
     if entries.is_empty() {
@@ -205,7 +205,9 @@ pub(crate) fn render_transcript_entries(
 /// Keep both tool calls and tool results here. The reviewer often needs the
 /// agent's exact queried path / arguments as well as the returned evidence to
 /// decide whether the pending approval is justified.
-pub(crate) fn collect_transcript_entries(items: &[ResponseItem]) -> Vec<GuardianTranscriptEntry> {
+pub(crate) fn collect_guardian_transcript_entries(
+    items: &[ResponseItem],
+) -> Vec<GuardianTranscriptEntry> {
     let mut entries = Vec::new();
     let mut tool_names_by_call_id = HashMap::new();
     let non_empty_entry = |kind, text: String| {
