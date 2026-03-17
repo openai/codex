@@ -2004,10 +2004,11 @@ impl App {
         session.thread_name = notification.thread.name.clone();
         session.model_provider_id = notification.thread.model_provider.clone();
         session.cwd = notification.thread.cwd.clone();
-        session.model =
-            read_session_model(&self.config, thread_id, notification.thread.path.as_deref())
-                .await
-                .unwrap_or_default();
+        if let Some(model) =
+            read_session_model(&self.config, thread_id, notification.thread.path.as_deref()).await
+        {
+            session.model = model;
+        }
         session.history_log_id = 0;
         session.history_entry_count = 0;
         session.rollout_path = notification.thread.path.clone();
@@ -2135,6 +2136,42 @@ impl App {
         Ok(())
     }
 
+    async fn refresh_snapshot_session_if_needed(
+        &mut self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+        is_replay_only: bool,
+        snapshot: &mut ThreadEventSnapshot,
+    ) {
+        let should_refresh = !is_replay_only
+            && snapshot.session.as_ref().is_none_or(|session| {
+                session.model.trim().is_empty() || session.rollout_path.is_none()
+            });
+        if !should_refresh {
+            return;
+        }
+
+        match app_server
+            .resume_thread(self.config.clone(), thread_id)
+            .await
+        {
+            Ok(started) => {
+                if let Some(channel) = self.thread_event_channels.get(&thread_id) {
+                    let mut store = channel.store.lock().await;
+                    store.session = Some(started.session.clone());
+                }
+                snapshot.session = Some(started.session);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    error = %err,
+                    "failed to refresh inferred thread session before replay"
+                );
+            }
+        }
+    }
+
     /// Opens the `/agent` picker after refreshing cached labels for known threads.
     ///
     /// The picker state is derived from long-lived thread channels plus best-effort metadata
@@ -2238,7 +2275,12 @@ impl App {
         self.sync_active_agent_label();
     }
 
-    async fn select_agent_thread(&mut self, tui: &mut tui::Tui, thread_id: ThreadId) -> Result<()> {
+    async fn select_agent_thread(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+    ) -> Result<()> {
         if self.active_thread_id == Some(thread_id) {
             return Ok(());
         }
@@ -2256,7 +2298,8 @@ impl App {
         let previous_thread_id = self.active_thread_id;
         self.store_active_thread_receiver().await;
         self.active_thread_id = None;
-        let Some((receiver, snapshot)) = self.activate_thread_for_replay(thread_id).await else {
+        let Some((receiver, mut snapshot)) = self.activate_thread_for_replay(thread_id).await
+        else {
             self.chat_widget
                 .add_error_message(format!("Agent thread {thread_id} is already active."));
             if let Some(previous_thread_id) = previous_thread_id {
@@ -2264,6 +2307,14 @@ impl App {
             }
             return Ok(());
         };
+
+        self.refresh_snapshot_session_if_needed(
+            app_server,
+            thread_id,
+            is_replay_only,
+            &mut snapshot,
+        )
+        .await;
 
         self.active_thread_id = Some(thread_id);
         self.active_thread_rx = Some(receiver);
@@ -2810,7 +2861,7 @@ impl App {
                         app.active_thread_rx.is_some()
                     ) => {
                         if let Some(event) = active {
-                            if let Err(err) = app.handle_active_thread_event(tui, event).await {
+                            if let Err(err) = app.handle_active_thread_event(tui, &mut app_server, event).await {
                                 break Err(err);
                             }
                         } else {
@@ -2819,7 +2870,7 @@ impl App {
                         AppRunControl::Continue
                     }
                     Some(event) = tui_events.next() => {
-                        match app.handle_tui_event(tui, event).await {
+                        match app.handle_tui_event(tui, &mut app_server, event).await {
                             Ok(control) => control,
                             Err(err) => break Err(err),
                         }
@@ -2875,6 +2926,7 @@ impl App {
     pub(crate) async fn handle_tui_event(
         &mut self,
         tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
         if matches!(event, TuiEvent::Draw) {
@@ -2889,7 +2941,7 @@ impl App {
         } else {
             match event {
                 TuiEvent::Key(key_event) => {
-                    self.handle_key_event(tui, key_event).await;
+                    self.handle_key_event(tui, app_server, key_event).await;
                 }
                 TuiEvent::Paste(pasted) => {
                     // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
@@ -4033,7 +4085,7 @@ impl App {
                 self.open_agent_picker().await;
             }
             AppEvent::SelectAgentThread(thread_id) => {
-                self.select_agent_thread(tui, thread_id).await?;
+                self.select_agent_thread(tui, app_server, thread_id).await?;
             }
             AppEvent::OpenSkillsList => {
                 self.chat_widget.open_skills_list();
@@ -4359,6 +4411,7 @@ impl App {
     async fn handle_active_thread_event(
         &mut self,
         tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
         event: ThreadBufferedEvent,
     ) -> Result<()> {
         // Capture this before any potential thread switch: we only want to clear
@@ -4382,7 +4435,8 @@ impl App {
                 self.active_non_primary_shutdown_target(notification)
         {
             self.mark_agent_picker_thread_closed(closed_thread_id);
-            self.select_agent_thread(tui, primary_thread_id).await?;
+            self.select_agent_thread(tui, app_server, primary_thread_id)
+                .await?;
             if self.active_thread_id == Some(primary_thread_id) {
                 self.chat_widget.add_info_message(
                     format!(
@@ -4539,7 +4593,12 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
-    async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
+    async fn handle_key_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        key_event: KeyEvent,
+    ) {
         // Some terminals, especially on macOS, encode Option+Left/Right as Option+b/f unless
         // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
         // agent-switch shortcuts when the composer is empty so we never steal the expected
@@ -4558,7 +4617,7 @@ impl App {
                 self.current_displayed_thread_id(),
                 AgentNavigationDirection::Previous,
             ) {
-                let _ = self.select_agent_thread(tui, thread_id).await;
+                let _ = self.select_agent_thread(tui, app_server, thread_id).await;
             }
             return;
         }
@@ -4573,7 +4632,7 @@ impl App {
                 self.current_displayed_thread_id(),
                 AgentNavigationDirection::Next,
             ) {
-                let _ = self.select_agent_thread(tui, thread_id).await;
+                let _ = self.select_agent_thread(tui, app_server, thread_id).await;
             }
             return;
         }
@@ -6694,8 +6753,8 @@ guardian_approval = true
     }
 
     #[tokio::test]
-    async fn inactive_thread_started_notification_does_not_fallback_to_primary_model() -> Result<()>
-    {
+    async fn inactive_thread_started_notification_preserves_primary_model_when_inference_missing()
+    -> Result<()> {
         let mut app = make_test_app().await;
         let main_thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000301").expect("valid thread");
@@ -6749,8 +6808,7 @@ guardian_approval = true
             .await;
         let session = store.session.clone().expect("inferred session");
 
-        assert_eq!(session.model, "");
-        assert_ne!(session.model, primary_session.model);
+        assert_eq!(session.model, primary_session.model);
 
         Ok(())
     }
