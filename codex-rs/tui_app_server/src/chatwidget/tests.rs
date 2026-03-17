@@ -10562,6 +10562,29 @@ async fn thread_snapshot_replayed_turn_started_marks_task_running() {
 }
 
 #[tokio::test]
+async fn replayed_in_progress_turn_marks_task_running() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.replay_thread_turns(
+        vec![AppServerTurn {
+            id: "turn-1".to_string(),
+            items: Vec::new(),
+            status: AppServerTurnStatus::InProgress,
+            error: None,
+        }],
+        ReplayKind::ResumeInitialMessages,
+    );
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(chat.bottom_pane.is_task_running());
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Working");
+}
+
+#[tokio::test]
 async fn replayed_stream_error_does_not_set_retry_status_or_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.set_status_header("Idle".to_string());

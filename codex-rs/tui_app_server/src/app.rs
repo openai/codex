@@ -5331,6 +5331,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replay_thread_snapshot_in_progress_turn_restores_running_queue_state() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
+        app.chat_widget.handle_thread_session(session.clone());
+        app.chat_widget
+            .handle_server_notification(turn_started_notification(thread_id, "turn-1"), None);
+        app.chat_widget.handle_server_notification(
+            agent_message_delta_notification(thread_id, "turn-1", "agent-1", "streaming"),
+            None,
+        );
+        app.chat_widget
+            .apply_external_edit("queued follow-up".to_string());
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let input_state = app
+            .chat_widget
+            .capture_thread_input_state()
+            .expect("expected queued follow-up state");
+
+        let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
+            make_chatwidget_manual_with_sender().await;
+        app.chat_widget = chat_widget;
+        app.chat_widget.handle_thread_session(session.clone());
+        while new_op_rx.try_recv().is_ok() {}
+
+        app.replay_thread_snapshot(
+            ThreadEventSnapshot {
+                session: None,
+                turns: vec![test_turn("turn-1", TurnStatus::InProgress, Vec::new())],
+                events: Vec::new(),
+                input_state: Some(input_state),
+            },
+            true,
+        );
+
+        assert_eq!(
+            app.chat_widget.queued_user_message_texts(),
+            vec!["queued follow-up".to_string()]
+        );
+        assert!(
+            new_op_rx.try_recv().is_err(),
+            "restored queue should stay queued while replayed turn is still running"
+        );
+    }
+
+    #[tokio::test]
     async fn replay_thread_snapshot_does_not_submit_queue_before_replay_catches_up() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
