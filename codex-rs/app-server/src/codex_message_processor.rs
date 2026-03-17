@@ -1609,12 +1609,15 @@ impl CodexMessageProcessor {
         // then no auth step is required; otherwise, default to requiring auth.
         let requires_openai_auth = self.config.model_provider.requires_openai_auth;
 
-        let response = if !requires_openai_auth {
-            GetAuthStatusResponse {
-                auth_method: None,
-                auth_token: None,
-                requires_openai_auth: Some(false),
-            }
+        let (response, resolved_auth_token_present) = if !requires_openai_auth {
+            (
+                GetAuthStatusResponse {
+                    auth_method: None,
+                    auth_token: None,
+                    requires_openai_auth: Some(false),
+                },
+                false,
+            )
         } else {
             match self.auth_manager.auth().await {
                 Some(auth) => {
@@ -1631,33 +1634,30 @@ impl CodexMessageProcessor {
                                 (None, None, false)
                             }
                         };
-                    let response = GetAuthStatusResponse {
-                        auth_method: reported_auth_method,
-                        auth_token: token_opt,
-                        requires_openai_auth: Some(true),
-                    };
-                    emit_auth_status_observation(&build_auth_status_observation(
-                        self.config.model_provider_id.as_str(),
-                        &response,
+                    (
+                        GetAuthStatusResponse {
+                            auth_method: reported_auth_method,
+                            auth_token: token_opt,
+                            requires_openai_auth: Some(true),
+                        },
                         resolved_auth_token_present,
-                        include_token,
-                        do_refresh,
-                    ));
-                    self.outgoing.send_response(request_id, response).await;
-                    return;
+                    )
                 }
-                None => GetAuthStatusResponse {
-                    auth_method: None,
-                    auth_token: None,
-                    requires_openai_auth: Some(true),
-                },
+                None => (
+                    GetAuthStatusResponse {
+                        auth_method: None,
+                        auth_token: None,
+                        requires_openai_auth: Some(true),
+                    },
+                    false,
+                ),
             }
         };
 
         emit_auth_status_observation(&build_auth_status_observation(
             self.config.model_provider_id.as_str(),
             &response,
-            false,
+            resolved_auth_token_present,
             include_token,
             do_refresh,
         ));
