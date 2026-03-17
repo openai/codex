@@ -5497,32 +5497,16 @@ shell_tool = true
     Ok(())
 }
 
-#[tokio::test]
-async fn missing_system_bwrap_warning_is_added_during_config_load() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
-
-    let has_warning = config.startup_warnings.iter().any(|warning| {
-        warning.contains("Codex could not find system bubblewrap at /usr/bin/bwrap")
-    });
-
+#[test]
+fn missing_system_bwrap_warning_matches_system_bwrap_presence() {
     #[cfg(target_os = "linux")]
     assert_eq!(
-        has_warning,
-        !Path::new("/usr/bin/bwrap").is_file(),
-        "{:?}",
-        config.startup_warnings
+        missing_system_bwrap_warning().is_some(),
+        !Path::new("/usr/bin/bwrap").is_file()
     );
 
     #[cfg(not(target_os = "linux"))]
-    assert!(!has_warning, "{:?}", config.startup_warnings);
-
-    Ok(())
+    assert!(missing_system_bwrap_warning().is_none());
 }
 
 #[tokio::test]
