@@ -725,6 +725,7 @@
     "CommandExecutionOutputDeltaNotification": {
       "properties": {
         "delta": {
+          "description": "Raw bytes from the command stream (may not be valid UTF-8).",
           "type": "string"
         },
         "itemId": {

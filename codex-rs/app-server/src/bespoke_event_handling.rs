@@ -1583,7 +1583,6 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
             let item_id = exec_command_output_delta_event.call_id.clone();
-            let delta = String::from_utf8_lossy(&exec_command_output_delta_event.chunk).to_string();
             // The underlying EventMsg::ExecCommandOutputDelta is used for shell, unified_exec,
             // and apply_patch tool calls. We represent apply_patch with the FileChange item, and
             // everything else with the CommandExecution item.
@@ -1595,6 +1594,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 state.turn_summary.file_change_started.contains(&item_id)
             };
             if is_file_change {
+                let delta =
+                    String::from_utf8_lossy(&exec_command_output_delta_event.chunk).to_string();
                 let notification = FileChangeOutputDeltaNotification {
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
@@ -1611,7 +1612,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
                     item_id,
-                    delta,
+                    delta: exec_command_output_delta_event.chunk,
                 };
                 outgoing
                     .send_server_notification(ServerNotification::CommandExecutionOutputDelta(

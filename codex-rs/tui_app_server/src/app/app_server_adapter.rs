@@ -547,7 +547,7 @@ fn server_notification_thread_events(
                 msg: EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
                     call_id: notification.item_id,
                     stream: ExecOutputStream::Stdout,
-                    chunk: notification.delta.into_bytes(),
+                    chunk: notification.delta,
                 }),
             }],
         )),
@@ -946,7 +946,13 @@ fn command_execution_snapshot_events(turn_id: &str, item: &ThreadItem) -> Option
 }
 
 fn split_command_string(command: &str) -> Vec<String> {
-    shlex::split(command).unwrap_or_else(|| vec![command.to_string()])
+    let Some(parts) = shlex::split(command) else {
+        return vec![command.to_string()];
+    };
+    match shlex::try_join(parts.iter().map(String::as_str)) {
+        Ok(round_trip) if round_trip == command => parts,
+        _ => vec![command.to_string()],
+    }
 }
 
 #[cfg(test)]
@@ -1297,7 +1303,7 @@ mod tests {
                     thread_id: thread_id.clone(),
                     turn_id: turn_id.clone(),
                     item_id: "cmd-1".to_string(),
-                    delta: "hello world\n".to_string(),
+                    delta: b"hello world\n".to_vec(),
                 },
             ))
             .expect("command execution delta should bridge");
@@ -1344,6 +1350,36 @@ mod tests {
         assert_eq!(end.formatted_output, "hello world\n");
         assert_eq!(end.aggregated_output, "hello world\n");
         assert_eq!(end.source, ExecCommandSource::UserShell);
+    }
+
+    #[test]
+    fn command_execution_snapshot_preserves_non_roundtrippable_command_strings() {
+        let item = ThreadItem::CommandExecution {
+            id: "cmd-1".to_string(),
+            command: r#"C:\Program Files\Git\bin\bash.exe -lc "echo hi""#.to_string(),
+            cwd: PathBuf::from("C:\\repo"),
+            process_id: None,
+            source: CommandExecutionSource::UserShell,
+            status: CommandExecutionStatus::InProgress,
+            command_actions: vec![],
+            aggregated_output: None,
+            formatted_output: String::new(),
+            exit_code: None,
+            duration_ms: None,
+        };
+
+        let events =
+            command_execution_started_event("turn-1", &item).expect("command execution start");
+        let [started] = events.as_slice() else {
+            panic!("expected one started event");
+        };
+        let EventMsg::ExecCommandBegin(begin) = &started.msg else {
+            panic!("expected exec begin event");
+        };
+        assert_eq!(
+            begin.command,
+            vec![r#"C:\Program Files\Git\bin\bash.exe -lc "echo hi""#.to_string()]
+        );
     }
 
     #[test]
