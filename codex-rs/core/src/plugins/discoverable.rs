@@ -6,6 +6,7 @@ use super::PluginDetailSummary;
 use super::PluginReadRequest;
 use super::PluginsManager;
 use crate::config::Config;
+use crate::features::Feature;
 
 const TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST: &[&str] = &[
     "github@openai-curated",
@@ -22,6 +23,10 @@ const TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST: &[&str] = &[
 pub(crate) fn list_tool_suggest_discoverable_plugins(
     config: &Config,
 ) -> anyhow::Result<Vec<PluginDetailSummary>> {
+    if !config.features.enabled(Feature::Plugins) {
+        return Ok(Vec::new());
+    }
+
     let plugins_manager = PluginsManager::new(config.codex_home.clone());
     let marketplaces = plugins_manager
         .list_marketplaces_for_config(config, &[])
