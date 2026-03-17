@@ -4,7 +4,6 @@ import path from "node:path";
 
 import { codexExecSpy } from "./codexExecSpy";
 import { describe, expect, it } from "@jest/globals";
-import { Codex } from "../src/codex";
 
 import {
   assistantMessage,
@@ -15,7 +14,7 @@ import {
   startResponsesTestProxy,
   SseResponseBody,
 } from "./responsesProxy";
-import { codexExecPath, createMockClient, createTestClient } from "./testCodex";
+import { createMockClient, createTestClient } from "./testCodex";
 
 describe("Codex", () => {
   it("returns thread events", async () => {
