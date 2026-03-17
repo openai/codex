@@ -12,11 +12,14 @@ import type { CommandExecutionStatus } from "./CommandExecutionStatus";
 import type { DynamicToolCallOutputContentItem } from "./DynamicToolCallOutputContentItem";
 import type { DynamicToolCallStatus } from "./DynamicToolCallStatus";
 import type { FileUpdateChange } from "./FileUpdateChange";
+import type { MarkdownDocumentState } from "./MarkdownDocumentState";
 import type { McpToolCallError } from "./McpToolCallError";
 import type { McpToolCallResult } from "./McpToolCallResult";
 import type { McpToolCallStatus } from "./McpToolCallStatus";
 import type { PatchApplyStatus } from "./PatchApplyStatus";
 import type { UserInput } from "./UserInput";
+import type { VisualArtifact } from "./VisualArtifact";
+import type { VisualArtifactStatus } from "./VisualArtifactStatus";
 import type { WebSearchAction } from "./WebSearchAction";
 
 export type ThreadItem = { "type": "userMessage", id: string, content: Array<UserInput>, } | { "type": "agentMessage", id: string, text: string, phase: MessagePhase | null, } | { "type": "plan", id: string, text: string, } | { "type": "reasoning", id: string, summary: Array<string>, content: Array<string>, } | { "type": "commandExecution", id: string, 
@@ -94,4 +97,4 @@ reasoningEffort: ReasoningEffort | null,
 /**
  * Last known status of the target agents, when available.
  */
-agentsStates: { [key in string]?: CollabAgentState }, } | { "type": "webSearch", id: string, query: string, action: WebSearchAction | null, } | { "type": "imageView", id: string, path: string, } | { "type": "imageGeneration", id: string, status: string, revisedPrompt: string | null, result: string, } | { "type": "enteredReviewMode", id: string, review: string, } | { "type": "exitedReviewMode", id: string, review: string, } | { "type": "contextCompaction", id: string, };
+agentsStates: { [key in string]?: CollabAgentState }, } | { "type": "webSearch", id: string, query: string, action: WebSearchAction | null, } | { "type": "imageView", id: string, path: string, } | { "type": "imageGeneration", id: string, status: string, revisedPrompt: string | null, result: string, } | { "type": "visualArtifact", id: string, status: VisualArtifactStatus, visuals: Array<VisualArtifact>, document: MarkdownDocumentState | null, error: string | null, } | { "type": "enteredReviewMode", id: string, review: string, } | { "type": "exitedReviewMode", id: string, review: string, } | { "type": "contextCompaction", id: string, };

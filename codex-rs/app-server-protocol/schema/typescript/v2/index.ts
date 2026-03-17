@@ -139,6 +139,7 @@ export type { ListMcpServerStatusResponse } from "./ListMcpServerStatusResponse"
 export type { LoginAccountParams } from "./LoginAccountParams";
 export type { LoginAccountResponse } from "./LoginAccountResponse";
 export type { LogoutAccountResponse } from "./LogoutAccountResponse";
+export type { MarkdownDocumentState } from "./MarkdownDocumentState";
 export type { MarketplaceInterface } from "./MarketplaceInterface";
 export type { McpAuthStatus } from "./McpAuthStatus";
 export type { McpElicitationArrayType } from "./McpElicitationArrayType";
@@ -326,6 +327,8 @@ export type { TurnStatus } from "./TurnStatus";
 export type { TurnSteerParams } from "./TurnSteerParams";
 export type { TurnSteerResponse } from "./TurnSteerResponse";
 export type { UserInput } from "./UserInput";
+export type { VisualArtifact } from "./VisualArtifact";
+export type { VisualArtifactStatus } from "./VisualArtifactStatus";
 export type { WebSearchAction } from "./WebSearchAction";
 export type { WindowsSandboxSetupCompletedNotification } from "./WindowsSandboxSetupCompletedNotification";
 export type { WindowsSandboxSetupMode } from "./WindowsSandboxSetupMode";

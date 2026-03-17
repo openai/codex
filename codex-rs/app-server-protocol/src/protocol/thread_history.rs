@@ -270,6 +270,12 @@ impl ThreadHistoryBuilder {
                     ThreadItem::from(payload.item.clone()),
                 );
             }
+            codex_protocol::items::TurnItem::VisualArtifact(_) => {
+                self.upsert_item_in_turn_id(
+                    &payload.turn_id,
+                    ThreadItem::from(payload.item.clone()),
+                );
+            }
             codex_protocol::items::TurnItem::UserMessage(_)
             | codex_protocol::items::TurnItem::AgentMessage(_)
             | codex_protocol::items::TurnItem::Reasoning(_)
@@ -285,6 +291,12 @@ impl ThreadHistoryBuilder {
                 if plan.text.is_empty() {
                     return;
                 }
+                self.upsert_item_in_turn_id(
+                    &payload.turn_id,
+                    ThreadItem::from(payload.item.clone()),
+                );
+            }
+            codex_protocol::items::TurnItem::VisualArtifact(_) => {
                 self.upsert_item_in_turn_id(
                     &payload.turn_id,
                     ThreadItem::from(payload.item.clone()),
@@ -1310,6 +1322,75 @@ mod tests {
                     text_elements: Vec::new(),
                 }],
             }
+        );
+    }
+
+    #[test]
+    fn visual_artifact_items_are_upserted_on_completion() {
+        let turn_id = "turn-1";
+        let thread_id = ThreadId::new();
+        let mut builder = ThreadHistoryBuilder::new();
+        let completed_item = codex_protocol::items::TurnItem::VisualArtifact(
+            codex_protocol::items::VisualArtifactItem {
+                id: "artifact-1".into(),
+                status: codex_protocol::items::VisualArtifactStatus::Completed,
+                visuals: vec![codex_protocol::items::VisualArtifact {
+                    title: "Revenue breakdown".into(),
+                    html: "<div>chart</div>".into(),
+                    summary: Some("Interactive stacked bars".into()),
+                    height_px: Some(420),
+                }],
+                document: Some(codex_protocol::items::MarkdownDocumentState {
+                    title: "Working brief".into(),
+                    markdown: "# Revenue breakdown".into(),
+                }),
+                error: None,
+            },
+        );
+        let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: turn_id.to_string(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+            EventMsg::ItemStarted(ItemStartedEvent {
+                thread_id,
+                turn_id: turn_id.to_string(),
+                item: codex_protocol::items::TurnItem::VisualArtifact(
+                    codex_protocol::items::VisualArtifactItem::in_progress("artifact-1".into()),
+                ),
+            }),
+            EventMsg::ItemCompleted(ItemCompletedEvent {
+                thread_id,
+                turn_id: turn_id.to_string(),
+                item: completed_item,
+            }),
+        ];
+
+        for event in &events {
+            builder.handle_event(event);
+        }
+
+        let snapshot = builder
+            .active_turn_snapshot()
+            .expect("active turn snapshot");
+        assert_eq!(
+            snapshot.items,
+            vec![ThreadItem::VisualArtifact {
+                id: "artifact-1".into(),
+                status: crate::protocol::v2::VisualArtifactStatus::Completed,
+                visuals: vec![crate::protocol::v2::VisualArtifact {
+                    title: "Revenue breakdown".into(),
+                    html: "<div>chart</div>".into(),
+                    summary: Some("Interactive stacked bars".into()),
+                    height_px: Some(420),
+                }],
+                document: Some(crate::protocol::v2::MarkdownDocumentState {
+                    title: "Working brief".into(),
+                    markdown: "# Revenue breakdown".into(),
+                }),
+                error: None,
+            }]
         );
     }
 

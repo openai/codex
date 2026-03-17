@@ -4248,6 +4248,15 @@ pub enum ThreadItem {
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
+    VisualArtifact {
+        id: String,
+        status: VisualArtifactStatus,
+        visuals: Vec<VisualArtifact>,
+        document: Option<MarkdownDocumentState>,
+        error: Option<String>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     EnteredReviewMode { id: String, review: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4272,6 +4281,7 @@ impl ThreadItem {
             | ThreadItem::WebSearch { id, .. }
             | ThreadItem::ImageView { id, .. }
             | ThreadItem::ImageGeneration { id, .. }
+            | ThreadItem::VisualArtifact { id, .. }
             | ThreadItem::EnteredReviewMode { id, .. }
             | ThreadItem::ExitedReviewMode { id, .. }
             | ThreadItem::ContextCompaction { id, .. } => id,
@@ -4310,6 +4320,26 @@ impl From<CoreGuardianRiskLevel> for GuardianRiskLevel {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum VisualArtifactStatus {
+    InProgress,
+    Completed,
+    Failed,
+}
+
+impl From<codex_protocol::items::VisualArtifactStatus> for VisualArtifactStatus {
+    fn from(value: codex_protocol::items::VisualArtifactStatus) -> Self {
+        match value {
+            codex_protocol::items::VisualArtifactStatus::InProgress => Self::InProgress,
+            codex_protocol::items::VisualArtifactStatus::Completed => Self::Completed,
+            codex_protocol::items::VisualArtifactStatus::Failed => Self::Failed,
+        }
+    }
+}
+
 /// [UNSTABLE] Temporary guardian approval review payload used by
 /// `item/autoApprovalReview/*` notifications. This shape is expected to change
 /// soon.
@@ -4324,6 +4354,26 @@ pub struct GuardianApprovalReview {
     #[serde(alias = "risk_level")]
     pub risk_level: Option<GuardianRiskLevel>,
     pub rationale: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct VisualArtifact {
+    pub title: String,
+    pub html: String,
+    pub summary: Option<String>,
+    pub height_px: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MarkdownDocumentState {
+    pub title: String,
+    pub markdown: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -4403,6 +4453,25 @@ impl From<CoreTurnItem> for ThreadItem {
                 status: image.status,
                 revised_prompt: image.revised_prompt,
                 result: image.result,
+            },
+            CoreTurnItem::VisualArtifact(artifact) => ThreadItem::VisualArtifact {
+                id: artifact.id,
+                status: artifact.status.into(),
+                visuals: artifact
+                    .visuals
+                    .into_iter()
+                    .map(|visual| VisualArtifact {
+                        title: visual.title,
+                        html: visual.html,
+                        summary: visual.summary,
+                        height_px: visual.height_px,
+                    })
+                    .collect(),
+                document: artifact.document.map(|document| MarkdownDocumentState {
+                    title: document.title,
+                    markdown: document.markdown,
+                }),
+                error: artifact.error,
             },
             CoreTurnItem::ContextCompaction(compaction) => {
                 ThreadItem::ContextCompaction { id: compaction.id }
@@ -7519,6 +7588,41 @@ mod tests {
                     query: Some("docs".to_string()),
                     queries: None,
                 }),
+            }
+        );
+
+        let visual_item = TurnItem::VisualArtifact(codex_protocol::items::VisualArtifactItem {
+            id: "visual-1".to_string(),
+            status: codex_protocol::items::VisualArtifactStatus::Completed,
+            visuals: vec![codex_protocol::items::VisualArtifact {
+                title: "Revenue breakdown".to_string(),
+                html: "<div>chart</div>".to_string(),
+                summary: Some("Interactive stacked bars".to_string()),
+                height_px: Some(420),
+            }],
+            document: Some(codex_protocol::items::MarkdownDocumentState {
+                title: "Working notes".to_string(),
+                markdown: "# Revenue breakdown\n\n- Interactive bars".to_string(),
+            }),
+            error: None,
+        });
+
+        assert_eq!(
+            ThreadItem::from(visual_item),
+            ThreadItem::VisualArtifact {
+                id: "visual-1".to_string(),
+                status: VisualArtifactStatus::Completed,
+                visuals: vec![VisualArtifact {
+                    title: "Revenue breakdown".to_string(),
+                    html: "<div>chart</div>".to_string(),
+                    summary: Some("Interactive stacked bars".to_string()),
+                    height_px: Some(420),
+                }],
+                document: Some(MarkdownDocumentState {
+                    title: "Working notes".to_string(),
+                    markdown: "# Revenue breakdown\n\n- Interactive bars".to_string(),
+                }),
+                error: None,
             }
         );
     }

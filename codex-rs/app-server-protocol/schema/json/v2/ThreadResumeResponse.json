@@ -456,6 +456,21 @@
       },
       "type": "object"
     },
+    "MarkdownDocumentState": {
+      "properties": {
+        "markdown": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "markdown",
+        "title"
+      ],
+      "type": "object"
+    },
     "McpToolCallError": {
       "properties": {
         "message": {
@@ -1524,6 +1539,53 @@
         },
         {
           "properties": {
+            "document": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MarkdownDocumentState"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/definitions/VisualArtifactStatus"
+            },
+            "type": {
+              "enum": [
+                "visualArtifact"
+              ],
+              "title": "VisualArtifactThreadItemType",
+              "type": "string"
+            },
+            "visuals": {
+              "items": {
+                "$ref": "#/definitions/VisualArtifact"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "status",
+            "type",
+            "visuals"
+          ],
+          "title": "VisualArtifactThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
             "id": {
               "type": "string"
             },
@@ -1857,6 +1919,43 @@
           "type": "object"
         }
       ]
+    },
+    "VisualArtifact": {
+      "properties": {
+        "heightPx": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "html": {
+          "type": "string"
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "html",
+        "title"
+      ],
+      "type": "object"
+    },
+    "VisualArtifactStatus": {
+      "enum": [
+        "in_progress",
+        "completed",
+        "failed"
+      ],
+      "type": "string"
     },
     "WebSearchAction": {
       "oneOf": [

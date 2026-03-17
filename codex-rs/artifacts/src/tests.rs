@@ -16,6 +16,7 @@ use crate::ReleaseManifest;
 use crate::RuntimeEntrypoints;
 use crate::RuntimePathEntry;
 use crate::SpreadsheetRenderTarget;
+use crate::client::VISUAL_ARTIFACTS_MANIFEST_PREFIX;
 use crate::load_cached_runtime;
 use codex_package_manager::ArchiveFormat;
 use codex_package_manager::PackageReleaseArchive;
@@ -295,8 +296,16 @@ async fn artifacts_client_execute_build_writes_wrapped_script_and_env() {
 
     let wrapped_script =
         fs::read_to_string(wrapped_script_path).unwrap_or_else(|error| panic!("{error}"));
+    assert!(wrapped_script.contains("const emitVisual = (spec) => {"));
+    assert!(wrapped_script.contains("const setDocument = (spec) => {"));
+    assert!(
+        wrapped_script.contains(
+            "globalThis.codex = { ...(globalThis.codex ?? {}), emitVisual, setDocument };"
+        )
+    );
     assert!(wrapped_script.contains("globalThis.artifacts = artifactTool;"));
     assert!(wrapped_script.contains("globalThis.codexArtifacts = artifactTool;"));
+    assert!(wrapped_script.contains(VISUAL_ARTIFACTS_MANIFEST_PREFIX));
     assert!(wrapped_script.contains("console.log('hello');"));
 }
 

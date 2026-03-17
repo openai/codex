@@ -13,6 +13,7 @@ use tokio::process::Command;
 use tokio::time::timeout;
 
 const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const VISUAL_ARTIFACTS_MANIFEST_PREFIX: &str = "__CODEX_VISUAL_ARTIFACTS__";
 
 /// Executes artifact build and render commands against a resolved runtime.
 #[derive(Clone, Debug)]
@@ -233,23 +234,76 @@ pub enum ArtifactsError {
 }
 
 fn build_wrapped_script(source: &str) -> String {
-    format!(
-        concat!(
-            "import {{ pathToFileURL }} from \"node:url\";\n",
-            "const artifactTool = await import(pathToFileURL(process.env.CODEX_ARTIFACT_BUILD_ENTRYPOINT).href);\n",
-            "globalThis.artifactTool = artifactTool;\n",
-            "globalThis.artifacts = artifactTool;\n",
-            "globalThis.codexArtifacts = artifactTool;\n",
-            "for (const [name, value] of Object.entries(artifactTool)) {{\n",
-            "  if (name === \"default\" || Object.prototype.hasOwnProperty.call(globalThis, name)) {{\n",
-            "    continue;\n",
-            "  }}\n",
-            "  globalThis[name] = value;\n",
-            "}}\n\n",
-            "{}\n"
-        ),
-        source
+    let mut wrapped = concat!(
+        "import { pathToFileURL } from \"node:url\";\n",
+        "const artifactTool = await import(pathToFileURL(process.env.CODEX_ARTIFACT_BUILD_ENTRYPOINT).href);\n",
+        "const __codexVisualArtifacts = [];\n",
+        "let __codexArtifactDocument;\n",
+        "const emitVisual = (spec) => {\n",
+        "  if (!spec || typeof spec !== \"object\" || Array.isArray(spec)) {\n",
+        "    throw new TypeError(\"codex.emitVisual(...) expects an object\");\n",
+        "  }\n",
+        "  const title = typeof spec.title === \"string\" && spec.title.trim()\n",
+        "    ? spec.title.trim()\n",
+        "    : \"Interactive visual\";\n",
+        "  const html = typeof spec.html === \"string\" ? spec.html : \"\";\n",
+        "  if (!html.trim()) {\n",
+        "    throw new TypeError(\"codex.emitVisual(...) requires a non-empty html string\");\n",
+        "  }\n",
+        "  const summary = typeof spec.summary === \"string\" && spec.summary.trim()\n",
+        "    ? spec.summary.trim()\n",
+        "    : undefined;\n",
+        "  const heightPx = Number.isFinite(spec.heightPx)\n",
+        "    ? Math.max(160, Math.min(1600, Math.trunc(spec.heightPx)))\n",
+        "    : undefined;\n",
+        "  const visual = { title, html, summary, heightPx };\n",
+        "  __codexVisualArtifacts.push(visual);\n",
+        "  return visual;\n",
+        "};\n",
+        "const setDocument = (spec) => {\n",
+        "  const normalized = typeof spec === \"string\" ? { markdown: spec } : spec;\n",
+        "  if (!normalized || typeof normalized !== \"object\" || Array.isArray(normalized)) {\n",
+        "    throw new TypeError(\"codex.setDocument(...) expects a string or object\");\n",
+        "  }\n",
+        "  const markdown = typeof normalized.markdown === \"string\" ? normalized.markdown : \"\";\n",
+        "  if (!markdown.trim()) {\n",
+        "    throw new TypeError(\"codex.setDocument(...) requires a non-empty markdown string\");\n",
+        "  }\n",
+        "  const title = typeof normalized.title === \"string\" && normalized.title.trim()\n",
+        "    ? normalized.title.trim()\n",
+        "    : \"Markdown workspace\";\n",
+        "  const document = { title, markdown };\n",
+        "  __codexArtifactDocument = document;\n",
+        "  return document;\n",
+        "};\n",
+        "globalThis.codex = { ...(globalThis.codex ?? {}), emitVisual, setDocument };\n",
+        "globalThis.emitVisual = emitVisual;\n",
+        "globalThis.setDocument = setDocument;\n",
+        "globalThis.artifactTool = artifactTool;\n",
+        "globalThis.artifacts = artifactTool;\n",
+        "globalThis.codexArtifacts = artifactTool;\n",
+        "for (const [name, value] of Object.entries(artifactTool)) {\n",
+        "  if (name === \"default\" || Object.prototype.hasOwnProperty.call(globalThis, name)) {\n",
+        "    continue;\n",
+        "  }\n",
+        "  globalThis[name] = value;\n",
+        "}\n\n",
+        "try {\n",
     )
+    .to_string();
+    wrapped.push_str(source);
+    wrapped.push_str(
+        "\n\
+} finally {\n\
+  const __codexManifest = Buffer.from(\n\
+    JSON.stringify({ visuals: __codexVisualArtifacts, document: __codexArtifactDocument ?? null }),\n\
+    \"utf8\"\n\
+  ).toString(\"base64\");\n\
+  process.stdout.write(`\\n",
+    );
+    wrapped.push_str(VISUAL_ARTIFACTS_MANIFEST_PREFIX);
+    wrapped.push_str("${__codexManifest}\\n`);\n}\n");
+    wrapped
 }
 
 async fn run_command(

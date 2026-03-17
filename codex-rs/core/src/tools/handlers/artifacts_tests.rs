@@ -115,10 +115,51 @@ fn load_cached_runtime_reads_pinned_cache_path() {
 
 #[test]
 fn format_artifact_output_includes_success_message_when_silent() {
-    let formatted = format_artifact_output(&ArtifactCommandOutput {
+    let formatted = format_artifact_output(
+        &ArtifactCommandOutput {
+            exit_code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+        },
+        0,
+        false,
+    );
+    assert!(formatted.contains("artifact JS completed successfully."));
+}
+
+#[test]
+fn parse_artifact_output_extracts_visuals_and_document() {
+    let manifest = base64::engine::general_purpose::STANDARD.encode(
+        serde_json::json!({
+            "visuals": [
+                {
+                    "title": "Counter",
+                    "html": "<div>ok</div>",
+                    "summary": "Live counter",
+                    "heightPx": 420
+                }
+            ],
+            "document": {
+                "title": "Working notes",
+                "markdown": "# Notes"
+            }
+        })
+        .to_string(),
+    );
+    let parsed = parse_artifact_output(ArtifactCommandOutput {
         exit_code: Some(0),
-        stdout: String::new(),
+        stdout: format!("stdout-ok\n{VISUAL_ARTIFACTS_MANIFEST_PREFIX}{manifest}\n"),
         stderr: String::new(),
     });
-    assert!(formatted.contains("artifact JS completed successfully."));
+
+    assert_eq!(parsed.output.stdout, "stdout-ok");
+    assert_eq!(parsed.visuals.len(), 1);
+    assert_eq!(parsed.visuals[0].title, "Counter");
+    assert_eq!(
+        parsed
+            .document
+            .as_ref()
+            .map(|document| document.title.as_str()),
+        Some("Working notes")
+    );
 }

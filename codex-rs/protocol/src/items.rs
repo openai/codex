@@ -26,6 +26,7 @@ pub enum TurnItem {
     Reasoning(ReasoningItem),
     WebSearch(WebSearchItem),
     ImageGeneration(ImageGenerationItem),
+    VisualArtifact(VisualArtifactItem),
     ContextCompaction(ContextCompactionItem),
 }
 
@@ -92,6 +93,59 @@ pub struct ImageGenerationItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub saved_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum VisualArtifactStatus {
+    InProgress,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+pub struct VisualArtifact {
+    pub title: String,
+    pub html: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub height_px: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+pub struct MarkdownDocumentState {
+    pub title: String,
+    pub markdown: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+pub struct VisualArtifactItem {
+    pub id: String,
+    pub status: VisualArtifactStatus,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visuals: Vec<VisualArtifact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub document: Option<MarkdownDocumentState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<String>,
+}
+
+impl VisualArtifactItem {
+    pub fn in_progress(id: String) -> Self {
+        Self {
+            id,
+            status: VisualArtifactStatus::InProgress,
+            visuals: Vec::new(),
+            document: None,
+            error: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -271,6 +325,7 @@ impl TurnItem {
             TurnItem::Reasoning(item) => item.id.clone(),
             TurnItem::WebSearch(item) => item.id.clone(),
             TurnItem::ImageGeneration(item) => item.id.clone(),
+            TurnItem::VisualArtifact(item) => item.id.clone(),
             TurnItem::ContextCompaction(item) => item.id.clone(),
         }
     }
@@ -282,6 +337,7 @@ impl TurnItem {
             TurnItem::Plan(_) => Vec::new(),
             TurnItem::WebSearch(item) => vec![item.as_legacy_event()],
             TurnItem::ImageGeneration(item) => vec![item.as_legacy_event()],
+            TurnItem::VisualArtifact(_) => Vec::new(),
             TurnItem::Reasoning(item) => item.as_legacy_events(show_raw_agent_reasoning),
             TurnItem::ContextCompaction(item) => vec![item.as_legacy_event()],
         }
