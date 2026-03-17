@@ -3138,14 +3138,6 @@ impl App {
             AppEvent::CommitTick => {
                 self.chat_widget.on_commit_tick();
             }
-            #[cfg(test)]
-            AppEvent::CodexEvent(_) => {
-                tracing::warn!("ignoring legacy AppEvent::CodexEvent in tui_app_server");
-            }
-            #[cfg(test)]
-            AppEvent::ThreadEvent { .. } => {
-                tracing::warn!("ignoring legacy AppEvent::ThreadEvent in tui_app_server");
-            }
             AppEvent::Exit(mode) => {
                 return Ok(self.handle_exit_mode(app_server, mode).await);
             }
