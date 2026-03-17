@@ -3266,9 +3266,9 @@ pub struct CollabAgentSpawnEndEvent {
     /// Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the
     /// beginning.
     pub prompt: String,
-    /// Model requested for the spawned agent.
+    /// Effective model used by the spawned agent after inheritance and role overrides.
     pub model: String,
-    /// Reasoning effort requested for the spawned agent.
+    /// Effective reasoning effort used by the spawned agent after inheritance and role overrides.
     pub reasoning_effort: ReasoningEffortConfig,
     /// Last known status of the new agent reported to the sender agent.
     pub status: AgentStatus,

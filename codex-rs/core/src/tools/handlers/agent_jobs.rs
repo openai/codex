@@ -15,9 +15,12 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -26,8 +29,10 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::watch::Receiver;
 use tokio::time::Duration;
 use tokio::time::Instant;
+use tokio::time::timeout;
 use uuid::Uuid;
 
 pub struct BatchJobHandler;
@@ -103,6 +108,7 @@ struct JobRunnerOptions {
 struct ActiveJobItem {
     item_id: String,
     started_at: Instant,
+    status_rx: Option<Receiver<AgentStatus>>,
 }
 
 struct JobProgressEmitter {
@@ -676,6 +682,12 @@ async fn run_agent_job_loop(
                     ActiveJobItem {
                         item_id: item.item_id.clone(),
                         started_at: Instant::now(),
+                        status_rx: session
+                            .services
+                            .agent_control
+                            .subscribe_status(thread_id)
+                            .await
+                            .ok(),
                     },
                 );
                 progressed = true;
@@ -708,7 +720,7 @@ async fn run_agent_job_loop(
                 break;
             }
             if !progressed {
-                tokio::time::sleep(STATUS_POLL_INTERVAL).await;
+                wait_for_status_change(&active_items).await;
             }
             continue;
         }
@@ -863,6 +875,12 @@ async fn recover_running_items(
                 ActiveJobItem {
                     item_id: item.item_id.clone(),
                     started_at: started_at_from_item(&item),
+                    status_rx: session
+                        .services
+                        .agent_control
+                        .subscribe_status(thread_id)
+                        .await
+                        .ok(),
                 },
             );
         }
@@ -876,11 +894,42 @@ async fn find_finished_threads(
 ) -> Vec<(ThreadId, String)> {
     let mut finished = Vec::new();
     for (thread_id, item) in active_items {
-        if is_final(&session.services.agent_control.get_status(*thread_id).await) {
+        let status = active_item_status(session.as_ref(), *thread_id, item).await;
+        if is_final(&status) {
             finished.push((*thread_id, item.item_id.clone()));
         }
     }
     finished
+}
+
+async fn active_item_status(
+    session: &Session,
+    thread_id: ThreadId,
+    item: &ActiveJobItem,
+) -> AgentStatus {
+    if let Some(status_rx) = item.status_rx.as_ref()
+        && status_rx.has_changed().is_ok()
+    {
+        return status_rx.borrow().clone();
+    }
+    session.services.agent_control.get_status(thread_id).await
+}
+
+async fn wait_for_status_change(active_items: &HashMap<ThreadId, ActiveJobItem>) {
+    let mut waiters = FuturesUnordered::new();
+    for item in active_items.values() {
+        if let Some(status_rx) = item.status_rx.as_ref() {
+            let mut status_rx = status_rx.clone();
+            waiters.push(async move {
+                let _ = status_rx.changed().await;
+            });
+        }
+    }
+    if waiters.is_empty() {
+        tokio::time::sleep(STATUS_POLL_INTERVAL).await;
+        return;
+    }
+    let _ = timeout(STATUS_POLL_INTERVAL, waiters.next()).await;
 }
 
 async fn reap_stale_active_items(
@@ -920,37 +969,24 @@ async fn finalize_finished_item(
     item_id: &str,
     thread_id: ThreadId,
 ) -> anyhow::Result<()> {
-    let mut item = db
+    let item = db
         .get_agent_job_item(job_id, item_id)
         .await?
         .ok_or_else(|| {
             anyhow::anyhow!("job item not found for finalization: {job_id}/{item_id}")
         })?;
-    if item.result_json.is_none() {
-        tokio::time::sleep(Duration::from_millis(250)).await;
-        item = db
-            .get_agent_job_item(job_id, item_id)
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!("job item not found after grace period: {job_id}/{item_id}")
-            })?;
-    }
-    if item.result_json.is_some() {
-        if !db.mark_agent_job_item_completed(job_id, item_id).await? {
-            db.mark_agent_job_item_failed(
-                job_id,
-                item_id,
-                "worker reported result but item could not transition to completed",
-            )
-            .await?;
+    if matches!(item.status, codex_state::AgentJobItemStatus::Running) {
+        if item.result_json.is_some() {
+            let _ = db.mark_agent_job_item_completed(job_id, item_id).await?;
+        } else {
+            let _ = db
+                .mark_agent_job_item_failed(
+                    job_id,
+                    item_id,
+                    "worker finished without calling report_agent_job_result",
+                )
+                .await?;
         }
-    } else {
-        db.mark_agent_job_item_failed(
-            job_id,
-            item_id,
-            "worker finished without calling report_agent_job_result",
-        )
-        .await?;
     }
     let _ = session
         .services

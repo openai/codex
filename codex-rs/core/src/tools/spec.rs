@@ -195,9 +195,12 @@ fn close_agent_output_schema() -> JsonValue {
     json!({
         "type": "object",
         "properties": {
-            "status": agent_status_output_schema()
+            "previous_status": {
+                "description": "The agent status observed before shutdown was requested.",
+                "allOf": [agent_status_output_schema()]
+            }
         },
-        "required": ["status"],
+        "required": ["previous_status"],
         "additionalProperties": false
     })
 }
@@ -1523,7 +1526,7 @@ fn create_close_agent_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "close_agent".to_string(),
-        description: "Close an agent when it is no longer needed and return its last known status. Don't keep agents open for too long if they are not needed anymore.".to_string(),
+        description: "Close an agent when it is no longer needed and return its previous status before shutdown was requested. Don't keep agents open for too long if they are not needed anymore.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::Object {
