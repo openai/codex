@@ -1549,8 +1549,10 @@ impl App {
     /// `AppEvent::McpInventoryLoaded`.
     ///
     /// The spawned task is fire-and-forget: no `JoinHandle` is stored, so a stale
-    /// result may arrive after the user has moved on. This is harmless — the result
-    /// is rendered into the current history regardless.
+    /// result may arrive after the user has moved on. We currently accept that
+    /// tradeoff because the effect is limited to stale inventory output in history,
+    /// while request-token invalidation would add cross-cutting async state for a
+    /// low-severity path.
     fn fetch_mcp_inventory(&mut self, app_server: &AppServerSession) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
