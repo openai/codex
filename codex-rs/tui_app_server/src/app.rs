@@ -2159,7 +2159,10 @@ impl App {
 
         self.primary_thread_id = Some(thread_id);
         self.primary_session_configured = Some(session_configured);
-        self.upsert_agent_picker_thread(thread_id, None, None, false);
+        self.upsert_agent_picker_thread(
+            thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
+            /*is_closed*/ false,
+        );
 
         let store = {
             let channel = self.ensure_thread_channel(thread_id);
@@ -2174,7 +2177,7 @@ impl App {
         }
 
         self.activate_thread_channel(thread_id).await;
-        self.replay_thread_snapshot(replay_snapshot, false);
+        self.replay_thread_snapshot(replay_snapshot, /*resume_restored_queue*/ false);
         Ok(())
     }
 
