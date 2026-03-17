@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use codex_environment::FileSystem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageDetail;
@@ -102,6 +103,17 @@ impl ToolHandler for ViewImageHandler {
                 abs_path.display()
             )));
         }
+        let file_bytes = turn
+            .environment
+            .get_filesystem()
+            .read_file(&abs_path)
+            .await
+            .map_err(|error| {
+                FunctionCallError::RespondToModel(format!(
+                    "unable to read image at `{}`: {error}",
+                    abs_path.display()
+                ))
+            })?;
         let event_path = abs_path.clone();
 
         let can_request_original_detail =
@@ -115,23 +127,24 @@ impl ToolHandler for ViewImageHandler {
         };
         let image_detail = use_original_detail.then_some(ImageDetail::Original);
 
-        let content = local_image_content_items_with_label_number(&abs_path, None, image_mode)
-            .into_iter()
-            .map(|item| match item {
-                ContentItem::InputText { text } => {
-                    FunctionCallOutputContentItem::InputText { text }
-                }
-                ContentItem::InputImage { image_url } => {
-                    FunctionCallOutputContentItem::InputImage {
-                        image_url,
-                        detail: image_detail,
+        let content =
+            local_image_content_items_with_label_number(&abs_path, file_bytes, None, image_mode)
+                .into_iter()
+                .map(|item| match item {
+                    ContentItem::InputText { text } => {
+                        FunctionCallOutputContentItem::InputText { text }
                     }
-                }
-                ContentItem::OutputText { text } => {
-                    FunctionCallOutputContentItem::InputText { text }
-                }
-            })
-            .collect();
+                    ContentItem::InputImage { image_url } => {
+                        FunctionCallOutputContentItem::InputImage {
+                            image_url,
+                            detail: image_detail,
+                        }
+                    }
+                    ContentItem::OutputText { text } => {
+                        FunctionCallOutputContentItem::InputText { text }
+                    }
+                })
+                .collect();
 
         session
             .send_event(

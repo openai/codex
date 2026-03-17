@@ -32,6 +32,7 @@ axum = { workspace = true, default-features = false, features = [
 codex-arg0 = { workspace = true }
 codex-cloud-requirements = { workspace = true }
 codex-core = { workspace = true }
+codex-environment = { workspace = true }
 codex-otel = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-utils-cli = { workspace = true }

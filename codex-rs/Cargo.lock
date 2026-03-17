@@ -1427,6 +1427,7 @@ dependencies = [
  "codex-chatgpt",
  "codex-cloud-requirements",
  "codex-core",
+ "codex-environment",
  "codex-feedback",
  "codex-file-search",
  "codex-login",
@@ -1837,6 +1838,7 @@ dependencies = [
  "codex-client",
  "codex-config",
  "codex-connectors",
+ "codex-environment",
  "codex-execpolicy",
  "codex-file-search",
  "codex-git",
@@ -1938,6 +1940,16 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "codex-environment"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "pretty_assertions",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
