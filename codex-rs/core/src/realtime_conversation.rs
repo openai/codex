@@ -443,6 +443,7 @@ struct PreparedRealtimeConversationStart {
     api_provider: ApiProvider,
     extra_headers: Option<HeaderMap>,
     requested_session_id: Option<String>,
+    version: RealtimeWsVersion,
     session_config: RealtimeSessionConfig,
 }
 
@@ -499,6 +500,7 @@ async fn prepare_realtime_start(
         api_provider,
         extra_headers,
         requested_session_id,
+        version,
         session_config,
     })
 }
@@ -512,6 +514,7 @@ async fn handle_start_inner(
         api_provider,
         extra_headers,
         requested_session_id,
+        version,
         session_config,
     } = prepared_start;
     info!("starting realtime conversation");
