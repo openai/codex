@@ -1273,6 +1273,36 @@ fn patch_approval_request_from_params(
     }
 }
 
+fn app_server_patch_changes_to_core(
+    changes: Vec<codex_app_server_protocol::FileUpdateChange>,
+) -> HashMap<PathBuf, codex_protocol::protocol::FileChange> {
+    changes
+        .into_iter()
+        .map(|change| {
+            let path = PathBuf::from(change.path);
+            let file_change = match change.kind {
+                codex_app_server_protocol::PatchChangeKind::Add => {
+                    codex_protocol::protocol::FileChange::Add {
+                        content: change.diff,
+                    }
+                }
+                codex_app_server_protocol::PatchChangeKind::Delete => {
+                    codex_protocol::protocol::FileChange::Delete {
+                        content: change.diff,
+                    }
+                }
+                codex_app_server_protocol::PatchChangeKind::Update { move_path } => {
+                    codex_protocol::protocol::FileChange::Update {
+                        unified_diff: change.diff,
+                        move_path,
+                    }
+                }
+            };
+            (path, file_change)
+        })
+        .collect()
+}
+
 fn request_permissions_from_params(
     params: codex_app_server_protocol::PermissionsRequestApprovalParams,
 ) -> RequestPermissionsEvent {
@@ -5301,7 +5331,7 @@ impl ChatWidget {
             }
             ThreadItem::FileChange {
                 id,
-                changes: _,
+                changes,
                 status,
             } => {
                 if !matches!(
@@ -5317,7 +5347,7 @@ impl ChatWidget {
                             status,
                             codex_app_server_protocol::PatchApplyStatus::Failed
                         ),
-                        changes: HashMap::new(),
+                        changes: app_server_patch_changes_to_core(changes),
                         status: match status {
                             codex_app_server_protocol::PatchApplyStatus::Completed => {
                                 codex_protocol::protocol::PatchApplyStatus::Completed
@@ -5782,12 +5812,12 @@ impl ChatWidget {
                     interaction_input: None,
                 });
             }
-            ThreadItem::FileChange { id, changes: _, .. } => {
+            ThreadItem::FileChange { id, changes, .. } => {
                 self.on_patch_apply_begin(PatchApplyBeginEvent {
                     call_id: id,
                     turn_id: notification.turn_id,
                     auto_approved: false,
-                    changes: HashMap::new(),
+                    changes: app_server_patch_changes_to_core(changes),
                 });
             }
             ThreadItem::McpToolCall {

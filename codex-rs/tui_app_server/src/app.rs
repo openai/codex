@@ -2082,6 +2082,8 @@ impl App {
             store.set_session(session.clone(), turns.clone());
         }
         self.activate_thread_channel(thread_id).await;
+        self.chat_widget
+            .set_initial_user_message_submit_suppressed(/*suppressed*/ true);
         self.chat_widget.handle_thread_session(session);
         self.chat_widget
             .replay_thread_turns(turns, ReplayKind::ResumeInitialMessages);
@@ -2097,6 +2099,9 @@ impl App {
                 }
             }
         }
+        self.chat_widget
+            .set_initial_user_message_submit_suppressed(/*suppressed*/ false);
+        self.chat_widget.submit_initial_user_message_if_pending();
         Ok(())
     }
 
@@ -4774,6 +4779,8 @@ mod tests {
     use crate::app_backtrack::BacktrackState;
     use crate::app_backtrack::user_count;
 
+    use crate::chatwidget::ChatWidgetInit;
+    use crate::chatwidget::create_initial_user_message;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use crate::chatwidget::tests::set_chatgpt_auth;
     use crate::file_search::FileSearchManager;
@@ -5047,6 +5054,89 @@ mod tests {
         }
 
         panic!("expected approval action to submit a thread-scoped op");
+    }
+
+    #[tokio::test]
+    async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_submit()
+    -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let initial_prompt = "follow-up after replay".to_string();
+        let config = app.config.clone();
+        let model = codex_core::test_support::get_model_offline(config.model.as_deref());
+        app.chat_widget = ChatWidget::new_with_app_event(ChatWidgetInit {
+            config,
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            app_event_tx: app.app_event_tx.clone(),
+            initial_user_message: create_initial_user_message(
+                Some(initial_prompt.clone()),
+                Vec::new(),
+                Vec::new(),
+            ),
+            enhanced_keys_supported: false,
+            has_chatgpt_account: false,
+            model_catalog: app.model_catalog.clone(),
+            feedback: codex_feedback::CodexFeedback::new(),
+            is_first_run: false,
+            feedback_audience: app.feedback_audience,
+            status_account_display: None,
+            initial_plan_type: None,
+            model: Some(model),
+            startup_tooltip_override: None,
+            status_line_invalid_items_warned: app.status_line_invalid_items_warned.clone(),
+            session_telemetry: app.session_telemetry.clone(),
+        });
+
+        app.enqueue_primary_thread_session(
+            test_thread_session(thread_id, PathBuf::from("/tmp/project")),
+            vec![test_turn(
+                "turn-1",
+                TurnStatus::Completed,
+                vec![ThreadItem::UserMessage {
+                    id: "user-1".to_string(),
+                    content: vec![AppServerUserInput::Text {
+                        text: "earlier prompt".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                }],
+            )],
+        )
+        .await?;
+
+        let mut saw_replayed_answer = false;
+        let mut submitted_items = None;
+        while let Ok(event) = app_event_rx.try_recv() {
+            match event {
+                AppEvent::InsertHistoryCell(cell) => {
+                    let transcript = lines_to_single_string(&cell.transcript_lines(80));
+                    saw_replayed_answer |= transcript.contains("earlier prompt");
+                }
+                AppEvent::SubmitThreadOp {
+                    thread_id: op_thread_id,
+                    op: Op::UserTurn { items, .. },
+                } => {
+                    assert_eq!(op_thread_id, thread_id);
+                    submitted_items = Some(items);
+                }
+                AppEvent::CodexOp(Op::UserTurn { items, .. }) => {
+                    submitted_items = Some(items);
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            saw_replayed_answer,
+            "expected replayed history before initial prompt submit"
+        );
+        assert_eq!(
+            submitted_items,
+            Some(vec![UserInput::Text {
+                text: initial_prompt,
+                text_elements: Vec::new(),
+            }])
+        );
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -7210,6 +7300,19 @@ guardian_approval = true
             seen.push(format!("{op:?}"));
         }
         panic!("expected UserTurn op, saw: {seen:?}");
+    }
+
+    fn lines_to_single_string(lines: &[Line<'_>]) -> String {
+        lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {

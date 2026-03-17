@@ -20,7 +20,11 @@ use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
 use codex_app_server_protocol::ErrorNotification;
+use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::ItemCompletedNotification;
+use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::PatchApplyStatus as AppServerPatchApplyStatus;
+use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadItem as AppServerThreadItem;
@@ -141,6 +145,7 @@ use pretty_assertions::assert_eq;
 #[cfg(target_os = "windows")]
 use serial_test::serial;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
@@ -4228,6 +4233,55 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
 
     assert!(!chat.bottom_pane.is_task_running());
     assert!(chat.bottom_pane.status_widget().is_none());
+}
+
+#[tokio::test]
+async fn live_app_server_file_change_item_started_preserves_changes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::FileChange {
+                id: "patch-1".to_string(),
+                changes: vec![FileUpdateChange {
+                    path: "foo.txt".to_string(),
+                    kind: PatchChangeKind::Add,
+                    diff: "hello\n".to_string(),
+                }],
+                status: AppServerPatchApplyStatus::InProgress,
+            },
+        }),
+        None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(!cells.is_empty(), "expected patch history to be rendered");
+    let transcript = lines_to_single_string(cells.last().expect("patch cell"));
+    assert!(
+        transcript.contains("Added foo.txt") || transcript.contains("Edited foo.txt"),
+        "expected patch summary to include foo.txt, got: {transcript}"
+    );
+}
+
+#[test]
+fn app_server_patch_changes_to_core_preserves_diffs() {
+    let changes = app_server_patch_changes_to_core(vec![FileUpdateChange {
+        path: "foo.txt".to_string(),
+        kind: PatchChangeKind::Add,
+        diff: "hello\n".to_string(),
+    }]);
+
+    assert_eq!(
+        changes,
+        HashMap::from([(
+            PathBuf::from("foo.txt"),
+            FileChange::Add {
+                content: "hello\n".to_string(),
+            },
+        )])
+    );
 }
 
 #[tokio::test]
