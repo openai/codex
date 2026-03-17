@@ -5649,6 +5649,7 @@ impl ChatWidget {
                     self.on_realtime_conversation_started(
                         codex_protocol::protocol::RealtimeConversationStartedEvent {
                             session_id: notification.session_id,
+                            version: notification.version,
                         },
                     );
                 }
