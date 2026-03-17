@@ -1246,6 +1246,10 @@ impl AuthManager {
             .is_some_and(CodexAuth::is_external_chatgpt_tokens)
     }
 
+    pub fn codex_api_key_env_enabled(&self) -> bool {
+        self.enable_codex_api_key_env
+    }
+
     /// Convenience constructor returning an `Arc` wrapper.
     pub fn shared(
         codex_home: PathBuf,

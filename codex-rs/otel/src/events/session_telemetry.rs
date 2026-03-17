@@ -62,10 +62,21 @@ const RESPONSES_API_ENGINE_SERVICE_TTFT_FIELD: &str = "engine_service_ttft_total
 const RESPONSES_API_ENGINE_IAPI_TBT_FIELD: &str = "engine_iapi_tbt_across_engine_calls_ms";
 const RESPONSES_API_ENGINE_SERVICE_TBT_FIELD: &str = "engine_service_tbt_across_engine_calls_ms";
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AuthEnvTelemetryMetadata {
+    pub openai_api_key_env_present: bool,
+    pub codex_api_key_env_present: bool,
+    pub codex_api_key_env_enabled: bool,
+    pub provider_env_key_name: Option<String>,
+    pub provider_env_key_present: Option<bool>,
+    pub refresh_token_url_override_present: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionTelemetryMetadata {
     pub(crate) conversation_id: ThreadId,
     pub(crate) auth_mode: Option<String>,
+    pub(crate) auth_env: AuthEnvTelemetryMetadata,
     pub(crate) account_id: Option<String>,
     pub(crate) account_email: Option<String>,
     pub(crate) originator: String,
@@ -86,6 +97,11 @@ pub struct SessionTelemetry {
 }
 
 impl SessionTelemetry {
+    pub fn with_auth_env(mut self, auth_env: AuthEnvTelemetryMetadata) -> Self {
+        self.metadata.auth_env = auth_env;
+        self
+    }
+
     pub fn with_model(mut self, model: &str, slug: &str) -> Self {
         self.metadata.model = model.to_owned();
         self.metadata.slug = slug.to_owned();
@@ -255,6 +271,7 @@ impl SessionTelemetry {
             metadata: SessionTelemetryMetadata {
                 conversation_id,
                 auth_mode: auth_mode.map(|m| m.to_string()),
+                auth_env: AuthEnvTelemetryMetadata::default(),
                 account_id,
                 account_email,
                 originator: sanitize_metric_tag_value(originator.as_str()),
@@ -309,6 +326,12 @@ impl SessionTelemetry {
             common: {
                 event.name = "codex.conversation_starts",
                 provider_name = %provider_name,
+                auth.env_openai_api_key_present = self.metadata.auth_env.openai_api_key_env_present,
+                auth.env_codex_api_key_present = self.metadata.auth_env.codex_api_key_env_present,
+                auth.env_codex_api_key_enabled = self.metadata.auth_env.codex_api_key_env_enabled,
+                auth.env_provider_key_name = self.metadata.auth_env.provider_env_key_name.as_deref(),
+                auth.env_provider_key_present = self.metadata.auth_env.provider_env_key_present,
+                auth.env_refresh_token_url_override_present = self.metadata.auth_env.refresh_token_url_override_present,
                 reasoning_effort = reasoning_effort.map(|e| e.to_string()),
                 reasoning_summary = %reasoning_summary,
                 context_window = context_window,
@@ -407,6 +430,12 @@ impl SessionTelemetry {
                 auth.recovery_mode = recovery_mode,
                 auth.recovery_phase = recovery_phase,
                 endpoint = endpoint,
+                auth.env_openai_api_key_present = self.metadata.auth_env.openai_api_key_env_present,
+                auth.env_codex_api_key_present = self.metadata.auth_env.codex_api_key_env_present,
+                auth.env_codex_api_key_enabled = self.metadata.auth_env.codex_api_key_env_enabled,
+                auth.env_provider_key_name = self.metadata.auth_env.provider_env_key_name.as_deref(),
+                auth.env_provider_key_present = self.metadata.auth_env.provider_env_key_present,
+                auth.env_refresh_token_url_override_present = self.metadata.auth_env.refresh_token_url_override_present,
                 auth.request_id = request_id,
                 auth.cf_ray = cf_ray,
                 auth.error = auth_error,
@@ -454,6 +483,12 @@ impl SessionTelemetry {
                 auth.recovery_mode = recovery_mode,
                 auth.recovery_phase = recovery_phase,
                 endpoint = endpoint,
+                auth.env_openai_api_key_present = self.metadata.auth_env.openai_api_key_env_present,
+                auth.env_codex_api_key_present = self.metadata.auth_env.codex_api_key_env_present,
+                auth.env_codex_api_key_enabled = self.metadata.auth_env.codex_api_key_env_enabled,
+                auth.env_provider_key_name = self.metadata.auth_env.provider_env_key_name.as_deref(),
+                auth.env_provider_key_present = self.metadata.auth_env.provider_env_key_present,
+                auth.env_refresh_token_url_override_present = self.metadata.auth_env.refresh_token_url_override_present,
                 auth.connection_reused = connection_reused,
                 auth.request_id = request_id,
                 auth.cf_ray = cf_ray,
@@ -489,6 +524,12 @@ impl SessionTelemetry {
                 duration_ms = %duration.as_millis(),
                 success = success_str,
                 error.message = error,
+                auth.env_openai_api_key_present = self.metadata.auth_env.openai_api_key_env_present,
+                auth.env_codex_api_key_present = self.metadata.auth_env.codex_api_key_env_present,
+                auth.env_codex_api_key_enabled = self.metadata.auth_env.codex_api_key_env_enabled,
+                auth.env_provider_key_name = self.metadata.auth_env.provider_env_key_name.as_deref(),
+                auth.env_provider_key_present = self.metadata.auth_env.provider_env_key_present,
+                auth.env_refresh_token_url_override_present = self.metadata.auth_env.refresh_token_url_override_present,
                 auth.connection_reused = connection_reused,
             },
             log: {},
