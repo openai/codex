@@ -62,7 +62,7 @@ python examples/01_quickstart_constructor/async.py
 - `03_turn_stream_events/`
   - stream a turn with a small curated event view
 - `04_models_and_metadata/`
-  - read server metadata and model list
+  - discover visible models for the connected runtime
 - `05_existing_thread/`
   - resume a real existing thread (created in-script)
 - `06_thread_lifecycle_and_controls/`
@@ -78,7 +78,7 @@ python examples/01_quickstart_constructor/async.py
 - `11_cli_mini_app/`
   - interactive chat loop
 - `12_turn_params_kitchen_sink/`
-  - one turn using most optional `turn(...)` params (sync + async)
+  - structured output with a curated advanced `turn(...)` configuration
 - `13_model_select_and_turn_params/`
   - list models, pick highest model + highest supported reasoning effort, run turns, print message and usage
 - `14_turn_controls/`

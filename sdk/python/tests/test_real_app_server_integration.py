@@ -27,7 +27,7 @@ pytestmark = pytest.mark.skipif(
     reason="set RUN_REAL_CODEX_TESTS=1 to run real Codex integration coverage",
 )
 
-# 11_cli_mini_app is interactive; we still run it by feeding '/exit'.
+# 11_cli_mini_app is interactive; we still run it by feeding one prompt, then '/exit'.
 EXAMPLE_CASES: list[tuple[str, str]] = [
     ("01_quickstart_constructor", "sync.py"),
     ("01_quickstart_constructor", "async.py"),
@@ -180,7 +180,11 @@ def _run_example(
     path = EXAMPLES_DIR / folder / script
     assert path.exists(), f"Missing example script: {path}"
 
-    stdin = "/exit\n" if folder == "11_cli_mini_app" else None
+    stdin = (
+        "Give 3 short bullets on SIMD.\nNow rewrite that as 1 short sentence.\n/exit\n"
+        if folder == "11_cli_mini_app"
+        else None
+    )
     return _run_command(
         [str(runtime_env.python), str(path)],
         cwd=ROOT,
@@ -427,9 +431,10 @@ def test_real_examples_run_and_assert(
         assert "stream.completed:" in out
         assert "assistant>" in out
     elif folder == "04_models_and_metadata":
+        assert "server:" in out
         assert "models.count:" in out
-        assert "server_name=None" not in out
-        assert "server_version=None" not in out
+        assert "models:" in out
+        assert "metadata:" not in out
     elif folder == "05_existing_thread":
         assert "Created thread:" in out
     elif folder == "06_thread_lifecycle_and_controls":
@@ -442,8 +447,14 @@ def test_real_examples_run_and_assert(
         assert "Text:" in out
     elif folder == "11_cli_mini_app":
         assert "Thread:" in out
+        assert out.count("assistant>") >= 2
+        assert out.count("assistant.status>") >= 2
+        assert out.count("usage>") >= 2
     elif folder == "12_turn_params_kitchen_sink":
-        assert "Status:" in out and "Items:" in out
+        assert "Status:" in out
+        assert "summary:" in out
+        assert "actions:" in out
+        assert "Items:" in out
     elif folder == "13_model_select_and_turn_params":
         assert "selected.model:" in out and "agent.message.params:" in out and "items.params:" in out
     elif folder == "14_turn_controls":

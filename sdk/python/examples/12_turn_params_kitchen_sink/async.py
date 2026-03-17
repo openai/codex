@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -20,9 +21,7 @@ from codex_app_server import (
     AskForApproval,
     AsyncCodex,
     Personality,
-    ReasoningEffort,
     ReasoningSummary,
-    SandboxPolicy,
     TextInput,
 )
 
@@ -39,12 +38,6 @@ OUTPUT_SCHEMA = {
     "additionalProperties": False,
 }
 
-SANDBOX_POLICY = SandboxPolicy.model_validate(
-    {
-        "type": "readOnly",
-        "access": {"type": "fullAccess"},
-    }
-)
 SUMMARY = ReasoningSummary.model_validate("concise")
 
 PROMPT = (
@@ -61,20 +54,33 @@ async def main() -> None:
         turn = await thread.turn(
             TextInput(PROMPT),
             approval_policy=APPROVAL_POLICY,
-            cwd=str(Path.cwd()),
-            effort=ReasoningEffort.medium,
-            model="gpt-5.4",
             output_schema=OUTPUT_SCHEMA,
             personality=Personality.pragmatic,
-            sandbox_policy=SANDBOX_POLICY,
             summary=SUMMARY,
         )
         result = await turn.run()
         persisted = await thread.read(include_turns=True)
         persisted_turn = find_turn_by_id(persisted.thread.turns, result.id)
+        structured_text = assistant_text_from_turn(persisted_turn).strip()
+        try:
+            structured = json.loads(structured_text)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Expected JSON matching OUTPUT_SCHEMA, got: {structured_text!r}") from exc
+
+        summary = structured.get("summary")
+        actions = structured.get("actions")
+        if not isinstance(summary, str) or not isinstance(actions, list) or not all(
+            isinstance(action, str) for action in actions
+        ):
+            raise RuntimeError(
+                f"Expected structured output with string summary/actions, got: {structured!r}"
+            )
 
         print("Status:", result.status)
-        print("Text:", assistant_text_from_turn(persisted_turn))
+        print("summary:", summary)
+        print("actions:")
+        for action in actions:
+            print("-", action)
         print("Items:", 0 if persisted_turn is None else len(persisted_turn.items or []))
 
 

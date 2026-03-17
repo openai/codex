@@ -34,8 +34,8 @@ def _format_usage(usage: object | None) -> str:
 
     return (
         "usage>\n"
-        f"  last: input={last.inputTokens} output={last.outputTokens} reasoning={last.reasoningOutputTokens} total={last.totalTokens} cached={last.cachedInputTokens}\n"
-        f"  total: input={total.inputTokens} output={total.outputTokens} reasoning={total.reasoningOutputTokens} total={total.totalTokens} cached={total.cachedInputTokens}"
+        f"  last: input={last.input_tokens} output={last.output_tokens} reasoning={last.reasoning_output_tokens} total={last.total_tokens} cached={last.cached_input_tokens}\n"
+        f"  total: input={total.input_tokens} output={total.output_tokens} reasoning={total.reasoning_output_tokens} total={total.total_tokens} cached={total.cached_input_tokens}"
     )
 
 
