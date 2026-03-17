@@ -132,6 +132,21 @@ crate.annotation(
     workspace_cargo_toml = "rust/runfiles/Cargo.toml",
 )
 
+crate.annotation(
+    build_script_data_select = {
+        "aarch64-unknown-linux-musl": ["//third_party/v8:rusty_v8_archive"],
+        "x86_64-unknown-linux-musl": ["//third_party/v8:rusty_v8_archive"],
+    },
+    build_script_env_select = {
+        # Replace the placeholder archive with a musl-built librusty_v8 artifact before
+        # enabling codex-v8-poc's `rusty_v8` feature for musl Cargo or Bazel builds.
+        "aarch64-unknown-linux-musl": "{\"RUSTY_V8_ARCHIVE\":\"$(execpath //third_party/v8:rusty_v8_archive)\"}",
+        "x86_64-unknown-linux-musl": "{\"RUSTY_V8_ARCHIVE\":\"$(execpath //third_party/v8:rusty_v8_archive)\"}",
+    },
+    crate = "v8",
+    gen_build_script = "on",
+)
+
 llvm = use_extension("@llvm//extensions:llvm.bzl", "llvm")
 use_repo(llvm, "llvm-project")
 

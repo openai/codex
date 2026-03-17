@@ -42,6 +42,13 @@ In some cases, an upstream crate may need a patch or a `crate.annotation` in `..
 to have it build in Bazel's sandbox or make it cross-compilation-friendly. If you see issues,
 feel free to ping zbarsky or mbolin.
 
+One current example is `rusty_v8`: normal workspace builds should consume a prebuilt archive
+through `RUSTY_V8_ARCHIVE` rather than trying to build V8 from source inside every Bazel action.
+The placeholder Bazel label lives at `//third_party/v8:rusty_v8_archive`; replace that target's
+underlying file with the musl-built archive before enabling the `codex-v8-poc` crate's
+`rusty_v8` feature for musl targets in Cargo or Bazel. Non-musl Bazel targets are left to the
+crate's default build-script behavior.
+
 When you add a new crate or binary:
 
 1. Add it to the Cargo workspace as usual.

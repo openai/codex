@@ -1,0 +1,11 @@
+package(default_visibility = ["//visibility:public"])
+
+alias(
+    name = "rusty_v8_archive",
+    actual = ":rusty_v8_archive_placeholder",
+)
+
+filegroup(
+    name = "rusty_v8_archive_placeholder",
+    srcs = ["README.md"],
+)
