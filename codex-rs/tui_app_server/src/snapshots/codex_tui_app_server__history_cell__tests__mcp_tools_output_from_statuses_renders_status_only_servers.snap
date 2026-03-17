@@ -1,6 +1,5 @@
 ---
 source: tui_app_server/src/history_cell.rs
-assertion_line: 3202
 expression: rendered
 ---
 /mcp
@@ -8,7 +7,6 @@ expression: rendered
 🔌  MCP Tools
 
   • plugin_docs
-    • Status: enabled
     • Auth: Unsupported
     • Command: docs-server --stdio
     • Tools: lookup

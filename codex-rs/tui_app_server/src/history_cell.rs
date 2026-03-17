@@ -2004,7 +2004,6 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
         let header: Vec<Span<'static>> = vec!["  • ".into(), server.clone().into()];
 
         lines.push(header.into());
-        lines.push(vec!["    • Status: ".into(), "enabled".green()].into());
         let auth_status = status
             .map(|status| match status.auth_status {
                 codex_app_server_protocol::McpAuthStatus::Unsupported => McpAuthStatus::Unsupported,
@@ -2160,10 +2159,9 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
 /// inventory RPC is in flight.
 ///
 /// Inserted as the `active_cell` by `ChatWidget::add_mcp_output()` and removed
-/// by `ChatWidget::clear_mcp_inventory_loading()` once the fetch completes.
-/// `clear_mcp_inventory_loading` uses `Any::is::<McpInventoryLoadingCell>()` to
-/// ensure it only clears a cell of this exact type, avoiding interference with
-/// unrelated active cells.
+/// once the fetch completes. The app removes committed copies from transcript
+/// history, while `ChatWidget::clear_mcp_inventory_loading()` only clears the
+/// in-flight `active_cell`.
 #[derive(Debug)]
 pub(crate) struct McpInventoryLoadingCell {
     start_time: Instant,

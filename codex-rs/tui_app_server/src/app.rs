@@ -1570,6 +1570,7 @@ impl App {
     fn handle_mcp_inventory_result(&mut self, result: Result<Vec<McpServerStatus>, String>) {
         let config = self.chat_widget.config_ref().clone();
         self.chat_widget.clear_mcp_inventory_loading();
+        self.clear_committed_mcp_inventory_loading();
 
         let statuses = match result {
             Ok(statuses) => statuses,
@@ -1590,6 +1591,23 @@ impl App {
             .add_to_history(history_cell::new_mcp_tools_output_from_statuses(
                 &config, &statuses,
             ));
+    }
+
+    fn clear_committed_mcp_inventory_loading(&mut self) {
+        let Some(last_cell) = self.transcript_cells.last() else {
+            return;
+        };
+        if !last_cell
+            .as_any()
+            .is::<history_cell::McpInventoryLoadingCell>()
+        {
+            return;
+        }
+
+        self.transcript_cells.pop();
+        if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
+            overlay.replace_cells(self.transcript_cells.clone());
+        }
     }
 
     async fn try_submit_active_thread_op_via_app_server(
@@ -4678,6 +4696,25 @@ mod tests {
             auth_statuses.get("disabled"),
             Some(&McpAuthStatus::Unsupported)
         );
+    }
+
+    #[tokio::test]
+    async fn handle_mcp_inventory_result_clears_committed_loading_cell() {
+        let mut app = make_test_app().await;
+        app.transcript_cells
+            .push(Arc::new(history_cell::new_mcp_inventory_loading(
+                /*animations_enabled*/ false,
+            )));
+
+        app.handle_mcp_inventory_result(Ok(vec![McpServerStatus {
+            name: "docs".to_string(),
+            tools: HashMap::new(),
+            resources: Vec::new(),
+            resource_templates: Vec::new(),
+            auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+        }]));
+
+        assert_eq!(app.transcript_cells.len(), 0);
     }
 
     #[test]
