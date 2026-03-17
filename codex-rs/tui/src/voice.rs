@@ -744,18 +744,17 @@ fn should_send_realtime_input(
     input_behavior: &RealtimeInputBehavior,
     allow_input_until: &mut Option<Instant>,
 ) -> bool {
-    if matches!(input_behavior, RealtimeInputBehavior::Ungated) {
-        *allow_input_until = None;
-        return true;
-    }
+    let playback_queued_samples = match input_behavior {
+        RealtimeInputBehavior::Ungated => {
+            *allow_input_until = None;
+            return true;
+        }
+        RealtimeInputBehavior::PlaybackAware {
+            playback_queued_samples,
+        } => playback_queued_samples,
+    };
 
     let now = Instant::now();
-    let RealtimeInputBehavior::PlaybackAware {
-        playback_queued_samples,
-    } = input_behavior
-    else {
-        unreachable!("ungated realtime input should return early");
-    };
 
     if playback_queued_samples.load(Ordering::Relaxed) == 0 {
         *allow_input_until = None;
