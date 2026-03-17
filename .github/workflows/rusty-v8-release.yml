@@ -1,0 +1,176 @@
+name: rusty-v8-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Optional release tag. Defaults to rusty-v8-v<resolved_v8_version>.
+        required: false
+        type: string
+      publish:
+        description: Publish the staged musl artifacts to a GitHub release.
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}::${{ inputs.release_tag || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.release_tag.outputs.release_tag }}
+      v8_version: ${{ steps.v8_version.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Resolve exact v8 crate version
+        id: v8_version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(python3 .github/scripts/rusty_v8_bazel.py resolved-v8-crate-version)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve release tag
+        id: release_tag
+        env:
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+          V8_VERSION: ${{ steps.v8_version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release_tag="${RELEASE_TAG_INPUT}"
+          if [[ -z "${release_tag}" ]]; then
+            release_tag="rusty-v8-v${V8_VERSION}"
+          fi
+
+          echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux_amd64_musl
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            platform: linux_arm64_musl
+            target: aarch64-unknown-linux-musl
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Bazel
+        uses: bazelbuild/setup-bazelisk@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Build Bazel V8 release pair
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+          PLATFORM: ${{ matrix.platform }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target_suffix="${TARGET//-/_}"
+          pair_target="//third_party/v8:rusty_v8_release_pair_${target_suffix}"
+
+          bazel_args=(
+            build
+            "--platforms=@llvm//platforms:${PLATFORM}"
+            "${pair_target}"
+            --build_metadata=REPO_URL=https://github.com/${GITHUB_REPOSITORY}.git
+            --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
+            --build_metadata=ROLE=CI
+            --build_metadata=VISIBILITY=PUBLIC
+          )
+
+          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+            bazel \
+              --noexperimental_remote_repo_contents_cache \
+              --bazelrc=.github/workflows/ci.bazelrc \
+              "${bazel_args[@]}" \
+              "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+          else
+            bazel \
+              --noexperimental_remote_repo_contents_cache \
+              "${bazel_args[@]}" \
+              --remote_cache= \
+              --remote_executor=
+          fi
+
+      - name: Stage release pair
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 .github/scripts/rusty_v8_bazel.py stage-release-pair \
+            --platform "${PLATFORM}" \
+            --target "${TARGET}" \
+            --output-dir "dist/${TARGET}"
+
+      - name: Upload staged musl artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: rusty-v8-${{ needs.metadata.outputs.v8_version }}-${{ matrix.target }}
+          path: dist/${{ matrix.target }}/*
+
+  publish-release:
+    if: ${{ inputs.publish }}
+    needs:
+      - metadata
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+      - name: Ensure release tag is new
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "${RELEASE_TAG}" > /dev/null 2>&1; then
+            echo "Release tag ${RELEASE_TAG} already exists; musl artifact tags are immutable." >&2
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.metadata.outputs.release_tag }}
+          name: ${{ needs.metadata.outputs.release_tag }}
+          files: dist/**

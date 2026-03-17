@@ -42,12 +42,13 @@ In some cases, an upstream crate may need a patch or a `crate.annotation` in `..
 to have it build in Bazel's sandbox or make it cross-compilation-friendly. If you see issues,
 feel free to ping zbarsky or mbolin.
 
-One current example is `rusty_v8`: normal workspace builds should consume a prebuilt archive
-through `RUSTY_V8_ARCHIVE` rather than trying to build V8 from source inside every Bazel action.
-The placeholder Bazel label lives at `//third_party/v8:rusty_v8_archive`; replace that target's
-underlying file with the musl-built archive before enabling the `codex-v8-poc` crate's
-`rusty_v8` feature for musl targets in Cargo or Bazel. Non-musl Bazel targets are left to the
-crate's default build-script behavior.
+One current example is `rusty_v8`: musl workspace builds should consume explicit, version-aligned
+artifacts through both `RUSTY_V8_ARCHIVE` and `RUSTY_V8_SRC_BINDING_PATH` rather than trying to
+build V8 from source inside every Bazel action. Those musl artifacts are produced by
+`.github/workflows/rusty-v8-release.yml` and surfaced to Bazel through `//third_party/v8`.
+Keep the archive and binding file aligned to the exact resolved `v8` crate version in
+`codex-rs/Cargo.lock`. Non-musl Bazel targets are left to the crate's default build-script
+behavior.
 
 When you add a new crate or binary:
 

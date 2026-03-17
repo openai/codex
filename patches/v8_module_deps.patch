@@ -1,0 +1,71 @@
+diff --git a/orig/v8-14.2.231.17/MODULE.bazel b/mod/v8-14.2.231.17/MODULE.bazel
+--- a/orig/v8-14.2.231.17/MODULE.bazel	2026-03-17 19:06:16.296039877 +0000
++++ b/mod/v8-14.2.231.17/MODULE.bazel	2026-03-17 19:06:16.296039877 +0000
+@@ -8,13 +8,65 @@
+ bazel_dep(name = "rules_python", version = "1.0.0")
+ bazel_dep(name = "platforms", version = "0.0.11")
+ bazel_dep(name = "abseil-cpp", version = "20250814.0")
+-bazel_dep(name = "highway", version = "1.2.0")
++bazel_dep(name = "rules_license", version = "0.0.4")
++
++git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
++http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
++
++http_archive(
++    name = "highway",
++    patch_cmds = ['python3 - <<\'PY\'\nfrom pathlib import Path\n\nbuild = Path("BUILD")\ntext = build.read_text()\ntext = text.replace(\n    \'load("@rules_cc//cc:defs.bzl", "cc_test")\',\n    \'load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")\',\n)\nbuild.write_text(text)\nPY'],
++    sha256 = "7e0be78b8318e8bdbf6fa545d2ecb4c90f947df03f7aadc42c1967f019e63343",
++    strip_prefix = "highway-1.2.0",
++    urls = ["https://github.com/google/highway/archive/refs/tags/1.2.0.tar.gz"],
++)
++
++git_repository(
++    name = "icu",
++    build_file = "@v8//:bazel/BUILD.icu",
++    commit = "a86a32e67b8d1384b33f8fa48c83a6079b86f8cd",
++    patch_cmds = ["find source -name BUILD.bazel | xargs rm"],
++    patch_cmds_win = ["Get-ChildItem -Path source -File -Include BUILD.bazel -Recurse | Remove-Item"],
++    remote = "https://chromium.googlesource.com/chromium/deps/icu.git",
++)
++
++http_archive(
++    name = "fast_float",
++    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "fast_float",\n    hdrs = glob(["include/fast_float/*.h"]),\n    include_prefix = "third_party/fast_float/src/include",\n    strip_include_prefix = "include",\n    visibility = ["//visibility:public"],\n)\n',
++    sha256 = "e14a33089712b681d74d94e2a11362643bd7d769ae8f7e7caefe955f57f7eacd",
++    strip_prefix = "fast_float-8.0.2",
++    urls = ["https://github.com/fastfloat/fast_float/archive/refs/tags/v8.0.2.tar.gz"],
++)
++
++git_repository(
++    name = "simdutf",
++    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "simdutf",\n    srcs = ["simdutf.cpp"],\n    hdrs = ["simdutf.h"],\n    copts = ["-std=c++20"],\n    include_prefix = "third_party/simdutf",\n    visibility = ["//visibility:public"],\n)\n',
++    commit = "93b35aec29256f705c97f675fe4623578bd7a395",
++    remote = "https://chromium.googlesource.com/chromium/src/third_party/simdutf",
++)
++
++git_repository(
++    name = "dragonbox",
++    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "dragonbox",\n    hdrs = ["include/dragonbox/dragonbox.h"],\n    include_prefix = "third_party/dragonbox/src/include",\n    strip_include_prefix = "include",\n    visibility = ["//visibility:public"],\n)\n',
++    commit = "beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44",
++    remote = "https://chromium.googlesource.com/external/github.com/jk-jeon/dragonbox.git",
++)
++
++git_repository(
++    name = "fp16",
++    build_file_content = 'load("@rules_cc//cc:defs.bzl", "cc_library")\n\ncc_library(\n    name = "fp16",\n    hdrs = glob(["include/**/*.h"]),\n    include_prefix = "third_party/fp16/src/include",\n    includes = ["include"],\n    strip_include_prefix = "include",\n    visibility = ["//visibility:public"],\n)\n',
++    commit = "3d2de1816307bac63c16a297e8c4dc501b4076df",
++    remote = "https://chromium.googlesource.com/external/github.com/Maratyszcza/FP16.git",
++)
+ 
+ pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
+ pip.parse(
+     hub_name = "v8_python_deps",
+     python_version = "3.11",
+     requirements_lock = "//:bazel/requirements.txt",
+-    extra_pip_args = ["--require-hashes"],
++    extra_pip_args = [
++        "--require-hashes",
++        "--index-url=https://pypi.org/simple",
++    ],
+ )
+ use_repo(pip, "v8_python_deps")

@@ -1,0 +1,21 @@
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "binding_cc",
+    srcs = ["src/binding.cc"],
+)
+
+filegroup(
+    name = "support_h",
+    srcs = ["src/support.h"],
+)
+
+filegroup(
+    name = "src_binding_release_aarch64_unknown_linux_gnu",
+    srcs = ["gen/src_binding_release_aarch64-unknown-linux-gnu.rs"],
+)
+
+filegroup(
+    name = "src_binding_release_x86_64_unknown_linux_gnu",
+    srcs = ["gen/src_binding_release_x86_64-unknown-linux-gnu.rs"],
+)

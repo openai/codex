@@ -132,16 +132,27 @@ crate.annotation(
     workspace_cargo_toml = "rust/runfiles/Cargo.toml",
 )
 
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
 crate.annotation(
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:v8_custom_archive_out_dir.patch",
+    ],
     build_script_data_select = {
-        "aarch64-unknown-linux-musl": ["//third_party/v8:rusty_v8_archive"],
-        "x86_64-unknown-linux-musl": ["//third_party/v8:rusty_v8_archive"],
+        "aarch64-unknown-linux-musl": [
+            "//third_party/v8:rusty_v8_archive_aarch64_unknown_linux_musl",
+            "//third_party/v8:rusty_v8_binding_aarch64_unknown_linux_musl",
+        ],
+        "x86_64-unknown-linux-musl": [
+            "//third_party/v8:rusty_v8_archive_x86_64_unknown_linux_musl",
+            "//third_party/v8:rusty_v8_binding_x86_64_unknown_linux_musl",
+        ],
     },
     build_script_env_select = {
-        # Replace the placeholder archive with a musl-built librusty_v8 artifact before
-        # enabling codex-v8-poc's `rusty_v8` feature for musl Cargo or Bazel builds.
-        "aarch64-unknown-linux-musl": "{\"RUSTY_V8_ARCHIVE\":\"$(execpath //third_party/v8:rusty_v8_archive)\"}",
-        "x86_64-unknown-linux-musl": "{\"RUSTY_V8_ARCHIVE\":\"$(execpath //third_party/v8:rusty_v8_archive)\"}",
+        # Musl consumers must use version-aligned archive and binding artifacts.
+        "aarch64-unknown-linux-musl": "{\"RUSTY_V8_ARCHIVE\":\"$(execpath //third_party/v8:rusty_v8_archive_aarch64_unknown_linux_musl)\",\"RUSTY_V8_SRC_BINDING_PATH\":\"$(execpath //third_party/v8:rusty_v8_binding_aarch64_unknown_linux_musl)\"}",
+        "x86_64-unknown-linux-musl": "{\"RUSTY_V8_ARCHIVE\":\"$(execpath //third_party/v8:rusty_v8_archive_x86_64_unknown_linux_musl)\",\"RUSTY_V8_SRC_BINDING_PATH\":\"$(execpath //third_party/v8:rusty_v8_binding_x86_64_unknown_linux_musl)\"}",
     },
     crate = "v8",
     gen_build_script = "on",
@@ -188,6 +199,29 @@ crate.annotation(
 )
 
 inject_repo(crate, "alsa_lib")
+
+bazel_dep(name = "v8", version = "14.2.231.17")
+archive_override(
+    module_name = "v8",
+    integrity = "sha256-cBaRBeVxRiQD6sbmStc467b1t6AtyT3ipE1xrJaLIfg=",
+    patch_strip = 3,
+    patches = [
+        "//patches:v8_module_deps.patch",
+        "//patches:v8_bazel_rules.patch",
+        "//patches:v8_source_portability.patch",
+    ],
+    strip_prefix = "v8-14.2.231.17",
+    urls = ["https://github.com/v8/v8/archive/refs/tags/14.2.231.17.tar.gz"],
+)
+
+http_archive(
+    name = "v8_crate_pinned",
+    build_file = "//third_party/v8:v8_crate.BUILD.bazel",
+    sha256 = "f566072bd76b2631d0dca1d90a766c943863b1fd6b01312281dc919816de976d",
+    strip_prefix = "v8-142.2.0",
+    type = "tar.gz",
+    urls = ["https://static.crates.io/crates/v8/v8-142.2.0.crate"],
+)
 
 use_repo(crate, "crates")
 
