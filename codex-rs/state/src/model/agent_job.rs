@@ -12,6 +12,29 @@ pub enum AgentJobStatus {
     Cancelled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentJobKind {
+    CsvBatch,
+    DynamicQueue,
+}
+
+impl AgentJobKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            AgentJobKind::CsvBatch => "csv_batch",
+            AgentJobKind::DynamicQueue => "dynamic_queue",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "csv_batch" => Ok(Self::CsvBatch),
+            "dynamic_queue" => Ok(Self::DynamicQueue),
+            _ => Err(anyhow::anyhow!("invalid agent job kind: {value}")),
+        }
+    }
+}
+
 impl AgentJobStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -75,9 +98,11 @@ impl AgentJobItemStatus {
 pub struct AgentJob {
     pub id: String,
     pub name: String,
+    pub kind: AgentJobKind,
     pub status: AgentJobStatus,
     pub instruction: String,
     pub auto_export: bool,
+    pub max_items: Option<u64>,
     pub max_runtime_seconds: Option<u64>,
     // TODO(jif-oai): Convert to JSON Schema and enforce structured outputs.
     pub output_schema_json: Option<Value>,
@@ -95,8 +120,10 @@ pub struct AgentJob {
 pub struct AgentJobItem {
     pub job_id: String,
     pub item_id: String,
+    pub parent_item_id: Option<String>,
     pub row_index: i64,
     pub source_id: Option<String>,
+    pub dedupe_key: Option<String>,
     pub row_json: Value,
     pub status: AgentJobItemStatus,
     pub assigned_thread_id: Option<String>,
@@ -118,12 +145,14 @@ pub struct AgentJobProgress {
     pub failed_items: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AgentJobCreateParams {
     pub id: String,
     pub name: String,
+    pub kind: AgentJobKind,
     pub instruction: String,
     pub auto_export: bool,
+    pub max_items: Option<u64>,
     pub max_runtime_seconds: Option<u64>,
     pub output_schema_json: Option<Value>,
     pub input_headers: Vec<String>,
@@ -131,21 +160,45 @@ pub struct AgentJobCreateParams {
     pub output_csv_path: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AgentJobItemCreateParams {
     pub item_id: String,
+    pub parent_item_id: Option<String>,
     pub row_index: i64,
     pub source_id: Option<String>,
+    pub dedupe_key: Option<String>,
     pub row_json: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnqueueAgentJobItemsResult {
+    pub outcomes: Vec<EnqueueAgentJobItemOutcome>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum EnqueueAgentJobItemOutcome {
+    Enqueued {
+        item: AgentJobItem,
+    },
+    Deduped {
+        item: AgentJobItem,
+    },
+    MaxItemsReached {
+        requested_item_id: String,
+        parent_item_id: Option<String>,
+        dedupe_key: Option<String>,
+    },
 }
 
 #[derive(Debug, sqlx::FromRow)]
 pub(crate) struct AgentJobRow {
     pub(crate) id: String,
     pub(crate) name: String,
+    pub(crate) kind: String,
     pub(crate) status: String,
     pub(crate) instruction: String,
     pub(crate) auto_export: i64,
+    pub(crate) max_items: Option<i64>,
     pub(crate) max_runtime_seconds: Option<i64>,
     pub(crate) output_schema_json: Option<String>,
     pub(crate) input_headers_json: String,
@@ -168,6 +221,11 @@ impl TryFrom<AgentJobRow> for AgentJob {
             .map(serde_json::from_str)
             .transpose()?;
         let input_headers = serde_json::from_str(value.input_headers_json.as_str())?;
+        let max_items = value
+            .max_items
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|_| anyhow::anyhow!("invalid max_items value"))?;
         let max_runtime_seconds = value
             .max_runtime_seconds
             .map(u64::try_from)
@@ -176,9 +234,11 @@ impl TryFrom<AgentJobRow> for AgentJob {
         Ok(Self {
             id: value.id,
             name: value.name,
+            kind: AgentJobKind::parse(value.kind.as_str())?,
             status: AgentJobStatus::parse(value.status.as_str())?,
             instruction: value.instruction,
             auto_export: value.auto_export != 0,
+            max_items,
             max_runtime_seconds,
             output_schema_json,
             input_headers,
@@ -203,8 +263,10 @@ impl TryFrom<AgentJobRow> for AgentJob {
 pub(crate) struct AgentJobItemRow {
     pub(crate) job_id: String,
     pub(crate) item_id: String,
+    pub(crate) parent_item_id: Option<String>,
     pub(crate) row_index: i64,
     pub(crate) source_id: Option<String>,
+    pub(crate) dedupe_key: Option<String>,
     pub(crate) row_json: String,
     pub(crate) status: String,
     pub(crate) assigned_thread_id: Option<String>,
@@ -224,8 +286,10 @@ impl TryFrom<AgentJobItemRow> for AgentJobItem {
         Ok(Self {
             job_id: value.job_id,
             item_id: value.item_id,
+            parent_item_id: value.parent_item_id,
             row_index: value.row_index,
             source_id: value.source_id,
+            dedupe_key: value.dedupe_key,
             row_json: serde_json::from_str(value.row_json.as_str())?,
             status: AgentJobItemStatus::parse(value.status.as_str())?,
             assigned_thread_id: value.assigned_thread_id,

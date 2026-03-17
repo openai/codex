@@ -50,6 +50,37 @@ struct SpawnAgentsOnCsvArgs {
     max_runtime_seconds: Option<u64>,
 }
 
+const DEFAULT_AGENT_QUEUE_MAX_ITEMS: usize = 1000;
+const CSV_AGENT_JOB_SOURCE_PREFIX: &str = "agent_job:csv:";
+const QUEUE_AGENT_JOB_SOURCE_PREFIX: &str = "agent_job:queue:";
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+struct QueueJobItemArgs {
+    input: Value,
+    item_id: Option<String>,
+    dedupe_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SpawnAgentsOnQueueArgs {
+    seed_items: Option<Vec<QueueJobItemArgs>>,
+    seed_path: Option<String>,
+    instruction: String,
+    output_jsonl_path: Option<String>,
+    output_schema: Option<Value>,
+    max_concurrency: Option<usize>,
+    max_workers: Option<usize>,
+    max_runtime_seconds: Option<u64>,
+    max_items: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EnqueueAgentJobItemsArgs {
+    job_id: String,
+    parent_item_id: String,
+    items: Vec<QueueJobItemArgs>,
+}
+
 #[derive(Debug, Deserialize)]
 struct ReportAgentJobResultArgs {
     job_id: String,
@@ -70,6 +101,25 @@ struct SpawnAgentsOnCsvResult {
     failed_item_errors: Option<Vec<AgentJobFailureSummary>>,
 }
 
+#[derive(Debug, Serialize)]
+struct SpawnAgentsOnQueueResult {
+    job_id: String,
+    status: String,
+    output_jsonl_path: String,
+    total_items: usize,
+    pending_items: usize,
+    completed_items: usize,
+    failed_items: usize,
+    job_error: Option<String>,
+    failed_item_errors: Option<Vec<QueueAgentJobFailureSummary>>,
+}
+
+#[derive(Debug, Serialize)]
+struct QueueAgentJobFailureSummary {
+    item_id: String,
+    dedupe_key: Option<String>,
+    last_error: String,
+}
 #[derive(Debug, Serialize)]
 struct AgentJobFailureSummary {
     item_id: String,
@@ -93,6 +143,22 @@ struct ReportAgentJobResultToolResult {
     accepted: bool,
 }
 
+#[derive(Debug, Serialize)]
+struct EnqueueAgentJobItemsToolResult {
+    accepted_count: usize,
+    duplicate_count: usize,
+    rejected_count: usize,
+    items: Vec<EnqueueAgentJobItemsToolItemResult>,
+}
+
+#[derive(Debug, Serialize)]
+struct EnqueueAgentJobItemsToolItemResult {
+    index: usize,
+    status: String,
+    item_id: Option<String>,
+    dedupe_key: Option<String>,
+    reason: Option<String>,
+}
 #[derive(Debug, Clone)]
 struct JobRunnerOptions {
     max_concurrency: usize,
@@ -203,7 +269,15 @@ impl ToolHandler for BatchJobHandler {
         };
 
         match tool_name.as_str() {
-            "spawn_agents_on_csv" => spawn_agents_on_csv::handle(session, turn, arguments).await,
+            "spawn_agents_on_csv" => {
+                spawn_agents_on_csv::handle(session.clone(), turn.clone(), arguments).await
+            }
+            "spawn_agents_on_queue" => {
+                spawn_agents_on_queue::handle(session.clone(), turn, arguments).await
+            }
+            "enqueue_agent_job_items" => {
+                enqueue_agent_job_items::handle(session.clone(), arguments).await
+            }
             "report_agent_job_result" => report_agent_job_result::handle(session, arguments).await,
             other => Err(FunctionCallError::RespondToModel(format!(
                 "unsupported agent job tool {other}"
@@ -297,8 +371,10 @@ mod spawn_agents_on_csv {
                 .collect::<serde_json::Map<_, _>>();
             items.push(codex_state::AgentJobItemCreateParams {
                 item_id,
+                parent_item_id: None,
                 row_index: idx as i64,
                 source_id,
+                dedupe_key: None,
                 row_json: Value::Object(row_object),
             });
         }
@@ -314,89 +390,36 @@ mod spawn_agents_on_csv {
             args.max_runtime_seconds
                 .or(turn.config.agent_job_max_runtime_seconds),
         )?;
-        let _job = db
-            .create_agent_job(
-                &codex_state::AgentJobCreateParams {
-                    id: job_id.clone(),
-                    name: job_name,
-                    instruction: args.instruction,
-                    auto_export: true,
-                    max_runtime_seconds,
-                    output_schema_json: args.output_schema,
-                    input_headers: headers,
-                    input_csv_path: input_path.display().to_string(),
-                    output_csv_path: output_csv_path.display().to_string(),
-                },
-                items.as_slice(),
-            )
-            .await
-            .map_err(|err| {
-                FunctionCallError::RespondToModel(format!("failed to create agent job: {err}"))
-            })?;
-
-        let requested_concurrency = args.max_concurrency.or(args.max_workers);
-        let options = match build_runner_options(&session, &turn, requested_concurrency).await {
-            Ok(options) => options,
-            Err(err) => {
-                let error_message = err.to_string();
-                let _ = db
-                    .mark_agent_job_failed(job_id.as_str(), error_message.as_str())
-                    .await;
-                return Err(err);
-            }
-        };
-        db.mark_agent_job_running(job_id.as_str())
-            .await
-            .map_err(|err| {
-                FunctionCallError::RespondToModel(format!(
-                    "failed to transition agent job {job_id} to running: {err}"
-                ))
-            })?;
-        let max_threads = turn.config.agent_max_threads;
-        let effective_concurrency = options.max_concurrency;
-        let message = format!(
-            "agent job concurrency: job_id={job_id} requested={requested_concurrency:?} max_threads={max_threads:?} effective={effective_concurrency}"
-        );
-        let _ = session.notify_background_event(&turn, message).await;
-        if let Err(err) = run_agent_job_loop(
-            session.clone(),
-            turn.clone(),
-            db.clone(),
-            job_id.clone(),
-            options,
+        db.create_agent_job(
+            &codex_state::AgentJobCreateParams {
+                id: job_id.clone(),
+                name: job_name,
+                kind: codex_state::AgentJobKind::CsvBatch,
+                instruction: args.instruction,
+                auto_export: true,
+                max_items: None,
+                max_runtime_seconds,
+                output_schema_json: args.output_schema,
+                input_headers: headers,
+                input_csv_path: input_path.display().to_string(),
+                output_csv_path: output_csv_path.display().to_string(),
+            },
+            items.as_slice(),
         )
         .await
-        {
-            let error_message = format!("job runner failed: {err}");
-            let _ = db
-                .mark_agent_job_failed(job_id.as_str(), error_message.as_str())
-                .await;
-            return Err(FunctionCallError::RespondToModel(format!(
-                "agent job {job_id} failed: {err}"
-            )));
-        }
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!("failed to create agent job: {err}"))
+        })?;
 
-        let job = db
-            .get_agent_job(job_id.as_str())
-            .await
-            .map_err(|err| {
-                FunctionCallError::RespondToModel(format!(
-                    "failed to load agent job {job_id}: {err}"
-                ))
-            })?
-            .ok_or_else(|| {
-                FunctionCallError::RespondToModel(format!("agent job {job_id} not found"))
-            })?;
-        let output_path = PathBuf::from(job.output_csv_path.clone());
-        if !tokio::fs::try_exists(&output_path).await.unwrap_or(false) {
-            export_job_csv_snapshot(db.clone(), &job)
-                .await
-                .map_err(|err| {
-                    FunctionCallError::RespondToModel(format!(
-                        "failed to export output csv {job_id}: {err}"
-                    ))
-                })?;
-        }
+        let requested_concurrency = args.max_concurrency.or(args.max_workers);
+        let job = run_agent_job_and_load(
+            session,
+            turn,
+            db.clone(),
+            job_id.clone(),
+            requested_concurrency,
+        )
+        .await?;
         let progress = db
             .get_agent_job_progress(job_id.as_str())
             .await
@@ -461,6 +484,176 @@ mod spawn_agents_on_csv {
     }
 }
 
+mod spawn_agents_on_queue {
+    use super::*;
+
+    pub async fn handle(
+        session: Arc<Session>,
+        turn: Arc<TurnContext>,
+        arguments: String,
+    ) -> Result<FunctionToolOutput, FunctionCallError> {
+        let args: SpawnAgentsOnQueueArgs = parse_arguments(arguments.as_str())?;
+        if args.instruction.trim().is_empty() {
+            return Err(FunctionCallError::RespondToModel(
+                "instruction must be non-empty".to_string(),
+            ));
+        }
+
+        let db = required_state_db(&session)?;
+        let max_items = normalize_max_items(args.max_items)?;
+        let (seed_items, seed_path) =
+            parse_queue_seed_inputs(&turn, args.seed_items, args.seed_path).await?;
+        let items = build_initial_queue_job_items(seed_items.as_slice(), max_items)?;
+
+        let job_id = Uuid::new_v4().to_string();
+        let output_jsonl_path = args.output_jsonl_path.map_or_else(
+            || {
+                seed_path.as_ref().map_or_else(
+                    || default_output_jsonl_path_for_inline(&turn, job_id.as_str()),
+                    |path| default_output_jsonl_path_for_seed(path.as_path(), job_id.as_str()),
+                )
+            },
+            |path| turn.resolve_path(Some(path)),
+        );
+        let job_suffix = &job_id[..8];
+        let job_name = format!("agent-queue-{job_suffix}");
+        let max_runtime_seconds = normalize_max_runtime_seconds(
+            args.max_runtime_seconds
+                .or(turn.config.agent_job_max_runtime_seconds),
+        )?;
+        db.create_agent_job(
+            &codex_state::AgentJobCreateParams {
+                id: job_id.clone(),
+                name: job_name,
+                kind: codex_state::AgentJobKind::DynamicQueue,
+                instruction: args.instruction,
+                auto_export: true,
+                max_items: Some(max_items as u64),
+                max_runtime_seconds,
+                output_schema_json: args.output_schema,
+                input_headers: Vec::new(),
+                input_csv_path: seed_path
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_default(),
+                output_csv_path: output_jsonl_path.display().to_string(),
+            },
+            items.as_slice(),
+        )
+        .await
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!("failed to create agent job: {err}"))
+        })?;
+
+        let requested_concurrency = args.max_concurrency.or(args.max_workers);
+        let job = run_agent_job_and_load(
+            session,
+            turn,
+            db.clone(),
+            job_id.clone(),
+            requested_concurrency,
+        )
+        .await?;
+        let progress = db
+            .get_agent_job_progress(job_id.as_str())
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to load agent job progress {job_id}: {err}"
+                ))
+            })?;
+        let mut job_error = job.last_error.clone().filter(|err| !err.trim().is_empty());
+        let failed_item_errors = if progress.failed_items > 0 {
+            let items = db
+                .list_agent_job_items(
+                    job_id.as_str(),
+                    Some(codex_state::AgentJobItemStatus::Failed),
+                    Some(5),
+                )
+                .await
+                .unwrap_or_default();
+            let summaries: Vec<_> = items
+                .into_iter()
+                .filter_map(|item| {
+                    let last_error = item.last_error.unwrap_or_default();
+                    if last_error.trim().is_empty() {
+                        return None;
+                    }
+                    Some(QueueAgentJobFailureSummary {
+                        item_id: item.item_id,
+                        dedupe_key: item.dedupe_key,
+                        last_error,
+                    })
+                })
+                .collect();
+            if summaries.is_empty() {
+                if job_error.is_none() {
+                    job_error = Some(
+                        "agent job has failed items but no error details were recorded".to_string(),
+                    );
+                }
+                None
+            } else {
+                Some(summaries)
+            }
+        } else {
+            None
+        };
+        let content = serde_json::to_string(&SpawnAgentsOnQueueResult {
+            job_id,
+            status: job.status.as_str().to_string(),
+            output_jsonl_path: job.output_csv_path,
+            total_items: progress.total_items,
+            pending_items: progress.pending_items,
+            completed_items: progress.completed_items,
+            failed_items: progress.failed_items,
+            job_error,
+            failed_item_errors,
+        })
+        .map_err(|err| {
+            FunctionCallError::Fatal(format!(
+                "failed to serialize spawn_agents_on_queue result: {err}"
+            ))
+        })?;
+        Ok(FunctionToolOutput::from_text(content, Some(true)))
+    }
+}
+
+mod enqueue_agent_job_items {
+    use super::*;
+
+    pub async fn handle(
+        session: Arc<Session>,
+        arguments: String,
+    ) -> Result<FunctionToolOutput, FunctionCallError> {
+        let args: EnqueueAgentJobItemsArgs = parse_arguments(arguments.as_str())?;
+        let db = required_state_db(&session)?;
+        let reporting_thread_id = session.conversation_id.to_string();
+        let items = build_enqueued_queue_job_items(args.items.as_slice())?;
+        let result = db
+            .enqueue_agent_job_items(
+                args.job_id.as_str(),
+                args.parent_item_id.as_str(),
+                reporting_thread_id.as_str(),
+                items.as_slice(),
+            )
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to enqueue queue items for {} / {}: {err}",
+                    args.job_id, args.parent_item_id
+                ))
+            })?;
+        let content = serde_json::to_string(&build_enqueue_agent_job_items_tool_result(&result))
+            .map_err(|err| {
+                FunctionCallError::Fatal(format!(
+                    "failed to serialize enqueue_agent_job_items result: {err}"
+                ))
+            })?;
+        Ok(FunctionToolOutput::from_text(content, Some(true)))
+    }
+}
+
 mod report_agent_job_result {
     use super::*;
 
@@ -507,6 +700,73 @@ mod report_agent_job_result {
     }
 }
 
+async fn run_agent_job_and_load(
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
+    db: Arc<codex_state::StateRuntime>,
+    job_id: String,
+    requested_concurrency: Option<usize>,
+) -> Result<codex_state::AgentJob, FunctionCallError> {
+    let options = match build_runner_options(&session, &turn, requested_concurrency).await {
+        Ok(options) => options,
+        Err(err) => {
+            let error_message = err.to_string();
+            let _ = db
+                .mark_agent_job_failed(job_id.as_str(), error_message.as_str())
+                .await;
+            return Err(err);
+        }
+    };
+    db.mark_agent_job_running(job_id.as_str())
+        .await
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to transition agent job {job_id} to running: {err}"
+            ))
+        })?;
+    let max_threads = turn.config.agent_max_threads;
+    let effective_concurrency = options.max_concurrency;
+    let message = format!(
+        "agent job concurrency: job_id={job_id} requested={requested_concurrency:?} max_threads={max_threads:?} effective={effective_concurrency}"
+    );
+    let _ = session.notify_background_event(&turn, message).await;
+    if let Err(err) = run_agent_job_loop(
+        session.clone(),
+        turn.clone(),
+        db.clone(),
+        job_id.clone(),
+        options,
+    )
+    .await
+    {
+        let error_message = format!("job runner failed: {err}");
+        let _ = db
+            .mark_agent_job_failed(job_id.as_str(), error_message.as_str())
+            .await;
+        return Err(FunctionCallError::RespondToModel(format!(
+            "agent job {job_id} failed: {err}"
+        )));
+    }
+
+    let job = db
+        .get_agent_job(job_id.as_str())
+        .await
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!("failed to load agent job {job_id}: {err}"))
+        })?
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(format!("agent job {job_id} not found"))
+        })?;
+    let output_path = PathBuf::from(job.output_csv_path.clone());
+    if !tokio::fs::try_exists(&output_path).await.unwrap_or(false) {
+        export_job_snapshot(db, &job).await.map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to export output for agent job {job_id}: {err}"
+            ))
+        })?;
+    }
+    Ok(job)
+}
 fn required_state_db(
     session: &Arc<Session>,
 ) -> Result<Arc<codex_state::StateRuntime>, FunctionCallError> {
@@ -560,6 +820,221 @@ fn normalize_max_runtime_seconds(requested: Option<u64>) -> Result<Option<u64>, 
     Ok(Some(requested))
 }
 
+fn normalize_max_items(requested: Option<usize>) -> Result<usize, FunctionCallError> {
+    let max_items = requested.unwrap_or(DEFAULT_AGENT_QUEUE_MAX_ITEMS);
+    if max_items == 0 {
+        return Err(FunctionCallError::RespondToModel(
+            "max_items must be >= 1".to_string(),
+        ));
+    }
+    if max_items > i64::MAX as usize {
+        return Err(FunctionCallError::RespondToModel(
+            "max_items is too large".to_string(),
+        ));
+    }
+    Ok(max_items)
+}
+
+async fn parse_queue_seed_inputs(
+    turn: &Arc<TurnContext>,
+    seed_items: Option<Vec<QueueJobItemArgs>>,
+    seed_path: Option<String>,
+) -> Result<(Vec<QueueJobItemArgs>, Option<PathBuf>), FunctionCallError> {
+    match (seed_items, seed_path) {
+        (Some(items), None) => Ok((items, None)),
+        (None, Some(seed_path)) => {
+            if seed_path.trim().is_empty() {
+                return Err(FunctionCallError::RespondToModel(
+                    "seed_path must be non-empty".to_string(),
+                ));
+            }
+            let resolved_path = turn.resolve_path(Some(seed_path));
+            let display_path = resolved_path.display().to_string();
+            let content = tokio::fs::read_to_string(&resolved_path)
+                .await
+                .map_err(|err| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to read queue seed input {display_path}: {err}"
+                    ))
+                })?;
+            let items = parse_queue_seed_content(content.as_str())?;
+            Ok((items, Some(resolved_path)))
+        }
+        (Some(_), Some(_)) | (None, None) => Err(FunctionCallError::RespondToModel(
+            "provide exactly one of seed_items or seed_path".to_string(),
+        )),
+    }
+}
+
+fn parse_queue_seed_content(content: &str) -> Result<Vec<QueueJobItemArgs>, FunctionCallError> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    if trimmed.starts_with('[') {
+        return serde_json::from_str(trimmed).map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "failed to parse queue seed JSON array: {err}"
+            ))
+        });
+    }
+
+    let mut items = Vec::new();
+    for (index, line) in content.lines().enumerate() {
+        let trimmed_line = line.trim();
+        if trimmed_line.is_empty() {
+            continue;
+        }
+        let item = serde_json::from_str::<QueueJobItemArgs>(trimmed_line).map_err(|err| {
+            let line_number = index + 1;
+            FunctionCallError::RespondToModel(format!(
+                "failed to parse queue seed JSONL line {line_number}: {err}"
+            ))
+        })?;
+        items.push(item);
+    }
+    Ok(items)
+}
+
+fn build_initial_queue_job_items(
+    items: &[QueueJobItemArgs],
+    max_items: usize,
+) -> Result<Vec<codex_state::AgentJobItemCreateParams>, FunctionCallError> {
+    let mut created_items = Vec::with_capacity(items.len().min(max_items));
+    let mut seen_item_ids = HashSet::new();
+    let mut seen_dedupe_keys = HashSet::new();
+
+    for (index, item) in items.iter().enumerate() {
+        let row_json = queue_item_input_object(item, index, "queue seed item")?;
+        let dedupe_key = normalize_optional_queue_text(item.dedupe_key.as_deref());
+        if let Some(dedupe_key) = dedupe_key.as_ref()
+            && !seen_dedupe_keys.insert(dedupe_key.clone())
+        {
+            continue;
+        }
+        if created_items.len() >= max_items {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "queue seeds exceed max_items limit of {max_items}"
+            )));
+        }
+
+        let base_item_id = normalize_optional_queue_text(item.item_id.as_deref())
+            .unwrap_or_else(|| format!("item-{}", index + 1));
+        let mut item_id = base_item_id.clone();
+        let mut suffix = 2usize;
+        while !seen_item_ids.insert(item_id.clone()) {
+            item_id = format!("{base_item_id}-{suffix}");
+            suffix = suffix.saturating_add(1);
+        }
+
+        created_items.push(codex_state::AgentJobItemCreateParams {
+            item_id,
+            parent_item_id: None,
+            row_index: created_items.len() as i64,
+            source_id: None,
+            dedupe_key,
+            row_json,
+        });
+    }
+
+    Ok(created_items)
+}
+
+fn build_enqueued_queue_job_items(
+    items: &[QueueJobItemArgs],
+) -> Result<Vec<codex_state::AgentJobItemCreateParams>, FunctionCallError> {
+    let mut created_items = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let row_json = queue_item_input_object(item, index, "enqueue item")?;
+        let item_id = normalize_optional_queue_text(item.item_id.as_deref())
+            .unwrap_or_else(|| format!("item-{}", index + 1));
+        created_items.push(codex_state::AgentJobItemCreateParams {
+            item_id,
+            parent_item_id: None,
+            row_index: index as i64,
+            source_id: None,
+            dedupe_key: normalize_optional_queue_text(item.dedupe_key.as_deref()),
+            row_json,
+        });
+    }
+    Ok(created_items)
+}
+
+fn queue_item_input_object(
+    item: &QueueJobItemArgs,
+    index: usize,
+    item_label: &str,
+) -> Result<Value, FunctionCallError> {
+    let Some(object) = item.input.as_object() else {
+        let item_number = index + 1;
+        return Err(FunctionCallError::RespondToModel(format!(
+            "{item_label} {item_number} input must be a JSON object"
+        )));
+    };
+    Ok(Value::Object(object.clone()))
+}
+
+fn normalize_optional_queue_text(value: Option<&str>) -> Option<String> {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+}
+
+fn build_enqueue_agent_job_items_tool_result(
+    result: &codex_state::EnqueueAgentJobItemsResult,
+) -> EnqueueAgentJobItemsToolResult {
+    let mut accepted_count = 0usize;
+    let mut duplicate_count = 0usize;
+    let mut rejected_count = 0usize;
+    let mut items = Vec::with_capacity(result.outcomes.len());
+
+    for (index, outcome) in result.outcomes.iter().enumerate() {
+        match outcome {
+            codex_state::EnqueueAgentJobItemOutcome::Enqueued { item } => {
+                accepted_count = accepted_count.saturating_add(1);
+                items.push(EnqueueAgentJobItemsToolItemResult {
+                    index,
+                    status: "accepted".to_string(),
+                    item_id: Some(item.item_id.clone()),
+                    dedupe_key: item.dedupe_key.clone(),
+                    reason: None,
+                });
+            }
+            codex_state::EnqueueAgentJobItemOutcome::Deduped { item } => {
+                duplicate_count = duplicate_count.saturating_add(1);
+                items.push(EnqueueAgentJobItemsToolItemResult {
+                    index,
+                    status: "duplicate".to_string(),
+                    item_id: Some(item.item_id.clone()),
+                    dedupe_key: item.dedupe_key.clone(),
+                    reason: None,
+                });
+            }
+            codex_state::EnqueueAgentJobItemOutcome::MaxItemsReached {
+                requested_item_id,
+                dedupe_key,
+                ..
+            } => {
+                rejected_count = rejected_count.saturating_add(1);
+                items.push(EnqueueAgentJobItemsToolItemResult {
+                    index,
+                    status: "rejected".to_string(),
+                    item_id: Some(requested_item_id.clone()),
+                    dedupe_key: dedupe_key.clone(),
+                    reason: Some("max_items_reached".to_string()),
+                });
+            }
+        }
+    }
+
+    EnqueueAgentJobItemsToolResult {
+        accepted_count,
+        duplicate_count,
+        rejected_count,
+        items,
+    }
+}
+
 async fn run_agent_job_loop(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
@@ -594,6 +1069,12 @@ async fn run_agent_job_loop(
         .await?;
 
     let mut cancel_requested = db.is_agent_job_cancelled(job_id.as_str()).await?;
+    let worker_source_label = match job.kind {
+        codex_state::AgentJobKind::CsvBatch => format!("{CSV_AGENT_JOB_SOURCE_PREFIX}{job_id}"),
+        codex_state::AgentJobKind::DynamicQueue => {
+            format!("{QUEUE_AGENT_JOB_SOURCE_PREFIX}{job_id}")
+        }
+    };
     loop {
         let mut progressed = false;
 
@@ -628,9 +1109,9 @@ async fn run_agent_job_loop(
                     .spawn_agent(
                         options.spawn_config.clone(),
                         items,
-                        Some(SessionSource::SubAgent(SubAgentSource::Other(format!(
-                            "agent_job:{job_id}"
-                        )))),
+                        Some(SessionSource::SubAgent(SubAgentSource::Other(
+                            worker_source_label.clone(),
+                        ))),
                     )
                     .await
                 {
@@ -737,7 +1218,7 @@ async fn run_agent_job_loop(
     }
 
     let progress = db.get_agent_job_progress(job_id.as_str()).await?;
-    if let Err(err) = export_job_csv_snapshot(db.clone(), &job).await {
+    if let Err(err) = export_job_snapshot(db.clone(), &job).await {
         let message = format!("auto-export failed: {err}");
         db.mark_agent_job_failed(job_id.as_str(), message.as_str())
             .await?;
@@ -779,6 +1260,16 @@ async fn run_agent_job_loop(
     Ok(())
 }
 
+async fn export_job_snapshot(
+    db: Arc<codex_state::StateRuntime>,
+    job: &codex_state::AgentJob,
+) -> anyhow::Result<()> {
+    match job.kind {
+        codex_state::AgentJobKind::CsvBatch => export_job_csv_snapshot(db, job).await,
+        codex_state::AgentJobKind::DynamicQueue => export_job_queue_snapshot(db, job).await,
+    }
+}
+
 async fn export_job_csv_snapshot(
     db: Arc<codex_state::StateRuntime>,
     job: &codex_state::AgentJob,
@@ -793,6 +1284,21 @@ async fn export_job_csv_snapshot(
         tokio::fs::create_dir_all(parent).await?;
     }
     tokio::fs::write(&output_path, csv_content).await?;
+    Ok(())
+}
+
+async fn export_job_queue_snapshot(
+    db: Arc<codex_state::StateRuntime>,
+    job: &codex_state::AgentJob,
+) -> anyhow::Result<()> {
+    let items = db.list_agent_job_items(job.id.as_str(), None, None).await?;
+    let jsonl_content = render_job_queue_jsonl(items.as_slice())
+        .map_err(|err| anyhow::anyhow!("failed to render job queue snapshot: {err}"))?;
+    let output_path = PathBuf::from(job.output_csv_path.clone());
+    if let Some(parent) = output_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(&output_path, jsonl_content).await?;
     Ok(())
 }
 
@@ -974,23 +1480,93 @@ fn build_worker_prompt(
         .transpose()?
         .unwrap_or_else(|| "{}".to_string());
     let row_json = serde_json::to_string_pretty(&item.row_json)?;
-    Ok(format!(
-        "You are processing one item for a generic agent job.\n\
-Job ID: {job_id}\n\
-Item ID: {item_id}\n\n\
-Task instruction:\n\
-{instruction}\n\n\
-Input row (JSON):\n\
-{row_json}\n\n\
-Expected result schema (JSON Schema or {{}}):\n\
-{output_schema}\n\n\
-You MUST call the `report_agent_job_result` tool exactly once with:\n\
-1. `job_id` = \"{job_id}\"\n\
-2. `item_id` = \"{item_id}\"\n\
-3. `result` = a JSON object that contains your analysis result for this row.\n\n\
-If you need to stop the job early, include `stop` = true in the tool call.\n\n\
+    match job.kind {
+        codex_state::AgentJobKind::CsvBatch => Ok(format!(
+            "You are processing one item for a generic agent job.
+\
+Job ID: {job_id}
+\
+Item ID: {item_id}
+
+\
+Task instruction:
+\
+{instruction}
+
+\
+Input row (JSON):
+\
+{row_json}
+
+\
+Expected result schema (JSON Schema or {{}}):
+\
+{output_schema}
+
+\
+You MUST call the `report_agent_job_result` tool exactly once with:
+\
+1. `job_id` = \"{job_id}\"
+\
+2. `item_id` = \"{item_id}\"
+\
+3. `result` = a JSON object that contains your analysis result for this row.
+
+\
+If you need to stop the job early, include `stop` = true in the tool call.
+
+\
 After the tool call succeeds, stop.",
-    ))
+        )),
+        codex_state::AgentJobKind::DynamicQueue => Ok(format!(
+            "You are processing one item in a queue-draining agent job.
+\
+Job ID: {job_id}
+\
+Item ID: {item_id}
+
+\
+Task instruction:
+\
+{instruction}
+
+\
+Input item (JSON):
+\
+{row_json}
+
+\
+Expected result schema (JSON Schema or {{}}):
+\
+{output_schema}
+
+\
+You may call the `enqueue_agent_job_items` tool zero or more times to add discovered work.
+\
+When calling `enqueue_agent_job_items`, use:
+\
+1. `job_id` = \"{job_id}\"
+\
+2. `parent_item_id` = \"{item_id}\"
+\
+3. `items` = an array of queue items, each with an `input` object and optional `item_id` and `dedupe_key`.
+
+\
+You MUST call the `report_agent_job_result` tool exactly once with:
+\
+1. `job_id` = \"{job_id}\"
+\
+2. `item_id` = \"{item_id}\"
+\
+3. `result` = a JSON object that contains your analysis result for this item.
+
+\
+If you need to stop the entire job early, include `stop` = true in the `report_agent_job_result` tool call.
+
+\
+After the final `report_agent_job_result` tool call succeeds, stop.",
+        )),
+    }
 }
 
 fn render_instruction_template(instruction: &str, row_json: &Value) -> String {
@@ -1062,6 +1638,52 @@ fn default_output_csv_path(input_csv_path: &Path, job_id: &str) -> PathBuf {
         .unwrap_or("agent_job_output");
     let job_suffix = &job_id[..8];
     input_csv_path.with_file_name(format!("{stem}.agent-job-{job_suffix}.csv"))
+}
+
+fn default_output_jsonl_path_for_inline(turn: &TurnContext, job_id: &str) -> PathBuf {
+    turn.resolve_path(Some(format!("agent-queue-{}.jsonl", &job_id[..8])))
+}
+
+fn default_output_jsonl_path_for_seed(seed_path: &Path, job_id: &str) -> PathBuf {
+    let stem = seed_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("agent-queue");
+    let filename = format!("{stem}.agent-queue-{}.jsonl", &job_id[..8]);
+    seed_path.with_file_name(filename)
+}
+
+fn render_job_queue_jsonl(items: &[codex_state::AgentJobItem]) -> serde_json::Result<String> {
+    let mut lines = Vec::with_capacity(items.len());
+    for item in items {
+        lines.push(serde_json::to_string(&serde_json::json!({
+            "job_id": &item.job_id,
+            "item_id": &item.item_id,
+            "parent_item_id": &item.parent_item_id,
+            "dedupe_key": &item.dedupe_key,
+            "row_index": item.row_index,
+            "status": item.status.as_str(),
+            "attempt_count": item.attempt_count,
+            "input": &item.row_json,
+            "result": &item.result_json,
+            "last_error": &item.last_error,
+            "reported_at": item.reported_at.map(|value| value.to_rfc3339()),
+            "completed_at": item.completed_at.map(|value| value.to_rfc3339()),
+        }))?);
+    }
+    if lines.is_empty() {
+        Ok(String::new())
+    } else {
+        Ok(format!(
+            "{}
+",
+            lines.join(
+                "
+"
+            )
+        ))
+    }
 }
 
 fn parse_csv(content: &str) -> Result<(Vec<String>, Vec<Vec<String>>), String> {

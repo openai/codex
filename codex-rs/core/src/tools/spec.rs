@@ -279,6 +279,7 @@ pub(crate) struct ToolsConfig {
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
     pub agent_jobs_worker_tools: bool,
+    pub agent_jobs_queue_worker_tools: bool,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -376,12 +377,23 @@ impl ToolsConfig {
             }
         };
 
-        let agent_jobs_worker_tools = include_agent_jobs
-            && matches!(
-                session_source,
+        let (agent_jobs_worker_tools, agent_jobs_queue_worker_tools) = if !include_agent_jobs {
+            (false, false)
+        } else {
+            match session_source {
                 SessionSource::SubAgent(SubAgentSource::Other(label))
-                    if label.starts_with("agent_job:")
-            );
+                    if label.starts_with("agent_job:queue:") =>
+                {
+                    (true, true)
+                }
+                SessionSource::SubAgent(SubAgentSource::Other(label))
+                    if label.starts_with("agent_job:csv:") || label.starts_with("agent_job:") =>
+                {
+                    (true, false)
+                }
+                _ => (false, false),
+            }
+        };
 
         Self {
             available_models: available_models_ref.to_vec(),
@@ -411,6 +423,7 @@ impl ToolsConfig {
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
             agent_jobs_worker_tools,
+            agent_jobs_queue_worker_tools,
         }
     }
 
@@ -1240,6 +1253,177 @@ fn create_spawn_agents_on_csv_tool() -> ToolSpec {
     })
 }
 
+fn create_agent_queue_item_schema() -> JsonSchema {
+    JsonSchema::Object {
+        properties: BTreeMap::from([
+            (
+                "input".to_string(),
+                JsonSchema::Object {
+                    properties: BTreeMap::new(),
+                    required: None,
+                    additional_properties: None,
+                },
+            ),
+            (
+                "item_id".to_string(),
+                JsonSchema::String {
+                    description: Some(
+                        "Optional stable identifier for this queue item.".to_string(),
+                    ),
+                },
+            ),
+            (
+                "dedupe_key".to_string(),
+                JsonSchema::String {
+                    description: Some(
+                        "Optional deduplication key used to skip already-seen items.".to_string(),
+                    ),
+                },
+            ),
+        ]),
+        required: Some(vec!["input".to_string()]),
+        additional_properties: Some(false.into()),
+    }
+}
+
+fn create_spawn_agents_on_queue_tool() -> ToolSpec {
+    let queue_item_schema = create_agent_queue_item_schema();
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "seed_items".to_string(),
+        JsonSchema::Array {
+            items: Box::new(queue_item_schema),
+            description: Some(
+                "Initial queue items as JSON objects. Provide exactly one of `seed_items` or `seed_path`."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "seed_path".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Path to a JSON array or JSONL file containing initial queue items. Provide exactly one of `seed_items` or `seed_path`."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "instruction".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Instruction template to apply to each queue item. Use {field_name} placeholders to inject values from the item's `input` object."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "output_jsonl_path".to_string(),
+        JsonSchema::String {
+            description: Some("Optional output JSONL path for exported results.".to_string()),
+        },
+    );
+    properties.insert(
+        "max_concurrency".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Maximum concurrent workers for this job. Defaults to 16 and is capped by config."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "max_workers".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Alias for max_concurrency. Set to 1 to run sequentially.".to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "max_runtime_seconds".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Maximum runtime per worker before it is failed. Defaults to 1800 seconds."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "max_items".to_string(),
+        JsonSchema::Number {
+            description: Some(
+                "Hard cap on accepted queue items for this job, including seeds and later enqueues. Defaults to 1000."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "output_schema".to_string(),
+        JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: None,
+            additional_properties: None,
+        },
+    );
+    ToolSpec::Function(ResponsesApiTool {
+        name: "spawn_agents_on_queue".to_string(),
+        description: "Process a dynamic queue by spawning worker sub-agents for pending items until the queue is drained. Workers may call `enqueue_agent_job_items` zero or more times to append discovered work, and must call `report_agent_job_result` exactly once. This call blocks until the queue finishes and automatically exports a JSONL snapshot to `output_jsonl_path` (or a default path)."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["instruction".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
+    })
+}
+
+fn create_enqueue_agent_job_items_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "job_id".to_string(),
+        JsonSchema::String {
+            description: Some("Identifier of the job.".to_string()),
+        },
+    );
+    properties.insert(
+        "parent_item_id".to_string(),
+        JsonSchema::String {
+            description: Some("Identifier of the running parent queue item.".to_string()),
+        },
+    );
+    properties.insert(
+        "items".to_string(),
+        JsonSchema::Array {
+            items: Box::new(create_agent_queue_item_schema()),
+            description: Some(
+                "Queue items to append. Each item requires an `input` object and may include `item_id` and `dedupe_key`."
+                    .to_string(),
+            ),
+        },
+    );
+    ToolSpec::Function(ResponsesApiTool {
+        name: "enqueue_agent_job_items".to_string(),
+        description:
+            "Worker-only tool to append new pending items to a dynamic agent-job queue. Main agents should not call this."
+                .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec![
+                "job_id".to_string(),
+                "parent_item_id".to_string(),
+                "items".to_string(),
+            ]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
+    })
+}
 fn create_report_agent_job_result_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -2958,7 +3142,14 @@ pub(crate) fn build_specs_with_discoverable_tools(
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
+        push_tool_spec(
+            &mut builder,
+            create_spawn_agents_on_queue_tool(),
+            false,
+            config.code_mode_enabled,
+        );
         builder.register_handler("spawn_agents_on_csv", agent_jobs_handler.clone());
+        builder.register_handler("spawn_agents_on_queue", agent_jobs_handler.clone());
         if config.agent_jobs_worker_tools {
             push_tool_spec(
                 &mut builder,
@@ -2966,7 +3157,16 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
-            builder.register_handler("report_agent_job_result", agent_jobs_handler);
+            builder.register_handler("report_agent_job_result", agent_jobs_handler.clone());
+        }
+        if config.agent_jobs_queue_worker_tools {
+            push_tool_spec(
+                &mut builder,
+                create_enqueue_agent_job_items_tool(),
+                false,
+                config.code_mode_enabled,
+            );
+            builder.register_handler("enqueue_agent_job_items", agent_jobs_handler);
         }
     }
 
