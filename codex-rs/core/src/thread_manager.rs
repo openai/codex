@@ -381,7 +381,7 @@ impl ThreadManager {
             persist_extended_history,
             metrics_service_name,
             parent_trace,
-            None,
+            /*user_shell_override*/ None,
         ))
         .await
     }
@@ -421,7 +421,7 @@ impl ThreadManager {
             persist_extended_history,
             /*metrics_service_name*/ None,
             parent_trace,
-            None,
+            /*user_shell_override*/ None,
         ))
         .await
     }
@@ -437,10 +437,10 @@ impl ThreadManager {
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
             Vec::new(),
-            false,
-            None,
-            None,
-            Some(user_shell_override),
+            /*persist_extended_history*/ false,
+            /*metrics_service_name*/ None,
+            /*parent_trace*/ None,
+            /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
     }
@@ -459,10 +459,10 @@ impl ThreadManager {
             auth_manager,
             self.agent_control(),
             Vec::new(),
-            false,
-            None,
-            None,
-            Some(user_shell_override),
+            /*persist_extended_history*/ false,
+            /*metrics_service_name*/ None,
+            /*parent_trace*/ None,
+            /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
     }
@@ -548,7 +548,7 @@ impl ThreadManager {
             persist_extended_history,
             /*metrics_service_name*/ None,
             parent_trace,
-            None,
+            /*user_shell_override*/ None,
         ))
         .await
     }
@@ -634,7 +634,7 @@ impl ThreadManagerState {
             metrics_service_name,
             inherited_shell_snapshot,
             /*parent_trace*/ None,
-            None,
+            /*user_shell_override*/ None,
         ))
         .await
     }
@@ -659,7 +659,7 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
             /*parent_trace*/ None,
-            None,
+            /*user_shell_override*/ None,
         ))
         .await
     }
@@ -684,7 +684,7 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
             /*parent_trace*/ None,
-            None,
+            /*user_shell_override*/ None,
         ))
         .await
     }
