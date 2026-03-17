@@ -2081,12 +2081,6 @@ impl Config {
 
         let user_instructions = Self::load_instructions(Some(&codex_home));
         let mut startup_warnings = Vec::new();
-        #[cfg(target_os = "linux")]
-        if !Path::new(SYSTEM_BWRAP_PATH).is_file() {
-            startup_warnings.push(format!(
-                "Codex could not find system bubblewrap at {SYSTEM_BWRAP_PATH}. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime."
-            ));
-        }
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
@@ -2332,6 +2326,12 @@ impl Config {
                     "`{OPENAI_BASE_URL_ENV_VAR}` is deprecated. Set `openai_base_url` in config.toml instead."
                 ));
             }
+        }
+        #[cfg(target_os = "linux")]
+        if !Path::new(SYSTEM_BWRAP_PATH).is_file() {
+            startup_warnings.push(format!(
+                "Codex could not find system bubblewrap at {SYSTEM_BWRAP_PATH}. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime."
+            ));
         }
         let effective_openai_base_url = openai_base_url.or(openai_base_url_from_env);
 
