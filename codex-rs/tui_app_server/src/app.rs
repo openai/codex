@@ -2146,7 +2146,8 @@ impl App {
             id: String::new(),
             msg: EventMsg::SessionConfigured(session_configured.clone()),
         };
-        let history_events = thread_snapshot_events(&started.thread);
+        let history_events =
+            thread_snapshot_events(&started.thread, started.show_raw_agent_reasoning);
         let replay_snapshot = {
             let mut replay_store = ThreadEventStore::new(history_events.len().saturating_add(1));
             replay_store.push_event(session_event.clone());
@@ -6785,6 +6786,7 @@ guardian_approval = true
                 network_proxy: None,
                 rollout_path: Some(PathBuf::new()),
             },
+            show_raw_agent_reasoning: false,
         })
         .await?;
 
@@ -6888,6 +6890,7 @@ guardian_approval = true
                 network_proxy: None,
                 rollout_path: Some(PathBuf::new()),
             },
+            show_raw_agent_reasoning: false,
         })
         .await?;
 
@@ -6914,6 +6917,89 @@ guardian_approval = true
         assert_eq!(
             user_messages.last().map(String::as_str),
             Some(last_message.as_str())
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn restore_started_app_server_thread_replays_raw_reasoning_when_enabled() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+
+        app.restore_started_app_server_thread(AppServerStartedThread {
+            thread: Thread {
+                id: thread_id.to_string(),
+                preview: "hello".to_string(),
+                ephemeral: false,
+                model_provider: "test-provider".to_string(),
+                created_at: 0,
+                updated_at: 0,
+                status: ThreadStatus::Idle,
+                path: None,
+                cwd: PathBuf::from("/tmp/project"),
+                cli_version: "test".to_string(),
+                source: SessionSource::Cli.into(),
+                agent_nickname: None,
+                agent_role: None,
+                git_info: None,
+                name: Some("restored".to_string()),
+                turns: vec![Turn {
+                    id: "turn-1".to_string(),
+                    items: vec![ThreadItem::Reasoning {
+                        id: "reasoning-1".to_string(),
+                        summary: vec!["summary reasoning".to_string()],
+                        content: vec!["raw reasoning".to_string()],
+                    }],
+                    status: TurnStatus::Completed,
+                    error: None,
+                }],
+            },
+            session_configured: SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: Some("restored".to_string()),
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            },
+            show_raw_agent_reasoning: true,
+        })
+        .await?;
+
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let cell: Arc<dyn HistoryCell> = cell.into();
+                app.transcript_cells.push(cell);
+            }
+        }
+
+        let channel = app
+            .thread_event_channels
+            .get(&thread_id)
+            .expect("restored thread channel should exist");
+        let snapshot = channel.store.lock().await.snapshot();
+        let replayed_raw_reasoning = snapshot.events.iter().any(|event| {
+            matches!(
+                &event.msg,
+                EventMsg::AgentReasoningRawContent(raw) if raw.text == "raw reasoning"
+            )
+        });
+
+        assert!(
+            replayed_raw_reasoning,
+            "expected restored snapshot to keep raw reasoning event: {:?}",
+            snapshot.events
         );
 
         Ok(())

@@ -207,7 +207,10 @@ impl App {
 /// Each turn is expanded into `TurnStarted`, zero or more `ItemCompleted`,
 /// and a terminal event that matches the turn's `TurnStatus`. Returns an
 /// empty vec (with a warning log) if the thread ID is not a valid UUID.
-pub(super) fn thread_snapshot_events(thread: &Thread) -> Vec<Event> {
+pub(super) fn thread_snapshot_events(
+    thread: &Thread,
+    show_raw_agent_reasoning: bool,
+) -> Vec<Event> {
     let Ok(thread_id) = ThreadId::from_string(&thread.id) else {
         tracing::warn!(
             thread_id = %thread.id,
@@ -219,7 +222,7 @@ pub(super) fn thread_snapshot_events(thread: &Thread) -> Vec<Event> {
     thread
         .turns
         .iter()
-        .flat_map(|turn| turn_snapshot_events(thread_id, turn))
+        .flat_map(|turn| turn_snapshot_events(thread_id, turn, show_raw_agent_reasoning))
         .collect()
 }
 
@@ -452,7 +455,11 @@ fn token_usage_from_app_server(
 /// agent-message items, while replaying the legacy events that still
 /// drive rendering for reasoning, web-search, image-generation, and
 /// context-compaction history cells.
-fn turn_snapshot_events(thread_id: ThreadId, turn: &Turn) -> Vec<Event> {
+fn turn_snapshot_events(
+    thread_id: ThreadId,
+    turn: &Turn,
+    show_raw_agent_reasoning: bool,
+) -> Vec<Event> {
     let mut events = vec![Event {
         id: String::new(),
         msg: EventMsg::TurnStarted(TurnStartedEvent {
@@ -482,7 +489,7 @@ fn turn_snapshot_events(thread_id: ThreadId, turn: &Turn) -> Vec<Event> {
             | TurnItem::ImageGeneration(_)
             | TurnItem::ContextCompaction(_) => {
                 events.extend(
-                    item.as_legacy_events(/*show_raw_agent_reasoning*/ false)
+                    item.as_legacy_events(show_raw_agent_reasoning)
                         .into_iter()
                         .map(|msg| Event {
                             id: String::new(),
@@ -865,60 +872,63 @@ mod tests {
     #[test]
     fn bridges_thread_snapshot_turns_for_resume_restore() {
         let thread_id = ThreadId::new();
-        let events = thread_snapshot_events(&Thread {
-            id: thread_id.to_string(),
-            preview: "hello".to_string(),
-            ephemeral: false,
-            model_provider: "openai".to_string(),
-            created_at: 0,
-            updated_at: 0,
-            status: ThreadStatus::Idle,
-            path: None,
-            cwd: PathBuf::from("/tmp/project"),
-            cli_version: "test".to_string(),
-            source: SessionSource::Cli.into(),
-            agent_nickname: None,
-            agent_role: None,
-            git_info: None,
-            name: Some("restore".to_string()),
-            turns: vec![
-                Turn {
-                    id: "turn-complete".to_string(),
-                    items: vec![
-                        ThreadItem::UserMessage {
-                            id: "user-1".to_string(),
-                            content: vec![codex_app_server_protocol::UserInput::Text {
-                                text: "hello".to_string(),
-                                text_elements: Vec::new(),
-                            }],
-                        },
-                        ThreadItem::AgentMessage {
-                            id: "assistant-1".to_string(),
-                            text: "hi".to_string(),
-                            phase: Some(MessagePhase::FinalAnswer),
-                        },
-                    ],
-                    status: TurnStatus::Completed,
-                    error: None,
-                },
-                Turn {
-                    id: "turn-interrupted".to_string(),
-                    items: Vec::new(),
-                    status: TurnStatus::Interrupted,
-                    error: None,
-                },
-                Turn {
-                    id: "turn-failed".to_string(),
-                    items: Vec::new(),
-                    status: TurnStatus::Failed,
-                    error: Some(TurnError {
-                        message: "request failed".to_string(),
-                        codex_error_info: Some(CodexErrorInfo::Other),
-                        additional_details: None,
-                    }),
-                },
-            ],
-        });
+        let events = thread_snapshot_events(
+            &Thread {
+                id: thread_id.to_string(),
+                preview: "hello".to_string(),
+                ephemeral: false,
+                model_provider: "openai".to_string(),
+                created_at: 0,
+                updated_at: 0,
+                status: ThreadStatus::Idle,
+                path: None,
+                cwd: PathBuf::from("/tmp/project"),
+                cli_version: "test".to_string(),
+                source: SessionSource::Cli.into(),
+                agent_nickname: None,
+                agent_role: None,
+                git_info: None,
+                name: Some("restore".to_string()),
+                turns: vec![
+                    Turn {
+                        id: "turn-complete".to_string(),
+                        items: vec![
+                            ThreadItem::UserMessage {
+                                id: "user-1".to_string(),
+                                content: vec![codex_app_server_protocol::UserInput::Text {
+                                    text: "hello".to_string(),
+                                    text_elements: Vec::new(),
+                                }],
+                            },
+                            ThreadItem::AgentMessage {
+                                id: "assistant-1".to_string(),
+                                text: "hi".to_string(),
+                                phase: Some(MessagePhase::FinalAnswer),
+                            },
+                        ],
+                        status: TurnStatus::Completed,
+                        error: None,
+                    },
+                    Turn {
+                        id: "turn-interrupted".to_string(),
+                        items: Vec::new(),
+                        status: TurnStatus::Interrupted,
+                        error: None,
+                    },
+                    Turn {
+                        id: "turn-failed".to_string(),
+                        items: Vec::new(),
+                        status: TurnStatus::Failed,
+                        error: Some(TurnError {
+                            message: "request failed".to_string(),
+                            codex_error_info: Some(CodexErrorInfo::Other),
+                            additional_details: None,
+                        }),
+                    },
+                ],
+            },
+            /*show_raw_agent_reasoning*/ false,
+        );
 
         assert_eq!(events.len(), 9);
         assert!(matches!(events[0].msg, EventMsg::TurnStarted(_)));
@@ -973,6 +983,7 @@ mod tests {
                 status: TurnStatus::Completed,
                 error: None,
             },
+            /*show_raw_agent_reasoning*/ false,
         );
 
         assert_eq!(events.len(), 6);
@@ -999,5 +1010,35 @@ mod tests {
         assert_eq!(image_generation.result, "image.png");
         assert!(matches!(events[4].msg, EventMsg::ContextCompacted(_)));
         assert!(matches!(events[5].msg, EventMsg::TurnComplete(_)));
+    }
+
+    #[test]
+    fn bridges_raw_reasoning_snapshot_items_when_enabled() {
+        let events = turn_snapshot_events(
+            ThreadId::new(),
+            &Turn {
+                id: "turn-complete".to_string(),
+                items: vec![ThreadItem::Reasoning {
+                    id: "reasoning-1".to_string(),
+                    summary: vec!["Need to inspect config".to_string()],
+                    content: vec!["hidden chain".to_string()],
+                }],
+                status: TurnStatus::Completed,
+                error: None,
+            },
+            /*show_raw_agent_reasoning*/ true,
+        );
+
+        assert_eq!(events.len(), 4);
+        assert!(matches!(events[0].msg, EventMsg::TurnStarted(_)));
+        let EventMsg::AgentReasoning(reasoning) = &events[1].msg else {
+            panic!("expected reasoning replay");
+        };
+        assert_eq!(reasoning.text, "Need to inspect config");
+        let EventMsg::AgentReasoningRawContent(raw_reasoning) = &events[2].msg else {
+            panic!("expected raw reasoning replay");
+        };
+        assert_eq!(raw_reasoning.text, "hidden chain");
+        assert!(matches!(events[3].msg, EventMsg::TurnComplete(_)));
     }
 }

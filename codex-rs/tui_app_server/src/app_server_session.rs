@@ -123,6 +123,7 @@ impl ThreadParamsMode {
 pub(crate) struct AppServerStartedThread {
     pub(crate) thread: Thread,
     pub(crate) session_configured: SessionConfiguredEvent,
+    pub(crate) show_raw_agent_reasoning: bool,
 }
 
 impl AppServerSession {
@@ -841,12 +842,13 @@ fn started_thread_from_start_response(
     Ok(AppServerStartedThread {
         thread: response.thread,
         session_configured,
+        show_raw_agent_reasoning: false,
     })
 }
 
 fn started_thread_from_resume_response(
     response: ThreadResumeResponse,
-    _show_raw_agent_reasoning: bool,
+    show_raw_agent_reasoning: bool,
 ) -> Result<AppServerStartedThread> {
     let session_configured = session_configured_from_thread_resume_response(&response)
         .map_err(color_eyre::eyre::Report::msg)?;
@@ -854,12 +856,13 @@ fn started_thread_from_resume_response(
     Ok(AppServerStartedThread {
         thread,
         session_configured,
+        show_raw_agent_reasoning,
     })
 }
 
 fn started_thread_from_fork_response(
     response: ThreadForkResponse,
-    _show_raw_agent_reasoning: bool,
+    show_raw_agent_reasoning: bool,
 ) -> Result<AppServerStartedThread> {
     let session_configured = session_configured_from_thread_fork_response(&response)
         .map_err(color_eyre::eyre::Report::msg)?;
@@ -867,6 +870,7 @@ fn started_thread_from_fork_response(
     Ok(AppServerStartedThread {
         thread,
         session_configured,
+        show_raw_agent_reasoning,
     })
 }
 
@@ -1133,6 +1137,7 @@ mod tests {
             started_thread_from_resume_response(response, /*show_raw_agent_reasoning*/ false)
                 .expect("resume response should map");
         assert!(started.session_configured.initial_messages.is_none());
+        assert!(!started.show_raw_agent_reasoning);
         assert_eq!(started.thread.turns.len(), 1);
         assert_eq!(started.thread.turns[0].items.len(), 2);
     }
