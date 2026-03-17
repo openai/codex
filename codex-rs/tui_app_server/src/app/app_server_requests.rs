@@ -781,13 +781,17 @@ mod tests {
         let mut pending = PendingAppServerRequests::default();
 
         assert_eq!(
-            pending.note_server_request(&ServerRequest::ChatgptAuthTokensRefresh {
-                request_id: AppServerRequestId::Integer(100),
-                params: codex_app_server_protocol::ChatgptAuthTokensRefreshParams {
-                    reason: codex_app_server_protocol::ChatgptAuthTokensRefreshReason::Unauthorized,
-                    previous_account_id: Some("workspace-1".to_string()),
+            pending.note_server_request(
+                &ServerRequest::ChatgptAuthTokensRefresh {
+                    request_id: AppServerRequestId::Integer(100),
+                    params: codex_app_server_protocol::ChatgptAuthTokensRefreshParams {
+                        reason:
+                            codex_app_server_protocol::ChatgptAuthTokensRefreshReason::Unauthorized,
+                        previous_account_id: Some("workspace-1".to_string()),
+                    },
                 },
-            }),
+                /*allow_legacy_exec_approvals*/ false,
+            ),
             None
         );
     }
