@@ -1,9 +1,9 @@
 use std::path::Path;
 
+use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
 use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::auth::CodexAuth;
-use codex_protocol::account::PlanType as AccountPlanType;
+use codex_core::auth::load_auth_dot_json;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LocalChatgptAuth {
@@ -27,18 +27,20 @@ pub(crate) fn load_local_chatgpt_auth(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     forced_chatgpt_workspace_id: Option<&str>,
 ) -> Result<LocalChatgptAuth, String> {
-    let auth = CodexAuth::from_auth_storage(codex_home, auth_credentials_store_mode)
+    let auth = load_auth_dot_json(codex_home, auth_credentials_store_mode)
         .map_err(|err| format!("failed to load local auth: {err}"))?
         .ok_or_else(|| "no local auth available".to_string())?;
-    if !auth.is_chatgpt_auth() {
+    if matches!(auth.auth_mode, Some(AuthMode::ApiKey)) || auth.openai_api_key.is_some() {
         return Err("local auth is not a ChatGPT login".to_string());
     }
 
-    let access_token = auth
-        .get_token()
-        .map_err(|err| format!("failed to read local ChatGPT access token: {err}"))?;
-    let chatgpt_account_id = auth
-        .get_account_id()
+    let tokens = auth
+        .tokens
+        .ok_or_else(|| "local ChatGPT auth is missing token data".to_string())?;
+    let access_token = tokens.access_token;
+    let chatgpt_account_id = tokens
+        .account_id
+        .or(tokens.id_token.chatgpt_account_id.clone())
         .ok_or_else(|| "local ChatGPT auth is missing chatgpt account id".to_string())?;
     if let Some(expected_workspace) = forced_chatgpt_workspace_id
         && chatgpt_account_id != expected_workspace
@@ -48,17 +50,10 @@ pub(crate) fn load_local_chatgpt_auth(
         ));
     }
 
-    let chatgpt_plan_type = auth.account_plan_type().map(|plan_type| match plan_type {
-        AccountPlanType::Free => "free".to_string(),
-        AccountPlanType::Go => "go".to_string(),
-        AccountPlanType::Plus => "plus".to_string(),
-        AccountPlanType::Pro => "pro".to_string(),
-        AccountPlanType::Team => "team".to_string(),
-        AccountPlanType::Business => "business".to_string(),
-        AccountPlanType::Enterprise => "enterprise".to_string(),
-        AccountPlanType::Edu => "edu".to_string(),
-        AccountPlanType::Unknown => "unknown".to_string(),
-    });
+    let chatgpt_plan_type = tokens
+        .id_token
+        .get_chatgpt_plan_type()
+        .map(|plan_type| plan_type.to_ascii_lowercase());
 
     Ok(LocalChatgptAuth {
         access_token,
@@ -75,6 +70,7 @@ mod tests {
     use chrono::Utc;
     use codex_app_server_protocol::AuthMode;
     use codex_core::auth::AuthDotJson;
+    use codex_core::auth::login_with_chatgpt_auth_tokens;
     use codex_core::auth::save_auth;
     use codex_core::token_data::TokenData;
     use pretty_assertions::assert_eq;
@@ -172,5 +168,28 @@ mod tests {
             .expect_err("api key auth should fail");
 
         assert_eq!(err, "local auth is not a ChatGPT login");
+    }
+
+    #[test]
+    fn prefers_managed_auth_over_external_ephemeral_tokens() {
+        let codex_home = TempDir::new().expect("tempdir");
+        write_chatgpt_auth(codex_home.path());
+        login_with_chatgpt_auth_tokens(
+            codex_home.path(),
+            &fake_jwt("user@example.com", "workspace-2", "enterprise"),
+            "workspace-2",
+            Some("enterprise"),
+        )
+        .expect("external auth should save");
+
+        let auth = load_local_chatgpt_auth(
+            codex_home.path(),
+            AuthCredentialsStoreMode::File,
+            Some("workspace-1"),
+        )
+        .expect("managed auth should win");
+
+        assert_eq!(auth.chatgpt_account_id, "workspace-1");
+        assert_eq!(auth.chatgpt_plan_type.as_deref(), Some("business"));
     }
 }
