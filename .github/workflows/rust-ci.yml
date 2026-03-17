@@ -121,7 +121,6 @@ jobs:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             profile: dev
-            remote_env: "true"
             runs_on:
               group: codex-runners
               labels: codex-linux-x64
@@ -476,6 +475,7 @@ jobs:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             profile: dev
+            remote_env: "true"
             runs_on:
               group: codex-runners
               labels: codex-linux-x64

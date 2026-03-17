@@ -49,6 +49,10 @@ rm -rf "${temp_dir}"
 }
 
 fn run_remote_script(remote_env: &RemoteEnvConfig, script: &str) -> Result<String> {
+    let user = &remote_env.user;
+    let host = &remote_env.host;
+    let ssh_target = format!("{user}@{host}");
+
     let mut command = Command::new("ssh");
     command
         .arg("-i")
@@ -63,7 +67,7 @@ fn run_remote_script(remote_env: &RemoteEnvConfig, script: &str) -> Result<Strin
         .arg("UserKnownHostsFile=/dev/null")
         .arg("-o")
         .arg("ConnectTimeout=10")
-        .arg(format!("{}@{}", remote_env.user, remote_env.host))
+        .arg(ssh_target)
         .arg("bash")
         .arg("-s")
         .stdin(Stdio::piped())
