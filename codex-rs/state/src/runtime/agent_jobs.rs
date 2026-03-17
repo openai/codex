@@ -435,10 +435,13 @@ WHERE job_id = ? AND item_id = ? AND status = ?
             r#"
 UPDATE agent_job_items
 SET
+    status = ?,
     result_json = ?,
     reported_at = ?,
+    completed_at = ?,
     updated_at = ?,
-    last_error = NULL
+    last_error = NULL,
+    assigned_thread_id = NULL
 WHERE
     job_id = ?
     AND item_id = ?
@@ -446,7 +449,9 @@ WHERE
     AND assigned_thread_id = ?
             "#,
         )
+        .bind(AgentJobItemStatus::Completed.as_str())
         .bind(serialized)
+        .bind(now)
         .bind(now)
         .bind(now)
         .bind(job_id)
@@ -558,5 +563,122 @@ WHERE job_id = ?
                 .unwrap_or_default(),
             failed_items: usize::try_from(failed_items.unwrap_or_default()).unwrap_or_default(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::test_support::unique_temp_dir;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    async fn create_running_single_item_job(
+        runtime: &StateRuntime,
+    ) -> anyhow::Result<(String, String, String)> {
+        let job_id = "job-1".to_string();
+        let item_id = "item-1".to_string();
+        let thread_id = "thread-1".to_string();
+        runtime
+            .create_agent_job(
+                &AgentJobCreateParams {
+                    id: job_id.clone(),
+                    name: "test-job".to_string(),
+                    instruction: "Return a result".to_string(),
+                    auto_export: true,
+                    max_runtime_seconds: None,
+                    output_schema_json: None,
+                    input_headers: vec!["path".to_string()],
+                    input_csv_path: "/tmp/in.csv".to_string(),
+                    output_csv_path: "/tmp/out.csv".to_string(),
+                },
+                &[AgentJobItemCreateParams {
+                    item_id: item_id.clone(),
+                    row_index: 0,
+                    source_id: None,
+                    row_json: json!({"path":"file-1"}),
+                }],
+            )
+            .await?;
+        runtime.mark_agent_job_running(job_id.as_str()).await?;
+        let marked_running = runtime
+            .mark_agent_job_item_running_with_thread(
+                job_id.as_str(),
+                item_id.as_str(),
+                thread_id.as_str(),
+            )
+            .await?;
+        assert!(marked_running);
+        Ok((job_id, item_id, thread_id))
+    }
+
+    #[tokio::test]
+    async fn report_agent_job_item_result_completes_item_atomically() -> anyhow::Result<()> {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home, "test-provider".to_string()).await?;
+        let (job_id, item_id, thread_id) = create_running_single_item_job(runtime.as_ref()).await?;
+
+        let accepted = runtime
+            .report_agent_job_item_result(
+                job_id.as_str(),
+                item_id.as_str(),
+                thread_id.as_str(),
+                &json!({"ok": true}),
+            )
+            .await?;
+        assert!(accepted);
+
+        let item = runtime
+            .get_agent_job_item(job_id.as_str(), item_id.as_str())
+            .await?
+            .expect("job item should exist");
+        assert_eq!(item.status, AgentJobItemStatus::Completed);
+        assert_eq!(item.result_json, Some(json!({"ok": true})));
+        assert_eq!(item.assigned_thread_id, None);
+        assert_eq!(item.last_error, None);
+        assert!(item.reported_at.is_some());
+        assert!(item.completed_at.is_some());
+        let progress = runtime.get_agent_job_progress(job_id.as_str()).await?;
+        assert_eq!(
+            progress,
+            AgentJobProgress {
+                total_items: 1,
+                pending_items: 0,
+                running_items: 0,
+                completed_items: 1,
+                failed_items: 0,
+            }
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn report_agent_job_item_result_rejects_late_reports() -> anyhow::Result<()> {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home, "test-provider".to_string()).await?;
+        let (job_id, item_id, thread_id) = create_running_single_item_job(runtime.as_ref()).await?;
+
+        let marked_failed = runtime
+            .mark_agent_job_item_failed(job_id.as_str(), item_id.as_str(), "missing report")
+            .await?;
+        assert!(marked_failed);
+        let accepted = runtime
+            .report_agent_job_item_result(
+                job_id.as_str(),
+                item_id.as_str(),
+                thread_id.as_str(),
+                &json!({"late": true}),
+            )
+            .await?;
+        assert!(!accepted);
+
+        let item = runtime
+            .get_agent_job_item(job_id.as_str(), item_id.as_str())
+            .await?
+            .expect("job item should exist");
+        assert_eq!(item.status, AgentJobItemStatus::Failed);
+        assert_eq!(item.result_json, None);
+        assert_eq!(item.last_error, Some("missing report".to_string()));
+        Ok(())
     }
 }

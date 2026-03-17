@@ -1500,6 +1500,13 @@ fn prompt_with_input_and_instructions(input: Vec<ResponseItem>, instructions: &s
 }
 
 fn websocket_provider(server: &WebSocketTestServer) -> ModelProviderInfo {
+    websocket_provider_with_connect_timeout(server, None)
+}
+
+fn websocket_provider_with_connect_timeout(
+    server: &WebSocketTestServer,
+    websocket_connect_timeout_ms: Option<u64>,
+) -> ModelProviderInfo {
     ModelProviderInfo {
         name: "mock-ws".into(),
         base_url: Some(format!("{}/v1", server.uri())),
@@ -1513,6 +1520,7 @@ fn websocket_provider(server: &WebSocketTestServer) -> ModelProviderInfo {
         request_max_retries: Some(0),
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
+        websocket_connect_timeout_ms,
         requires_openai_auth: false,
         supports_websockets: true,
     }
@@ -1543,7 +1551,23 @@ async fn websocket_harness_with_options(
     websocket_v2_enabled: bool,
     prefer_websockets: bool,
 ) -> WebsocketTestHarness {
-    let provider = websocket_provider(server);
+    websocket_harness_with_provider_options(
+        websocket_provider(server),
+        runtime_metrics_enabled,
+        websocket_enabled,
+        websocket_v2_enabled,
+        prefer_websockets,
+    )
+    .await
+}
+
+async fn websocket_harness_with_provider_options(
+    provider: ModelProviderInfo,
+    runtime_metrics_enabled: bool,
+    websocket_enabled: bool,
+    websocket_v2_enabled: bool,
+    prefer_websockets: bool,
+) -> WebsocketTestHarness {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model = Some(MODEL.to_string());

@@ -81,11 +81,11 @@ impl ManagedFeatures {
     }
 
     pub fn enable(&mut self, feature: Feature) -> ConstraintResult<()> {
-        self.set_enabled(feature, true)
+        self.set_enabled(feature, /*enabled*/ true)
     }
 
     pub fn disable(&mut self, feature: Feature) -> ConstraintResult<()> {
-        self.set_enabled(feature, false)
+        self.set_enabled(feature, /*enabled*/ false)
     }
 }
 
@@ -321,7 +321,12 @@ pub(crate) fn validate_feature_requirements_in_config_toml(
             })
     }
 
-    validate_profile(cfg, None, &ConfigProfile::default(), feature_requirements)?;
+    validate_profile(
+        cfg,
+        /*profile_name*/ None,
+        &ConfigProfile::default(),
+        feature_requirements,
+    )?;
     for (profile_name, profile) in &cfg.profiles {
         validate_profile(cfg, Some(profile_name), profile, feature_requirements)?;
     }

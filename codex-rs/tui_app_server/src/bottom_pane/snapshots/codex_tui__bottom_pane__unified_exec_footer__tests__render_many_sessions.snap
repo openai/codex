@@ -1,0 +1,13 @@
+---
+source: tui/src/bottom_pane/unified_exec_footer.rs
+expression: "format!(\"{buf:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 50, height: 1 },
+    content: [
+        "  123 background terminals running · /ps to view ·",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+    ]
+}

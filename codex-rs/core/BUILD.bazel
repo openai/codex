@@ -1,5 +1,13 @@
 load("//:defs.bzl", "codex_rust_crate")
 
+exports_files(
+    [
+        "templates/collaboration_mode/default.md",
+        "templates/collaboration_mode/plan.md",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 filegroup(
     name = "model_availability_nux_fixtures",
     srcs = [

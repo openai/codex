@@ -180,6 +180,8 @@ pub enum Feature {
     VoiceTranscription,
     /// Enable experimental realtime voice conversation mode in the TUI.
     RealtimeConversation,
+    /// Route interactive startup to the app-server-backed TUI implementation.
+    TuiAppServer,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
     /// Use the Responses API WebSocket transport for OpenAI by default.
@@ -339,7 +341,7 @@ impl Features {
             if self.enabled(feature.id) != feature.default_enabled {
                 otel.counter(
                     "codex.feature.state",
-                    1,
+                    /*inc*/ 1,
                     &[
                         ("feature", feature.key),
                         ("value", &self.enabled(feature.id).to_string()),
@@ -825,6 +827,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::RealtimeConversation,
         key: "realtime_conversation",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::TuiAppServer,
+        key: "tui_app_server",
+        stage: Stage::Experimental {
+            name: "App-server TUI",
+            menu_description: "Use the app-server-backed TUI implementation.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {

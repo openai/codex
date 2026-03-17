@@ -672,6 +672,7 @@ impl SandboxManager {
                 let allow_proxy_network = allow_network_for_proxy(enforce_managed_network);
                 let mut args = create_linux_sandbox_command_args_for_policies(
                     command.clone(),
+                    spec.cwd.as_path(),
                     &effective_policy,
                     &effective_file_system_policy,
                     effective_network_policy,
@@ -728,7 +729,13 @@ pub async fn execute_env(
     stdout_stream: Option<StdoutStream>,
 ) -> crate::error::Result<ExecToolCallOutput> {
     let effective_policy = exec_request.sandbox_policy.clone();
-    execute_exec_request(exec_request, &effective_policy, stdout_stream, None).await
+    execute_exec_request(
+        exec_request,
+        &effective_policy,
+        stdout_stream,
+        /*after_spawn*/ None,
+    )
+    .await
 }
 
 pub async fn execute_exec_request_with_after_spawn(

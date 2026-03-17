@@ -68,7 +68,11 @@ fn emit_turn_network_proxy_metric(
     } else {
         "false"
     };
-    session_telemetry.counter(TURN_NETWORK_PROXY_METRIC, 1, &[("active", active), tmp_mem]);
+    session_telemetry.counter(
+        TURN_NETWORK_PROXY_METRIC,
+        /*inc*/ 1,
+        &[("active", active), tmp_mem],
+    );
 }
 
 /// Thin wrapper that exposes the parts of [`Session`] task runners need.
@@ -380,7 +384,6 @@ impl Session {
         turn.add_task(task);
         *active = Some(turn);
     }
-
     async fn take_active_turn(&self) -> Option<ActiveTurn> {
         let mut active = self.active_turn.lock().await;
         active.take()

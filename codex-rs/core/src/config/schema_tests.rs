@@ -6,6 +6,10 @@ use pretty_assertions::assert_eq;
 use similar::TextDiff;
 use tempfile::TempDir;
 
+fn trim_single_trailing_newline(contents: &str) -> &str {
+    contents.strip_suffix('\n').unwrap_or(contents)
+}
+
 #[test]
 fn config_schema_matches_fixture() {
     let fixture_path = codex_utils_cargo_bin::find_resource!("config.schema.json")
@@ -40,9 +44,12 @@ Run `just write-config-schema` to overwrite with your changes.\n\n{diff}"
         std::fs::read_to_string(&tmp_path).expect("read back config schema from temp path");
     #[cfg(windows)]
     let fixture = fixture.replace("\r\n", "\n");
+    #[cfg(windows)]
+    let tmp_contents = tmp_contents.replace("\r\n", "\n");
 
     assert_eq!(
-        fixture, tmp_contents,
+        trim_single_trailing_newline(&fixture),
+        trim_single_trailing_newline(&tmp_contents),
         "fixture should match exactly with generated schema"
     );
 }

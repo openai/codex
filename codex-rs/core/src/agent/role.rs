@@ -231,7 +231,10 @@ mod reload {
     fn existing_layers(config: &Config) -> Vec<ConfigLayerEntry> {
         config
             .config_layer_stack
-            .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
             .into_iter()
             .cloned()
             .collect()

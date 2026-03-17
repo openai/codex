@@ -71,6 +71,7 @@ fn provider_for(base_url: String) -> ModelProviderInfo {
         request_max_retries: Some(0),
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
+        websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
     }

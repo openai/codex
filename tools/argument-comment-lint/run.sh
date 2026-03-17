@@ -5,7 +5,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 lint_path="$repo_root/tools/argument-comment-lint"
 manifest_path="$repo_root/codex-rs/Cargo.toml"
-strict_lint="uncommented_anonymous_literal_argument"
+strict_lint="uncommented-anonymous-literal-argument"
 noise_lint="unknown_lints"
 
 has_manifest_path=false

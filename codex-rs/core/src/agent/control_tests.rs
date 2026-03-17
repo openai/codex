@@ -207,7 +207,7 @@ async fn on_event_updates_status_from_turn_aborted() {
         reason: TurnAbortReason::Interrupted,
     }));
 
-    let expected = AgentStatus::Errored("Interrupted".to_string());
+    let expected = AgentStatus::Interrupted;
     assert_eq!(status, Some(expected));
 }
 

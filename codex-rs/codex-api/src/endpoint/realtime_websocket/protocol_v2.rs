@@ -5,6 +5,8 @@ use crate::endpoint::realtime_websocket::protocol_common::parse_transcript_delta
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeHandoffRequested;
+use codex_protocol::protocol::RealtimeInputAudioSpeechStarted;
+use codex_protocol::protocol::RealtimeResponseCancelled;
 use serde_json::Map as JsonMap;
 use serde_json::Value;
 use tracing::debug;
@@ -19,7 +21,9 @@ pub(super) fn parse_realtime_event_v2(payload: &str) -> Option<RealtimeEvent> {
 
     match message_type.as_str() {
         "session.updated" => parse_session_updated_event(&parsed),
-        "response.output_audio.delta" => parse_output_audio_delta_event(&parsed),
+        "response.output_audio.delta" | "response.audio.delta" => {
+            parse_output_audio_delta_event(&parsed)
+        }
         "conversation.item.input_audio_transcription.delta" => {
             parse_transcript_delta_event(&parsed, "delta").map(RealtimeEvent::InputTranscriptDelta)
         }
@@ -30,11 +34,37 @@ pub(super) fn parse_realtime_event_v2(payload: &str) -> Option<RealtimeEvent> {
         "response.output_text.delta" | "response.output_audio_transcript.delta" => {
             parse_transcript_delta_event(&parsed, "delta").map(RealtimeEvent::OutputTranscriptDelta)
         }
+        "input_audio_buffer.speech_started" => Some(RealtimeEvent::InputAudioSpeechStarted(
+            RealtimeInputAudioSpeechStarted {
+                item_id: parsed
+                    .get("item_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            },
+        )),
         "conversation.item.added" => parsed
             .get("item")
             .cloned()
             .map(RealtimeEvent::ConversationItemAdded),
         "conversation.item.done" => parse_conversation_item_done_event(&parsed),
+        "response.created" => Some(RealtimeEvent::ConversationItemAdded(parsed)),
+        "response.done" => parse_response_done_event(parsed),
+        "response.cancelled" => Some(RealtimeEvent::ResponseCancelled(
+            RealtimeResponseCancelled {
+                response_id: parsed
+                    .get("response")
+                    .and_then(Value::as_object)
+                    .and_then(|response| response.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| {
+                        parsed
+                            .get("response_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    }),
+            },
+        )),
         "error" => parse_error_event(&parsed),
         _ => {
             debug!("received unsupported realtime v2 event type: {message_type}, data: {payload}");
@@ -67,6 +97,10 @@ fn parse_output_audio_delta_event(parsed: &Value) -> Option<RealtimeEvent> {
             .get("samples_per_channel")
             .and_then(Value::as_u64)
             .and_then(|value| u32::try_from(value).ok()),
+        item_id: parsed
+            .get("item_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
     }))
 }
 
@@ -80,6 +114,30 @@ fn parse_conversation_item_done_event(parsed: &Value) -> Option<RealtimeEvent> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .map(|item_id| RealtimeEvent::ConversationItemDone { item_id })
+}
+
+fn parse_response_done_event(parsed: Value) -> Option<RealtimeEvent> {
+    if let Some(handoff) = parse_response_done_handoff_requested_event(&parsed) {
+        return Some(handoff);
+    }
+
+    Some(RealtimeEvent::ConversationItemAdded(parsed))
+}
+
+fn parse_response_done_handoff_requested_event(parsed: &Value) -> Option<RealtimeEvent> {
+    let item = parsed
+        .get("response")
+        .and_then(Value::as_object)
+        .and_then(|response| response.get("output"))
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|item| {
+            item.get("type").and_then(Value::as_str) == Some("function_call")
+                && item.get("name").and_then(Value::as_str) == Some(CODEX_TOOL_NAME)
+        })?
+        .as_object()?;
+
+    parse_handoff_requested_event(item)
 }
 
 fn parse_handoff_requested_event(item: &JsonMap<String, Value>) -> Option<RealtimeEvent> {

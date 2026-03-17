@@ -115,7 +115,6 @@ export type { GetAccountParams } from "./GetAccountParams";
 export type { GetAccountRateLimitsResponse } from "./GetAccountRateLimitsResponse";
 export type { GetAccountResponse } from "./GetAccountResponse";
 export type { GitInfo } from "./GitInfo";
-export type { GrantedMacOsPermissions } from "./GrantedMacOsPermissions";
 export type { GrantedPermissionProfile } from "./GrantedPermissionProfile";
 export type { GuardianApprovalReview } from "./GuardianApprovalReview";
 export type { GuardianApprovalReviewStatus } from "./GuardianApprovalReviewStatus";
@@ -140,6 +139,7 @@ export type { ListMcpServerStatusResponse } from "./ListMcpServerStatusResponse"
 export type { LoginAccountParams } from "./LoginAccountParams";
 export type { LoginAccountResponse } from "./LoginAccountResponse";
 export type { LogoutAccountResponse } from "./LogoutAccountResponse";
+export type { MarketplaceInterface } from "./MarketplaceInterface";
 export type { McpAuthStatus } from "./McpAuthStatus";
 export type { McpElicitationArrayType } from "./McpElicitationArrayType";
 export type { McpElicitationBooleanSchema } from "./McpElicitationBooleanSchema";
@@ -222,6 +222,7 @@ export type { ReasoningSummaryPartAddedNotification } from "./ReasoningSummaryPa
 export type { ReasoningSummaryTextDeltaNotification } from "./ReasoningSummaryTextDeltaNotification";
 export type { ReasoningTextDeltaNotification } from "./ReasoningTextDeltaNotification";
 export type { RemoteSkillSummary } from "./RemoteSkillSummary";
+export type { RequestPermissionProfile } from "./RequestPermissionProfile";
 export type { ResidencyRequirement } from "./ResidencyRequirement";
 export type { ReviewDelivery } from "./ReviewDelivery";
 export type { ReviewStartParams } from "./ReviewStartParams";

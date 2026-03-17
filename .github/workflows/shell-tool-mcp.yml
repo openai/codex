@@ -31,11 +31,14 @@ jobs:
     steps:
       - name: Compute version and tags
         id: compute
+        env:
+          RELEASE_TAG_INPUT: ${{ inputs.release-tag }}
+          RELEASE_VERSION_INPUT: ${{ inputs.release-version }}
         run: |
           set -euo pipefail
 
-          version="${{ inputs.release-version }}"
-          release_tag="${{ inputs.release-tag }}"
+          version="$RELEASE_VERSION_INPUT"
+          release_tag="$RELEASE_TAG_INPUT"
 
           if [[ -z "$version" ]]; then
             if [[ -n "$release_tag" && "$release_tag" =~ ^rust-v.+ ]]; then
@@ -483,20 +486,22 @@ jobs:
           STAGING_DIR: ${{ runner.temp }}/shell-tool-mcp
 
       - name: Ensure binaries are executable
+        env:
+          STAGING_DIR: ${{ steps.staging.outputs.dir }}
         run: |
           set -euo pipefail
-          staging="${{ steps.staging.outputs.dir }}"
           chmod +x \
-            "$staging"/vendor/*/bash/*/bash \
-            "$staging"/vendor/*/zsh/*/zsh
+            "$STAGING_DIR"/vendor/*/bash/*/bash \
+            "$STAGING_DIR"/vendor/*/zsh/*/zsh
 
       - name: Create npm tarball
         shell: bash
+        env:
+          STAGING_DIR: ${{ steps.staging.outputs.dir }}
         run: |
           set -euo pipefail
           mkdir -p dist/npm
-          staging="${{ steps.staging.outputs.dir }}"
-          pack_info=$(cd "$staging" && npm pack --ignore-scripts --json --pack-destination "${GITHUB_WORKSPACE}/dist/npm")
+          pack_info=$(cd "$STAGING_DIR" && npm pack --ignore-scripts --json --pack-destination "${GITHUB_WORKSPACE}/dist/npm")
           filename=$(PACK_INFO="$pack_info" node -e 'const data = JSON.parse(process.env.PACK_INFO); console.log(data[0].filename);')
           mv "dist/npm/${filename}" "dist/npm/codex-shell-tool-mcp-npm-${PACKAGE_VERSION}.tgz"
 

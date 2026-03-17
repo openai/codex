@@ -198,7 +198,7 @@ pub(crate) fn guardian_approval_request_to_json(
             *sandbox_permissions,
             additional_permissions.as_ref(),
             justification.as_ref(),
-            None,
+            /*tty*/ None,
         ),
         GuardianApprovalRequest::ExecCommand {
             id: _,

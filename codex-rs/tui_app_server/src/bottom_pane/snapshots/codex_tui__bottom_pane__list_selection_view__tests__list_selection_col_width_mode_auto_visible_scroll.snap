@@ -1,0 +1,31 @@
+---
+source: tui/src/bottom_pane/list_selection_view.rs
+assertion_line: 1046
+expression: "render_before_after_scroll_snapshot(ColumnWidthMode::AutoVisible, 96)"
+---
+before scroll:
+                                                                                                
+  Debug                                                                                         
+                                                                                                
+› 1. Item 1  desc 1                                                                             
+  2. Item 2  desc 2                                                                             
+  3. Item 3  desc 3                                                                             
+  4. Item 4  desc 4                                                                             
+  5. Item 5  desc 5                                                                             
+  6. Item 6  desc 6                                                                             
+  7. Item 7  desc 7                                                                             
+  8. Item 8  desc 8                                                                             
+                                                                                                
+
+after scroll:
+                                                                                                
+  Debug                                                                                         
+                                                                                                
+  2. Item 2                                         desc 2                                      
+  3. Item 3                                         desc 3                                      
+  4. Item 4                                         desc 4                                      
+  5. Item 5                                         desc 5                                      
+  6. Item 6                                         desc 6                                      
+  7. Item 7                                         desc 7                                      
+  8. Item 8                                         desc 8                                      
+› 9. Item 9 with an intentionally much longer name  desc 9

@@ -332,7 +332,7 @@ impl MessageProcessor {
                     request_id.clone(),
                     codex_request,
                     session,
-                    None,
+                    /*outbound_initialized*/ None,
                     request_context.clone(),
                 )
                 .await;
@@ -358,7 +358,8 @@ impl MessageProcessor {
         };
         let request_span =
             crate::app_server_tracing::typed_request_span(&request, connection_id, session);
-        let request_context = RequestContext::new(request_id.clone(), request_span, None);
+        let request_context =
+            RequestContext::new(request_id.clone(), request_span, /*parent_trace*/ None);
         tracing::trace!(
             ?connection_id,
             request_id = ?request_id.request_id,
@@ -454,6 +455,12 @@ impl MessageProcessor {
 
     pub(crate) async fn drain_background_tasks(&self) {
         self.codex_message_processor.drain_background_tasks().await;
+    }
+
+    pub(crate) async fn clear_all_thread_listeners(&self) {
+        self.codex_message_processor
+            .clear_all_thread_listeners()
+            .await;
     }
 
     pub(crate) async fn shutdown_threads(&self) {

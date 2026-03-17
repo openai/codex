@@ -117,6 +117,9 @@ const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=20
 const RESPONSES_ENDPOINT: &str = "/responses";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
+#[cfg(test)]
+pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
+    Duration::from_millis(crate::model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
 pub fn ws_version_from_features(config: &Config) -> bool {
     config
         .features
@@ -308,6 +311,27 @@ impl ModelClient {
             .cached_websocket_session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = websocket_session;
+    }
+
+    pub(crate) fn force_http_fallback(
+        &self,
+        session_telemetry: &SessionTelemetry,
+        model_info: &ModelInfo,
+    ) -> bool {
+        let websocket_enabled = self.responses_websocket_enabled(model_info);
+        let activated =
+            websocket_enabled && !self.state.disable_websockets.swap(true, Ordering::Relaxed);
+        if activated {
+            warn!("falling back to HTTP");
+            session_telemetry.counter(
+                "codex.transport.fallback_to_http",
+                /*inc*/ 1,
+                &[("from_wire_api", "responses_websocket")],
+            );
+        }
+
+        self.store_cached_websocket_session(WebsocketSession::default());
+        activated
     }
 
     /// Compacts the current conversation history using the Compact endpoint.
@@ -538,15 +562,22 @@ impl ModelClient {
             auth_context,
             request_route_telemetry,
         );
+        let websocket_connect_timeout = self.state.provider.websocket_connect_timeout();
         let start = Instant::now();
-        let result = ApiWebSocketResponsesClient::new(api_provider, api_auth)
-            .connect(
+        let result = match tokio::time::timeout(
+            websocket_connect_timeout,
+            ApiWebSocketResponsesClient::new(api_provider, api_auth).connect(
                 headers,
                 crate::default_client::default_headers(),
                 turn_state,
                 Some(websocket_telemetry),
-            )
-            .await;
+            ),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(ApiError::Transport(TransportError::Timeout)),
+        };
         let error_message = result.as_ref().err().map(telemetry_api_error_message);
         let response_debug = result
             .as_ref()
@@ -564,7 +595,7 @@ impl ModelClient {
             auth_context.recovery_mode,
             auth_context.recovery_phase,
             request_route_telemetry.endpoint,
-            false,
+            /*connection_reused*/ false,
             response_debug.request_id.as_deref(),
             response_debug.cf_ray.as_deref(),
             response_debug.auth_error.as_deref(),
@@ -637,13 +668,12 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
-    fn activate_http_fallback(&self, websocket_enabled: bool) -> bool {
-        websocket_enabled
-            && !self
-                .client
-                .state
-                .disable_websockets
-                .swap(true, Ordering::Relaxed)
+    fn reset_websocket_session(&mut self) {
+        self.websocket_session.connection = None;
+        self.websocket_session.last_request = None;
+        self.websocket_session.last_response_rx = None;
+        self.websocket_session
+            .set_connection_reused(/*connection_reused*/ false);
     }
 
     fn build_responses_request(
@@ -796,9 +826,11 @@ impl ModelClientSession {
         let Some(last_response) = self.get_last_response() else {
             return ResponsesWsRequest::ResponseCreate(payload);
         };
-        let Some(incremental_items) =
-            self.get_incremental_items(request, Some(&last_response), true)
-        else {
+        let Some(incremental_items) = self.get_incremental_items(
+            request,
+            Some(&last_response),
+            /*allow_empty_delta*/ true,
+        ) else {
             return ResponsesWsRequest::ResponseCreate(payload);
         };
 
@@ -846,13 +878,14 @@ impl ModelClientSession {
                 client_setup.api_provider,
                 client_setup.api_auth,
                 Some(Arc::clone(&self.turn_state)),
-                None,
+                /*turn_metadata_header*/ None,
                 auth_context,
                 RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
             )
             .await?;
         self.websocket_session.connection = Some(connection);
-        self.websocket_session.set_connection_reused(false);
+        self.websocket_session
+            .set_connection_reused(/*connection_reused*/ false);
         Ok(())
     }
     /// Returns a websocket connection for this turn.
@@ -893,7 +926,7 @@ impl ModelClientSession {
                 .turn_state
                 .clone()
                 .unwrap_or_else(|| Arc::clone(&self.turn_state));
-            let new_conn = self
+            let new_conn = match self
                 .client
                 .connect_websocket(
                     session_telemetry,
@@ -904,11 +937,22 @@ impl ModelClientSession {
                     auth_context,
                     request_route_telemetry,
                 )
-                .await?;
+                .await
+            {
+                Ok(new_conn) => new_conn,
+                Err(err) => {
+                    if matches!(err, ApiError::Transport(TransportError::Timeout)) {
+                        self.reset_websocket_session();
+                    }
+                    return Err(err);
+                }
+            };
             self.websocket_session.connection = Some(new_conn);
-            self.websocket_session.set_connection_reused(false);
+            self.websocket_session
+                .set_connection_reused(/*connection_reused*/ false);
         } else {
-            self.websocket_session.set_connection_reused(true);
+            self.websocket_session
+                .set_connection_reused(/*connection_reused*/ true);
         }
 
         self.websocket_session
@@ -1125,15 +1169,12 @@ impl ModelClientSession {
 
             let ws_request = self.prepare_websocket_request(ws_payload, &request);
             self.websocket_session.last_request = Some(request);
-            let stream_result = self
-                .websocket_session
-                .connection
-                .as_ref()
-                .ok_or_else(|| {
-                    map_api_error(ApiError::Stream(
-                        "websocket connection is unavailable".to_string(),
-                    ))
-                })?
+            let stream_result = self.websocket_session.connection.as_ref().ok_or_else(|| {
+                map_api_error(ApiError::Stream(
+                    "websocket connection is unavailable".to_string(),
+                ))
+            })?;
+            let stream_result = stream_result
                 .stream_request(ws_request, self.websocket_session.connection_reused())
                 .await
                 .map_err(map_api_error)?;
@@ -1202,7 +1243,7 @@ impl ModelClientSession {
                 summary,
                 service_tier,
                 turn_metadata_header,
-                true,
+                /*warmup*/ true,
             )
             .await
         {
@@ -1255,7 +1296,7 @@ impl ModelClientSession {
                             summary,
                             service_tier,
                             turn_metadata_header,
-                            false,
+                            /*warmup*/ false,
                         )
                         .await?
                     {
@@ -1291,21 +1332,10 @@ impl ModelClientSession {
         session_telemetry: &SessionTelemetry,
         model_info: &ModelInfo,
     ) -> bool {
-        let websocket_enabled = self.client.responses_websocket_enabled(model_info);
-        let activated = self.activate_http_fallback(websocket_enabled);
-        if activated {
-            warn!("falling back to HTTP");
-            session_telemetry.counter(
-                "codex.transport.fallback_to_http",
-                1,
-                &[("from_wire_api", "responses_websocket")],
-            );
-
-            self.websocket_session.connection = None;
-            self.websocket_session.last_request = None;
-            self.websocket_session.last_response_rx = None;
-            self.websocket_session.set_connection_reused(false);
-        }
+        let activated = self
+            .client
+            .force_http_fallback(session_telemetry, model_info);
+        self.websocket_session = WebsocketSession::default();
         activated
     }
 }
@@ -1527,7 +1557,7 @@ async fn handle_unauthorized(
                     debug.cf_ray.as_deref(),
                     debug.auth_error.as_deref(),
                     debug.auth_error_code.as_deref(),
-                    None,
+                    /*recovery_reason*/ None,
                     step_result.auth_state_changed(),
                 );
                 emit_feedback_auth_recovery_tags(
@@ -1550,8 +1580,8 @@ async fn handle_unauthorized(
                     debug.cf_ray.as_deref(),
                     debug.auth_error.as_deref(),
                     debug.auth_error_code.as_deref(),
-                    None,
-                    None,
+                    /*recovery_reason*/ None,
+                    /*auth_state_changed*/ None,
                 );
                 emit_feedback_auth_recovery_tags(
                     mode,
@@ -1573,8 +1603,8 @@ async fn handle_unauthorized(
                     debug.cf_ray.as_deref(),
                     debug.auth_error.as_deref(),
                     debug.auth_error_code.as_deref(),
-                    None,
-                    None,
+                    /*recovery_reason*/ None,
+                    /*auth_state_changed*/ None,
                 );
                 emit_feedback_auth_recovery_tags(
                     mode,
@@ -1607,7 +1637,7 @@ async fn handle_unauthorized(
         debug.auth_error.as_deref(),
         debug.auth_error_code.as_deref(),
         recovery_reason,
-        None,
+        /*auth_state_changed*/ None,
     );
     emit_feedback_auth_recovery_tags(
         mode,

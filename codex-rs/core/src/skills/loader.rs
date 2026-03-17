@@ -247,9 +247,10 @@ fn skill_roots_from_layer_stack_inner(
 ) -> Vec<SkillRoot> {
     let mut roots = Vec::new();
 
-    for layer in
-        config_layer_stack.get_layers(ConfigLayerStackOrdering::HighestPrecedenceFirst, true)
-    {
+    for layer in config_layer_stack.get_layers(
+        ConfigLayerStackOrdering::HighestPrecedenceFirst,
+        /*include_disabled*/ true,
+    ) {
         let Some(config_folder) = layer.config_folder() else {
             continue;
         };
@@ -321,9 +322,10 @@ fn repo_agents_skill_roots(config_layer_stack: &ConfigLayerStack, cwd: &Path) ->
 
 fn project_root_markers_from_stack(config_layer_stack: &ConfigLayerStack) -> Vec<String> {
     let mut merged = TomlValue::Table(toml::map::Map::new());
-    for layer in
-        config_layer_stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false)
-    {
+    for layer in config_layer_stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ false,
+    ) {
         if matches!(layer.name, ConfigLayerSource::Project { .. }) {
             continue;
         }

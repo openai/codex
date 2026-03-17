@@ -43,6 +43,7 @@ members = [
     "stdio-to-uds",
     "otel",
     "tui",
+    "tui_app_server",
     "utils/absolute-path",
     "utils/cargo-bin",
     "utils/git",
@@ -131,6 +132,7 @@ codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-test-macros = { path = "test-macros" }
 codex-tui = { path = "tui" }
+codex-tui-app-server = { path = "tui_app_server" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-approval-presets = { path = "utils/approval-presets" }
 codex-utils-cache = { path = "utils/cache" }

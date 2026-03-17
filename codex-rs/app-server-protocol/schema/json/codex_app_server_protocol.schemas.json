@@ -2198,81 +2198,12 @@
       "title": "FuzzyFileSearchSessionUpdatedNotification",
       "type": "object"
     },
-    "GrantedMacOsPermissions": {
-      "properties": {
-        "accessibility": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "automations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsAutomationPermission"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "calendar": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "contacts": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsContactsPermission"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "launchServices": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "preferences": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsPreferencesPermission"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "reminders": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
     "GrantedPermissionProfile": {
       "properties": {
         "fileSystem": {
           "anyOf": [
             {
               "$ref": "#/definitions/AdditionalFileSystemPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "macos": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/GrantedMacOsPermissions"
             },
             {
               "type": "null"
@@ -3324,7 +3255,7 @@
           "type": "string"
         },
         "permissions": {
-          "$ref": "#/definitions/AdditionalPermissionProfile"
+          "$ref": "#/definitions/RequestPermissionProfile"
         },
         "reason": {
           "type": [
@@ -3381,6 +3312,32 @@
         }
       ],
       "title": "RequestId"
+    },
+    "RequestPermissionProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "fileSystem": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalFileSystemPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AdditionalNetworkPermissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "ReviewDecision": {
       "description": "User's decision in response to an ExecApprovalRequest.",
@@ -5691,6 +5648,7 @@
         "enum": [
           "pendingInit",
           "running",
+          "interrupted",
           "completed",
           "errored",
           "shutdown",
@@ -8533,6 +8491,17 @@
         "title": "LogoutAccountResponse",
         "type": "object"
       },
+      "MarketplaceInterface": {
+        "properties": {
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "McpAuthStatus": {
         "enum": [
           "unsupported",
@@ -9222,6 +9191,10 @@
       "PluginInstallParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "forceRemoteSync": {
+            "description": "When true, apply the remote plugin change before the local install flow.",
+            "type": "boolean"
+          },
           "marketplacePath": {
             "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
@@ -9414,6 +9387,16 @@
       },
       "PluginMarketplaceEntry": {
         "properties": {
+          "interface": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/MarketplaceInterface"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "name": {
             "type": "string"
           },
@@ -9536,6 +9519,10 @@
       "PluginUninstallParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "forceRemoteSync": {
+            "description": "When true, apply the remote plugin change before the local uninstall flow.",
+            "type": "boolean"
+          },
           "pluginId": {
             "type": "string"
           }
@@ -12844,6 +12831,12 @@
         "properties": {
           "data": {
             "type": "string"
+          },
+          "itemId": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "numChannels": {
             "format": "uint16",
