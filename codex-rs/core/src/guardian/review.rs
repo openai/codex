@@ -221,7 +221,7 @@ pub(crate) async fn review_approval_request(
         Arc::clone(turn),
         request,
         retry_reason,
-        None,
+        /*external_cancel*/ None,
     )
     .await
 }

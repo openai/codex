@@ -26,9 +26,10 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
     let mut warnings = Vec::new();
     let mut display_order = 0_i64;
 
-    for layer in
-        config_layer_stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false)
-    {
+    for layer in config_layer_stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ false,
+    ) {
         let Some(folder) = layer.config_folder() else {
             continue;
         };
@@ -87,7 +88,7 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
                 &mut display_order,
                 source_path.as_path(),
                 codex_protocol::protocol::HookEventName::Stop,
-                None,
+                /*matcher*/ None,
                 group.hooks,
             );
         }

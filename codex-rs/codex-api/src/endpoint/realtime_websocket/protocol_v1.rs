@@ -35,6 +35,7 @@ pub(super) fn parse_realtime_event_v1(payload: &str) -> Option<RealtimeEvent> {
                     .get("samples_per_channel")
                     .and_then(Value::as_u64)
                     .and_then(|value| u32::try_from(value).ok()),
+                item_id: None,
             }))
         }
         "conversation.input_transcript.delta" => {

@@ -45,7 +45,12 @@ pub fn stream_from_fixture(
     let reader = std::io::Cursor::new(content);
     let stream = ReaderStream::new(reader).map_err(|err| TransportError::Network(err.to_string()));
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
-    tokio::spawn(process_sse(Box::pin(stream), tx_event, idle_timeout, None));
+    tokio::spawn(process_sse(
+        Box::pin(stream),
+        tx_event,
+        idle_timeout,
+        /*telemetry*/ None,
+    ));
     Ok(ResponseStream { rx_event })
 }
 

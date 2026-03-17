@@ -94,7 +94,7 @@ where
 
     services.session_telemetry.counter(
         "codex.approval.requested",
-        1,
+        /*inc*/ 1,
         &[
             ("tool", tool_name),
             ("approved", decision.to_opaque_string()),

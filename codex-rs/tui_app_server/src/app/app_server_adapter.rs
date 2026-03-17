@@ -89,6 +89,17 @@ impl App {
                     );
                 }
                 notification => {
+                    if !app_server_client.is_remote()
+                        && matches!(
+                            notification,
+                            ServerNotification::TurnCompleted(_)
+                                | ServerNotification::ThreadRealtimeItemAdded(_)
+                                | ServerNotification::ThreadRealtimeOutputAudioDelta(_)
+                                | ServerNotification::ThreadRealtimeError(_)
+                        )
+                    {
+                        return;
+                    }
                     if let Some((thread_id, events)) =
                         server_notification_thread_events(notification)
                     {
@@ -116,6 +127,9 @@ impl App {
             AppServerEvent::LegacyNotification(notification) => {
                 if let Some((thread_id, event)) = legacy_thread_event(notification.params) {
                     self.pending_app_server_requests.note_legacy_event(&event);
+                    if legacy_event_is_shadowed_by_server_notification(&event.msg) {
+                        return;
+                    }
                     if self.primary_thread_id.is_none()
                         || matches!(event.msg, EventMsg::SessionConfigured(_))
                             && self.primary_thread_id == Some(thread_id)
@@ -196,6 +210,24 @@ fn legacy_thread_event(params: Option<Value>) -> Option<(ThreadId, Event)> {
         _ => None,
     })?;
     Some((thread_id, event))
+}
+
+fn legacy_event_is_shadowed_by_server_notification(msg: &EventMsg) -> bool {
+    matches!(
+        msg,
+        EventMsg::TokenCount(_)
+            | EventMsg::Error(_)
+            | EventMsg::ThreadNameUpdated(_)
+            | EventMsg::TurnStarted(_)
+            | EventMsg::ItemStarted(_)
+            | EventMsg::ItemCompleted(_)
+            | EventMsg::AgentMessageDelta(_)
+            | EventMsg::PlanDelta(_)
+            | EventMsg::AgentReasoningDelta(_)
+            | EventMsg::AgentReasoningRawContentDelta(_)
+            | EventMsg::RealtimeConversationStarted(_)
+            | EventMsg::RealtimeConversationClosed(_)
+    )
 }
 
 fn server_notification_thread_events(

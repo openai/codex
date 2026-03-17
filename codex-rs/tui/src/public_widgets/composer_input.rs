@@ -37,7 +37,13 @@ impl ComposerInput {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let sender = AppEventSender::new(tx.clone());
         // `enhanced_keys_supported=true` enables Shift+Enter newline hint/behavior.
-        let inner = ChatComposer::new(true, sender, true, "Compose new task".to_string(), false);
+        let inner = ChatComposer::new(
+            /*has_input_focus*/ true,
+            sender,
+            /*enhanced_keys_supported*/ true,
+            "Compose new task".to_string(),
+            /*disable_paste_burst*/ false,
+        );
         Self { inner, _tx: tx, rx }
     }
 
@@ -80,7 +86,7 @@ impl ComposerInput {
 
     /// Clear any previously set custom hint items and restore the default hints.
     pub fn clear_hint_items(&mut self) {
-        self.inner.set_footer_hint_override(None);
+        self.inner.set_footer_hint_override(/*items*/ None);
     }
 
     /// Desired height (in rows) for a given width.

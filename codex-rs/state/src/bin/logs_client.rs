@@ -205,7 +205,12 @@ async fn fetch_backfill(
     filter: &LogFilter,
     backfill: usize,
 ) -> anyhow::Result<Vec<LogRow>> {
-    let query = to_log_query(filter, Some(backfill), None, true);
+    let query = to_log_query(
+        filter,
+        Some(backfill),
+        /*after_id*/ None,
+        /*descending*/ true,
+    );
     runtime
         .query_logs(&query)
         .await
@@ -217,7 +222,12 @@ async fn fetch_new_rows(
     filter: &LogFilter,
     last_id: i64,
 ) -> anyhow::Result<Vec<LogRow>> {
-    let query = to_log_query(filter, None, Some(last_id), false);
+    let query = to_log_query(
+        filter,
+        /*limit*/ None,
+        Some(last_id),
+        /*descending*/ false,
+    );
     runtime
         .query_logs(&query)
         .await
@@ -225,7 +235,9 @@ async fn fetch_new_rows(
 }
 
 async fn fetch_max_id(runtime: &StateRuntime, filter: &LogFilter) -> anyhow::Result<i64> {
-    let query = to_log_query(filter, None, None, false);
+    let query = to_log_query(
+        filter, /*limit*/ None, /*after_id*/ None, /*descending*/ false,
+    );
     runtime
         .max_log_id(&query)
         .await

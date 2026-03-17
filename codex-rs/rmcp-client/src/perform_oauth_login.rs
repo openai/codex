@@ -92,10 +92,10 @@ pub async fn perform_oauth_login(
         headers,
         scopes,
         oauth_resource,
-        true,
+        /*launch_browser*/ true,
         callback_port,
         callback_url,
-        None,
+        /*timeout_secs*/ None,
     )
     .await?
     .finish()
@@ -126,7 +126,7 @@ pub async fn perform_oauth_login_return_url(
         headers,
         scopes,
         oauth_resource,
-        false,
+        /*launch_browser*/ false,
         callback_port,
         callback_url,
         timeout_secs,

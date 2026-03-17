@@ -211,7 +211,10 @@ impl ConfigLayerStack {
 
     pub fn effective_config(&self) -> TomlValue {
         let mut merged = TomlValue::Table(toml::map::Map::new());
-        for layer in self.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false) {
+        for layer in self.get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ false,
+        ) {
             merge_toml_values(&mut merged, &layer.config);
         }
         merged
@@ -221,7 +224,10 @@ impl ConfigLayerStack {
         let mut origins = HashMap::new();
         let mut path = Vec::new();
 
-        for layer in self.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false) {
+        for layer in self.get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ false,
+        ) {
             record_origins(&layer.config, &layer.metadata(), &mut path, &mut origins);
         }
 
@@ -231,7 +237,10 @@ impl ConfigLayerStack {
     /// Returns the highest-precedence to lowest-precedence layers, so
     /// `ConfigLayerSource::SessionFlags` would be first, if present.
     pub fn layers_high_to_low(&self) -> Vec<&ConfigLayerEntry> {
-        self.get_layers(ConfigLayerStackOrdering::HighestPrecedenceFirst, false)
+        self.get_layers(
+            ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            /*include_disabled*/ false,
+        )
     }
 
     /// Returns the highest-precedence to lowest-precedence layers, so

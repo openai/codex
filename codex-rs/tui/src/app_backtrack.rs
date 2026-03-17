@@ -344,7 +344,7 @@ impl App {
         } else {
             self.backtrack.nth_user_message = usize::MAX;
             if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                t.set_highlight_cell(None);
+                t.set_highlight_cell(/*cell*/ None);
             }
         }
     }

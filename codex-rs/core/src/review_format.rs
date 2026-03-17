@@ -68,7 +68,7 @@ pub fn render_review_output_text(output: &ReviewOutputEvent) -> String {
         sections.push(explanation.to_string());
     }
     if !output.findings.is_empty() {
-        let findings = format_review_findings_block(&output.findings, None);
+        let findings = format_review_findings_block(&output.findings, /*selection*/ None);
         let trimmed = findings.trim();
         if !trimmed.is_empty() {
             sections.push(trimmed.to_string());

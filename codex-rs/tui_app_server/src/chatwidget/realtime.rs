@@ -185,7 +185,7 @@ impl ChatWidget {
             self.realtime_conversation.warned_audio_only_submission = true;
             self.add_info_message(
                 "Realtime voice mode is audio-only. Use /realtime to stop.".to_string(),
-                None,
+                /*hint*/ None,
             );
         } else {
             self.request_redraw();
@@ -216,7 +216,7 @@ impl ChatWidget {
     pub(super) fn request_realtime_conversation_close(&mut self, info_message: Option<String>) {
         if !self.realtime_conversation.is_live() {
             if let Some(message) = info_message {
-                self.add_info_message(message, None);
+                self.add_info_message(message, /*hint*/ None);
             }
             return;
         }
@@ -225,10 +225,10 @@ impl ChatWidget {
         self.realtime_conversation.phase = RealtimeConversationPhase::Stopping;
         self.submit_op(AppCommand::realtime_conversation_close());
         self.stop_realtime_local_audio();
-        self.set_footer_hint_override(None);
+        self.set_footer_hint_override(/*items*/ None);
 
         if let Some(message) = info_message {
-            self.add_info_message(message, None);
+            self.add_info_message(message, /*hint*/ None);
         } else {
             self.request_redraw();
         }
@@ -236,7 +236,7 @@ impl ChatWidget {
 
     pub(super) fn reset_realtime_conversation_state(&mut self) {
         self.stop_realtime_local_audio();
-        self.set_footer_hint_override(None);
+        self.set_footer_hint_override(/*items*/ None);
         self.realtime_conversation.phase = RealtimeConversationPhase::Inactive;
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.session_id = None;
@@ -268,9 +268,11 @@ impl ChatWidget {
             RealtimeEvent::SessionUpdated { session_id, .. } => {
                 self.realtime_conversation.session_id = Some(session_id);
             }
+            RealtimeEvent::InputAudioSpeechStarted(_) => self.interrupt_realtime_audio_playback(),
             RealtimeEvent::InputTranscriptDelta(_) => {}
             RealtimeEvent::OutputTranscriptDelta(_) => {}
             RealtimeEvent::AudioOut(frame) => self.enqueue_realtime_audio_out(&frame),
+            RealtimeEvent::ResponseCancelled(_) => self.interrupt_realtime_audio_playback(),
             RealtimeEvent::ConversationItemAdded(_item) => {}
             RealtimeEvent::ConversationItemDone { .. } => {}
             RealtimeEvent::HandoffRequested(_) => {}
@@ -286,7 +288,10 @@ impl ChatWidget {
         let reason = ev.reason;
         self.reset_realtime_conversation_state();
         if !requested && let Some(reason) = reason {
-            self.add_info_message(format!("Realtime voice mode closed: {reason}"), None);
+            self.add_info_message(
+                format!("Realtime voice mode closed: {reason}"),
+                /*hint*/ None,
+            );
         }
         self.request_redraw();
     }
@@ -309,6 +314,16 @@ impl ChatWidget {
             let _ = frame;
         }
     }
+
+    #[cfg(not(target_os = "linux"))]
+    fn interrupt_realtime_audio_playback(&mut self) {
+        if let Some(player) = &self.realtime_conversation.audio_player {
+            player.clear();
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn interrupt_realtime_audio_playback(&mut self) {}
 
     #[cfg(not(target_os = "linux"))]
     fn start_realtime_local_audio(&mut self) {

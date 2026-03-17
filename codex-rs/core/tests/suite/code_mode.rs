@@ -1552,6 +1552,47 @@ text({ json: true });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exit_stops_script_immediately() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use exec to stop script early with exit helper",
+        r#"
+import { exit, text } from "@openai/code_mode";
+
+text("before");
+exit();
+text("after");
+"#,
+        false,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let items = custom_tool_output_items(&req, "call-1");
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec exit helper call failed unexpectedly: {output}"
+    );
+    assert_eq!(items.len(), 2);
+    assert_regex_match(
+        concat!(
+            r"(?s)\A",
+            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
+        ),
+        text_item(&items, 0),
+    );
+    assert_eq!(text_item(&items, 1), "before");
+    assert_eq!(output, "before");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_surfaces_text_stringify_errors() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1909,6 +1950,7 @@ text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
         "encodeURI",
         "encodeURIComponent",
         "escape",
+        "exit",
         "eval",
         "globalThis",
         "image",

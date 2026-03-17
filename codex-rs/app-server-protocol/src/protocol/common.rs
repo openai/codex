@@ -1577,6 +1577,7 @@ mod tests {
                     sample_rate: 24_000,
                     num_channels: 1,
                     samples_per_channel: Some(512),
+                    item_id: None,
                 },
             },
         );
@@ -1589,7 +1590,8 @@ mod tests {
                         "data": "AQID",
                         "sampleRate": 24000,
                         "numChannels": 1,
-                        "samplesPerChannel": 512
+                        "samplesPerChannel": 512,
+                        "itemId": null
                     }
                 }
             }),
@@ -1641,6 +1643,7 @@ mod tests {
                     sample_rate: 24_000,
                     num_channels: 1,
                     samples_per_channel: Some(512),
+                    item_id: None,
                 },
             },
         );

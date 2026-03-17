@@ -345,16 +345,16 @@ impl SessionTelemetry {
             status,
             error.as_deref(),
             duration,
-            false,
-            None,
-            false,
-            None,
-            None,
+            /*auth_header_attached*/ false,
+            /*auth_header_name*/ None,
+            /*retry_after_unauthorized*/ false,
+            /*recovery_mode*/ None,
+            /*recovery_phase*/ None,
             "unknown",
-            None,
-            None,
-            None,
-            None,
+            /*request_id*/ None,
+            /*cf_ray*/ None,
+            /*auth_error*/ None,
+            /*auth_error_code*/ None,
         );
 
         response
@@ -385,7 +385,7 @@ impl SessionTelemetry {
             .unwrap_or_else(|| "none".to_string());
         self.counter(
             API_CALL_COUNT_METRIC,
-            1,
+            /*inc*/ 1,
             &[("status", status_str.as_str()), ("success", success_str)],
         );
         self.record_duration(
@@ -474,7 +474,7 @@ impl SessionTelemetry {
         let success_str = if error.is_none() { "true" } else { "false" };
         self.counter(
             WEBSOCKET_REQUEST_COUNT_METRIC,
-            1,
+            /*inc*/ 1,
             &[("success", success_str)],
         );
         self.record_duration(
@@ -608,7 +608,7 @@ impl SessionTelemetry {
         let kind_str = kind.as_deref().unwrap_or(WEBSOCKET_UNKNOWN_KIND);
         let success_str = if success { "true" } else { "false" };
         let tags = [("kind", kind_str), ("success", success_str)];
-        self.counter(WEBSOCKET_EVENT_COUNT_METRIC, 1, &tags);
+        self.counter(WEBSOCKET_EVENT_COUNT_METRIC, /*inc*/ 1, &tags);
         self.record_duration(WEBSOCKET_EVENT_DURATION_METRIC, duration, &tags);
         log_and_trace_event!(
             self,
@@ -662,11 +662,15 @@ impl SessionTelemetry {
                 }
             }
             Ok(Some(Err(error))) => {
-                self.sse_event_failed(None, duration, error);
+                self.sse_event_failed(/*kind*/ None, duration, error);
             }
             Ok(None) => {}
             Err(_) => {
-                self.sse_event_failed(None, duration, &"idle timeout waiting for SSE");
+                self.sse_event_failed(
+                    /*kind*/ None,
+                    duration,
+                    &"idle timeout waiting for SSE",
+                );
             }
         }
     }
@@ -674,7 +678,7 @@ impl SessionTelemetry {
     fn sse_event(&self, kind: &str, duration: Duration) {
         self.counter(
             SSE_EVENT_COUNT_METRIC,
-            1,
+            /*inc*/ 1,
             &[("kind", kind), ("success", "true")],
         );
         self.record_duration(
@@ -697,7 +701,7 @@ impl SessionTelemetry {
         let kind_str = kind.map_or(SSE_UNKNOWN_KIND, String::as_str);
         self.counter(
             SSE_EVENT_COUNT_METRIC,
-            1,
+            /*inc*/ 1,
             &[("kind", kind_str), ("success", "false")],
         );
         self.record_duration(
@@ -911,7 +915,7 @@ impl SessionTelemetry {
         tags.push(("tool", tool_name));
         tags.push(("success", success_str));
         tags.extend_from_slice(extra_tags);
-        self.counter(TOOL_CALL_COUNT_METRIC, 1, &tags);
+        self.counter(TOOL_CALL_COUNT_METRIC, /*inc*/ 1, &tags);
         self.record_duration(TOOL_CALL_DURATION_METRIC, duration, &tags);
         let mcp_server = mcp_server.unwrap_or("");
         let mcp_server_origin = mcp_server_origin.unwrap_or("");

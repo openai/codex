@@ -877,12 +877,12 @@ async fn consume_truncated_output(
     let stdout_handle = tokio::spawn(read_capped(
         BufReader::new(stdout_reader),
         stdout_stream.clone(),
-        false,
+        /*is_stderr*/ false,
     ));
     let stderr_handle = tokio::spawn(read_capped(
         BufReader::new(stderr_reader),
         stdout_stream.clone(),
-        true,
+        /*is_stderr*/ true,
     ));
 
     let (exit_status, timed_out) = tokio::select! {

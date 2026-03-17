@@ -91,7 +91,7 @@ fn main() -> anyhow::Result<()> {
                     into_app_server_cli(inner),
                     arg0_paths,
                     codex_core::config_loader::LoaderOverrides::default(),
-                    None,
+                    /*remote*/ None,
                 )
                 .await?,
             )

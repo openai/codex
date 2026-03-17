@@ -1223,7 +1223,7 @@ async fn find_thread_path_by_id_str_in_subdir(
         ..Default::default()
     };
 
-    let results = file_search::run(id_str, vec![root], options, None)
+    let results = file_search::run(id_str, vec![root], options, /*cancel_flag*/ None)
         .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
 
     let found = results.matches.into_iter().next().map(|m| m.full_path());

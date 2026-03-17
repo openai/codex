@@ -311,6 +311,32 @@ async fn test_writable_root() {
 }
 
 #[tokio::test]
+async fn sandbox_ignores_missing_writable_roots_under_bwrap() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let existing_root = tempdir.path().join("existing");
+    let missing_root = tempdir.path().join("missing");
+    std::fs::create_dir(&existing_root).expect("create existing root");
+
+    let output = run_cmd_result_with_writable_roots(
+        &["bash", "-lc", "printf sandbox-ok"],
+        &[existing_root, missing_root],
+        LONG_TIMEOUT_MS,
+        false,
+        true,
+    )
+    .await
+    .expect("sandboxed command should execute");
+
+    assert_eq!(output.exit_code, 0);
+    assert_eq!(output.stdout.text, "sandbox-ok");
+}
+
+#[tokio::test]
 async fn test_no_new_privs_is_enabled() {
     let output = run_cmd_output(
         &["bash", "-lc", "grep '^NoNewPrivs:' /proc/self/status"],

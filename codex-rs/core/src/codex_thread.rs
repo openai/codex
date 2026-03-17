@@ -173,7 +173,7 @@ impl CodexThread {
         if was_zero {
             self.codex
                 .session
-                .set_out_of_band_elicitation_pause_state(true);
+                .set_out_of_band_elicitation_pause_state(/*paused*/ true);
         }
 
         Ok(*guard)
@@ -192,7 +192,7 @@ impl CodexThread {
         if now_zero {
             self.codex
                 .session
-                .set_out_of_band_elicitation_pause_state(false);
+                .set_out_of_band_elicitation_pause_state(/*paused*/ false);
         }
 
         Ok(*guard)

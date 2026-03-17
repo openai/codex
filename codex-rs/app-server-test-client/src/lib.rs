@@ -657,7 +657,7 @@ pub async fn send_message_v2(
         &endpoint,
         config_overrides,
         user_message,
-        true,
+        /*experimental_api*/ true,
         dynamic_tools,
     )
     .await
@@ -1510,7 +1510,7 @@ impl CodexClient {
     }
 
     fn initialize(&mut self) -> Result<InitializeResponse> {
-        self.initialize_with_experimental_api(true)
+        self.initialize_with_experimental_api(/*experimental_api*/ true)
     }
 
     fn initialize_with_experimental_api(

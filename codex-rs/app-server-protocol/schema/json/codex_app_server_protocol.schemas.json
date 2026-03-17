@@ -8491,6 +8491,17 @@
         "title": "LogoutAccountResponse",
         "type": "object"
       },
+      "MarketplaceInterface": {
+        "properties": {
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "McpAuthStatus": {
         "enum": [
           "unsupported",
@@ -9228,6 +9239,10 @@
       "PluginInstallParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "forceRemoteSync": {
+            "description": "When true, apply the remote plugin change before the local install flow.",
+            "type": "boolean"
+          },
           "marketplacePath": {
             "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
@@ -9420,6 +9435,16 @@
       },
       "PluginMarketplaceEntry": {
         "properties": {
+          "interface": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/MarketplaceInterface"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "name": {
             "type": "string"
           },
@@ -9542,6 +9567,10 @@
       "PluginUninstallParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "forceRemoteSync": {
+            "description": "When true, apply the remote plugin change before the local uninstall flow.",
+            "type": "boolean"
+          },
           "pluginId": {
             "type": "string"
           }
@@ -12861,6 +12890,12 @@
         "properties": {
           "data": {
             "type": "string"
+          },
+          "itemId": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "numChannels": {
             "format": "uint16",

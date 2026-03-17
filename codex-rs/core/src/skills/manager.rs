@@ -250,9 +250,10 @@ fn disabled_paths_from_stack(
     config_layer_stack: &crate::config_loader::ConfigLayerStack,
 ) -> HashSet<PathBuf> {
     let mut configs = HashMap::new();
-    for layer in
-        config_layer_stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
-    {
+    for layer in config_layer_stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ true,
+    ) {
         if !matches!(
             layer.name,
             ConfigLayerSource::User { .. } | ConfigLayerSource::SessionFlags

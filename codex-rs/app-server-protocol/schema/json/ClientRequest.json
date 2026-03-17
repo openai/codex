@@ -1280,6 +1280,10 @@
     },
     "PluginInstallParams": {
       "properties": {
+        "forceRemoteSync": {
+          "description": "When true, apply the remote plugin change before the local install flow.",
+          "type": "boolean"
+        },
         "marketplacePath": {
           "$ref": "#/definitions/AbsolutePathBuf"
         },
@@ -1329,6 +1333,10 @@
     },
     "PluginUninstallParams": {
       "properties": {
+        "forceRemoteSync": {
+          "description": "When true, apply the remote plugin change before the local uninstall flow.",
+          "type": "boolean"
+        },
         "pluginId": {
           "type": "string"
         }
@@ -2770,6 +2778,12 @@
       "properties": {
         "data": {
           "type": "string"
+        },
+        "itemId": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "numChannels": {
           "format": "uint16",
