@@ -5591,7 +5591,11 @@ impl ChatWidget {
             ServerNotification::ItemGuardianApprovalReviewCompleted(notification) => {
                 self.on_guardian_review_notification(notification.review, notification.action);
             }
-            ServerNotification::ThreadClosed(_) => self.on_shutdown_complete(),
+            ServerNotification::ThreadClosed(_) => {
+                if !from_replay {
+                    self.on_shutdown_complete();
+                }
+            }
             ServerNotification::ThreadRealtimeStarted(notification) => {
                 if !from_replay {
                     self.on_realtime_conversation_started(

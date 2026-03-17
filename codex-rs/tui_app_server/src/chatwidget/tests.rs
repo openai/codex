@@ -22,6 +22,7 @@ use assert_matches::assert_matches;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadItem as AppServerThreadItem;
 use codex_app_server_protocol::Turn as AppServerTurn;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -4283,6 +4284,34 @@ async fn live_app_server_failed_turn_does_not_duplicate_error_history() {
 
     assert!(drain_insert_history(&mut rx).is_empty());
     assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
+async fn live_app_server_thread_closed_requests_immediate_exit() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadClosed(ThreadClosedNotification {
+            thread_id: "thread-1".to_string(),
+        }),
+        None,
+    );
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::Exit(ExitMode::Immediate)));
+}
+
+#[tokio::test]
+async fn replayed_thread_closed_notification_does_not_exit_tui() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadClosed(ThreadClosedNotification {
+            thread_id: "thread-1".to_string(),
+        }),
+        Some(ReplayKind::ThreadSnapshot),
+    );
+
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 #[test]
