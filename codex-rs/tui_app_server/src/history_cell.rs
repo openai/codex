@@ -878,7 +878,6 @@ pub fn new_approval_decision_cell(
                     " codex to run ".into(),
                     snippet,
                 ],
-                #[cfg(test)]
                 ApprovalDecisionActor::Guardian => vec![
                     "Request ".into(),
                     "denied".bold(),
@@ -912,7 +911,6 @@ pub fn new_approval_decision_cell(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalDecisionActor {
     User,
-    #[cfg(test)]
     Guardian,
 }
 
@@ -920,13 +918,11 @@ impl ApprovalDecisionActor {
     fn subject(self) -> &'static str {
         match self {
             Self::User => "You ",
-            #[cfg(test)]
             Self::Guardian => "Auto-reviewer ",
         }
     }
 }
 
-#[cfg(test)]
 pub fn new_guardian_denied_patch_request(
     files: Vec<String>,
     change_count: usize,
@@ -952,7 +948,6 @@ pub fn new_guardian_denied_patch_request(
     ))
 }
 
-#[cfg(test)]
 pub fn new_guardian_denied_action_request(summary: String) -> Box<dyn HistoryCell> {
     let line = Line::from(vec![
         "Request ".into(),
@@ -963,7 +958,6 @@ pub fn new_guardian_denied_action_request(summary: String) -> Box<dyn HistoryCel
     Box::new(PrefixedWrappedHistoryCell::new(line, "✗ ".red(), "  "))
 }
 
-#[cfg(test)]
 pub fn new_guardian_approved_action_request(summary: String) -> Box<dyn HistoryCell> {
     let line = Line::from(vec![
         "Request ".into(),

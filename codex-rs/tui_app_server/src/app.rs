@@ -437,6 +437,7 @@ struct ThreadEventSnapshot {
 enum ThreadBufferedEvent {
     Notification(ServerNotification),
     Request(ServerRequest),
+    LegacyWarning(String),
 }
 
 #[derive(Debug)]
@@ -539,7 +540,8 @@ impl ThreadEventStore {
                     ThreadBufferedEvent::Request(request) => self
                         .pending_interactive_replay
                         .should_replay_snapshot_request(request),
-                    ThreadBufferedEvent::Notification(_) => true,
+                    ThreadBufferedEvent::Notification(_)
+                    | ThreadBufferedEvent::LegacyWarning(_) => true,
                 })
                 .cloned()
                 .collect(),
@@ -2072,6 +2074,54 @@ impl App {
         Ok(())
     }
 
+    async fn enqueue_thread_legacy_warning(
+        &mut self,
+        thread_id: ThreadId,
+        message: String,
+    ) -> Result<()> {
+        let (sender, store) = {
+            let channel = self.ensure_thread_channel(thread_id);
+            (channel.sender.clone(), Arc::clone(&channel.store))
+        };
+
+        let should_send = {
+            let mut guard = store.lock().await;
+            guard
+                .buffer
+                .push_back(ThreadBufferedEvent::LegacyWarning(message.clone()));
+            if guard.buffer.len() > guard.capacity {
+                guard.buffer.pop_front();
+            }
+            guard.active
+        };
+
+        if should_send {
+            match sender.try_send(ThreadBufferedEvent::LegacyWarning(message)) {
+                Ok(()) => {}
+                Err(TrySendError::Full(event)) => {
+                    tokio::spawn(async move {
+                        if let Err(err) = sender.send(event).await {
+                            tracing::warn!("thread {thread_id} event channel closed: {err}");
+                        }
+                    });
+                }
+                Err(TrySendError::Closed(_)) => {
+                    tracing::warn!("thread {thread_id} event channel closed");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn enqueue_primary_thread_legacy_warning(&mut self, message: String) -> Result<()> {
+        if let Some(thread_id) = self.primary_thread_id {
+            return self.enqueue_thread_legacy_warning(thread_id, message).await;
+        }
+        self.pending_primary_events
+            .push_back(ThreadBufferedEvent::LegacyWarning(message));
+        Ok(())
+    }
+
     async fn enqueue_primary_thread_session(
         &mut self,
         session: ThreadSessionState,
@@ -2104,6 +2154,10 @@ impl App {
                 }
                 ThreadBufferedEvent::Request(request) => {
                     self.enqueue_thread_request(thread_id, request).await?;
+                }
+                ThreadBufferedEvent::LegacyWarning(message) => {
+                    self.enqueue_thread_legacy_warning(thread_id, message)
+                        .await?;
                 }
             }
         }
@@ -4386,6 +4440,9 @@ impl App {
                 self.chat_widget
                     .handle_server_request(request, /*replay_kind*/ None);
             }
+            ThreadBufferedEvent::LegacyWarning(message) => {
+                self.chat_widget.add_warning_message(message);
+            }
         }
         if needs_refresh {
             self.refresh_status_line();
@@ -4400,6 +4457,9 @@ impl App {
             ThreadBufferedEvent::Request(request) => self
                 .chat_widget
                 .handle_server_request(request, Some(ReplayKind::ThreadSnapshot)),
+            ThreadBufferedEvent::LegacyWarning(message) => {
+                self.chat_widget.add_warning_message(message);
+            }
         }
     }
 
@@ -5391,6 +5451,33 @@ mod tests {
             ),
             other => panic!("expected queued follow-up submission, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn replay_thread_snapshot_replays_legacy_warning_history() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        app.replay_thread_snapshot(
+            ThreadEventSnapshot {
+                session: None,
+                turns: Vec::new(),
+                events: vec![ThreadBufferedEvent::LegacyWarning(
+                    "legacy warning message".to_string(),
+                )],
+                input_state: None,
+            },
+            false,
+        );
+
+        let mut saw_warning = false;
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let transcript = lines_to_single_string(&cell.transcript_lines(80));
+                saw_warning |= transcript.contains("legacy warning message");
+            }
+        }
+
+        assert!(saw_warning, "expected replayed legacy warning history cell");
     }
 
     #[tokio::test]

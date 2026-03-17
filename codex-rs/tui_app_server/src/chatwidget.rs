@@ -143,9 +143,7 @@ use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecCommandSource;
 #[cfg(test)]
 use codex_protocol::protocol::ExitedReviewModeEvent;
-#[cfg(test)]
 use codex_protocol::protocol::GuardianAssessmentEvent;
-#[cfg(test)]
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::ImageGenerationBeginEvent;
 use codex_protocol::protocol::ImageGenerationEndEvent;
@@ -584,26 +582,22 @@ impl StatusIndicatorState {
         }
     }
 
-    #[cfg(test)]
     fn is_guardian_review(&self) -> bool {
         self.header == "Reviewing approval request" || self.header.starts_with("Reviewing ")
     }
 }
 
-#[cfg(test)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct PendingGuardianReviewStatus {
     entries: Vec<PendingGuardianReviewStatusEntry>,
 }
 
-#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PendingGuardianReviewStatusEntry {
     id: String,
     detail: String,
 }
 
-#[cfg(test)]
 impl PendingGuardianReviewStatus {
     fn start_or_update(&mut self, id: String, detail: String) {
         if let Some(existing) = self.entries.iter_mut().find(|entry| entry.id == id) {
@@ -749,7 +743,6 @@ pub(crate) struct ChatWidget {
     // details here so transient stream interruptions can restore the footer
     // exactly as it was shown.
     current_status: StatusIndicatorState,
-    #[cfg(test)]
     // Guardian review keeps its own pending set so it can derive a single
     // footer summary from one or more in-flight review events.
     pending_guardian_review_status: PendingGuardianReviewStatus,
@@ -2700,7 +2693,6 @@ impl ChatWidget {
     /// aggregation. Terminal assessments clear or update that footer state and
     /// render the final approved/denied history cell when guardian returns a
     /// decision.
-    #[cfg(test)]
     fn on_guardian_assessment(&mut self, ev: GuardianAssessmentEvent) {
         // Guardian emits a compact JSON action payload; map the stable fields we
         // care about into a short footer/history summary without depending on
@@ -3956,7 +3948,6 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status: StatusIndicatorState::working(),
-            #[cfg(test)]
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             retry_status_header: None,
             pending_status_indicator_restore: false,
@@ -5634,10 +5625,20 @@ impl ChatWidget {
                     .unwrap_or(notification.summary),
             ),
             ServerNotification::ItemGuardianApprovalReviewStarted(notification) => {
-                self.on_guardian_review_notification(notification.review, notification.action);
+                self.on_guardian_review_notification(
+                    notification.target_item_id,
+                    notification.turn_id,
+                    notification.review,
+                    notification.action,
+                );
             }
             ServerNotification::ItemGuardianApprovalReviewCompleted(notification) => {
-                self.on_guardian_review_notification(notification.review, notification.action);
+                self.on_guardian_review_notification(
+                    notification.target_item_id,
+                    notification.turn_id,
+                    notification.review,
+                    notification.action,
+                );
             }
             ServerNotification::ThreadClosed(_) => {
                 if !from_replay {
@@ -5875,14 +5876,43 @@ impl ChatWidget {
 
     fn on_guardian_review_notification(
         &mut self,
+        id: String,
+        turn_id: String,
         review: codex_app_server_protocol::GuardianApprovalReview,
-        _action: Option<serde_json::Value>,
+        action: Option<serde_json::Value>,
     ) {
-        self.on_warning(
-            review
-                .rationale
-                .unwrap_or_else(|| "Approval review updated.".to_string()),
-        );
+        self.on_guardian_assessment(GuardianAssessmentEvent {
+            id,
+            turn_id,
+            status: match review.status {
+                codex_app_server_protocol::GuardianApprovalReviewStatus::InProgress => {
+                    GuardianAssessmentStatus::InProgress
+                }
+                codex_app_server_protocol::GuardianApprovalReviewStatus::Approved => {
+                    GuardianAssessmentStatus::Approved
+                }
+                codex_app_server_protocol::GuardianApprovalReviewStatus::Denied => {
+                    GuardianAssessmentStatus::Denied
+                }
+                codex_app_server_protocol::GuardianApprovalReviewStatus::Aborted => {
+                    GuardianAssessmentStatus::Aborted
+                }
+            },
+            risk_score: review.risk_score,
+            risk_level: review.risk_level.map(|risk_level| match risk_level {
+                codex_app_server_protocol::GuardianRiskLevel::Low => {
+                    codex_protocol::protocol::GuardianRiskLevel::Low
+                }
+                codex_app_server_protocol::GuardianRiskLevel::Medium => {
+                    codex_protocol::protocol::GuardianRiskLevel::Medium
+                }
+                codex_app_server_protocol::GuardianRiskLevel::High => {
+                    codex_protocol::protocol::GuardianRiskLevel::High
+                }
+            }),
+            rationale: review.rationale,
+            action,
+        });
     }
 
     #[cfg(test)]
@@ -9099,6 +9129,10 @@ impl ChatWidget {
     pub(crate) fn add_error_message(&mut self, message: String) {
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
+    }
+
+    pub(crate) fn add_warning_message(&mut self, message: String) {
+        self.on_warning(message);
     }
 
     fn add_app_server_stub_message(&mut self, feature: &str) {

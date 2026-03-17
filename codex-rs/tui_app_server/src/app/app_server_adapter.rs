@@ -8,10 +8,12 @@ use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_protocol::ThreadId;
+use serde_json::Value;
 
 impl App {
     pub(super) async fn handle_app_server_event(
@@ -30,8 +32,21 @@ impl App {
                 self.handle_server_notification_event(app_server_client, notification)
                     .await;
             }
-            AppServerEvent::LegacyNotification(_) => {
-                tracing::warn!("ignoring legacy app-server notification in tui_app_server");
+            AppServerEvent::LegacyNotification(notification) => {
+                if let Some((thread_id, message)) = legacy_warning_notification(notification) {
+                    let result = if self.primary_thread_id == Some(thread_id)
+                        || self.primary_thread_id.is_none()
+                    {
+                        self.enqueue_primary_thread_legacy_warning(message).await
+                    } else {
+                        self.enqueue_thread_legacy_warning(thread_id, message).await
+                    };
+                    if let Err(err) = result {
+                        tracing::warn!("failed to enqueue app-server legacy warning: {err}");
+                    }
+                } else {
+                    tracing::warn!("ignoring legacy app-server notification in tui_app_server");
+                }
             }
             AppServerEvent::ServerRequest(request) => {
                 if let ServerRequest::ChatgptAuthTokensRefresh { request_id, params } = request {
@@ -1022,5 +1037,81 @@ mod tests {
         };
         assert_eq!(raw_reasoning.text, "hidden chain");
         assert!(matches!(events[3].msg, EventMsg::TurnComplete(_)));
+    }
+}
+
+fn legacy_warning_notification(notification: JSONRPCNotification) -> Option<(ThreadId, String)> {
+    let method = notification
+        .method
+        .strip_prefix("codex/event/")
+        .unwrap_or(&notification.method);
+    if method != "warning" {
+        return None;
+    }
+
+    let Value::Object(mut params) = notification.params? else {
+        return None;
+    };
+    let thread_id = params
+        .remove("conversationId")
+        .and_then(|value| serde_json::from_value::<String>(value).ok())
+        .and_then(|value| ThreadId::from_string(&value).ok())?;
+    let message = params
+        .get("msg")
+        .and_then(Value::as_object)
+        .and_then(|msg| {
+            msg.get("type")
+                .and_then(Value::as_str)
+                .zip(msg.get("message"))
+        })
+        .and_then(|(kind, message)| (kind == "warning").then_some(message))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)?;
+    Some((thread_id, message))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::legacy_warning_notification;
+    use codex_app_server_protocol::JSONRPCNotification;
+    use codex_protocol::ThreadId;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    #[test]
+    fn legacy_warning_notification_extracts_thread_id_and_message() {
+        let thread_id = ThreadId::new();
+        let warning = legacy_warning_notification(JSONRPCNotification {
+            method: "codex/event/warning".to_string(),
+            params: Some(json!({
+                "conversationId": thread_id.to_string(),
+                "id": "event-1",
+                "msg": {
+                    "type": "warning",
+                    "message": "legacy warning message",
+                },
+            })),
+        });
+
+        assert_eq!(
+            warning,
+            Some((thread_id, "legacy warning message".to_string()))
+        );
+    }
+
+    #[test]
+    fn legacy_warning_notification_ignores_non_warning_legacy_events() {
+        let notification = legacy_warning_notification(JSONRPCNotification {
+            method: "codex/event/task_started".to_string(),
+            params: Some(json!({
+                "conversationId": ThreadId::new().to_string(),
+                "id": "event-1",
+                "msg": {
+                    "type": "task_started",
+                },
+            })),
+        });
+
+        assert_eq!(notification, None);
     }
 }
