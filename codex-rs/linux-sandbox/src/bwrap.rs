@@ -16,7 +16,6 @@ use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_core::error::CodexErr;
 use codex_core::error::Result;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::WritableRoot;
@@ -41,10 +40,10 @@ const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
 /// Options that control how bubblewrap is invoked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BwrapOptions {
-    /// Whether to mount a fresh `/proc` inside the PID namespace.
+    /// Whether to mount a fresh `/proc` inside the sandbox.
     ///
     /// This is the secure default, but some restrictive container environments
-    /// deny `--proc /proc` even when PID namespaces are available.
+    /// deny `--proc /proc`.
     pub mount_proc: bool,
     /// How networking should be configured inside the bubblewrap sandbox.
     pub network_mode: BwrapNetworkMode,
@@ -167,7 +166,6 @@ fn create_bwrap_flags(
     // Request a user namespace explicitly rather than relying on bubblewrap's
     // auto-enable behavior, which is skipped when the caller runs as uid 0.
     args.push("--unshare-user".to_string());
-    // Isolate the PID namespace.
     args.push("--unshare-pid".to_string());
     if options.network_mode.should_unshare_network() {
         args.push("--unshare-net".to_string());
@@ -213,9 +211,9 @@ fn create_filesystem_args(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     cwd: &Path,
 ) -> Result<BwrapArgs> {
-    let writable_roots = file_system_sandbox_policy.get_writable_roots_with_cwd(cwd);
+    let writable_roots =
+        existing_writable_roots(file_system_sandbox_policy.get_writable_roots_with_cwd(cwd));
     let unreadable_roots = file_system_sandbox_policy.get_unreadable_roots_with_cwd(cwd);
-    ensure_mount_targets_exist(&writable_roots)?;
 
     let mut args = if file_system_sandbox_policy.has_full_disk_read_access() {
         // Read-only root, then mount a minimal device tree.
@@ -385,21 +383,15 @@ fn create_filesystem_args(
     })
 }
 
-/// Validate that writable roots exist before constructing mounts.
+/// Bubblewrap requires bind mount targets to exist.
 ///
-/// Bubblewrap requires bind mount targets to exist. We fail fast with a clear
-/// error so callers can present an actionable message.
-fn ensure_mount_targets_exist(writable_roots: &[WritableRoot]) -> Result<()> {
-    for writable_root in writable_roots {
-        let root = writable_root.root.as_path();
-        if !root.exists() {
-            return Err(CodexErr::UnsupportedOperation(format!(
-                "Sandbox expected writable root {root}, but it does not exist.",
-                root = root.display()
-            )));
-        }
-    }
-    Ok(())
+/// Skip missing writable roots so mixed-platform configs can keep harmless
+/// paths for other environments without breaking Linux command startup.
+fn existing_writable_roots(writable_roots: Vec<WritableRoot>) -> Vec<WritableRoot> {
+    writable_roots
+        .into_iter()
+        .filter(|writable_root| writable_root.root.as_path().exists())
+        .collect()
 }
 
 fn path_to_string(path: &Path) -> String {
@@ -728,6 +720,41 @@ mod tests {
                 .args
                 .windows(2)
                 .any(|window| { window == ["--chdir", link_command_cwd.as_str()] })
+        );
+    }
+
+    #[test]
+    fn ignores_missing_writable_roots() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let existing_root = temp_dir.path().join("existing");
+        let missing_root = temp_dir.path().join("missing");
+        std::fs::create_dir(&existing_root).expect("create existing root");
+
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![
+                AbsolutePathBuf::try_from(existing_root.as_path()).expect("absolute existing root"),
+                AbsolutePathBuf::try_from(missing_root.as_path()).expect("absolute missing root"),
+            ],
+            read_only_access: Default::default(),
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let args = create_filesystem_args(&FileSystemSandboxPolicy::from(&policy), temp_dir.path())
+            .expect("filesystem args");
+        let existing_root = path_to_string(&existing_root);
+        let missing_root = path_to_string(&missing_root);
+
+        assert!(
+            args.args.windows(3).any(|window| {
+                window == ["--bind", existing_root.as_str(), existing_root.as_str()]
+            }),
+            "existing writable root should be rebound writable",
+        );
+        assert!(
+            !args.args.iter().any(|arg| arg == &missing_root),
+            "missing writable root should be skipped",
         );
     }
 
