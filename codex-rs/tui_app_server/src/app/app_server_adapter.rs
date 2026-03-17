@@ -606,7 +606,9 @@ fn app_server_web_search_action_to_core(
         codex_app_server_protocol::WebSearchAction::FindInPage { url, pattern } => {
             Some(codex_protocol::models::WebSearchAction::FindInPage { url, pattern })
         }
-        codex_app_server_protocol::WebSearchAction::Other => None,
+        codex_app_server_protocol::WebSearchAction::Other => {
+            Some(codex_protocol::models::WebSearchAction::Other)
+        }
     }
 }
 
