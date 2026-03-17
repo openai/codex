@@ -7,12 +7,10 @@ expression: rendered
 
 🔌  MCP Tools
 
-  • disabled (disabled)
-    • Reason: unknown
-
   • plugin_docs
     • Status: enabled
     • Auth: Unsupported
+    • Command: docs-server --stdio
     • Tools: lookup
     • Resources: (none)
     • Resource templates: (none)

@@ -1967,11 +1967,9 @@ pub(crate) fn new_mcp_tools_output(
 
 /// Build the `/mcp` history cell from app-server `McpServerStatus` responses.
 ///
-/// The server list is the union of servers declared in local config and servers
-/// reported by the app-server, sorted alphabetically. Disabled servers (from
-/// config) are rendered with a `(disabled)` tag and skip tool/resource details.
-/// Servers that appear only in the status response (e.g., plugin-injected
-/// servers) are rendered with whatever the app-server reported.
+/// The server list comes directly from the app-server status response, sorted
+/// alphabetically. Local config is only used to enrich returned servers with
+/// transport details such as command, URL, cwd, and environment display.
 ///
 /// This mirrors the layout of [`new_mcp_tools_output`] but sources data from
 /// the paginated RPC response rather than the in-process `McpManager`.
@@ -1991,12 +1989,7 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
         statuses_by_name.insert(status.name.as_str(), status);
     }
 
-    let mut server_names: Vec<String> = config.mcp_servers.keys().cloned().collect();
-    for status in statuses {
-        if !server_names.iter().any(|name| name == &status.name) {
-            server_names.push(status.name.clone());
-        }
-    }
+    let mut server_names: Vec<String> = statuses.iter().map(|status| status.name.clone()).collect();
     server_names.sort();
 
     let has_any_tools = statuses.iter().any(|status| !status.tools.is_empty());
@@ -2008,20 +2001,7 @@ pub(crate) fn new_mcp_tools_output_from_statuses(
     for server in server_names {
         let cfg = config.mcp_servers.get().get(server.as_str());
         let status = statuses_by_name.get(server.as_str()).copied();
-        let mut header: Vec<Span<'static>> = vec!["  • ".into(), server.clone().into()];
-
-        if let Some(cfg) = cfg
-            && !cfg.enabled
-        {
-            header.push(" ".into());
-            header.push("(disabled)".red());
-            lines.push(header.into());
-            if let Some(reason) = cfg.disabled_reason.as_ref().map(ToString::to_string) {
-                lines.push(vec!["    • Reason: ".into(), reason.dim()].into());
-            }
-            lines.push(Line::from(""));
-            continue;
-        }
+        let header: Vec<Span<'static>> = vec!["  • ".into(), server.clone().into()];
 
         lines.push(header.into());
         lines.push(vec!["    • Status: ".into(), "enabled".green()].into());
@@ -3210,11 +3190,11 @@ mod tests {
     async fn mcp_tools_output_from_statuses_renders_status_only_servers() {
         let mut config = test_config().await;
         let servers = HashMap::from([(
-            "disabled".to_string(),
+            "plugin_docs".to_string(),
             McpServerConfig {
                 transport: McpServerTransportConfig::Stdio {
-                    command: "disabled-server".to_string(),
-                    args: vec![],
+                    command: "docs-server".to_string(),
+                    args: vec!["--stdio".to_string()],
                     env: None,
                     env_vars: vec![],
                     cwd: None,
