@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use codex_environment::FileSystem;
+use codex_environment::ExecutorFileSystem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageDetail;

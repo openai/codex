@@ -43,7 +43,7 @@ pub struct ReadDirectoryEntry {
 pub type FileSystemResult<T> = io::Result<T>;
 
 #[async_trait]
-pub trait FileSystem: Send + Sync {
+pub trait ExecutorFileSystem: Send + Sync {
     async fn read_file(&self, path: &AbsolutePathBuf) -> FileSystemResult<Vec<u8>>;
 
     async fn write_file(&self, path: &AbsolutePathBuf, contents: Vec<u8>) -> FileSystemResult<()>;
@@ -75,7 +75,7 @@ pub trait FileSystem: Send + Sync {
 pub(crate) struct LocalFileSystem;
 
 #[async_trait]
-impl FileSystem for LocalFileSystem {
+impl ExecutorFileSystem for LocalFileSystem {
     async fn read_file(&self, path: &AbsolutePathBuf) -> FileSystemResult<Vec<u8>> {
         let metadata = tokio::fs::metadata(path.as_path()).await?;
         if metadata.len() > MAX_READ_FILE_BYTES {

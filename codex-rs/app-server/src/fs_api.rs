@@ -21,14 +21,14 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_environment::CopyOptions;
 use codex_environment::CreateDirectoryOptions;
 use codex_environment::Environment;
-use codex_environment::FileSystem;
+use codex_environment::ExecutorFileSystem;
 use codex_environment::RemoveOptions;
 use std::io;
 use std::sync::Arc;
 
 #[derive(Clone)]
 pub(crate) struct FsApi {
-    file_system: Arc<dyn FileSystem>,
+    file_system: Arc<dyn ExecutorFileSystem>,
 }
 
 impl Default for FsApi {
