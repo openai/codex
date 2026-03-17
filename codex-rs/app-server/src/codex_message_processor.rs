@@ -8855,8 +8855,7 @@ mod tests {
                 "unauthed",
             ),
         ] {
-            let observation =
-                build_auth_status_observation(provider_id, &response, false, false);
+            let observation = build_auth_status_observation(provider_id, &response, false, false);
 
             assert_eq!(observation.provider_id, provider_id);
             assert_eq!(observation.auth_method, expected_auth_method);
