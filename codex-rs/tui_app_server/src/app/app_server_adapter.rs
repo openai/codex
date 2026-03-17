@@ -446,11 +446,12 @@ fn token_usage_from_app_server(
 }
 
 /// Expand a single `Turn` into the event sequence the TUI would have
-/// observed if it had been connected for the turn's entire lifetime:
-/// `TurnStarted` → `ItemCompleted`* → terminal event.
+/// observed if it had been connected for the turn's entire lifetime.
 ///
-/// Items that cannot be mapped to a core `TurnItem` (e.g. unknown
-/// variants) are silently skipped via `filter_map`.
+/// Snapshot replay keeps committed-item semantics for user / plan /
+/// agent-message items, while replaying the legacy events that still
+/// drive rendering for reasoning, web-search, image-generation, and
+/// context-compaction history cells.
 fn turn_snapshot_events(thread_id: ThreadId, turn: &Turn) -> Vec<Event> {
     let mut events = vec![Event {
         id: String::new(),
@@ -461,17 +462,36 @@ fn turn_snapshot_events(thread_id: ThreadId, turn: &Turn) -> Vec<Event> {
         }),
     }];
 
-    events.extend(turn.items.iter().filter_map(|item| {
-        let item = thread_item_to_core(item)?;
-        Some(Event {
-            id: String::new(),
-            msg: EventMsg::ItemCompleted(ItemCompletedEvent {
-                thread_id,
-                turn_id: turn.id.clone(),
-                item,
-            }),
-        })
-    }));
+    for item in &turn.items {
+        let Some(item) = thread_item_to_core(item) else {
+            continue;
+        };
+        match item {
+            TurnItem::UserMessage(_) | TurnItem::Plan(_) | TurnItem::AgentMessage(_) => {
+                events.push(Event {
+                    id: String::new(),
+                    msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+                        thread_id,
+                        turn_id: turn.id.clone(),
+                        item,
+                    }),
+                });
+            }
+            TurnItem::Reasoning(_)
+            | TurnItem::WebSearch(_)
+            | TurnItem::ImageGeneration(_)
+            | TurnItem::ContextCompaction(_) => {
+                events.extend(
+                    item.as_legacy_events(/*show_raw_agent_reasoning*/ false)
+                        .into_iter()
+                        .map(|msg| Event {
+                            id: String::new(),
+                            msg,
+                        }),
+                );
+            }
+        }
+    }
 
     append_terminal_turn_events(&mut events, turn, /*include_failed_error*/ true);
 
@@ -626,6 +646,7 @@ fn app_server_codex_error_info_to_core(
 mod tests {
     use super::server_notification_thread_events;
     use super::thread_snapshot_events;
+    use super::turn_snapshot_events;
     use codex_app_server_protocol::AgentMessageDeltaNotification;
     use codex_app_server_protocol::CodexErrorInfo;
     use codex_app_server_protocol::ItemCompletedNotification;
@@ -920,5 +941,63 @@ mod tests {
             Some(codex_protocol::protocol::CodexErrorInfo::Other)
         );
         assert!(matches!(events[8].msg, EventMsg::TurnComplete(_)));
+    }
+
+    #[test]
+    fn bridges_non_message_snapshot_items_via_legacy_events() {
+        let events = turn_snapshot_events(
+            ThreadId::new(),
+            &Turn {
+                id: "turn-complete".to_string(),
+                items: vec![
+                    ThreadItem::Reasoning {
+                        id: "reasoning-1".to_string(),
+                        summary: vec!["Need to inspect config".to_string()],
+                        content: vec!["hidden chain".to_string()],
+                    },
+                    ThreadItem::WebSearch {
+                        id: "search-1".to_string(),
+                        query: "ratatui stylize".to_string(),
+                        action: Some(codex_app_server_protocol::WebSearchAction::Other),
+                    },
+                    ThreadItem::ImageGeneration {
+                        id: "image-1".to_string(),
+                        status: "completed".to_string(),
+                        revised_prompt: Some("diagram".to_string()),
+                        result: "image.png".to_string(),
+                    },
+                    ThreadItem::ContextCompaction {
+                        id: "compact-1".to_string(),
+                    },
+                ],
+                status: TurnStatus::Completed,
+                error: None,
+            },
+        );
+
+        assert_eq!(events.len(), 6);
+        assert!(matches!(events[0].msg, EventMsg::TurnStarted(_)));
+        let EventMsg::AgentReasoning(reasoning) = &events[1].msg else {
+            panic!("expected reasoning replay");
+        };
+        assert_eq!(reasoning.text, "Need to inspect config");
+        let EventMsg::WebSearchEnd(web_search) = &events[2].msg else {
+            panic!("expected web search replay");
+        };
+        assert_eq!(web_search.call_id, "search-1");
+        assert_eq!(web_search.query, "ratatui stylize");
+        assert_eq!(
+            web_search.action,
+            codex_protocol::models::WebSearchAction::Other
+        );
+        let EventMsg::ImageGenerationEnd(image_generation) = &events[3].msg else {
+            panic!("expected image generation replay");
+        };
+        assert_eq!(image_generation.call_id, "image-1");
+        assert_eq!(image_generation.status, "completed");
+        assert_eq!(image_generation.revised_prompt.as_deref(), Some("diagram"));
+        assert_eq!(image_generation.result, "image.png");
+        assert!(matches!(events[4].msg, EventMsg::ContextCompacted(_)));
+        assert!(matches!(events[5].msg, EventMsg::TurnComplete(_)));
     }
 }
