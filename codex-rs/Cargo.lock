@@ -1463,7 +1463,6 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
- "walkdir",
  "wiremock",
 ]
 
@@ -2756,7 +2755,6 @@ dependencies = [
  "base64 0.22.1",
  "codex-utils-cache",
  "image",
- "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]

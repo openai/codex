@@ -127,24 +127,19 @@ impl ToolHandler for ViewImageHandler {
         };
         let image_detail = use_original_detail.then_some(ImageDetail::Original);
 
-        let content =
-            local_image_content_items_with_label_number(&abs_path, file_bytes, None, image_mode)
-                .into_iter()
-                .map(|item| match item {
-                    ContentItem::InputText { text } => {
-                        FunctionCallOutputContentItem::InputText { text }
-                    }
-                    ContentItem::InputImage { image_url } => {
-                        FunctionCallOutputContentItem::InputImage {
-                            image_url,
-                            detail: image_detail,
-                        }
-                    }
-                    ContentItem::OutputText { text } => {
-                        FunctionCallOutputContentItem::InputText { text }
-                    }
-                })
-                .collect();
+        let content = local_image_content_items_with_label_number(
+            &abs_path, file_bytes, /*label_number*/ None, image_mode,
+        )
+        .into_iter()
+        .map(|item| match item {
+            ContentItem::InputText { text } => FunctionCallOutputContentItem::InputText { text },
+            ContentItem::InputImage { image_url } => FunctionCallOutputContentItem::InputImage {
+                image_url,
+                detail: image_detail,
+            },
+            ContentItem::OutputText { text } => FunctionCallOutputContentItem::InputText { text },
+        })
+        .collect();
 
         session
             .send_event(
