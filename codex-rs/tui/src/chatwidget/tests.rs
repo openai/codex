@@ -4767,6 +4767,8 @@ async fn ctrl_c_shutdown_works_with_caps_lock() {
 async fn ctrl_c_closes_realtime_conversation_before_interrupt_or_quit() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
+    chat.bottom_pane
+        .set_composer_text("recording meter".to_string(), Vec::new(), Vec::new());
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
 
@@ -4775,6 +4777,7 @@ async fn ctrl_c_closes_realtime_conversation_before_interrupt_or_quit() {
         chat.realtime_conversation.phase,
         RealtimeConversationPhase::Stopping
     );
+    assert_eq!(chat.bottom_pane.composer_text(), "recording meter");
     assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }
