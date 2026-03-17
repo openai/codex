@@ -2034,6 +2034,13 @@
       "title": "FileChangeRequestApprovalResponse",
       "type": "object"
     },
+    "FuzzyFileSearchMatchType": {
+      "enum": [
+        "file",
+        "directory"
+      ],
+      "type": "string"
+    },
     "FuzzyFileSearchParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -2093,6 +2100,9 @@
             "null"
           ]
         },
+        "matchType": {
+          "$ref": "#/definitions/FuzzyFileSearchMatchType"
+        },
         "path": {
           "type": "string"
         },
@@ -2107,6 +2117,7 @@
       },
       "required": [
         "file_name",
+        "matchType",
         "path",
         "root",
         "score"

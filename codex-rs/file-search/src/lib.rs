@@ -43,6 +43,7 @@ pub use cli::Cli;
 /// * `score` – Relevance score returned by `nucleo`.
 /// * `path`  – Path to the matched entry (file or directory), relative to the
 ///   search directory.
+/// * `match_type` – Whether this match is a file or directory.
 /// * `indices` – Optional list of character indices that matched the query.
 ///   These are only filled when the caller of [`run`] sets
 ///   `options.compute_indices` to `true`. The indices vector follows the
@@ -53,9 +54,18 @@ pub use cli::Cli;
 pub struct FileMatch {
     pub score: u32,
     pub path: PathBuf,
+    #[serde(rename = "matchType")]
+    pub match_type: MatchType,
     pub root: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub indices: Option<Vec<u32>>, // Sorted & deduplicated when present
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MatchType {
+    File,
+    Directory,
 }
 
 impl FileMatch {
@@ -552,13 +562,15 @@ fn matcher_worker(
                             } else {
                                 None
                             };
-                            let mut display_path = relative_path.to_string();
-                            if Path::new(full_path).is_dir() && !display_path.ends_with('/') {
-                                display_path.push('/');
-                            }
+                            let match_type = if Path::new(full_path).is_dir() {
+                                MatchType::Directory
+                            } else {
+                                MatchType::File
+                            };
                             Some(FileMatch {
                                 score: match_.score,
-                                path: PathBuf::from(display_path),
+                                path: PathBuf::from(relative_path),
+                                match_type,
                                 root: inner.search_directories[root_idx].clone(),
                                 indices,
                             })
@@ -986,12 +998,9 @@ mod tests {
         )
         .expect("run ok");
 
-        assert!(
-            results
-                .matches
-                .iter()
-                .any(|m| m.path.to_string_lossy() == "docs/guides/")
-        );
+        assert!(results.matches.iter().any(|m| {
+            m.path.to_string_lossy() == "docs/guides" && m.match_type == MatchType::Directory
+        }));
     }
 
     #[test]
