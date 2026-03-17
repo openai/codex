@@ -258,16 +258,13 @@ pub struct Tui {
 }
 
 impl Tui {
-    pub fn new(terminal: Terminal) -> Self {
+    fn from_terminal(
+        terminal: Terminal,
+        enhanced_keys_supported: bool,
+        notification_backend: Option<DesktopNotificationBackend>,
+    ) -> Self {
         let (draw_tx, _) = broadcast::channel(1);
         let frame_requester = FrameRequester::new(draw_tx.clone());
-
-        // Detect keyboard enhancement support before any EventStream is created so the
-        // crossterm poller can acquire its lock without contention.
-        let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
-        // Cache this to avoid contention with the event reader.
-        supports_color::on_cached(supports_color::Stream::Stdout);
-        let _ = crate::terminal_palette::default_colors();
 
         Self {
             frame_requester,
@@ -281,9 +278,37 @@ impl Tui {
             alt_screen_active: Arc::new(AtomicBool::new(false)),
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
-            notification_backend: Some(detect_backend(NotificationMethod::default())),
+            notification_backend,
             alt_screen_enabled: true,
         }
+    }
+
+    pub fn new(terminal: Terminal) -> Self {
+        // Detect keyboard enhancement support before any EventStream is created so the
+        // crossterm poller can acquire its lock without contention.
+        let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
+        // Cache this to avoid contention with the event reader.
+        supports_color::on_cached(supports_color::Stream::Stdout);
+        let _ = crate::terminal_palette::default_colors();
+
+        Self::from_terminal(
+            terminal,
+            enhanced_keys_supported,
+            Some(detect_backend(NotificationMethod::default())),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_test() -> Self {
+        let terminal = CustomTerminal::with_test_options(
+            CrosstermBackend::new(stdout()),
+            ratatui::layout::Size {
+                width: 80,
+                height: 24,
+            },
+            ratatui::layout::Position { x: 0, y: 0 },
+        );
+        Self::from_terminal(terminal, false, None)
     }
 
     /// Set whether alternate screen is enabled. When false, enter_alt_screen() becomes a no-op.

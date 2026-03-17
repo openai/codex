@@ -610,6 +610,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_thread_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
+        self.composer.set_thread_footer_hint_override(items);
+        self.request_redraw();
+    }
+
     pub(crate) fn set_remote_image_urls(&mut self, urls: Vec<String>) {
         self.composer.set_remote_image_urls(urls);
         self.request_redraw();

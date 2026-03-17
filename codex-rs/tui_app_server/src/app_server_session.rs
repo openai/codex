@@ -297,18 +297,34 @@ impl AppServerSession {
         config: Config,
         thread_id: ThreadId,
     ) -> Result<AppServerStartedThread> {
+        self.fork_thread_with_path(config, thread_id, /*path*/ None)
+            .await
+    }
+
+    pub(crate) async fn fork_thread_from_path(
+        &mut self,
+        config: Config,
+        thread_id: ThreadId,
+        path: PathBuf,
+    ) -> Result<AppServerStartedThread> {
+        self.fork_thread_with_path(config, thread_id, Some(path))
+            .await
+    }
+
+    async fn fork_thread_with_path(
+        &mut self,
+        config: Config,
+        thread_id: ThreadId,
+        path: Option<PathBuf>,
+    ) -> Result<AppServerStartedThread> {
         let show_raw_agent_reasoning = config.show_raw_agent_reasoning;
         let request_id = self.next_request_id();
+        let mut params =
+            thread_fork_params_from_config(config, thread_id, self.thread_params_mode());
+        params.path = path;
         let response: ThreadForkResponse = self
             .client
-            .request_typed(ClientRequest::ThreadFork {
-                request_id,
-                params: thread_fork_params_from_config(
-                    config,
-                    thread_id,
-                    self.thread_params_mode(),
-                ),
-            })
+            .request_typed(ClientRequest::ThreadFork { request_id, params })
             .await
             .wrap_err("thread/fork failed during TUI bootstrap")?;
         started_thread_from_fork_response(&response, show_raw_agent_reasoning)

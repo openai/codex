@@ -113,13 +113,21 @@ use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
 
 mod agent_navigation;
+mod btw;
 mod pending_interactive_replay;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
+use self::btw::BtwThreadState;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AgentPickerVisibility {
+    Hidden,
+    ShowInAgentPicker,
+}
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 
 enum ThreadInteractiveRequest {
@@ -703,10 +711,10 @@ pub(crate) struct App {
 
     /// One-shot guard used while switching threads.
     ///
-    /// We set this when intentionally stopping the current thread before moving
-    /// to another one, then ignore exactly one `ShutdownComplete` so it is not
-    /// misclassified as an unexpected sub-agent death.
-    suppress_shutdown_complete: bool,
+    /// We set this to the specific thread we are intentionally stopping before
+    /// moving to another one, then ignore that thread's `ShutdownComplete` so
+    /// it is not misclassified as an unexpected sub-agent death.
+    suppress_shutdown_complete_thread_id: Option<ThreadId>,
     /// Tracks the thread we intentionally shut down while exiting the app.
     ///
     /// When this matches the active thread, its `ShutdownComplete` should lead to
@@ -722,6 +730,7 @@ pub(crate) struct App {
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_navigation: AgentNavigationState,
+    btw_threads: HashMap<ThreadId, BtwThreadState>,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<Event>>,
     primary_thread_id: Option<ThreadId>,
@@ -1215,13 +1224,39 @@ impl App {
 
     async fn shutdown_current_thread(&mut self) {
         if let Some(thread_id) = self.chat_widget.thread_id() {
+            self.shutdown_and_remove_thread(thread_id).await;
+        }
+    }
+
+    async fn shutdown_attached_threads_except(&mut self, excluded_thread_id: ThreadId) {
+        let thread_ids: Vec<ThreadId> = self
+            .thread_event_channels
+            .keys()
+            .copied()
+            .filter(|thread_id| *thread_id != excluded_thread_id)
+            .collect();
+        for thread_id in thread_ids {
+            self.shutdown_and_remove_thread(thread_id).await;
+        }
+    }
+
+    async fn request_thread_shutdown(&mut self, thread_id: ThreadId) {
+        if self.chat_widget.thread_id() == Some(thread_id) {
             // Clear any in-flight rollback guard when switching threads.
             self.backtrack.pending_rollback = None;
-            self.suppress_shutdown_complete = true;
+            self.suppress_shutdown_complete_thread_id = Some(thread_id);
             self.chat_widget.submit_op(Op::Shutdown);
-            self.server.remove_thread(&thread_id).await;
-            self.abort_thread_event_listener(thread_id);
+        } else if let Ok(thread) = self.server.get_thread(thread_id).await {
+            let _ = thread.submit(Op::Shutdown).await;
         }
+    }
+
+    /// Requests shutdown for a loaded thread, removes it from the thread manager, and stops its
+    /// event listener task.
+    async fn shutdown_and_remove_thread(&mut self, thread_id: ThreadId) {
+        self.request_thread_shutdown(thread_id).await;
+        self.server.remove_thread(&thread_id).await;
+        self.abort_thread_event_listener(thread_id);
     }
 
     fn abort_thread_event_listener(&mut self, thread_id: ThreadId) {
@@ -1359,7 +1394,7 @@ impl App {
         self.active_thread_id.or(self.chat_widget.thread_id())
     }
 
-    /// Mirrors the visible thread into the contextual footer row.
+    /// Mirrors the visible thread into the contextual footer row and BTW banner.
     ///
     /// The footer sometimes shows ambient context instead of an instructional hint. In multi-agent
     /// sessions, that contextual row includes the currently viewed agent label. The label is
@@ -1370,6 +1405,60 @@ impl App {
             .agent_navigation
             .active_agent_label(self.current_displayed_thread_id(), self.primary_thread_id);
         self.chat_widget.set_active_agent_label(label);
+        self.sync_btw_thread_ui();
+    }
+
+    /// Registers an already-running thread with the TUI without replacing the current session.
+    ///
+    /// Unlike `/fork` and `/resume`, which swap the active `ChatWidget`, this is for parallel live
+    /// threads such as BTW children and background agent threads. It seeds the thread's replay
+    /// channel with a `SessionConfigured` event, starts the event-listener task, and optionally
+    /// exposes the thread in agent navigation.
+    async fn attach_live_thread(
+        &mut self,
+        thread_id: ThreadId,
+        thread: Arc<codex_core::CodexThread>,
+        session_configured: SessionConfiguredEvent,
+        visibility: AgentPickerVisibility,
+    ) -> Result<()> {
+        if self.thread_event_channels.contains_key(&thread_id) {
+            return Ok(());
+        }
+        let config_snapshot = thread.config_snapshot().await;
+        match visibility {
+            AgentPickerVisibility::Hidden => {}
+            AgentPickerVisibility::ShowInAgentPicker => {
+                self.upsert_agent_picker_thread(
+                    thread_id,
+                    config_snapshot.session_source.get_nickname(),
+                    config_snapshot.session_source.get_agent_role(),
+                    false,
+                );
+            }
+        }
+        let event = Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(session_configured),
+        };
+        let channel =
+            ThreadEventChannel::new_with_session_configured(THREAD_EVENT_CHANNEL_CAPACITY, event);
+        let app_event_tx = self.app_event_tx.clone();
+        self.thread_event_channels.insert(thread_id, channel);
+        let listener_handle = tokio::spawn(async move {
+            loop {
+                let event = match thread.next_event().await {
+                    Ok(event) => event,
+                    Err(err) => {
+                        tracing::debug!("external thread {thread_id} listener stopped: {err}");
+                        break;
+                    }
+                };
+                app_event_tx.send(AppEvent::ThreadEvent { thread_id, event });
+            }
+        });
+        self.thread_event_listener_tasks
+            .insert(thread_id, listener_handle);
+        Ok(())
     }
 
     async fn thread_cwd(&self, thread_id: ThreadId) -> Option<PathBuf> {
@@ -1606,6 +1695,9 @@ impl App {
     async fn open_agent_picker(&mut self) {
         let thread_ids: Vec<ThreadId> = self.thread_event_channels.keys().cloned().collect();
         for thread_id in thread_ids {
+            if self.btw_threads.contains_key(&thread_id) {
+                continue;
+            }
             match self.server.get_thread(thread_id).await {
                 Ok(thread) => {
                     let session_source = thread.config_snapshot().await.session_source;
@@ -1708,6 +1800,7 @@ impl App {
         if self.active_thread_id == Some(thread_id) {
             return Ok(());
         }
+        let btw_threads_to_discard = self.btw_threads_to_discard_after_switch(thread_id);
 
         let live_thread = match self.server.get_thread(thread_id).await {
             Ok(thread) => Some(thread),
@@ -1747,7 +1840,11 @@ impl App {
             let (tx, _rx) = unbounded_channel();
             tx
         };
+        let next_btw_fork_banner_parent_label =
+            self.take_next_btw_fork_banner_parent_label(thread_id);
         self.chat_widget = ChatWidget::new_with_op_sender(init, codex_op_tx);
+        self.chat_widget
+            .set_next_fork_banner_parent_label(next_btw_fork_banner_parent_label);
         self.sync_active_agent_label();
 
         self.reset_for_thread_switch(tui)?;
@@ -1760,6 +1857,9 @@ impl App {
         }
         self.drain_active_thread_events(tui).await?;
         self.refresh_pending_thread_approvals().await;
+        for btw_thread_id in btw_threads_to_discard {
+            self.discard_btw_thread(btw_thread_id).await;
+        }
 
         Ok(())
     }
@@ -1771,8 +1871,12 @@ impl App {
         self.has_emitted_history_lines = false;
         self.backtrack = BacktrackState::default();
         self.backtrack_render_pending = false;
-        tui.terminal.clear_scrollback()?;
-        tui.terminal.clear()?;
+        if let Err(err) = tui.terminal.clear_scrollback() {
+            tracing::warn!(error = %err, "failed to clear terminal scrollback during thread switch");
+        }
+        if let Err(err) = tui.terminal.clear() {
+            tracing::warn!(error = %err, "failed to clear terminal during thread switch");
+        }
         Ok(())
     }
 
@@ -1780,6 +1884,7 @@ impl App {
         self.abort_all_thread_event_listeners();
         self.thread_event_channels.clear();
         self.agent_navigation.clear();
+        self.btw_threads.clear();
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
@@ -2184,12 +2289,13 @@ impl App {
             feedback: feedback.clone(),
             feedback_audience,
             pending_update_action: None,
-            suppress_shutdown_complete: false,
+            suppress_shutdown_complete_thread_id: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
+            btw_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
@@ -2273,14 +2379,16 @@ impl App {
                         waiting_for_initial_session_configured,
                         app.active_thread_rx.is_some()
                     ) => {
-                        if let Some(event) = active {
-                            if let Err(err) = app.handle_active_thread_event(tui, event).await {
-                                break Err(err);
+                        match active {
+                            Some(event) => match app.handle_active_thread_event(tui, event).await {
+                                Ok(control) => control,
+                                Err(err) => break Err(err),
+                            },
+                            None => {
+                                app.clear_active_thread().await;
+                                AppRunControl::Continue
                             }
-                        } else {
-                            app.clear_active_thread().await;
                         }
-                        AppRunControl::Continue
                     }
                     Some(event) = tui_events.next() => {
                         match app.handle_tui_event(tui, event).await {
@@ -2468,7 +2576,8 @@ impl App {
                             .await
                         {
                             Ok(resumed) => {
-                                self.shutdown_current_thread().await;
+                                self.shutdown_attached_threads_except(resumed.thread_id)
+                                    .await;
                                 self.config = resume_config;
                                 tui.set_notification_method(self.config.tui_notification_method);
                                 self.file_search.update_search_dir(self.config.cwd.clone());
@@ -2542,7 +2651,8 @@ impl App {
                             .await
                         {
                             Ok(forked) => {
-                                self.shutdown_current_thread().await;
+                                self.shutdown_attached_threads_except(forked.thread_id)
+                                    .await;
                                 let init = self.chatwidget_init_for_forked_or_resumed_thread(
                                     tui,
                                     self.config.clone(),
@@ -2587,6 +2697,14 @@ impl App {
                 }
 
                 tui.frame_requester().schedule_frame();
+            }
+            AppEvent::StartBtw {
+                parent_thread_id,
+                user_message,
+            } => {
+                return self
+                    .handle_start_btw(tui, parent_thread_id, user_message)
+                    .await;
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
@@ -3758,8 +3876,10 @@ impl App {
         // This guard is only for intentional thread-switch shutdowns.
         // App-exit shutdowns are tracked by `pending_shutdown_exit_thread_id`
         // and resolved in `handle_active_thread_event`.
-        if self.suppress_shutdown_complete && matches!(event.msg, EventMsg::ShutdownComplete) {
-            self.suppress_shutdown_complete = false;
+        if matches!(event.msg, EventMsg::ShutdownComplete)
+            && self.suppress_shutdown_complete_thread_id == self.current_displayed_thread_id()
+        {
+            self.suppress_shutdown_complete_thread_id = None;
             return;
         }
         if let EventMsg::ListSkillsResponse(response) = &event.msg {
@@ -3784,7 +3904,11 @@ impl App {
     /// This function enforces shutdown intent routing: unexpected non-primary
     /// thread shutdowns fail over to the primary thread, while user-requested
     /// app exits consume only the tracked shutdown completion and then proceed.
-    async fn handle_active_thread_event(&mut self, tui: &mut tui::Tui, event: Event) -> Result<()> {
+    async fn handle_active_thread_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        event: Event,
+    ) -> Result<AppRunControl> {
         // Capture this before any potential thread switch: we only want to clear
         // the exit marker when the currently active thread acknowledges shutdown.
         let pending_shutdown_exit_completed = matches!(&event.msg, EventMsg::ShutdownComplete)
@@ -3816,7 +3940,7 @@ impl App {
                     "Agent thread {closed_thread_id} closed. Failed to switch back to main thread {primary_thread_id}.",
                 ));
             }
-            return Ok(());
+            return Ok(AppRunControl::Continue);
         }
 
         if pending_shutdown_exit_completed {
@@ -3825,10 +3949,13 @@ impl App {
             self.pending_shutdown_exit_thread_id = None;
         }
         self.handle_codex_event_now(event);
+        if pending_shutdown_exit_completed {
+            return Ok(AppRunControl::Exit(ExitReason::UserRequested));
+        }
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();
         }
-        Ok(())
+        Ok(AppRunControl::Continue)
     }
 
     async fn handle_thread_created(&mut self, thread_id: ThreadId) -> Result<()> {
@@ -3843,12 +3970,6 @@ impl App {
             }
         };
         let config_snapshot = thread.config_snapshot().await;
-        self.upsert_agent_picker_thread(
-            thread_id,
-            config_snapshot.session_source.get_nickname(),
-            config_snapshot.session_source.get_agent_role(),
-            /*is_closed*/ false,
-        );
         let event = Event {
             id: String::new(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -3870,25 +3991,16 @@ impl App {
                 rollout_path: thread.rollout_path(),
             }),
         };
-        let channel =
-            ThreadEventChannel::new_with_session_configured(THREAD_EVENT_CHANNEL_CAPACITY, event);
-        let app_event_tx = self.app_event_tx.clone();
-        self.thread_event_channels.insert(thread_id, channel);
-        let listener_handle = tokio::spawn(async move {
-            loop {
-                let event = match thread.next_event().await {
-                    Ok(event) => event,
-                    Err(err) => {
-                        tracing::debug!("external thread {thread_id} listener stopped: {err}");
-                        break;
-                    }
-                };
-                app_event_tx.send(AppEvent::ThreadEvent { thread_id, event });
-            }
-        });
-        self.thread_event_listener_tasks
-            .insert(thread_id, listener_handle);
-        Ok(())
+        let EventMsg::SessionConfigured(session_configured) = event.msg else {
+            unreachable!("thread-created event must be session-configured");
+        };
+        self.attach_live_thread(
+            thread_id,
+            thread,
+            session_configured,
+            AgentPickerVisibility::ShowInAgentPicker,
+        )
+        .await
     }
 
     fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
@@ -4109,11 +4221,23 @@ impl App {
             // Esc so the active UI (e.g. status indicator, modals, popups)
             // handles it.
             KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                if self.maybe_return_from_btw(tui).await {
+                } else {
+                    self.chat_widget.handle_key_event(key_event);
+                }
+            }
+            KeyEvent {
                 code: KeyCode::Esc,
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
-                if self.chat_widget.is_normal_backtrack_mode()
+                if self.maybe_return_from_btw(tui).await {
+                } else if self.chat_widget.is_normal_backtrack_mode()
                     && self.chat_widget.composer_is_empty()
                 {
                     self.handle_backtrack_esc_key(tui);
@@ -4235,6 +4359,9 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use tempfile::tempdir;
     use tokio::time;
+
+    #[path = "btw.rs"]
+    mod btw;
 
     #[test]
     fn normalize_harness_overrides_resolves_relative_add_dirs() -> Result<()> {
@@ -5398,7 +5525,7 @@ mod tests {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
-        let guardian_approvals = guardian_approvals_mode();
+        let guardian_approvals = super::guardian_approvals_mode();
 
         app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
             .await;
@@ -5456,6 +5583,7 @@ mod tests {
                 personality: None,
             })
         );
+
         let cell = match app_event_rx.try_recv() {
             Ok(AppEvent::InsertHistoryCell(cell)) => cell,
             other => panic!("expected InsertHistoryCell event, got {other:?}"),
@@ -5573,7 +5701,7 @@ mod tests {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
-        let guardian_approvals = guardian_approvals_mode();
+        let guardian_approvals = super::guardian_approvals_mode();
         let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
         let config_toml = "approvals_reviewer = \"user\"\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
@@ -5700,7 +5828,7 @@ mod tests {
         let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
-        let guardian_approvals = guardian_approvals_mode();
+        let guardian_approvals = super::guardian_approvals_mode();
         app.active_profile = Some("guardian".to_string());
         let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
         let config_toml = "profile = \"guardian\"\napprovals_reviewer = \"user\"\n";
@@ -6383,12 +6511,13 @@ guardian_approval = true
             feedback: codex_feedback::CodexFeedback::new(),
             feedback_audience: FeedbackAudience::External,
             pending_update_action: None,
-            suppress_shutdown_complete: false,
+            suppress_shutdown_complete_thread_id: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
+            btw_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
@@ -6443,12 +6572,13 @@ guardian_approval = true
                 feedback: codex_feedback::CodexFeedback::new(),
                 feedback_audience: FeedbackAudience::External,
                 pending_update_action: None,
-                suppress_shutdown_complete: false,
+                suppress_shutdown_complete_thread_id: None,
                 pending_shutdown_exit_thread_id: None,
                 windows_sandbox: WindowsSandboxState::default(),
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
                 agent_navigation: AgentNavigationState::default(),
+                btw_threads: HashMap::new(),
                 active_thread_id: None,
                 active_thread_rx: None,
                 primary_thread_id: None,
@@ -6485,6 +6615,10 @@ guardian_approval = true
             "test".to_string(),
             SessionSource::Cli,
         )
+    }
+
+    fn make_test_tui() -> crate::tui::Tui {
+        crate::tui::Tui::new_test()
     }
 
     fn app_enabled_in_effective_config(config: &Config, app_id: &str) -> Option<bool> {
@@ -7494,6 +7628,35 @@ guardian_approval = true
         assert_eq!(app.pending_shutdown_exit_thread_id, Some(thread_id));
         assert!(matches!(control, AppRunControl::Continue));
         assert_eq!(op_rx.try_recv(), Ok(Op::Shutdown));
+    }
+
+    #[tokio::test]
+    async fn shutdown_first_exit_matching_shutdown_complete_exits() -> Result<()> {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let mut tui = make_test_tui();
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
+        app.primary_thread_id = Some(thread_id);
+
+        let control = app.handle_exit_mode(ExitMode::ShutdownFirst);
+        assert!(matches!(control, AppRunControl::Continue));
+        assert_eq!(op_rx.try_recv(), Ok(Op::Shutdown));
+
+        let control = app
+            .handle_active_thread_event(
+                &mut tui,
+                Event {
+                    id: "shutdown-complete".to_string(),
+                    msg: EventMsg::ShutdownComplete,
+                },
+            )
+            .await?;
+        assert!(matches!(
+            control,
+            AppRunControl::Exit(ExitReason::UserRequested)
+        ));
+        assert_eq!(app.pending_shutdown_exit_thread_id, None);
+        Ok(())
     }
 
     #[tokio::test]

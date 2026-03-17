@@ -22,6 +22,7 @@ use tracing::warn;
 use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::contextual_user_message::TURN_ABORTED_CLOSE_TAG;
 use crate::contextual_user_message::TURN_ABORTED_OPEN_TAG;
 use crate::event_mapping::parse_turn_item;
 use crate::models_manager::manager::ModelsManager;
@@ -57,6 +58,24 @@ pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
+
+/// Model-visible history item recorded for an interrupted turn.
+///
+/// Keep this in sync with the real interrupt path so forked BTW threads can inherit the same
+/// in-distribution marker instead of approximating it with ad hoc instructions.
+pub(crate) fn interrupted_turn_history_marker() -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: format!(
+                "{TURN_ABORTED_OPEN_TAG}\n{TURN_ABORTED_INTERRUPTED_GUIDANCE}\n{TURN_ABORTED_CLOSE_TAG}"
+            ),
+        }],
+        end_turn: None,
+        phase: None,
+    }
+}
 
 fn emit_turn_network_proxy_metric(
     session_telemetry: &SessionTelemetry,
@@ -436,17 +455,7 @@ impl Session {
         if reason == TurnAbortReason::Interrupted {
             self.cleanup_after_interrupt(&task.turn_context).await;
 
-            let marker = ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: format!(
-                        "{TURN_ABORTED_OPEN_TAG}\n{TURN_ABORTED_INTERRUPTED_GUIDANCE}\n</turn_aborted>"
-                    ),
-                }],
-                end_turn: None,
-                phase: None,
-            };
+            let marker = interrupted_turn_history_marker();
             self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
                 .await;
             self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])
