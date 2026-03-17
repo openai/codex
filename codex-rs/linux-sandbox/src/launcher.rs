@@ -1,18 +1,19 @@
 use std::ffi::CString;
 use std::fs::File;
+use std::io::IsTerminal;
 use std::os::fd::AsRawFd;
 use std::os::raw::c_char;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
-use std::path::PathBuf;
 
 use crate::vendored_bwrap::exec_vendored_bwrap;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 const SYSTEM_BWRAP_PATH: &str = "/usr/bin/bwrap";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum BubblewrapLauncher {
-    System(PathBuf),
+    System(AbsolutePathBuf),
     Vendored,
 }
 
@@ -24,7 +25,7 @@ pub(crate) fn exec_bwrap(
     match preferred_bwrap_launcher() {
         BubblewrapLauncher::System(program) => exec_system_bwrap(&program, argv, preserved_files),
         BubblewrapLauncher::Vendored => {
-            if emit_missing_system_bwrap_warning {
+            if emit_missing_system_bwrap_warning && std::io::stderr().is_terminal() {
                 eprintln!(
                     "warning: Codex could not find system bubblewrap at {SYSTEM_BWRAP_PATH}. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime."
                 );
@@ -35,18 +36,25 @@ pub(crate) fn exec_bwrap(
 }
 
 fn preferred_bwrap_launcher() -> BubblewrapLauncher {
-    if Path::new(SYSTEM_BWRAP_PATH).exists() {
-        BubblewrapLauncher::System(PathBuf::from(SYSTEM_BWRAP_PATH))
+    let system_bwrap_path = AbsolutePathBuf::from_absolute_path(Path::new(SYSTEM_BWRAP_PATH))
+        .expect("system bubblewrap path should be absolute");
+    if system_bwrap_path.as_path().is_file() {
+        BubblewrapLauncher::System(system_bwrap_path)
     } else {
         BubblewrapLauncher::Vendored
     }
 }
 
-fn exec_system_bwrap(program: &Path, argv: Vec<String>, preserved_files: Vec<File>) -> ! {
+fn exec_system_bwrap(
+    program: &AbsolutePathBuf,
+    argv: Vec<String>,
+    preserved_files: Vec<File>,
+) -> ! {
+    // System bwrap runs across an exec boundary, so preserved fds must survive exec.
     make_files_inheritable(&preserved_files);
 
-    let program_path = program.display().to_string();
-    let program = CString::new(program.as_os_str().as_bytes())
+    let program_path = program.as_path().display().to_string();
+    let program = CString::new(program.as_path().as_os_str().as_bytes())
         .unwrap_or_else(|err| panic!("invalid system bubblewrap path: {err}"));
     let cstrings = argv_to_cstrings(&argv);
     let mut argv_ptrs: Vec<*const c_char> = cstrings.iter().map(|arg| arg.as_ptr()).collect();
