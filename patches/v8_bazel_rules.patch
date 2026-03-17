@@ -316,3 +316,127 @@ index 9648e4a54..8355ef3d2 100644
          }) + select({
              ":should_add_rdynamic": ["-rdynamic"],
              "//conditions:default": [],
+diff --git a/orig/v8-14.6.202.11/src/base/export-template.h b/mod/v8-14.6.202.11/src/base/export-template.h
+--- a/orig/v8-14.6.202.11/src/base/export-template.h
++++ b/mod/v8-14.6.202.11/src/base/export-template.h
+@@ -153,8 +153,10 @@
+ 
+ EXPORT_TEMPLATE_TEST(DEFAULT, );
+ EXPORT_TEMPLATE_TEST(DEFAULT, __attribute__((visibility("default"))));
++#if V8_CC_MSVC
+ EXPORT_TEMPLATE_TEST(MSVC_HACK, __declspec(dllexport));
+ EXPORT_TEMPLATE_TEST(DEFAULT, __declspec(dllimport));
++#endif  // V8_CC_MSVC
+ 
+ #undef EXPORT_TEMPLATE_TEST
+ #undef EXPORT_TEMPLATE_TEST_DEFAULT_DEFAULT
+diff --git a/orig/v8-14.6.202.11/src/base/bits.h b/mod/v8-14.6.202.11/src/base/bits.h
+--- a/orig/v8-14.6.202.11/src/base/bits.h
++++ b/mod/v8-14.6.202.11/src/base/bits.h
+@@ -17,6 +17,19 @@
+ #include "src/base/win32-headers.h"
+ #endif
+ 
++#ifdef RotateRight32
++#undef RotateRight32
++#endif
++#ifdef RotateLeft32
++#undef RotateLeft32
++#endif
++#ifdef RotateRight64
++#undef RotateRight64
++#endif
++#ifdef RotateLeft64
++#undef RotateLeft64
++#endif
++
+ namespace v8 {
+ namespace base {
+ namespace bits {
+diff --git a/orig/v8-14.6.202.11/src/base/platform/platform-win32.cc b/mod/v8-14.6.202.11/src/base/platform/platform-win32.cc
+--- a/orig/v8-14.6.202.11/src/base/platform/platform-win32.cc
++++ b/mod/v8-14.6.202.11/src/base/platform/platform-win32.cc
+@@ -10,18 +10,22 @@
+ // Secure API functions are not available using MinGW with msvcrt.dll
+ // on Windows XP. Make sure MINGW_HAS_SECURE_API is not defined to
+ // disable definition of secure API functions in standard headers that
+ // would conflict with our own implementation.
+-#ifdef __MINGW32__
++#if defined(__MINGW32__) && !defined(__MINGW64_VERSION_MAJOR)
+ #include <_mingw.h>
+ #ifdef MINGW_HAS_SECURE_API
+ #undef MINGW_HAS_SECURE_API
+ #endif  // MINGW_HAS_SECURE_API
+-#endif  // __MINGW32__
++#endif  // defined(__MINGW32__) && !defined(__MINGW64_VERSION_MAJOR)
+ 
+ #include <windows.h>
+ 
+ // This has to come after windows.h.
++#ifdef __MINGW32__
++#include <versionhelpers.h>
++#else
+ #include <VersionHelpers.h>
++#endif
+ #include <dbghelp.h>            // For SymLoadModule64 and al.
+ #include <malloc.h>             // For _msize()
+ #include <mmsystem.h>           // For timeGetTime().
+@@ -30,6 +34,6 @@
+ #include <limits>
+ #include <optional>
+ 
+ #include "src/base/bits.h"
+ #include "src/base/lazy-instance.h"
+ #include "src/base/macros.h"
+@@ -68,7 +76,7 @@
+ 
+ // Extra functions for MinGW. Most of these are the _s functions which are in
+ // the Microsoft Visual Studio C++ CRT.
+-#ifdef __MINGW32__
++#if defined(__MINGW32__) && !defined(__MINGW64_VERSION_MAJOR)
+ 
+ 
+ #ifndef __MINGW64_VERSION_MAJOR
+@@ -134,7 +142,7 @@
+   return 0;
+ }
+ 
+-#endif  // __MINGW32__
++#endif  // defined(__MINGW32__) && !defined(__MINGW64_VERSION_MAJOR)
+ 
+ namespace v8 {
+ namespace base {
+diff --git a/orig/v8-14.6.202.11/src/base/platform/time.cc b/mod/v8-14.6.202.11/src/base/platform/time.cc
+--- a/orig/v8-14.6.202.11/src/base/platform/time.cc
++++ b/mod/v8-14.6.202.11/src/base/platform/time.cc
+@@ -782,12 +782,12 @@
+ #elif defined(__PASE__)
+   // Thread CPU time accounting is unavailable in PASE
+   return false;
++#elif defined(V8_OS_WIN)
++  return IsSupportedWin();
+ #elif (defined(_POSIX_THREAD_CPUTIME) && (_POSIX_THREAD_CPUTIME >= 0)) || \
+     defined(V8_OS_DARWIN) || defined(V8_OS_ANDROID) ||                    \
+     defined(V8_OS_SOLARIS) || defined(V8_OS_ZOS)
+   return true;
+-#elif defined(V8_OS_WIN)
+-  return IsSupportedWin();
+ #else
+   return false;
+ #endif
+@@ -804,13 +804,13 @@
+   return ThreadTicks(ComputeThreadTicks());
+ #elif V8_OS_FUCHSIA
+   return ThreadTicks(GetFuchsiaThreadTicks());
++#elif V8_OS_WIN
++  return ThreadTicks::GetForThread(::GetCurrentThread());
+ #elif (defined(_POSIX_THREAD_CPUTIME) && (_POSIX_THREAD_CPUTIME >= 0)) || \
+     defined(V8_OS_ANDROID) || defined(V8_OS_ZOS)
+   return ThreadTicks(ClockNow(CLOCK_THREAD_CPUTIME_ID));
+ #elif V8_OS_SOLARIS
+   return ThreadTicks(gethrvtime() / Time::kNanosecondsPerMicrosecond);
+-#elif V8_OS_WIN
+-  return ThreadTicks::GetForThread(::GetCurrentThread());
+ #else
+   UNREACHABLE();
+ #endif
