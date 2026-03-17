@@ -55,10 +55,6 @@ impl RealtimeAudioBehavior {
         }
     }
 
-    fn should_interrupt_playback_on_server_event(self) -> bool {
-        matches!(self, Self::PlaybackAware)
-    }
-
     #[cfg(not(target_os = "linux"))]
     fn input_behavior(
         self,
@@ -312,11 +308,10 @@ impl ChatWidget {
             }
             RealtimeEvent::InputAudioSpeechStarted(_) | RealtimeEvent::ResponseCancelled(_) => {
                 #[cfg(not(target_os = "linux"))]
-                if self
-                    .realtime_conversation
-                    .audio_behavior
-                    .should_interrupt_playback_on_server_event()
-                    && let Some(player) = &self.realtime_conversation.audio_player
+                if matches!(
+                    self.realtime_conversation.audio_behavior,
+                    RealtimeAudioBehavior::PlaybackAware
+                ) && let Some(player) = &self.realtime_conversation.audio_player
                 {
                     // Once the server detects user speech or the current response is cancelled,
                     // any buffered assistant audio is stale and should stop gating mic input.
