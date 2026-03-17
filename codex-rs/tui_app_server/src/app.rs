@@ -1979,6 +1979,7 @@ impl App {
                 }
             }
         }
+        self.refresh_pending_thread_approvals().await;
         Ok(())
     }
 
@@ -6354,6 +6355,63 @@ guardian_approval = true
         assert_eq!(
             app.chat_widget.pending_thread_approvals(),
             &["Robie [explorer]".to_string()]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn inactive_thread_approval_badge_clears_after_turn_completion_notification() -> Result<()>
+    {
+        let mut app = make_test_app().await;
+        let main_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000101").expect("valid thread");
+        let agent_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000202").expect("valid thread");
+
+        app.primary_thread_id = Some(main_thread_id);
+        app.active_thread_id = Some(main_thread_id);
+        app.thread_event_channels
+            .insert(main_thread_id, ThreadEventChannel::new(1));
+        app.thread_event_channels.insert(
+            agent_thread_id,
+            ThreadEventChannel::new_with_session(
+                4,
+                ThreadSessionState {
+                    approval_policy: AskForApproval::OnRequest,
+                    sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                    rollout_path: Some(PathBuf::from("/tmp/agent-rollout.jsonl")),
+                    ..test_thread_session(agent_thread_id, PathBuf::from("/tmp/agent"))
+                },
+                Vec::new(),
+            ),
+        );
+        app.agent_navigation.upsert(
+            agent_thread_id,
+            Some("Robie".to_string()),
+            Some("explorer".to_string()),
+            false,
+        );
+
+        app.enqueue_thread_request(
+            agent_thread_id,
+            exec_approval_request(agent_thread_id, "turn-approval", "call-approval", None),
+        )
+        .await?;
+        assert_eq!(
+            app.chat_widget.pending_thread_approvals(),
+            &["Robie [explorer]".to_string()]
+        );
+
+        app.enqueue_thread_notification(
+            agent_thread_id,
+            turn_completed_notification(agent_thread_id, "turn-approval", TurnStatus::Completed),
+        )
+        .await?;
+
+        assert!(
+            app.chat_widget.pending_thread_approvals().is_empty(),
+            "turn completion should clear inactive-thread approval badge immediately"
         );
 
         Ok(())
