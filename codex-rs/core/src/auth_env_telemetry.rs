@@ -1,4 +1,5 @@
 use codex_otel::AuthEnvTelemetryMetadata;
+use std::collections::BTreeSet;
 
 use crate::auth::CODEX_API_KEY_ENV_VAR;
 use crate::auth::OPENAI_API_KEY_ENV_VAR;
@@ -7,23 +8,70 @@ use crate::model_provider_info::ModelProviderInfo;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AuthEnvTelemetry {
-    pub(crate) openai_api_key_env_present: bool,
-    pub(crate) codex_api_key_env_present: bool,
-    pub(crate) codex_api_key_env_enabled: bool,
-    pub(crate) provider_env_key_name: Option<String>,
-    pub(crate) provider_env_key_present: Option<bool>,
-    pub(crate) refresh_token_url_override_present: bool,
+    sources: BTreeSet<AuthEnvSource>,
+    codex_api_key_env_enabled: bool,
+    provider_env_key_configured: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum AuthEnvSource {
+    OpenAiApiKey,
+    CodexApiKey,
+    ProviderEnvKey,
+    RefreshTokenUrlOverride,
 }
 
 impl AuthEnvTelemetry {
+    pub(crate) fn new(
+        sources: impl IntoIterator<Item = AuthEnvSource>,
+        codex_api_key_env_enabled: bool,
+        provider_env_key_configured: bool,
+    ) -> Self {
+        Self {
+            sources: sources.into_iter().collect(),
+            codex_api_key_env_enabled,
+            provider_env_key_configured,
+        }
+    }
+
+    pub(crate) fn openai_api_key_env_present(&self) -> bool {
+        self.sources.contains(&AuthEnvSource::OpenAiApiKey)
+    }
+
+    pub(crate) fn codex_api_key_env_present(&self) -> bool {
+        self.sources.contains(&AuthEnvSource::CodexApiKey)
+    }
+
+    pub(crate) fn codex_api_key_env_enabled(&self) -> bool {
+        self.codex_api_key_env_enabled
+    }
+
+    pub(crate) fn provider_env_key_name(&self) -> Option<&'static str> {
+        self.provider_env_key_configured.then_some("configured")
+    }
+
+    pub(crate) fn provider_env_key_present(&self) -> Option<bool> {
+        self.provider_env_key_configured
+            .then(|| self.has(AuthEnvSource::ProviderEnvKey))
+    }
+
+    pub(crate) fn refresh_token_url_override_present(&self) -> bool {
+        self.sources
+            .contains(&AuthEnvSource::RefreshTokenUrlOverride)
+    }
+
+    fn has(&self, source: AuthEnvSource) -> bool {
+        self.sources.contains(&source)
+    }
+
     pub(crate) fn to_otel_metadata(&self) -> AuthEnvTelemetryMetadata {
         AuthEnvTelemetryMetadata {
-            openai_api_key_env_present: self.openai_api_key_env_present,
-            codex_api_key_env_present: self.codex_api_key_env_present,
-            codex_api_key_env_enabled: self.codex_api_key_env_enabled,
-            provider_env_key_name: self.provider_env_key_name.clone(),
-            provider_env_key_present: self.provider_env_key_present,
-            refresh_token_url_override_present: self.refresh_token_url_override_present,
+            openai_api_key_env_present: self.openai_api_key_env_present(),
+            codex_api_key_env_present: self.codex_api_key_env_present(),
+            codex_api_key_env_enabled: self.codex_api_key_env_enabled(),
+            provider_env_key_name: self.provider_env_key_name().map(str::to_string),
+            provider_env_key_present: self.provider_env_key_present(),
+            refresh_token_url_override_present: self.refresh_token_url_override_present(),
         }
     }
 }
@@ -32,15 +80,25 @@ pub(crate) fn collect_auth_env_telemetry(
     provider: &ModelProviderInfo,
     codex_api_key_env_enabled: bool,
 ) -> AuthEnvTelemetry {
-    AuthEnvTelemetry {
-        openai_api_key_env_present: env_var_present(OPENAI_API_KEY_ENV_VAR),
-        codex_api_key_env_present: env_var_present(CODEX_API_KEY_ENV_VAR),
-        codex_api_key_env_enabled,
-        // Custom provider `env_key` is arbitrary config text, so emit only a safe bucket.
-        provider_env_key_name: provider.env_key.as_ref().map(|_| "configured".to_string()),
-        provider_env_key_present: provider.env_key.as_deref().map(env_var_present),
-        refresh_token_url_override_present: env_var_present(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR),
+    let mut sources = Vec::new();
+    if env_var_present(OPENAI_API_KEY_ENV_VAR) {
+        sources.push(AuthEnvSource::OpenAiApiKey);
     }
+    if env_var_present(CODEX_API_KEY_ENV_VAR) {
+        sources.push(AuthEnvSource::CodexApiKey);
+    }
+    if provider.env_key.as_deref().is_some_and(env_var_present) {
+        sources.push(AuthEnvSource::ProviderEnvKey);
+    }
+    if env_var_present(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR) {
+        sources.push(AuthEnvSource::RefreshTokenUrlOverride);
+    }
+
+    AuthEnvTelemetry::new(
+        sources,
+        codex_api_key_env_enabled,
+        provider.env_key.is_some(),
+    )
 }
 
 fn env_var_present(name: &str) -> bool {
@@ -77,9 +135,6 @@ mod tests {
 
         let telemetry = collect_auth_env_telemetry(&provider, false);
 
-        assert_eq!(
-            telemetry.provider_env_key_name,
-            Some("configured".to_string())
-        );
+        assert_eq!(telemetry.provider_env_key_name(), Some("configured"));
     }
 }

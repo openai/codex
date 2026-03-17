@@ -123,14 +123,14 @@ pub(crate) fn emit_feedback_request_tags_with_auth_env(
 ) {
     emit_feedback_request_tags(tags);
     feedback_tags!(
-        auth_env_openai_api_key_present = auth_env.openai_api_key_env_present,
-        auth_env_codex_api_key_present = auth_env.codex_api_key_env_present,
-        auth_env_codex_api_key_enabled = auth_env.codex_api_key_env_enabled,
-        auth_env_provider_key_name = auth_env.provider_env_key_name.as_deref().unwrap_or(""),
+        auth_env_openai_api_key_present = auth_env.openai_api_key_env_present(),
+        auth_env_codex_api_key_present = auth_env.codex_api_key_env_present(),
+        auth_env_codex_api_key_enabled = auth_env.codex_api_key_env_enabled(),
+        auth_env_provider_key_name = auth_env.provider_env_key_name().unwrap_or(""),
         auth_env_provider_key_present = auth_env
-            .provider_env_key_present
+            .provider_env_key_present()
             .map_or_else(String::new, |value| value.to_string()),
-        auth_env_refresh_token_url_override_present = auth_env.refresh_token_url_override_present
+        auth_env_refresh_token_url_override_present = auth_env.refresh_token_url_override_present()
     );
 }
 
