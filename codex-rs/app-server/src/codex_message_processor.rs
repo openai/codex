@@ -8809,66 +8809,66 @@ mod tests {
     }
 
     #[test]
-    fn build_auth_status_observation_marks_unauthed_when_auth_is_required_but_missing() {
-        let observation = build_auth_status_observation(
-            "openai",
-            &GetAuthStatusResponse {
-                auth_method: None,
-                auth_token: None,
-                requires_openai_auth: Some(true),
-            },
-            false,
-            false,
-        );
+    fn build_auth_status_observation_normalizes_decision_state() {
+        for (
+            provider_id,
+            response,
+            expected_auth_method,
+            expected_auth_token_present,
+            expected_requires_openai_auth,
+            expected_decision_state,
+        ) in [
+            (
+                "openai",
+                GetAuthStatusResponse {
+                    auth_method: None,
+                    auth_token: None,
+                    requires_openai_auth: Some(true),
+                },
+                "none",
+                false,
+                true,
+                "unauthed",
+            ),
+            (
+                "mock_provider",
+                GetAuthStatusResponse {
+                    auth_method: None,
+                    auth_token: None,
+                    requires_openai_auth: Some(false),
+                },
+                "none",
+                false,
+                false,
+                "connected",
+            ),
+            (
+                "openai",
+                GetAuthStatusResponse {
+                    auth_method: Some(AuthMode::Chatgpt),
+                    auth_token: None,
+                    requires_openai_auth: Some(true),
+                },
+                "chatgpt",
+                false,
+                true,
+                "unauthed",
+            ),
+        ] {
+            let observation =
+                build_auth_status_observation(provider_id, &response, false, false);
 
-        assert_eq!(
-            observation,
-            AppServerAuthStatusObservation {
-                provider_id: "openai".to_string(),
-                requires_openai_auth: true,
-                auth_method: "none".to_string(),
-                auth_token_present: false,
-                include_token_requested: false,
-                refresh_token_requested: false,
-                decision_state: "unauthed".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn build_auth_status_observation_marks_connected_when_openai_auth_is_not_required() {
-        let observation = build_auth_status_observation(
-            "mock_provider",
-            &GetAuthStatusResponse {
-                auth_method: None,
-                auth_token: None,
-                requires_openai_auth: Some(false),
-            },
-            false,
-            false,
-        );
-
-        assert_eq!(observation.decision_state, "connected");
-        assert_eq!(observation.auth_method, "none");
-        assert_eq!(observation.requires_openai_auth, false);
-    }
-
-    #[test]
-    fn build_auth_status_observation_requires_real_token_for_auth_token_present() {
-        let observation = build_auth_status_observation(
-            "openai",
-            &GetAuthStatusResponse {
-                auth_method: Some(AuthMode::Chatgpt),
-                auth_token: None,
-                requires_openai_auth: Some(true),
-            },
-            false,
-            false,
-        );
-
-        assert_eq!(observation.auth_method, "chatgpt");
-        assert!(!observation.auth_token_present);
-        assert_eq!(observation.decision_state, "unauthed");
+            assert_eq!(observation.provider_id, provider_id);
+            assert_eq!(observation.auth_method, expected_auth_method);
+            assert_eq!(observation.auth_token_present, expected_auth_token_present);
+            assert_eq!(
+                observation.requires_openai_auth,
+                expected_requires_openai_auth
+            );
+            assert_eq!(observation.decision_state, expected_decision_state);
+            assert!(!observation.include_token_requested);
+            assert!(!observation.refresh_token_requested);
+        }
     }
 
     #[test]
