@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-import codex_app_server.public_api as public_api_module
+import codex_app_server.api as public_api_module
 from codex_app_server.client import AppServerClient
 from codex_app_server.generated.v2_all import (
     AgentMessageDeltaNotification,
@@ -14,7 +14,7 @@ from codex_app_server.generated.v2_all import (
     TurnStatus,
 )
 from codex_app_server.models import InitializeResponse, Notification
-from codex_app_server.public_api import (
+from codex_app_server.api import (
     AsyncCodex,
     AsyncTurnHandle,
     Codex,

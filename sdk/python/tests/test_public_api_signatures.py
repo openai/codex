@@ -6,7 +6,7 @@ from typing import Any
 
 from codex_app_server import AppServerConfig
 from codex_app_server.models import InitializeResponse
-from codex_app_server.public_api import AsyncCodex, AsyncThread, Codex, Thread
+from codex_app_server.api import AsyncCodex, AsyncThread, Codex, Thread
 
 
 def _keyword_only_names(fn: object) -> list[str]:

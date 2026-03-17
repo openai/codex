@@ -37,7 +37,7 @@ from .generated.v2_all import (
     TurnSteerParams,
 )
 from .models import InitializeResponse
-from .public_api import (
+from .api import (
     AsyncCodex,
     AsyncThread,
     AsyncTurnHandle,

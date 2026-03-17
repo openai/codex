@@ -835,7 +835,7 @@ def _render_async_thread_block(
 
 def generate_public_api_flat_methods() -> None:
     src_dir = sdk_root() / "src"
-    public_api_path = src_dir / "codex_app_server" / "public_api.py"
+    public_api_path = src_dir / "codex_app_server" / "api.py"
     if not public_api_path.exists():
         # PR2 can run codegen before the ergonomic public API layer is added.
         return
