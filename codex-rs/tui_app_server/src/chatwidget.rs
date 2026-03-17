@@ -37,7 +37,6 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
-#[cfg(test)]
 use self::realtime::PendingSteerCompareKey;
 use crate::app_command::AppCommand;
 use crate::app_event::RealtimeAudioDeviceKind;
@@ -855,6 +854,7 @@ pub(crate) struct ChatWidget {
     external_editor_state: ExternalEditorState,
     realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
+    last_non_retry_error: Option<(String, String)>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -960,7 +960,6 @@ impl From<&str> for UserMessage {
 
 struct PendingSteer {
     user_message: UserMessage,
-    #[cfg(test)]
     compare_key: PendingSteerCompareKey,
 }
 
@@ -1127,6 +1126,25 @@ fn merge_user_messages(messages: Vec<UserMessage>) -> UserMessage {
 pub(crate) enum ReplayKind {
     ResumeInitialMessages,
     ThreadSnapshot,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ThreadItemRenderSource {
+    Live,
+    Replay(ReplayKind),
+}
+
+impl ThreadItemRenderSource {
+    fn from_replay(self) -> bool {
+        matches!(self, Self::Replay(_))
+    }
+
+    fn replay_kind(self) -> Option<ReplayKind> {
+        match self {
+            Self::Live => None,
+            Self::Replay(replay_kind) => Some(replay_kind),
+        }
+    }
 }
 
 fn thread_session_state_to_legacy_event(
@@ -3953,6 +3971,7 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
+            last_non_retry_error: None,
         };
 
         widget.bottom_pane.set_voice_transcription_enabled(
@@ -4981,7 +5000,6 @@ impl ChatWidget {
                 text_elements: text_elements.clone(),
                 mention_bindings: mention_bindings.clone(),
             },
-            #[cfg(test)]
             compare_key: Self::pending_steer_compare_key_from_items(&items),
         });
         let personality = self
@@ -5129,7 +5147,17 @@ impl ChatWidget {
         turn_id: String,
         replay_kind: ReplayKind,
     ) {
-        let from_replay = true;
+        self.handle_thread_item(item, turn_id, ThreadItemRenderSource::Replay(replay_kind));
+    }
+
+    fn handle_thread_item(
+        &mut self,
+        item: ThreadItem,
+        turn_id: String,
+        render_source: ThreadItemRenderSource,
+    ) {
+        let from_replay = render_source.from_replay();
+        let replay_kind = render_source.replay_kind();
         match item {
             ThreadItem::UserMessage { id, content } => {
                 let user_message = codex_protocol::items::UserMessageItem {
@@ -5144,7 +5172,42 @@ impl ChatWidget {
                 else {
                     unreachable!("user message item should convert to a user message event");
                 };
-                self.on_user_message_event(event);
+                if from_replay {
+                    self.on_user_message_event(event);
+                } else {
+                    let rendered = Self::rendered_user_message_event_from_event(&event);
+                    let compare_key =
+                        Self::pending_steer_compare_key_from_items(&user_message.content);
+                    if self
+                        .pending_steers
+                        .front()
+                        .is_some_and(|pending| pending.compare_key == compare_key)
+                    {
+                        if let Some(pending) = self.pending_steers.pop_front() {
+                            self.refresh_pending_input_preview();
+                            let pending_event = UserMessageEvent {
+                                message: pending.user_message.text,
+                                images: Some(pending.user_message.remote_image_urls),
+                                local_images: pending
+                                    .user_message
+                                    .local_images
+                                    .into_iter()
+                                    .map(|image| image.path)
+                                    .collect(),
+                                text_elements: pending.user_message.text_elements,
+                            };
+                            self.on_user_message_event(pending_event);
+                        } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered)
+                        {
+                            tracing::warn!(
+                                "pending steer matched compare key but queue was empty when rendering committed user message"
+                            );
+                            self.on_user_message_event(event);
+                        }
+                    } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered) {
+                        self.on_user_message_event(event);
+                    }
+                }
             }
             ThreadItem::AgentMessage { id, text, phase } => {
                 self.on_agent_message_item_completed(AgentMessageItem {
@@ -5345,7 +5408,7 @@ impl ChatWidget {
             ThreadItem::DynamicToolCall { .. } | ThreadItem::CollabAgentToolCall { .. } => {}
         }
 
-        if matches!(replay_kind, ReplayKind::ThreadSnapshot) && turn_id.is_empty() && !from_replay {
+        if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot)) && turn_id.is_empty() {
             self.request_redraw();
         }
     }
@@ -5409,6 +5472,7 @@ impl ChatWidget {
                 })
             }
             ServerNotification::TurnStarted(_) => {
+                self.last_non_retry_error = None;
                 if !matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages)) {
                     self.on_task_started();
                 }
@@ -5493,6 +5557,12 @@ impl ChatWidget {
                         notification.error.additional_details,
                     );
                 } else {
+                    if !from_replay {
+                        self.last_non_retry_error = Some((
+                            notification.turn_id.clone(),
+                            notification.error.message.clone(),
+                        ));
+                    }
                     self.on_error(notification.error.message);
                 }
             }
@@ -5645,12 +5715,27 @@ impl ChatWidget {
     ) {
         match notification.turn.status {
             TurnStatus::Completed => {
+                self.last_non_retry_error = None;
                 self.on_task_complete(/*last_agent_message*/ None, replay_kind.is_some())
             }
-            TurnStatus::Interrupted => self.on_interrupted_turn(TurnAbortReason::Interrupted),
+            TurnStatus::Interrupted => {
+                self.last_non_retry_error = None;
+                self.on_interrupted_turn(TurnAbortReason::Interrupted);
+            }
             TurnStatus::Failed => {
                 if let Some(error) = notification.turn.error {
-                    self.on_error(error.message);
+                    if self.last_non_retry_error.as_ref()
+                        == Some(&(notification.turn.id.clone(), error.message.clone()))
+                    {
+                        self.last_non_retry_error = None;
+                    } else {
+                        self.on_error(error.message);
+                    }
+                } else {
+                    self.last_non_retry_error = None;
+                    self.finalize_turn();
+                    self.request_redraw();
+                    self.maybe_send_next_queued_input();
                 }
             }
             TurnStatus::InProgress => {}
@@ -5726,10 +5811,10 @@ impl ChatWidget {
         notification: ItemCompletedNotification,
         replay_kind: Option<ReplayKind>,
     ) {
-        self.replay_thread_item(
+        self.handle_thread_item(
             notification.item,
             notification.turn_id,
-            replay_kind.unwrap_or(ReplayKind::ThreadSnapshot),
+            replay_kind.map_or(ThreadItemRenderSource::Live, ThreadItemRenderSource::Replay),
         );
     }
 
