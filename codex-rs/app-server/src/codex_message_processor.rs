@@ -523,7 +523,7 @@ fn build_auth_status_observation(
         .auth_token
         .as_ref()
         .is_some_and(|token| !token.is_empty());
-    let decision_state = if !requires_openai_auth || auth_token_present {
+    let decision_state = if !requires_openai_auth || response.auth_method.is_some() {
         "connected"
     } else {
         "unauthed"
@@ -8852,7 +8852,7 @@ mod tests {
                 "chatgpt",
                 false,
                 true,
-                "unauthed",
+                "connected",
             ),
         ] {
             let observation = build_auth_status_observation(provider_id, &response, false, false);
