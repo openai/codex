@@ -10550,7 +10550,7 @@ async fn clearing_thread_footer_override_preserves_general_footer_hint_snapshot(
         "BTW".to_string(),
         "from main thread · Esc to return".to_string(),
     )]));
-    chat.set_thread_footer_hint_override(None);
+    chat.set_thread_footer_hint_override(/*items*/ None);
 
     let width = 80;
     let height = chat.desired_height(width);

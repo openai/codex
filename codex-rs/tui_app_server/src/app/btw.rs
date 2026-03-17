@@ -13,7 +13,7 @@ pub(super) struct BtwThreadState {
 impl App {
     pub(super) fn sync_btw_thread_ui(&mut self) {
         let clear_btw_ui = |chat_widget: &mut crate::chatwidget::ChatWidget| {
-            chat_widget.set_thread_footer_hint_override(None);
+            chat_widget.set_thread_footer_hint_override(/*items*/ None);
             chat_widget.clear_thread_rename_block();
         };
         let Some(active_thread_id) = self.current_displayed_thread_id() else {
@@ -183,8 +183,11 @@ impl App {
         parent_thread_id: ThreadId,
         user_message: crate::chatwidget::UserMessage,
     ) -> Result<AppRunControl> {
-        self.session_telemetry
-            .counter("codex.thread.btw", 1, &[("source", "slash_command")]);
+        self.session_telemetry.counter(
+            "codex.thread.btw",
+            /*inc*/ 1,
+            &[("source", "slash_command")],
+        );
         self.refresh_in_memory_config_from_disk_best_effort("starting a BTW subagent")
             .await;
 

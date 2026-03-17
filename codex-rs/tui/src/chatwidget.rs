@@ -4829,7 +4829,9 @@ impl ChatWidget {
     }
 
     fn prepare_inline_submission_user_message(&mut self) -> Option<UserMessage> {
-        let (text, text_elements) = self.bottom_pane.prepare_inline_args_submission(true)?;
+        let (text, text_elements) = self
+            .bottom_pane
+            .prepare_inline_args_submission(/*record_history*/ true)?;
         let local_images = self
             .bottom_pane
             .take_recent_submission_images_with_placeholders();
