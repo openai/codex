@@ -8217,6 +8217,11 @@ impl ChatWidget {
         PlainHistoryCell::new(vec![line.into()])
     }
 
+    /// Begin the asynchronous MCP inventory flow: show a loading spinner and
+    /// request the app-server fetch via `AppEvent::FetchMcpInventory`.
+    ///
+    /// The spinner lives in `active_cell` and is cleared by
+    /// [`clear_mcp_inventory_loading`] once the result arrives.
     pub(crate) fn add_mcp_output(&mut self) {
         self.flush_answer_stream_with_separator();
         self.flush_active_cell();
@@ -8228,6 +8233,10 @@ impl ChatWidget {
         self.app_event_tx.send(AppEvent::FetchMcpInventory);
     }
 
+    /// Remove the MCP loading spinner if it is still the active cell.
+    ///
+    /// Uses `Any`-based type checking so that a late-arriving inventory result
+    /// does not accidentally clear an unrelated cell that was set in the meantime.
     pub(crate) fn clear_mcp_inventory_loading(&mut self) {
         let Some(active) = self.active_cell.as_ref() else {
             return;

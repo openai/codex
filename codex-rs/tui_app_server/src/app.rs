@@ -1544,6 +1544,13 @@ impl App {
         Ok(())
     }
 
+    /// Spawn a background task that fetches the full MCP server inventory from the
+    /// app-server via paginated RPCs, then delivers the result back through
+    /// `AppEvent::McpInventoryLoaded`.
+    ///
+    /// The spawned task is fire-and-forget: no `JoinHandle` is stored, so a stale
+    /// result may arrive after the user has moved on. This is harmless — the result
+    /// is rendered into the current history regardless.
     fn fetch_mcp_inventory(&mut self, app_server: &AppServerSession) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
@@ -1555,6 +1562,11 @@ impl App {
         });
     }
 
+    /// Process the completed MCP inventory fetch: clear the loading spinner, then
+    /// render either the full tool/resource listing or an error into chat history.
+    ///
+    /// When both the local config and the app-server report zero servers, a special
+    /// "empty" cell is shown instead of the full table.
     fn handle_mcp_inventory_result(&mut self, result: Result<Vec<McpServerStatus>, String>) {
         let config = self.chat_widget.config_ref().clone();
         self.chat_widget.clear_mcp_inventory_loading();
@@ -4472,6 +4484,11 @@ impl App {
     }
 }
 
+/// Collect every MCP server status from the app-server by walking the paginated
+/// `mcpServerStatus/list` RPC until no `next_cursor` is returned.
+///
+/// All pages are eagerly gathered into a single `Vec` so the caller can render
+/// the inventory atomically. Each page requests up to 100 entries.
 async fn fetch_all_mcp_server_statuses(
     request_handle: AppServerRequestHandle,
 ) -> Result<Vec<McpServerStatus>> {
@@ -4501,6 +4518,10 @@ async fn fetch_all_mcp_server_statuses(
     Ok(statuses)
 }
 
+/// Convert flat `McpServerStatus` responses into the per-server maps used by the
+/// in-process MCP subsystem (tools keyed as `mcp__{server}__{tool}`, plus
+/// per-server resource/template/auth maps). Test-only because the app-server TUI
+/// renders directly from `McpServerStatus` rather than these maps.
 #[cfg(test)]
 fn mcp_inventory_maps_from_statuses(
     statuses: Vec<McpServerStatus>,

@@ -1965,6 +1965,16 @@ pub(crate) fn new_mcp_tools_output(
     PlainHistoryCell { lines }
 }
 
+/// Build the `/mcp` history cell from app-server `McpServerStatus` responses.
+///
+/// The server list is the union of servers declared in local config and servers
+/// reported by the app-server, sorted alphabetically. Disabled servers (from
+/// config) are rendered with a `(disabled)` tag and skip tool/resource details.
+/// Servers that appear only in the status response (e.g., plugin-injected
+/// servers) are rendered with whatever the app-server reported.
+///
+/// This mirrors the layout of [`new_mcp_tools_output`] but sources data from
+/// the paginated RPC response rather than the in-process `McpManager`.
 pub(crate) fn new_mcp_tools_output_from_statuses(
     config: &Config,
     statuses: &[McpServerStatus],
@@ -2166,6 +2176,14 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
+/// A transient history cell that shows an animated spinner while the MCP
+/// inventory RPC is in flight.
+///
+/// Inserted as the `active_cell` by `ChatWidget::add_mcp_output()` and removed
+/// by `ChatWidget::clear_mcp_inventory_loading()` once the fetch completes.
+/// `clear_mcp_inventory_loading` uses `Any::is::<McpInventoryLoadingCell>()` to
+/// ensure it only clears a cell of this exact type, avoiding interference with
+/// unrelated active cells.
 #[derive(Debug)]
 pub(crate) struct McpInventoryLoadingCell {
     start_time: Instant,
@@ -2202,6 +2220,7 @@ impl HistoryCell for McpInventoryLoadingCell {
     }
 }
 
+/// Convenience constructor for [`McpInventoryLoadingCell`].
 pub(crate) fn new_mcp_inventory_loading(animations_enabled: bool) -> McpInventoryLoadingCell {
     McpInventoryLoadingCell::new(animations_enabled)
 }
