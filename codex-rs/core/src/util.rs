@@ -124,7 +124,7 @@ impl<'a> FeedbackRequestSnapshot<'a> {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn emit_feedback_request_tags(tags: &FeedbackRequestTags<'_>) {
     let snapshot = FeedbackRequestSnapshot::from_tags(tags);
     feedback_tags!(
