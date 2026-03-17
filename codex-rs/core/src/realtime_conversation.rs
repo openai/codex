@@ -476,7 +476,8 @@ async fn prepare_realtime_start(
         format!("{prompt}\n\n{startup_context}")
     };
     let model = config.experimental_realtime_ws_model.clone();
-    let event_parser = match config.realtime.version {
+    let version = config.realtime.version;
+    let event_parser = match version {
         RealtimeWsVersion::V1 => RealtimeEventParser::V1,
         RealtimeWsVersion::V2 => RealtimeEventParser::RealtimeV2,
     };
@@ -525,6 +526,7 @@ async fn handle_start_inner(
         id: sub_id.to_string(),
         msg: EventMsg::RealtimeConversationStarted(RealtimeConversationStartedEvent {
             session_id: requested_session_id,
+            version,
         }),
     })
     .await;

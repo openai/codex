@@ -95,13 +95,15 @@ impl ToolHandler for Handler {
             .await;
         result?;
 
-        Ok(CloseAgentResult { status })
+        Ok(CloseAgentResult {
+            previous_status: status,
+        })
     }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct CloseAgentResult {
-    pub(crate) status: AgentStatus,
+    pub(crate) previous_status: AgentStatus,
 }
 
 impl ToolOutput for CloseAgentResult {

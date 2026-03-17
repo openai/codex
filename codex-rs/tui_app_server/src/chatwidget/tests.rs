@@ -1898,6 +1898,7 @@ async fn make_chatwidget_manual(
         submit_pending_steers_after_interrupt: false,
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
         suppress_session_configured_redraw: false,
+        suppress_initial_user_message_submit: false,
         pending_notification: None,
         quit_shortcut_expires_at: None,
         quit_shortcut_key: None,
@@ -6039,6 +6040,17 @@ async fn slash_memory_drop_reports_stubbed_feature() {
         op_rx.try_recv().is_err(),
         "expected no memory op to be sent"
     );
+}
+
+#[tokio::test]
+async fn slash_mcp_requests_inventory_via_app_server() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Mcp);
+
+    assert!(active_blob(&chat).contains("Loading MCP inventory"));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::FetchMcpInventory));
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
 }
 
 #[tokio::test]

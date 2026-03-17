@@ -1,4 +1,5 @@
 use super::*;
+use crate::packages::versions;
 use codex_artifacts::RuntimeEntrypoints;
 use codex_artifacts::RuntimePathEntry;
 use tempfile::TempDir;
@@ -46,7 +47,7 @@ fn default_runtime_manager_uses_openai_codex_release_base() {
     );
     assert_eq!(
         manager.config().release().runtime_version(),
-        PINNED_ARTIFACT_RUNTIME_VERSION
+        versions::ARTIFACT_RUNTIME
     );
 }
 
@@ -59,14 +60,14 @@ fn load_cached_runtime_reads_pinned_cache_path() {
         .path()
         .join("packages")
         .join("artifacts")
-        .join(PINNED_ARTIFACT_RUNTIME_VERSION)
+        .join(versions::ARTIFACT_RUNTIME)
         .join(platform.as_str());
     std::fs::create_dir_all(&install_dir).expect("create install dir");
     std::fs::write(
         install_dir.join("manifest.json"),
         serde_json::json!({
             "schema_version": 1,
-            "runtime_version": PINNED_ARTIFACT_RUNTIME_VERSION,
+            "runtime_version": versions::ARTIFACT_RUNTIME,
             "node": { "relative_path": "node/bin/node" },
             "entrypoints": {
                 "build_js": { "relative_path": "artifact-tool/dist/artifact_tool.mjs" },
@@ -95,10 +96,10 @@ fn load_cached_runtime_reads_pinned_cache_path() {
         &codex_home
             .path()
             .join(codex_artifacts::DEFAULT_CACHE_ROOT_RELATIVE),
-        PINNED_ARTIFACT_RUNTIME_VERSION,
+        versions::ARTIFACT_RUNTIME,
     )
     .expect("resolve runtime");
-    assert_eq!(runtime.runtime_version(), PINNED_ARTIFACT_RUNTIME_VERSION);
+    assert_eq!(runtime.runtime_version(), versions::ARTIFACT_RUNTIME);
     assert_eq!(
         runtime.manifest().entrypoints,
         RuntimeEntrypoints {

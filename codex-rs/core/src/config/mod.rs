@@ -1535,13 +1535,7 @@ pub enum RealtimeWsMode {
     Transcription,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum RealtimeWsVersion {
-    #[default]
-    V1,
-    V2,
-}
+pub use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]

@@ -4,6 +4,7 @@
 //! are used to preserve compatibility when older payloads omit newly introduced attributes.
 
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -46,6 +47,15 @@ pub enum ReasoningEffort {
     Medium,
     High,
     XHigh,
+}
+
+impl FromStr for ReasoningEffort {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_value(serde_json::Value::String(s.to_string()))
+            .map_err(|_| format!("invalid reasoning_effort: {s}"))
+    }
 }
 
 /// Canonical user-input modality tags advertised by a model.
@@ -550,6 +560,20 @@ mod tests {
             personality_friendly: Some("friendly".to_string()),
             personality_pragmatic: Some("pragmatic".to_string()),
         }
+    }
+
+    #[test]
+    fn reasoning_effort_from_str_accepts_known_values() {
+        assert_eq!("high".parse(), Ok(ReasoningEffort::High));
+        assert_eq!("minimal".parse(), Ok(ReasoningEffort::Minimal));
+    }
+
+    #[test]
+    fn reasoning_effort_from_str_rejects_unknown_values() {
+        assert_eq!(
+            "unsupported".parse::<ReasoningEffort>(),
+            Err("invalid reasoning_effort: unsupported".to_string())
+        );
     }
 
     #[test]
