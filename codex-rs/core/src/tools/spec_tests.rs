@@ -1931,6 +1931,17 @@ fn tool_suggest_can_be_registered_without_search_tool() {
 
     assert_contains_tool_names(&tools, &[TOOL_SUGGEST_TOOL_NAME]);
     assert_lacks_tool_name(&tools, TOOL_SEARCH_TOOL_NAME);
+
+    let tool_suggest = find_tool(&tools, TOOL_SUGGEST_TOOL_NAME);
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) = &tool_suggest.spec else {
+        panic!("expected function tool");
+    };
+    assert!(
+        description.contains(
+            "You've already tried to find a matching available tool for the user's request"
+        )
+    );
+    assert!(description.contains("This includes `tool_search` (if available) and other means."));
 }
 
 #[test]
@@ -2137,12 +2148,12 @@ fn tool_suggest_description_lists_discoverable_tools() {
     assert!(
         description.contains("skills; MCP servers: sample-docs; app connectors: connector_sample")
     );
-    assert!(description.contains(
-        "You've already tried to find a matching available tool for the user's request"
-    ));
-    assert!(description.contains(
-        "This includes `tool_search` (if available) and other means."
-    ));
+    assert!(
+        description.contains(
+            "You've already tried to find a matching available tool for the user's request"
+        )
+    );
+    assert!(description.contains("This includes `tool_search` (if available) and other means."));
     assert!(description.contains("DO NOT explore or recommend tools that are not on this list."));
     assert!(!description.contains("tool_search fails to find a good match"));
     let JsonSchema::Object { required, .. } = parameters else {
