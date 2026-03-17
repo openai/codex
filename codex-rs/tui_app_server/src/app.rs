@@ -2004,11 +2004,10 @@ impl App {
         session.thread_name = notification.thread.name.clone();
         session.model_provider_id = notification.thread.model_provider.clone();
         session.cwd = notification.thread.cwd.clone();
-        if let Some(model) =
-            read_session_model(&self.config, thread_id, notification.thread.path.as_deref()).await
-        {
-            session.model = model;
-        }
+        session.model =
+            read_session_model(&self.config, thread_id, notification.thread.path.as_deref())
+                .await
+                .unwrap_or_default();
         session.history_log_id = 0;
         session.history_entry_count = 0;
         session.rollout_path = notification.thread.path.clone();
@@ -6690,6 +6689,68 @@ guardian_approval = true
                 is_closed: false,
             })
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn inactive_thread_started_notification_does_not_fallback_to_primary_model() -> Result<()>
+    {
+        let mut app = make_test_app().await;
+        let main_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000301").expect("valid thread");
+        let agent_thread_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000302").expect("valid thread");
+        let primary_session = ThreadSessionState {
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            ..test_thread_session(main_thread_id, PathBuf::from("/tmp/main"))
+        };
+
+        app.primary_thread_id = Some(main_thread_id);
+        app.active_thread_id = Some(main_thread_id);
+        app.primary_session_configured = Some(primary_session.clone());
+        app.thread_event_channels.insert(
+            main_thread_id,
+            ThreadEventChannel::new_with_session(4, primary_session.clone(), Vec::new()),
+        );
+
+        app.enqueue_thread_notification(
+            agent_thread_id,
+            ServerNotification::ThreadStarted(ThreadStartedNotification {
+                thread: Thread {
+                    id: agent_thread_id.to_string(),
+                    preview: "agent thread".to_string(),
+                    ephemeral: false,
+                    model_provider: "agent-provider".to_string(),
+                    created_at: 1,
+                    updated_at: 2,
+                    status: codex_app_server_protocol::ThreadStatus::Idle,
+                    path: None,
+                    cwd: PathBuf::from("/tmp/agent"),
+                    cli_version: "0.0.0".to_string(),
+                    source: codex_app_server_protocol::SessionSource::Unknown,
+                    agent_nickname: Some("Robie".to_string()),
+                    agent_role: Some("explorer".to_string()),
+                    git_info: None,
+                    name: Some("agent thread".to_string()),
+                    turns: Vec::new(),
+                },
+            }),
+        )
+        .await?;
+
+        let store = app
+            .thread_event_channels
+            .get(&agent_thread_id)
+            .expect("agent thread channel")
+            .store
+            .lock()
+            .await;
+        let session = store.session.clone().expect("inferred session");
+
+        assert_eq!(session.model, "");
+        assert_ne!(session.model, primary_session.model);
 
         Ok(())
     }

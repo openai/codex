@@ -2930,6 +2930,28 @@ async fn submit_user_message_with_mode_errors_when_mode_changes_during_running_t
 }
 
 #[tokio::test]
+async fn submit_user_message_blocks_when_thread_model_is_unavailable() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.set_model("");
+    chat.bottom_pane
+        .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_no_submit_op(&mut op_rx);
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Thread model is unavailable."),
+        "expected unavailable-model error, got: {rendered:?}"
+    );
+}
+
+#[tokio::test]
 async fn submit_user_message_with_mode_allows_same_mode_during_running_turn() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());
