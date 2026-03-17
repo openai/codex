@@ -126,6 +126,43 @@ if payload.get("prompt") == {blocked_prompt_json}:
     Ok(())
 }
 
+fn write_session_start_hook_recording_transcript(home: &Path) -> Result<()> {
+    let script_path = home.join("session_start_hook.py");
+    let log_path = home.join("session_start_hook_log.jsonl");
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+payload = json.load(sys.stdin)
+transcript_path = payload.get("transcript_path")
+record = {{
+    "transcript_path": transcript_path,
+    "exists": Path(transcript_path).exists() if transcript_path else False,
+}}
+
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(record) + "\n")
+"#,
+        log_path = log_path.display(),
+    );
+    let hooks = serde_json::json!({
+        "hooks": {
+            "SessionStart": [{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", script_path.display()),
+                    "statusMessage": "running session start hook",
+                }]
+            }]
+        }
+    });
+
+    fs::write(&script_path, script).context("write session start hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
 fn rollout_developer_texts(text: &str) -> Result<Vec<String>> {
     let mut texts = Vec::new();
     for line in text.lines() {
@@ -153,6 +190,15 @@ fn read_stop_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).context("parse stop hook log line"))
+        .collect()
+}
+
+fn read_session_start_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
+    fs::read_to_string(home.join("session_start_hook_log.jsonl"))
+        .context("read session start hook log")?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).context("parse session start hook log line"))
         .collect()
 }
 
@@ -280,6 +326,51 @@ async fn stop_hook_can_block_multiple_times_in_same_turn() -> Result<()> {
         developer_texts.contains(&SECOND_CONTINUATION_PROMPT.to_string()),
         "rollout should persist the second continuation prompt",
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_start_hook_sees_materialized_transcript_path() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let _response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "hello from the reef"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_session_start_hook_recording_transcript(home) {
+                panic!("failed to write session start hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("hello").await?;
+
+    let hook_inputs = read_session_start_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(
+        hook_inputs[0]
+            .get("transcript_path")
+            .and_then(Value::as_str)
+            .map(str::is_empty),
+        Some(false)
+    );
+    assert_eq!(hook_inputs[0].get("exists"), Some(&Value::Bool(true)));
 
     Ok(())
 }

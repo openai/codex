@@ -4025,6 +4025,11 @@ impl Session {
         recorder.map(|recorder| recorder.rollout_path().to_path_buf())
     }
 
+    pub(crate) async fn hook_transcript_path(&self) -> Option<PathBuf> {
+        self.ensure_rollout_materialized().await;
+        self.current_rollout_path().await
+    }
+
     pub(crate) async fn take_pending_session_start_source(
         &self,
     ) -> Option<codex_hooks::SessionStartSource> {
@@ -5850,7 +5855,7 @@ pub(crate) async fn run_turn(
                         session_id: sess.conversation_id,
                         turn_id: turn_context.sub_id.clone(),
                         cwd: turn_context.cwd.clone(),
-                        transcript_path: sess.current_rollout_path().await,
+                        transcript_path: sess.hook_transcript_path().await,
                         model: turn_context.model_info.slug.clone(),
                         permission_mode: stop_hook_permission_mode,
                         stop_hook_active,
