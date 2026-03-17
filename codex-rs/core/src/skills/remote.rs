@@ -9,17 +9,34 @@ use std::time::Duration;
 use crate::auth::CodexAuth;
 use crate::config::Config;
 use crate::default_client::build_reqwest_client;
-use codex_protocol::protocol::RemoteSkillHazelnutScope;
-use codex_protocol::protocol::RemoteSkillProductSurface;
 
 const REMOTE_SKILLS_API_TIMEOUT: Duration = Duration::from_secs(30);
 
-fn as_query_hazelnut_scope(scope: RemoteSkillHazelnutScope) -> Option<&'static str> {
+// Low-level client for the remote skill API. This is intentionally kept around for
+// future wiring, but it is not used yet by any active product surface.
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteSkillScope {
+    WorkspaceShared,
+    AllShared,
+    Personal,
+    Example,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteSkillProductSurface {
+    Chatgpt,
+    Codex,
+    Api,
+    Atlas,
+}
+
+fn as_query_scope(scope: RemoteSkillScope) -> Option<&'static str> {
     match scope {
-        RemoteSkillHazelnutScope::WorkspaceShared => Some("workspace-shared"),
-        RemoteSkillHazelnutScope::AllShared => Some("all-shared"),
-        RemoteSkillHazelnutScope::Personal => Some("personal"),
-        RemoteSkillHazelnutScope::Example => Some("example"),
+        RemoteSkillScope::WorkspaceShared => Some("workspace-shared"),
+        RemoteSkillScope::AllShared => Some("all-shared"),
+        RemoteSkillScope::Personal => Some("personal"),
+        RemoteSkillScope::Example => Some("example"),
     }
 }
 
@@ -34,11 +51,11 @@ fn as_query_product_surface(product_surface: RemoteSkillProductSurface) -> &'sta
 
 fn ensure_chatgpt_auth(auth: Option<&CodexAuth>) -> Result<&CodexAuth> {
     let Some(auth) = auth else {
-        anyhow::bail!("chatgpt authentication required for hazelnut scopes");
+        anyhow::bail!("chatgpt authentication required for remote skill scopes");
     };
     if !auth.is_chatgpt_auth() {
         anyhow::bail!(
-            "chatgpt authentication required for hazelnut scopes; api key auth is not supported"
+            "chatgpt authentication required for remote skill scopes; api key auth is not supported"
         );
     }
     Ok(auth)
@@ -59,7 +76,8 @@ pub struct RemoteSkillDownloadResult {
 
 #[derive(Debug, Deserialize)]
 struct RemoteSkillsResponse {
-    hazelnuts: Vec<RemoteSkill>,
+    #[serde(rename = "hazelnuts")]
+    skills: Vec<RemoteSkill>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,7 +90,7 @@ struct RemoteSkill {
 pub async fn list_remote_skills(
     config: &Config,
     auth: Option<&CodexAuth>,
-    hazelnut_scope: RemoteSkillHazelnutScope,
+    scope: RemoteSkillScope,
     product_surface: RemoteSkillProductSurface,
     enabled: Option<bool>,
 ) -> Result<Vec<RemoteSkillSummary>> {
@@ -82,7 +100,7 @@ pub async fn list_remote_skills(
     let url = format!("{base_url}/hazelnuts");
     let product_surface = as_query_product_surface(product_surface);
     let mut query_params = vec![("product_surface", product_surface)];
-    if let Some(scope) = as_query_hazelnut_scope(hazelnut_scope) {
+    if let Some(scope) = as_query_scope(scope) {
         query_params.push(("scope", scope));
     }
     if let Some(enabled) = enabled {
@@ -117,7 +135,7 @@ pub async fn list_remote_skills(
         serde_json::from_str(&body).context("Failed to parse skills response")?;
 
     Ok(parsed
-        .hazelnuts
+        .skills
         .into_iter()
         .map(|skill| RemoteSkillSummary {
             id: skill.id,
@@ -130,13 +148,13 @@ pub async fn list_remote_skills(
 pub async fn export_remote_skill(
     config: &Config,
     auth: Option<&CodexAuth>,
-    hazelnut_id: &str,
+    skill_id: &str,
 ) -> Result<RemoteSkillDownloadResult> {
     let auth = ensure_chatgpt_auth(auth)?;
 
     let client = build_reqwest_client();
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
-    let url = format!("{base_url}/hazelnuts/{hazelnut_id}/export");
+    let url = format!("{base_url}/hazelnuts/{skill_id}/export");
     let mut request = client.get(&url).timeout(REMOTE_SKILLS_API_TIMEOUT);
 
     let token = auth
@@ -163,14 +181,14 @@ pub async fn export_remote_skill(
         anyhow::bail!("Downloaded remote skill payload is not a zip archive");
     }
 
-    let output_dir = config.codex_home.join("skills").join(hazelnut_id);
+    let output_dir = config.codex_home.join("skills").join(skill_id);
     tokio::fs::create_dir_all(&output_dir)
         .await
         .context("Failed to create downloaded skills directory")?;
 
     let zip_bytes = body.to_vec();
     let output_dir_clone = output_dir.clone();
-    let prefix_candidates = vec![hazelnut_id.to_string()];
+    let prefix_candidates = vec![skill_id.to_string()];
     tokio::task::spawn_blocking(move || {
         extract_zip_to_dir(zip_bytes, &output_dir_clone, &prefix_candidates)
     })
@@ -178,7 +196,7 @@ pub async fn export_remote_skill(
     .context("Zip extraction task failed")??;
 
     Ok(RemoteSkillDownloadResult {
-        id: hazelnut_id.to_string(),
+        id: skill_id.to_string(),
         path: output_dir,
     })
 }

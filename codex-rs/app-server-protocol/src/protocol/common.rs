@@ -300,14 +300,6 @@ client_request_definitions! {
         params: v2::PluginReadParams,
         response: v2::PluginReadResponse,
     },
-    SkillsRemoteList => "skills/remote/list" {
-        params: v2::SkillsRemoteReadParams,
-        response: v2::SkillsRemoteReadResponse,
-    },
-    SkillsRemoteExport => "skills/remote/export" {
-        params: v2::SkillsRemoteWriteParams,
-        response: v2::SkillsRemoteWriteResponse,
-    },
     AppsList => "app/list" {
         params: v2::AppsListParams,
         response: v2::AppsListResponse,
