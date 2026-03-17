@@ -28,6 +28,7 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
+use codex_core::config::push_missing_system_bwrap_startup_warning;
 use codex_core::config::resolve_oss_provider;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLoadError;
@@ -118,25 +119,6 @@ mod selection_list;
 mod session_log;
 mod shimmer;
 mod skills_helpers;
-
-#[cfg(target_os = "linux")]
-const SYSTEM_BWRAP_PATH: &str = "/usr/bin/bwrap";
-
-#[cfg(target_os = "linux")]
-fn missing_system_bwrap_warning() -> Option<String> {
-    if !Path::new(SYSTEM_BWRAP_PATH).is_file() {
-        return Some(format!(
-            "Codex could not find system bubblewrap at {SYSTEM_BWRAP_PATH}. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime."
-        ));
-    }
-
-    None
-}
-
-#[cfg(not(target_os = "linux"))]
-fn missing_system_bwrap_warning() -> Option<String> {
-    None
-}
 mod slash_command;
 mod status;
 mod status_indicator_widget;
@@ -417,9 +399,7 @@ where
     F: FnOnce(InProcessClientStartArgs) -> Fut,
     Fut: Future<Output = std::io::Result<InProcessAppServerClient>>,
 {
-    if let Some(warning) = missing_system_bwrap_warning() {
-        config.startup_warnings.push(warning);
-    }
+    push_missing_system_bwrap_startup_warning(&mut config.startup_warnings);
 
     let config_warnings = config
         .startup_warnings
@@ -1534,7 +1514,10 @@ async fn load_config_or_exit_with_fallback_cwd(
         .build()
         .await
     {
-        Ok(config) => config,
+        Ok(mut config) => {
+            push_missing_system_bwrap_startup_warning(&mut config.startup_warnings);
+            config
+        }
         Err(err) => {
             eprintln!("Error loading configuration: {err}");
             std::process::exit(1);

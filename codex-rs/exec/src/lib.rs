@@ -52,6 +52,7 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
+use codex_core::config::push_missing_system_bwrap_startup_warning;
 use codex_core::config::resolve_oss_provider;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::LoaderOverrides;
@@ -360,12 +361,13 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         additional_writable_roots: add_dir,
     };
 
-    let config = ConfigBuilder::default()
+    let mut config = ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
         .harness_overrides(overrides)
         .cloud_requirements(cloud_requirements)
         .build()
         .await?;
+    push_missing_system_bwrap_startup_warning(&mut config.startup_warnings);
 
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {

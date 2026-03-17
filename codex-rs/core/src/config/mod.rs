@@ -140,11 +140,32 @@ pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 const OPENAI_BASE_URL_ENV_VAR: &str = "OPENAI_BASE_URL";
+#[cfg(target_os = "linux")]
+const SYSTEM_BWRAP_PATH: &str = "/usr/bin/bwrap";
 const RESERVED_MODEL_PROVIDER_IDS: [&str; 3] = [
     OPENAI_PROVIDER_ID,
     OLLAMA_OSS_PROVIDER_ID,
     LMSTUDIO_OSS_PROVIDER_ID,
 ];
+
+/// Add a shared startup warning when Linux will fall back to vendored
+/// bubblewrap because `/usr/bin/bwrap` is unavailable.
+#[cfg(target_os = "linux")]
+pub fn push_missing_system_bwrap_startup_warning(startup_warnings: &mut Vec<String>) {
+    if Path::new(SYSTEM_BWRAP_PATH).is_file() {
+        return;
+    }
+
+    let message = format!(
+        "Codex could not find system bubblewrap at {SYSTEM_BWRAP_PATH}. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime."
+    );
+    if !startup_warnings.contains(&message) {
+        startup_warnings.push(message);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn push_missing_system_bwrap_startup_warning(_startup_warnings: &mut Vec<String>) {}
 
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
