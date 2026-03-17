@@ -7,13 +7,21 @@ This crate is responsible for producing:
   - the `codex-exec` CLI can check if its arg0 is `codex-linux-sandbox` and, if so, execute as if it were `codex-linux-sandbox`
   - this should also be true of the `codex` multitool CLI
 
-On Linux, the bubblewrap pipeline uses the vendored bubblewrap path compiled
-into this binary.
+On Linux, the bubblewrap pipeline prefers the system `/usr/bin/bwrap` when the
+Ubuntu AppArmor `bwrap-userns-restrict` profile is installed, because that
+profile grants user namespace setup specifically to the system path. Otherwise,
+the helper uses the vendored bubblewrap path compiled into this binary.
 
 **Current Behavior**
 - Legacy `SandboxPolicy` / `sandbox_mode` configs remain supported.
-- Bubblewrap is the default filesystem sandbox pipeline and is standardized on
-  the vendored path.
+- Bubblewrap is the default filesystem sandbox pipeline.
+- On Ubuntu/AppArmor hosts that ship `/etc/apparmor.d/bwrap-userns-restrict`,
+  the helper prefers `/usr/bin/bwrap` so the distro AppArmor exception still
+  applies.
+- If that AppArmor profile exists but `/usr/bin/bwrap` is missing, the helper
+  warns on stderr and falls back to the vendored bubblewrap path for now.
+- On other Linux hosts, the helper continues to use the vendored bubblewrap
+  path compiled into the sandbox binary.
 - Legacy Landlock + mount protections remain available as an explicit legacy
   fallback path.
 - Set `features.use_legacy_landlock = true` (or CLI `-c use_legacy_landlock=true`)

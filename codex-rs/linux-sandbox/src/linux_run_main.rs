@@ -11,10 +11,9 @@ use crate::bwrap::BwrapNetworkMode;
 use crate::bwrap::BwrapOptions;
 use crate::bwrap::create_bwrap_command_args;
 use crate::landlock::apply_sandbox_policy_to_current_thread;
+use crate::launcher::exec_bwrap;
 use crate::proxy_routing::activate_proxy_routes_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
-use crate::vendored_bwrap::exec_vendored_bwrap;
-use crate::vendored_bwrap::run_vendored_bwrap_main;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
@@ -434,7 +433,11 @@ fn run_bwrap_with_proc_fallback(
         command_cwd,
         options,
     );
-    exec_vendored_bwrap(bwrap_args.args, bwrap_args.preserved_files);
+    exec_bwrap(
+        bwrap_args.args,
+        bwrap_args.preserved_files,
+        /*emit_missing_system_bwrap_warning*/ true,
+    );
 }
 
 fn bwrap_network_mode(
@@ -568,8 +571,11 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
             close_fd_or_panic(write_fd, "close write end in bubblewrap child");
         }
 
-        let exit_code = run_vendored_bwrap_main(&bwrap_args.args, &bwrap_args.preserved_files);
-        std::process::exit(exit_code);
+        exec_bwrap(
+            bwrap_args.args,
+            bwrap_args.preserved_files,
+            /*emit_missing_system_bwrap_warning*/ false,
+        );
     }
 
     // Parent: close the write end and read stderr while the child runs.
