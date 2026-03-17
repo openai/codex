@@ -9264,6 +9264,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn remove_transcription_placeholder(&mut self, id: &str) {
+        #[cfg(not(target_os = "linux"))]
         if self.realtime_conversation.is_live()
             && self.realtime_conversation.meter_placeholder_id.as_deref() == Some(id)
         {
