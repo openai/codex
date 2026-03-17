@@ -111,6 +111,10 @@ fn snapshot_file_name_parser_supports_legacy_and_suffixed_names() {
         Some(session_id)
     );
     assert_eq!(
+        snapshot_session_id_from_file_name(&format!("{session_id}.tmp-123")),
+        Some(session_id)
+    );
+    assert_eq!(
         snapshot_session_id_from_file_name("not-a-snapshot.txt"),
         None
     );

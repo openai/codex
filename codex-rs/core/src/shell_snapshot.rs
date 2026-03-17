@@ -555,14 +555,14 @@ async fn remove_snapshot_file(path: &Path) {
 
 fn snapshot_session_id_from_file_name(file_name: &str) -> Option<&str> {
     let (stem, extension) = file_name.rsplit_once('.')?;
-    if extension != "sh" && extension != "ps1" {
-        return None;
+    match extension {
+        "sh" | "ps1" => Some(
+            stem.split_once('.')
+                .map_or(stem, |(session_id, _generation)| session_id),
+        ),
+        _ if extension.starts_with("tmp-") => Some(stem),
+        _ => None,
     }
-
-    Some(
-        stem.split_once('.')
-            .map_or(stem, |(session_id, _generation)| session_id),
-    )
 }
 
 #[cfg(test)]
