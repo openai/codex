@@ -719,6 +719,10 @@ pub(crate) struct ChatWidget {
     // When resuming an existing session (selected via resume picker), avoid an
     // immediate redraw on SessionConfigured to prevent a gratuitous UI flicker.
     suppress_session_configured_redraw: bool,
+    // During snapshot restore, defer startup prompt submission until replayed
+    // history has been rendered so resumed/forked prompts keep chronological
+    // order.
+    suppress_initial_user_message_submit: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
     // Steers already submitted to core but not yet committed into history.
@@ -1427,13 +1431,32 @@ impl ChatWidget {
             self.prefetch_connectors();
         }
         if let Some(user_message) = self.initial_user_message.take() {
-            self.submit_user_message(user_message);
+            if self.suppress_initial_user_message_submit {
+                self.initial_user_message = Some(user_message);
+            } else {
+                self.submit_user_message(user_message);
+            }
         }
         if let Some(forked_from_id) = forked_from_id {
             self.emit_forked_thread_event(forked_from_id);
         }
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
+        }
+    }
+
+    pub(crate) fn set_initial_user_message_submit_suppressed(&mut self, suppressed: bool) {
+        self.suppress_initial_user_message_submit = suppressed;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_initial_user_message_for_test(&mut self, user_message: Option<UserMessage>) {
+        self.initial_user_message = user_message;
+    }
+
+    pub(crate) fn submit_initial_user_message_if_pending(&mut self) {
+        if let Some(user_message) = self.initial_user_message.take() {
+            self.submit_user_message(user_message);
         }
     }
 
@@ -3624,6 +3647,7 @@ impl ChatWidget {
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
             suppress_session_configured_redraw: false,
+            suppress_initial_user_message_submit: false,
             pending_notification: None,
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,
@@ -3816,6 +3840,7 @@ impl ChatWidget {
             show_welcome_banner: false,
             startup_tooltip_override: None,
             suppress_session_configured_redraw: true,
+            suppress_initial_user_message_submit: false,
             pending_notification: None,
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,

@@ -2241,6 +2241,8 @@ impl App {
         snapshot: ThreadEventSnapshot,
         resume_restored_queue: bool,
     ) {
+        self.chat_widget
+            .set_initial_user_message_submit_suppressed(/*suppressed*/ true);
         if let Some(event) = snapshot.session_configured {
             self.handle_codex_event_replay(event);
         }
@@ -2253,6 +2255,9 @@ impl App {
         }
         self.chat_widget
             .set_queue_autosend_suppressed(/*suppressed*/ false);
+        self.chat_widget
+            .set_initial_user_message_submit_suppressed(/*suppressed*/ false);
+        self.chat_widget.submit_initial_user_message_if_pending();
         if resume_restored_queue {
             self.chat_widget.maybe_send_next_queued_input();
         }
@@ -6827,6 +6832,113 @@ guardian_approval = true
 
         assert_eq!(user_messages, vec!["hello from remote".to_string()]);
         assert_eq!(agent_messages, vec!["• restored response".to_string()]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn restore_started_app_server_thread_submits_initial_prompt_after_history_replay()
+    -> Result<()> {
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        app.chat_widget.set_initial_user_message_for_test(
+            crate::chatwidget::create_initial_user_message(
+                Some("resume prompt".to_string()),
+                Vec::new(),
+                Vec::new(),
+            ),
+        );
+
+        app.restore_started_app_server_thread(AppServerStartedThread {
+            thread: Thread {
+                id: thread_id.to_string(),
+                preview: "hello".to_string(),
+                ephemeral: false,
+                model_provider: "test-provider".to_string(),
+                created_at: 0,
+                updated_at: 0,
+                status: ThreadStatus::Idle,
+                path: None,
+                cwd: PathBuf::from("/tmp/project"),
+                cli_version: "test".to_string(),
+                source: SessionSource::Cli.into(),
+                agent_nickname: None,
+                agent_role: None,
+                git_info: None,
+                name: Some("restored".to_string()),
+                turns: vec![Turn {
+                    id: "turn-1".to_string(),
+                    items: vec![
+                        ThreadItem::UserMessage {
+                            id: "user-1".to_string(),
+                            content: vec![codex_app_server_protocol::UserInput::Text {
+                                text: "hello from remote".to_string(),
+                                text_elements: Vec::new(),
+                            }],
+                        },
+                        ThreadItem::AgentMessage {
+                            id: "assistant-1".to_string(),
+                            text: "restored response".to_string(),
+                            phase: None,
+                        },
+                    ],
+                    status: TurnStatus::Completed,
+                    error: None,
+                }],
+            },
+            session_configured: SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: Some("restored".to_string()),
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            },
+            show_raw_agent_reasoning: false,
+        })
+        .await?;
+
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let cell: Arc<dyn HistoryCell> = cell.into();
+                app.transcript_cells.push(cell);
+            }
+        }
+
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+
+        assert_eq!(
+            user_messages,
+            vec!["hello from remote".to_string(), "resume prompt".to_string()]
+        );
+        match next_user_turn_op(&mut op_rx) {
+            Op::UserTurn { items, .. } => assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "resume prompt".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            ),
+            other => panic!("expected resume prompt submission, got {other:?}"),
+        }
 
         Ok(())
     }
