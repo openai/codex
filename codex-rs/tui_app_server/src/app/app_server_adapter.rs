@@ -492,6 +492,7 @@ fn server_notification_thread_events(
                 id: String::new(),
                 msg: EventMsg::RealtimeConversationStarted(RealtimeConversationStartedEvent {
                     session_id: notification.session_id,
+                    version: notification.version,
                 }),
             }],
         )),

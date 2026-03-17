@@ -371,7 +371,8 @@ pub(crate) async fn handle_start(
         format!("{prompt}\n\n{startup_context}")
     };
     let model = config.experimental_realtime_ws_model.clone();
-    let event_parser = match config.realtime.version {
+    let version = config.realtime.version;
+    let event_parser = match version {
         RealtimeWsVersion::V1 => RealtimeEventParser::V1,
         RealtimeWsVersion::V2 => RealtimeEventParser::RealtimeV2,
     };
@@ -411,6 +412,7 @@ pub(crate) async fn handle_start(
         id: sub_id.clone(),
         msg: EventMsg::RealtimeConversationStarted(RealtimeConversationStartedEvent {
             session_id: requested_session_id,
+            version,
         }),
     })
     .await;
