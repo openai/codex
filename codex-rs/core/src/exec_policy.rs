@@ -32,8 +32,10 @@ use tracing::instrument;
 
 use crate::bash::parse_shell_lc_plain_commands;
 use crate::bash::parse_shell_lc_single_command_prefix;
+use crate::config::Config;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ExecApprovalRequirement;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use shlex::try_join as shlex_try_join;
 
 const PROMPT_CONFLICT_REASON: &str =
@@ -93,6 +95,21 @@ static BANNED_PREFIX_SUGGESTIONS: &[&[&str]] = &[
     &["lua", "-e"],
     &["osascript"],
 ];
+
+pub(crate) fn child_uses_parent_exec_policy(parent_config: &Config, child_config: &Config) -> bool {
+    fn exec_policy_config_folders(config: &Config) -> Vec<AbsolutePathBuf> {
+        config
+            .config_layer_stack
+            .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false)
+            .into_iter()
+            .filter_map(codex_config::ConfigLayerEntry::config_folder)
+            .collect()
+    }
+
+    exec_policy_config_folders(parent_config) == exec_policy_config_folders(child_config)
+        && parent_config.config_layer_stack.requirements().exec_policy
+            == child_config.config_layer_stack.requirements().exec_policy
+}
 
 fn is_policy_match(rule_match: &RuleMatch) -> bool {
     match rule_match {

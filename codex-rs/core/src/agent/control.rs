@@ -23,7 +23,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::watch;
@@ -525,7 +524,7 @@ impl AgentControl {
 
         let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
         let parent_config = parent_thread.codex.session.get_config().await;
-        if !child_uses_parent_exec_policy(&parent_config, child_config) {
+        if !crate::exec_policy::child_uses_parent_exec_policy(&parent_config, child_config) {
             return None;
         }
 
@@ -533,27 +532,6 @@ impl AgentControl {
             &parent_thread.codex.session.services.exec_policy,
         ))
     }
-}
-
-fn child_uses_parent_exec_policy(
-    parent_config: &crate::config::Config,
-    child_config: &crate::config::Config,
-) -> bool {
-    fn exec_policy_config_folders(config: &crate::config::Config) -> Vec<AbsolutePathBuf> {
-        config
-            .config_layer_stack
-            .get_layers(
-                crate::config_loader::ConfigLayerStackOrdering::LowestPrecedenceFirst,
-                false,
-            )
-            .into_iter()
-            .filter_map(codex_config::ConfigLayerEntry::config_folder)
-            .collect()
-    }
-
-    exec_policy_config_folders(parent_config) == exec_policy_config_folders(child_config)
-        && parent_config.config_layer_stack.requirements().exec_policy
-            == child_config.config_layer_stack.requirements().exec_policy
 }
 #[cfg(test)]
 #[path = "control_tests.rs"]
