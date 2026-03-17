@@ -2692,7 +2692,7 @@ fn code_mode_only_restricts_model_tools_to_exec_tools() {
         "gpt-5.1-codex",
         &features,
         Some(WebSearchMode::Live),
-        &["exec", "exec_wait"],
+        &["exec", "wait"],
     );
 }
 
@@ -2723,7 +2723,7 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
     assert!(!description.contains("Enabled nested tools:"));
     assert!(!description.contains("Nested tool reference:"));
     assert!(description.starts_with(
-        "Use `exec/exec_wait` tool to run all other tools, do not attempt to use any other tools directly"
+        "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly"
     ));
     assert!(description.contains("### `update_plan` (`update_plan`)"));
     assert!(description.contains("### `view_image` (`view_image`)"));
@@ -2753,7 +2753,7 @@ fn code_mode_exec_description_omits_nested_tool_details_when_not_code_mode_only(
     };
 
     assert!(!description.starts_with(
-        "Use `exec/exec_wait` tool to run all other tools, do not attempt to use any other tools directly"
+        "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly"
     ));
     assert!(!description.contains("### `update_plan` (`update_plan`)"));
     assert!(!description.contains("### `view_image` (`view_image`)"));

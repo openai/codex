@@ -87,7 +87,7 @@ pub enum Feature {
     JsRepl,
     /// Enable a minimal JavaScript mode backed by Node's built-in vm runtime.
     CodeMode,
-    /// Restrict model-visible tools to code mode entrypoints (`exec`, `exec_wait`).
+    /// Restrict model-visible tools to code mode entrypoints (`exec`, `wait`).
     CodeModeOnly,
     /// Only expose js_repl tools directly to the model.
     JsReplToolsOnly,
