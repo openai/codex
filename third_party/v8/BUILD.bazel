@@ -116,18 +116,6 @@ cc_static_library(
     features = V8_STATIC_LIBRARY_FEATURES,
 )
 
-cc_static_library(
-    name = "v8_146_4_0_aarch64_pc_windows_msvc",
-    deps = [":v8_146_4_0_binding"],
-    features = V8_STATIC_LIBRARY_FEATURES,
-)
-
-cc_static_library(
-    name = "v8_146_4_0_x86_64_pc_windows_msvc",
-    deps = [":v8_146_4_0_binding"],
-    features = V8_STATIC_LIBRARY_FEATURES,
-)
-
 filegroup(
     name = "src_binding_release_x86_64_apple_darwin",
     srcs = ["@v8_crate_146_4_0//:src_binding_release_x86_64_apple_darwin"],
@@ -156,16 +144,6 @@ filegroup(
 filegroup(
     name = "src_binding_release_x86_64_unknown_linux_musl",
     srcs = ["@v8_crate_146_4_0//:src_binding_release_x86_64_unknown_linux_gnu"],
-)
-
-filegroup(
-    name = "src_binding_release_x86_64_pc_windows_msvc",
-    srcs = ["@v8_crate_146_4_0//:src_binding_release_x86_64_pc_windows_msvc"],
-)
-
-filegroup(
-    name = "src_binding_release_aarch64_pc_windows_msvc",
-    srcs = ["@v8_crate_146_4_0//:src_binding_release_aarch64_pc_windows_msvc"],
 )
 
 # rusty_v8 only publishes Windows bindings under MSVC target names, but the
@@ -244,33 +222,15 @@ filegroup(
     ],
 )
 
-filegroup(
-    name = "rusty_v8_release_pair_x86_64_pc_windows_msvc",
-    srcs = [
-        ":v8_146_4_0_x86_64_pc_windows_msvc",
-        ":src_binding_release_x86_64_pc_windows_msvc",
-    ],
-)
-
-filegroup(
-    name = "rusty_v8_release_pair_aarch64_pc_windows_msvc",
-    srcs = [
-        ":v8_146_4_0_aarch64_pc_windows_msvc",
-        ":src_binding_release_aarch64_pc_windows_msvc",
-    ],
-)
-
 alias(
     name = "rusty_v8_archive_for_target",
     actual = select({
         "@rules_rs//rs/experimental/platforms/config:aarch64-apple-darwin": ":v8_146_4_0_aarch64_apple_darwin",
         "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-gnullvm": ":v8_146_4_0_aarch64_pc_windows_gnullvm",
-        "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-msvc": ":v8_146_4_0_aarch64_pc_windows_msvc",
         "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-gnu": ":v8_146_4_0_aarch64_unknown_linux_gnu",
         "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-musl": ":v8_146_4_0_aarch64_unknown_linux_musl",
         "@rules_rs//rs/experimental/platforms/config:x86_64-apple-darwin": ":v8_146_4_0_x86_64_apple_darwin",
         "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-gnullvm": ":v8_146_4_0_x86_64_pc_windows_gnullvm",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-msvc": ":v8_146_4_0_x86_64_pc_windows_msvc",
         "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-gnu": ":v8_146_4_0_x86_64_unknown_linux_gnu",
         "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-musl": ":v8_146_4_0_x86_64_unknown_linux_musl",
         "//conditions:default": ":v8_146_4_0_x86_64_unknown_linux_gnu",
@@ -282,12 +242,10 @@ alias(
     actual = select({
         "@rules_rs//rs/experimental/platforms/config:aarch64-apple-darwin": ":src_binding_release_aarch64_apple_darwin",
         "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-gnullvm": ":src_binding_release_aarch64_pc_windows_gnullvm",
-        "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-msvc": ":src_binding_release_aarch64_pc_windows_msvc",
         "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-gnu": ":src_binding_release_aarch64_unknown_linux_gnu",
         "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-musl": ":src_binding_release_aarch64_unknown_linux_musl",
         "@rules_rs//rs/experimental/platforms/config:x86_64-apple-darwin": ":src_binding_release_x86_64_apple_darwin",
         "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-gnullvm": ":src_binding_release_x86_64_pc_windows_gnullvm",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-msvc": ":src_binding_release_x86_64_pc_windows_msvc",
         "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-gnu": ":src_binding_release_x86_64_unknown_linux_gnu",
         "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-musl": ":src_binding_release_x86_64_unknown_linux_musl",
         "//conditions:default": ":src_binding_release_x86_64_unknown_linux_gnu",
