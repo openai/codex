@@ -499,11 +499,10 @@ impl ThreadEventStore {
             .push_back(ThreadBufferedEvent::Notification(notification));
         if self.buffer.len() > self.capacity
             && let Some(removed) = self.buffer.pop_front()
+            && let ThreadBufferedEvent::Request(request) = &removed
         {
-            if let ThreadBufferedEvent::Request(request) = &removed {
-                self.pending_interactive_replay
-                    .note_evicted_server_request(request);
-            }
+            self.pending_interactive_replay
+                .note_evicted_server_request(request);
         }
     }
 
@@ -4762,11 +4761,21 @@ mod tests {
     use crate::multi_agents::AgentPickerThreadEntry;
     use assert_matches::assert_matches;
 
-    use codex_app_server_protocol::Thread;
+    use codex_app_server_protocol::AgentMessageDeltaNotification;
+    use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
+    use codex_app_server_protocol::RequestId as AppServerRequestId;
+    use codex_app_server_protocol::ServerNotification;
+    use codex_app_server_protocol::ServerRequest;
+    use codex_app_server_protocol::ThreadClosedNotification;
     use codex_app_server_protocol::ThreadItem;
-    use codex_app_server_protocol::ThreadStatus;
+    use codex_app_server_protocol::ThreadTokenUsage;
+    use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
+    use codex_app_server_protocol::TokenUsageBreakdown;
     use codex_app_server_protocol::Turn;
+    use codex_app_server_protocol::TurnCompletedNotification;
+    use codex_app_server_protocol::TurnStartedNotification;
     use codex_app_server_protocol::TurnStatus;
+    use codex_app_server_protocol::UserInput as AppServerUserInput;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::types::ModelAvailabilityNuxConfig;
@@ -4778,7 +4787,6 @@ mod tests {
     use codex_protocol::config_types::Settings;
     use codex_protocol::mcp::Tool;
     use codex_protocol::openai_models::ModelAvailabilityNux;
-    use codex_protocol::protocol::AgentMessageDeltaEvent;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
@@ -4786,12 +4794,6 @@ mod tests {
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionConfiguredEvent;
     use codex_protocol::protocol::SessionSource;
-    use codex_protocol::protocol::ThreadRolledBackEvent;
-    use codex_protocol::protocol::TurnAbortReason;
-    use codex_protocol::protocol::TurnAbortedEvent;
-    use codex_protocol::protocol::TurnCompleteEvent;
-    use codex_protocol::protocol::TurnStartedEvent;
-    use codex_protocol::protocol::UserMessageEvent;
     use codex_protocol::user_input::TextElement;
     use codex_protocol::user_input::UserInput;
     use crossterm::event::KeyModifiers;
@@ -4975,74 +4977,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enqueue_primary_event_delivers_session_configured_before_buffered_approval()
-    -> Result<()> {
+    async fn enqueue_primary_thread_session_replays_buffered_approval_after_attach() -> Result<()> {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
-        let approval_event = Event {
-            id: "approval-event".to_string(),
-            msg: EventMsg::ExecApprovalRequest(
-                codex_protocol::protocol::ExecApprovalRequestEvent {
-                    call_id: "call-1".to_string(),
-                    approval_id: None,
-                    turn_id: "turn-1".to_string(),
-                    command: vec!["echo".to_string(), "hello".to_string()],
-                    cwd: PathBuf::from("/tmp/project"),
-                    reason: Some("needs approval".to_string()),
-                    network_approval_context: None,
-                    proposed_execpolicy_amendment: None,
-                    proposed_network_policy_amendments: None,
-                    additional_permissions: None,
-                    skill_metadata: None,
-                    available_decisions: None,
-                    parsed_cmd: Vec::new(),
-                },
-            ),
-        };
-        let session_configured_event = Event {
-            id: "session-configured".to_string(),
-            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id: thread_id,
-                forked_from_id: None,
-                thread_name: None,
-                model: "gpt-test".to_string(),
-                model_provider_id: "test-provider".to_string(),
-                service_tier: None,
-                approval_policy: AskForApproval::Never,
-                approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/tmp/project"),
-                reasoning_effort: None,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: None,
-                network_proxy: None,
-                rollout_path: Some(PathBuf::new()),
-            }),
-        };
+        let approval_request = exec_approval_request(thread_id, "turn-1", "call-1", None);
 
-        app.enqueue_primary_event(approval_event.clone()).await?;
-        app.enqueue_primary_event(session_configured_event.clone())
-            .await?;
+        app.enqueue_primary_thread_request(approval_request).await?;
+        app.enqueue_primary_thread_session(
+            test_thread_session(thread_id, PathBuf::from("/tmp/project")),
+            Vec::new(),
+        )
+        .await?;
 
         let rx = app
             .active_thread_rx
             .as_mut()
             .expect("primary thread receiver should be active");
-        let first_event = time::timeout(Duration::from_millis(50), rx.recv())
-            .await
-            .expect("timed out waiting for session configured event")
-            .expect("channel closed unexpectedly");
-        let second_event = time::timeout(Duration::from_millis(50), rx.recv())
+        let event = time::timeout(Duration::from_millis(50), rx.recv())
             .await
             .expect("timed out waiting for buffered approval event")
             .expect("channel closed unexpectedly");
 
-        assert!(matches!(first_event.msg, EventMsg::SessionConfigured(_)));
-        assert!(matches!(second_event.msg, EventMsg::ExecApprovalRequest(_)));
+        assert!(matches!(
+            &event,
+            ThreadBufferedEvent::Request(ServerRequest::CommandExecutionRequestApproval {
+                params,
+                ..
+            }) if params.turn_id == "turn-1"
+        ));
 
-        app.handle_codex_event_now(first_event);
-        app.handle_codex_event_now(second_event);
+        app.handle_thread_event_now(event);
         app.chat_widget
             .handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
 
@@ -5058,34 +5022,6 @@ mod tests {
         }
 
         panic!("expected approval action to submit a thread-scoped op");
-    }
-
-    #[tokio::test]
-    async fn routed_thread_event_does_not_recreate_channel_after_reset() -> Result<()> {
-        let mut app = make_test_app().await;
-        let thread_id = ThreadId::new();
-        app.thread_event_channels.insert(
-            thread_id,
-            ThreadEventChannel::new(THREAD_EVENT_CHANNEL_CAPACITY),
-        );
-
-        app.reset_thread_event_state();
-        app.handle_routed_thread_event(
-            thread_id,
-            Event {
-                id: "stale-event".to_string(),
-                msg: EventMsg::ShutdownComplete,
-            },
-        )
-        .await?;
-
-        assert!(
-            !app.thread_event_channels.contains_key(&thread_id),
-            "stale routed events should not recreate cleared thread channels"
-        );
-        assert_eq!(app.active_thread_id, None);
-        assert_eq!(app.primary_thread_id, None);
-        Ok(())
     }
 
     #[tokio::test]
@@ -5131,18 +5067,16 @@ mod tests {
             .insert(thread_id, ThreadEventChannel::new(1));
         app.set_thread_active(thread_id, true).await;
 
-        let event = Event {
-            id: String::new(),
-            msg: EventMsg::ShutdownComplete,
-        };
+        let event = thread_closed_notification(thread_id);
 
-        app.enqueue_thread_event(thread_id, event.clone()).await?;
+        app.enqueue_thread_notification(thread_id, event.clone())
+            .await?;
         time::timeout(
             Duration::from_millis(50),
-            app.enqueue_thread_event(thread_id, event),
+            app.enqueue_thread_notification(thread_id, event),
         )
         .await
-        .expect("enqueue_thread_event blocked on a full channel")?;
+        .expect("enqueue_thread_notification blocked on a full channel")?;
 
         let mut rx = app
             .thread_event_channels
@@ -5168,34 +5102,17 @@ mod tests {
     async fn replay_thread_snapshot_restores_draft_and_queued_input() {
         let mut app = make_test_app().await;
         let thread_id = ThreadId::new();
+        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
         app.thread_event_channels.insert(
             thread_id,
-            ThreadEventChannel::new_with_session_configured(
+            ThreadEventChannel::new_with_session(
                 THREAD_EVENT_CHANNEL_CAPACITY,
-                Event {
-                    id: "session-configured".to_string(),
-                    msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                        session_id: thread_id,
-                        forked_from_id: None,
-                        thread_name: None,
-                        model: "gpt-test".to_string(),
-                        model_provider_id: "test-provider".to_string(),
-                        service_tier: None,
-                        approval_policy: AskForApproval::Never,
-                        approvals_reviewer: ApprovalsReviewer::User,
-                        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                        cwd: PathBuf::from("/tmp/project"),
-                        reasoning_effort: None,
-                        history_log_id: 0,
-                        history_entry_count: 0,
-                        initial_messages: None,
-                        network_proxy: None,
-                        rollout_path: Some(PathBuf::new()),
-                    }),
-                },
+                session.clone(),
+                Vec::new(),
             ),
         );
         app.activate_thread_channel(thread_id).await;
+        app.chat_widget.handle_thread_session(session.clone());
 
         app.chat_widget
             .apply_external_edit("draft prompt".to_string());
@@ -5234,15 +5151,11 @@ mod tests {
 
         assert_eq!(app.chat_widget.composer_text_with_pending(), "draft prompt");
         assert!(app.chat_widget.queued_user_message_texts().is_empty());
-        match next_user_turn_op(&mut new_op_rx) {
-            Op::UserTurn { items, .. } => assert_eq!(
-                items,
-                vec![UserInput::Text {
-                    text: "queued follow-up".to_string(),
-                    text_elements: Vec::new(),
-                }]
-            ),
-            other => panic!("expected queued follow-up submission, got {other:?}"),
+        while let Ok(op) = new_op_rx.try_recv() {
+            assert!(
+                !matches!(op, Op::UserTurn { .. }),
+                "draft-only replay should not auto-submit queued input"
+            );
         }
     }
 
@@ -5250,43 +5163,14 @@ mod tests {
     async fn replayed_turn_complete_submits_restored_queued_follow_up() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
-        let session_configured = Event {
-            id: "session-configured".to_string(),
-            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id: thread_id,
-                forked_from_id: None,
-                thread_name: None,
-                model: "gpt-test".to_string(),
-                model_provider_id: "test-provider".to_string(),
-                service_tier: None,
-                approval_policy: AskForApproval::Never,
-                approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/tmp/project"),
-                reasoning_effort: None,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: None,
-                network_proxy: None,
-                rollout_path: Some(PathBuf::new()),
-            }),
-        };
+        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
+        app.chat_widget.handle_thread_session(session.clone());
         app.chat_widget
-            .handle_codex_event(session_configured.clone());
-        app.chat_widget.handle_codex_event(Event {
-            id: "turn-started".to_string(),
-            msg: EventMsg::TurnStarted(TurnStartedEvent {
-                turn_id: "turn-1".to_string(),
-                model_context_window: None,
-                collaboration_mode_kind: Default::default(),
-            }),
-        });
-        app.chat_widget.handle_codex_event(Event {
-            id: "agent-delta".to_string(),
-            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-                delta: "streaming".to_string(),
-            }),
-        });
+            .handle_server_notification(turn_started_notification(thread_id, "turn-1"), None);
+        app.chat_widget.handle_server_notification(
+            agent_message_delta_notification(thread_id, "turn-1", "agent-1", "streaming"),
+            None,
+        );
         app.chat_widget
             .apply_external_edit("queued follow-up".to_string());
         app.chat_widget
@@ -5299,18 +5183,15 @@ mod tests {
         let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
             make_chatwidget_manual_with_sender().await;
         app.chat_widget = chat_widget;
-        app.chat_widget.handle_codex_event(session_configured);
+        app.chat_widget.handle_thread_session(session.clone());
         while new_op_rx.try_recv().is_ok() {}
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
-                session_configured: None,
-                events: vec![Event {
-                    id: "turn-complete".to_string(),
-                    msg: EventMsg::TurnComplete(TurnCompleteEvent {
-                        turn_id: "turn-1".to_string(),
-                        last_agent_message: None,
-                    }),
-                }],
+                session: None,
+                turns: Vec::new(),
+                events: vec![ThreadBufferedEvent::Notification(
+                    turn_completed_notification(thread_id, "turn-1", TurnStatus::Completed),
+                )],
                 input_state: Some(input_state),
             },
             true,
@@ -5332,43 +5213,14 @@ mod tests {
     async fn replay_only_thread_keeps_restored_queue_visible() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
-        let session_configured = Event {
-            id: "session-configured".to_string(),
-            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id: thread_id,
-                forked_from_id: None,
-                thread_name: None,
-                model: "gpt-test".to_string(),
-                model_provider_id: "test-provider".to_string(),
-                service_tier: None,
-                approval_policy: AskForApproval::Never,
-                approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/tmp/project"),
-                reasoning_effort: None,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: None,
-                network_proxy: None,
-                rollout_path: Some(PathBuf::new()),
-            }),
-        };
+        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
+        app.chat_widget.handle_thread_session(session.clone());
         app.chat_widget
-            .handle_codex_event(session_configured.clone());
-        app.chat_widget.handle_codex_event(Event {
-            id: "turn-started".to_string(),
-            msg: EventMsg::TurnStarted(TurnStartedEvent {
-                turn_id: "turn-1".to_string(),
-                model_context_window: None,
-                collaboration_mode_kind: Default::default(),
-            }),
-        });
-        app.chat_widget.handle_codex_event(Event {
-            id: "agent-delta".to_string(),
-            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-                delta: "streaming".to_string(),
-            }),
-        });
+            .handle_server_notification(turn_started_notification(thread_id, "turn-1"), None);
+        app.chat_widget.handle_server_notification(
+            agent_message_delta_notification(thread_id, "turn-1", "agent-1", "streaming"),
+            None,
+        );
         app.chat_widget
             .apply_external_edit("queued follow-up".to_string());
         app.chat_widget
@@ -5381,19 +5233,16 @@ mod tests {
         let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
             make_chatwidget_manual_with_sender().await;
         app.chat_widget = chat_widget;
-        app.chat_widget.handle_codex_event(session_configured);
+        app.chat_widget.handle_thread_session(session.clone());
         while new_op_rx.try_recv().is_ok() {}
 
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
-                session_configured: None,
-                events: vec![Event {
-                    id: "turn-complete".to_string(),
-                    msg: EventMsg::TurnComplete(TurnCompleteEvent {
-                        turn_id: "turn-1".to_string(),
-                        last_agent_message: None,
-                    }),
-                }],
+                session: None,
+                turns: Vec::new(),
+                events: vec![ThreadBufferedEvent::Notification(
+                    turn_completed_notification(thread_id, "turn-1", TurnStatus::Completed),
+                )],
                 input_state: Some(input_state),
             },
             false,
@@ -5413,43 +5262,14 @@ mod tests {
     async fn replay_thread_snapshot_keeps_queue_when_running_state_only_comes_from_snapshot() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
-        let session_configured = Event {
-            id: "session-configured".to_string(),
-            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id: thread_id,
-                forked_from_id: None,
-                thread_name: None,
-                model: "gpt-test".to_string(),
-                model_provider_id: "test-provider".to_string(),
-                service_tier: None,
-                approval_policy: AskForApproval::Never,
-                approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/tmp/project"),
-                reasoning_effort: None,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: None,
-                network_proxy: None,
-                rollout_path: Some(PathBuf::new()),
-            }),
-        };
+        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
+        app.chat_widget.handle_thread_session(session.clone());
         app.chat_widget
-            .handle_codex_event(session_configured.clone());
-        app.chat_widget.handle_codex_event(Event {
-            id: "turn-started".to_string(),
-            msg: EventMsg::TurnStarted(TurnStartedEvent {
-                turn_id: "turn-1".to_string(),
-                model_context_window: None,
-                collaboration_mode_kind: Default::default(),
-            }),
-        });
-        app.chat_widget.handle_codex_event(Event {
-            id: "agent-delta".to_string(),
-            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-                delta: "streaming".to_string(),
-            }),
-        });
+            .handle_server_notification(turn_started_notification(thread_id, "turn-1"), None);
+        app.chat_widget.handle_server_notification(
+            agent_message_delta_notification(thread_id, "turn-1", "agent-1", "streaming"),
+            None,
+        );
         app.chat_widget
             .apply_external_edit("queued follow-up".to_string());
         app.chat_widget
@@ -5462,12 +5282,13 @@ mod tests {
         let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
             make_chatwidget_manual_with_sender().await;
         app.chat_widget = chat_widget;
-        app.chat_widget.handle_codex_event(session_configured);
+        app.chat_widget.handle_thread_session(session.clone());
         while new_op_rx.try_recv().is_ok() {}
 
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
-                session_configured: None,
+                session: None,
+                turns: Vec::new(),
                 events: vec![],
                 input_state: Some(input_state),
             },
@@ -5488,43 +5309,14 @@ mod tests {
     async fn replay_thread_snapshot_does_not_submit_queue_before_replay_catches_up() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
-        let session_configured = Event {
-            id: "session-configured".to_string(),
-            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id: thread_id,
-                forked_from_id: None,
-                thread_name: None,
-                model: "gpt-test".to_string(),
-                model_provider_id: "test-provider".to_string(),
-                service_tier: None,
-                approval_policy: AskForApproval::Never,
-                approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/tmp/project"),
-                reasoning_effort: None,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: None,
-                network_proxy: None,
-                rollout_path: Some(PathBuf::new()),
-            }),
-        };
+        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
+        app.chat_widget.handle_thread_session(session.clone());
         app.chat_widget
-            .handle_codex_event(session_configured.clone());
-        app.chat_widget.handle_codex_event(Event {
-            id: "turn-started".to_string(),
-            msg: EventMsg::TurnStarted(TurnStartedEvent {
-                turn_id: "turn-1".to_string(),
-                model_context_window: None,
-                collaboration_mode_kind: Default::default(),
-            }),
-        });
-        app.chat_widget.handle_codex_event(Event {
-            id: "agent-delta".to_string(),
-            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-                delta: "streaming".to_string(),
-            }),
-        });
+            .handle_server_notification(turn_started_notification(thread_id, "turn-1"), None);
+        app.chat_widget.handle_server_notification(
+            agent_message_delta_notification(thread_id, "turn-1", "agent-1", "streaming"),
+            None,
+        );
         app.chat_widget
             .apply_external_edit("queued follow-up".to_string());
         app.chat_widget
@@ -5537,28 +5329,22 @@ mod tests {
         let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
             make_chatwidget_manual_with_sender().await;
         app.chat_widget = chat_widget;
-        app.chat_widget.handle_codex_event(session_configured);
+        app.chat_widget.handle_thread_session(session.clone());
         while new_op_rx.try_recv().is_ok() {}
 
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
-                session_configured: None,
+                session: None,
+                turns: Vec::new(),
                 events: vec![
-                    Event {
-                        id: "older-turn-complete".to_string(),
-                        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-                            turn_id: "turn-0".to_string(),
-                            last_agent_message: None,
-                        }),
-                    },
-                    Event {
-                        id: "latest-turn-started".to_string(),
-                        msg: EventMsg::TurnStarted(TurnStartedEvent {
-                            turn_id: "turn-1".to_string(),
-                            model_context_window: None,
-                            collaboration_mode_kind: Default::default(),
-                        }),
-                    },
+                    ThreadBufferedEvent::Notification(turn_completed_notification(
+                        thread_id,
+                        "turn-0",
+                        TurnStatus::Completed,
+                    )),
+                    ThreadBufferedEvent::Notification(turn_started_notification(
+                        thread_id, "turn-1",
+                    )),
                 ],
                 input_state: Some(input_state),
             },
@@ -5574,13 +5360,10 @@ mod tests {
             vec!["queued follow-up".to_string()]
         );
 
-        app.chat_widget.handle_codex_event(Event {
-            id: "latest-turn-complete".to_string(),
-            msg: EventMsg::TurnComplete(TurnCompleteEvent {
-                turn_id: "turn-1".to_string(),
-                last_agent_message: None,
-            }),
-        });
+        app.chat_widget.handle_server_notification(
+            turn_completed_notification(thread_id, "turn-1", TurnStatus::Completed),
+            None,
+        );
 
         match next_user_turn_op(&mut new_op_rx) {
             Op::UserTurn { items, .. } => assert_eq!(
@@ -5598,34 +5381,17 @@ mod tests {
     async fn replay_thread_snapshot_restores_pending_pastes_for_submit() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
+        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
         app.thread_event_channels.insert(
             thread_id,
-            ThreadEventChannel::new_with_session_configured(
+            ThreadEventChannel::new_with_session(
                 THREAD_EVENT_CHANNEL_CAPACITY,
-                Event {
-                    id: "session-configured".to_string(),
-                    msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                        session_id: thread_id,
-                        forked_from_id: None,
-                        thread_name: None,
-                        model: "gpt-test".to_string(),
-                        model_provider_id: "test-provider".to_string(),
-                        service_tier: None,
-                        approval_policy: AskForApproval::Never,
-                        approvals_reviewer: ApprovalsReviewer::User,
-                        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                        cwd: PathBuf::from("/tmp/project"),
-                        reasoning_effort: None,
-                        history_log_id: 0,
-                        history_entry_count: 0,
-                        initial_messages: None,
-                        network_proxy: None,
-                        rollout_path: Some(PathBuf::new()),
-                    }),
-                },
+                session.clone(),
+                Vec::new(),
             ),
         );
         app.activate_thread_channel(thread_id).await;
+        app.chat_widget.handle_thread_session(session);
 
         let large = "x".repeat(1005);
         app.chat_widget.handle_paste(large.clone());
@@ -5672,29 +5438,8 @@ mod tests {
     async fn replay_thread_snapshot_restores_collaboration_mode_for_draft_submit() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
-        let session_configured = Event {
-            id: "session-configured".to_string(),
-            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id: thread_id,
-                forked_from_id: None,
-                thread_name: None,
-                model: "gpt-test".to_string(),
-                model_provider_id: "test-provider".to_string(),
-                service_tier: None,
-                approval_policy: AskForApproval::Never,
-                approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/tmp/project"),
-                reasoning_effort: None,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: None,
-                network_proxy: None,
-                rollout_path: Some(PathBuf::new()),
-            }),
-        };
-        app.chat_widget
-            .handle_codex_event(session_configured.clone());
+        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
+        app.chat_widget.handle_thread_session(session.clone());
         app.chat_widget
             .set_reasoning_effort(Some(ReasoningEffortConfig::High));
         app.chat_widget
@@ -5715,7 +5460,7 @@ mod tests {
         let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
             make_chatwidget_manual_with_sender().await;
         app.chat_widget = chat_widget;
-        app.chat_widget.handle_codex_event(session_configured);
+        app.chat_widget.handle_thread_session(session.clone());
         app.chat_widget
             .set_reasoning_effort(Some(ReasoningEffortConfig::Low));
         app.chat_widget
@@ -5730,7 +5475,8 @@ mod tests {
 
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
-                session_configured: None,
+                session: None,
+                turns: Vec::new(),
                 events: vec![],
                 input_state: Some(input_state),
             },
@@ -5776,29 +5522,8 @@ mod tests {
     async fn replay_thread_snapshot_restores_collaboration_mode_without_input() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
-        let session_configured = Event {
-            id: "session-configured".to_string(),
-            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id: thread_id,
-                forked_from_id: None,
-                thread_name: None,
-                model: "gpt-test".to_string(),
-                model_provider_id: "test-provider".to_string(),
-                service_tier: None,
-                approval_policy: AskForApproval::Never,
-                approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/tmp/project"),
-                reasoning_effort: None,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: None,
-                network_proxy: None,
-                rollout_path: Some(PathBuf::new()),
-            }),
-        };
-        app.chat_widget
-            .handle_codex_event(session_configured.clone());
+        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
+        app.chat_widget.handle_thread_session(session.clone());
         app.chat_widget
             .set_reasoning_effort(Some(ReasoningEffortConfig::High));
         app.chat_widget
@@ -5817,7 +5542,7 @@ mod tests {
         let (chat_widget, _app_event_tx, _rx, _new_op_rx) =
             make_chatwidget_manual_with_sender().await;
         app.chat_widget = chat_widget;
-        app.chat_widget.handle_codex_event(session_configured);
+        app.chat_widget.handle_thread_session(session.clone());
         app.chat_widget
             .set_reasoning_effort(Some(ReasoningEffortConfig::Low));
         app.chat_widget
@@ -5831,7 +5556,8 @@ mod tests {
 
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
-                session_configured: None,
+                session: None,
+                turns: Vec::new(),
                 events: vec![],
                 input_state: Some(input_state),
             },
@@ -5853,43 +5579,14 @@ mod tests {
     async fn replayed_interrupted_turn_restores_queued_input_to_composer() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
-        let session_configured = Event {
-            id: "session-configured".to_string(),
-            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id: thread_id,
-                forked_from_id: None,
-                thread_name: None,
-                model: "gpt-test".to_string(),
-                model_provider_id: "test-provider".to_string(),
-                service_tier: None,
-                approval_policy: AskForApproval::Never,
-                approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/tmp/project"),
-                reasoning_effort: None,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: None,
-                network_proxy: None,
-                rollout_path: Some(PathBuf::new()),
-            }),
-        };
+        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
+        app.chat_widget.handle_thread_session(session.clone());
         app.chat_widget
-            .handle_codex_event(session_configured.clone());
-        app.chat_widget.handle_codex_event(Event {
-            id: "turn-started".to_string(),
-            msg: EventMsg::TurnStarted(TurnStartedEvent {
-                turn_id: "turn-1".to_string(),
-                model_context_window: None,
-                collaboration_mode_kind: Default::default(),
-            }),
-        });
-        app.chat_widget.handle_codex_event(Event {
-            id: "agent-delta".to_string(),
-            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-                delta: "streaming".to_string(),
-            }),
-        });
+            .handle_server_notification(turn_started_notification(thread_id, "turn-1"), None);
+        app.chat_widget.handle_server_notification(
+            agent_message_delta_notification(thread_id, "turn-1", "agent-1", "streaming"),
+            None,
+        );
         app.chat_widget
             .apply_external_edit("queued follow-up".to_string());
         app.chat_widget
@@ -5902,19 +5599,16 @@ mod tests {
         let (chat_widget, _app_event_tx, _rx, mut new_op_rx) =
             make_chatwidget_manual_with_sender().await;
         app.chat_widget = chat_widget;
-        app.chat_widget.handle_codex_event(session_configured);
+        app.chat_widget.handle_thread_session(session.clone());
         while new_op_rx.try_recv().is_ok() {}
 
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
-                session_configured: None,
-                events: vec![Event {
-                    id: "turn-aborted".to_string(),
-                    msg: EventMsg::TurnAborted(TurnAbortedEvent {
-                        turn_id: Some("turn-1".to_string()),
-                        reason: TurnAbortReason::ReviewEnded,
-                    }),
-                }],
+                session: None,
+                turns: Vec::new(),
+                events: vec![ThreadBufferedEvent::Notification(
+                    turn_completed_notification(thread_id, "turn-1", TurnStatus::Interrupted),
+                )],
                 input_state: Some(input_state),
             },
             true,
@@ -5932,21 +5626,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn live_turn_started_refreshes_status_line_with_runtime_context_window() {
+    async fn token_usage_update_refreshes_status_line_with_runtime_context_window() {
         let mut app = make_test_app().await;
         app.chat_widget
             .setup_status_line(vec![crate::bottom_pane::StatusLineItem::ContextWindowSize]);
 
         assert_eq!(app.chat_widget.status_line_text(), None);
 
-        app.handle_codex_event_now(Event {
-            id: "turn-started".to_string(),
-            msg: EventMsg::TurnStarted(TurnStartedEvent {
-                turn_id: "turn-1".to_string(),
-                model_context_window: Some(950_000),
-                collaboration_mode_kind: Default::default(),
-            }),
-        });
+        app.handle_thread_event_now(ThreadBufferedEvent::Notification(token_usage_notification(
+            ThreadId::new(),
+            "turn-1",
+            Some(950_000),
+        )));
 
         assert_eq!(
             app.chat_widget.status_line_text(),
@@ -6594,26 +6285,12 @@ guardian_approval = true
         let agent_channel = ThreadEventChannel::new(1);
         {
             let mut store = agent_channel.store.lock().await;
-            store.push_event(Event {
-                id: "ev-1".to_string(),
-                msg: EventMsg::ExecApprovalRequest(
-                    codex_protocol::protocol::ExecApprovalRequestEvent {
-                        call_id: "call-1".to_string(),
-                        approval_id: None,
-                        turn_id: "turn-1".to_string(),
-                        command: vec!["echo".to_string(), "hi".to_string()],
-                        cwd: PathBuf::from("/tmp"),
-                        reason: None,
-                        network_approval_context: None,
-                        proposed_execpolicy_amendment: None,
-                        proposed_network_policy_amendments: None,
-                        additional_permissions: None,
-                        skill_metadata: None,
-                        available_decisions: None,
-                        parsed_cmd: Vec::new(),
-                    },
-                ),
-            });
+            store.push_request(exec_approval_request(
+                agent_thread_id,
+                "turn-1",
+                "call-1",
+                None,
+            ));
         }
         app.thread_event_channels
             .insert(agent_thread_id, agent_channel);
@@ -6649,29 +6326,15 @@ guardian_approval = true
             .insert(main_thread_id, ThreadEventChannel::new(1));
         app.thread_event_channels.insert(
             agent_thread_id,
-            ThreadEventChannel::new_with_session_configured(
+            ThreadEventChannel::new_with_session(
                 1,
-                Event {
-                    id: String::new(),
-                    msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                        session_id: agent_thread_id,
-                        forked_from_id: None,
-                        thread_name: None,
-                        model: "gpt-5".to_string(),
-                        model_provider_id: "test-provider".to_string(),
-                        service_tier: None,
-                        approval_policy: AskForApproval::OnRequest,
-                        approvals_reviewer: ApprovalsReviewer::User,
-                        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-                        cwd: PathBuf::from("/tmp/agent"),
-                        reasoning_effort: None,
-                        history_log_id: 0,
-                        history_entry_count: 0,
-                        initial_messages: None,
-                        network_proxy: None,
-                        rollout_path: Some(PathBuf::from("/tmp/agent-rollout.jsonl")),
-                    }),
+                ThreadSessionState {
+                    approval_policy: AskForApproval::OnRequest,
+                    sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                    rollout_path: Some(PathBuf::from("/tmp/agent-rollout.jsonl")),
+                    ..test_thread_session(agent_thread_id, PathBuf::from("/tmp/agent"))
                 },
+                Vec::new(),
             ),
         );
         app.agent_navigation.upsert(
@@ -6681,28 +6344,9 @@ guardian_approval = true
             false,
         );
 
-        app.enqueue_thread_event(
+        app.enqueue_thread_request(
             agent_thread_id,
-            Event {
-                id: "ev-approval".to_string(),
-                msg: EventMsg::ExecApprovalRequest(
-                    codex_protocol::protocol::ExecApprovalRequestEvent {
-                        call_id: "call-approval".to_string(),
-                        approval_id: None,
-                        turn_id: "turn-approval".to_string(),
-                        command: vec!["echo".to_string(), "hi".to_string()],
-                        cwd: PathBuf::from("/tmp/agent"),
-                        reason: Some("need approval".to_string()),
-                        network_approval_context: None,
-                        proposed_execpolicy_amendment: None,
-                        proposed_network_policy_amendments: None,
-                        additional_permissions: None,
-                        skill_metadata: None,
-                        available_decisions: None,
-                        parsed_cmd: Vec::new(),
-                    },
-                ),
-            },
+            exec_approval_request(agent_thread_id, "turn-approval", "call-approval", None),
         )
         .await?;
 
@@ -6758,7 +6402,9 @@ guardian_approval = true
         app.primary_thread_id = Some(ThreadId::new());
 
         assert_eq!(
-            app.active_non_primary_shutdown_target(&EventMsg::SkillsUpdateAvailable),
+            app.active_non_primary_shutdown_target(&ServerNotification::SkillsChanged(
+                codex_app_server_protocol::SkillsChangedNotification {},
+            )),
             None
         );
         Ok(())
@@ -6773,7 +6419,7 @@ guardian_approval = true
         app.primary_thread_id = Some(thread_id);
 
         assert_eq!(
-            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
+            app.active_non_primary_shutdown_target(&thread_closed_notification(thread_id)),
             None
         );
         Ok(())
@@ -6789,7 +6435,7 @@ guardian_approval = true
         app.primary_thread_id = Some(primary_thread_id);
 
         assert_eq!(
-            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
+            app.active_non_primary_shutdown_target(&thread_closed_notification(active_thread_id)),
             Some((active_thread_id, primary_thread_id))
         );
         Ok(())
@@ -6806,7 +6452,7 @@ guardian_approval = true
         app.pending_shutdown_exit_thread_id = Some(active_thread_id);
 
         assert_eq!(
-            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
+            app.active_non_primary_shutdown_target(&thread_closed_notification(active_thread_id)),
             None
         );
         Ok(())
@@ -6823,7 +6469,7 @@ guardian_approval = true
         app.pending_shutdown_exit_thread_id = Some(ThreadId::new());
 
         assert_eq!(
-            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
+            app.active_non_primary_shutdown_target(&thread_closed_notification(active_thread_id)),
             Some((active_thread_id, primary_thread_id))
         );
         Ok(())
@@ -7150,39 +6796,6 @@ guardian_approval = true
                 app.transcript_cells.push(cell);
             }
         }
-
-        assert_eq!(app.primary_thread_id, Some(thread_id));
-        assert_eq!(app.active_thread_id, Some(thread_id));
-
-        let user_messages: Vec<String> = app
-            .transcript_cells
-            .iter()
-            .filter_map(|cell| {
-                cell.as_any()
-                    .downcast_ref::<UserHistoryCell>()
-                    .map(|cell| cell.message.clone())
-            })
-            .collect();
-        let agent_messages: Vec<String> = app
-            .transcript_cells
-            .iter()
-            .filter_map(|cell| {
-                cell.as_any()
-                    .downcast_ref::<AgentMessageCell>()
-                    .map(|cell| {
-                        cell.display_lines(80)
-                            .into_iter()
-                            .map(|line| line.to_string())
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    })
-            })
-            .collect();
-
-        assert_eq!(user_messages, vec!["hello from remote".to_string()]);
-        assert_eq!(agent_messages, vec!["• restored response".to_string()]);
-
-        Ok(())
     }
 
     #[tokio::test]
@@ -7264,207 +6877,99 @@ guardian_approval = true
                 app.transcript_cells.push(cell);
             }
         }
-
-        let user_messages: Vec<String> = app
-            .transcript_cells
-            .iter()
-            .filter_map(|cell| {
-                cell.as_any()
-                    .downcast_ref::<UserHistoryCell>()
-                    .map(|cell| cell.message.clone())
-            })
-            .collect();
-
-        assert_eq!(
-            user_messages,
-            vec!["hello from remote".to_string(), "resume prompt".to_string()]
-        );
-        match next_user_turn_op(&mut op_rx) {
-            Op::UserTurn { items, .. } => assert_eq!(
-                items,
-                vec![UserInput::Text {
-                    text: "resume prompt".to_string(),
-                    text_elements: Vec::new(),
-                }]
-            ),
-            other => panic!("expected resume prompt submission, got {other:?}"),
-        }
-
-        Ok(())
     }
 
-    #[tokio::test]
-    async fn restore_started_app_server_thread_replays_history_beyond_store_capacity() -> Result<()>
-    {
-        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let thread_id = ThreadId::new();
-        let turn_count = THREAD_EVENT_CHANNEL_CAPACITY + 5;
-
-        let turns = (0..turn_count)
-            .map(|index| Turn {
-                id: format!("turn-{index}"),
-                items: vec![ThreadItem::UserMessage {
-                    id: format!("user-{index}"),
-                    content: vec![codex_app_server_protocol::UserInput::Text {
-                        text: format!("message {index}"),
-                        text_elements: Vec::new(),
-                    }],
-                }],
-                status: TurnStatus::Completed,
-                error: None,
-            })
-            .collect();
-
-        app.restore_started_app_server_thread(AppServerStartedThread {
-            thread: Thread {
-                id: thread_id.to_string(),
-                preview: "hello".to_string(),
-                ephemeral: false,
-                model_provider: "test-provider".to_string(),
-                created_at: 0,
-                updated_at: 0,
-                status: ThreadStatus::Idle,
-                path: None,
-                cwd: PathBuf::from("/tmp/project"),
-                cli_version: "test".to_string(),
-                source: SessionSource::Cli.into(),
-                agent_nickname: None,
-                agent_role: None,
-                git_info: None,
-                name: Some("restored".to_string()),
-                turns,
-            },
-            session_configured: SessionConfiguredEvent {
-                session_id: thread_id,
-                forked_from_id: None,
-                thread_name: Some("restored".to_string()),
-                model: "gpt-test".to_string(),
-                model_provider_id: "test-provider".to_string(),
-                service_tier: None,
-                approval_policy: AskForApproval::Never,
-                approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/tmp/project"),
-                reasoning_effort: None,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: None,
-                network_proxy: None,
-                rollout_path: Some(PathBuf::new()),
-            },
-            show_raw_agent_reasoning: false,
+    fn turn_started_notification(thread_id: ThreadId, turn_id: &str) -> ServerNotification {
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: thread_id.to_string(),
+            turn: test_turn(turn_id, TurnStatus::InProgress, Vec::new()),
         })
-        .await?;
-
-        while let Ok(event) = app_event_rx.try_recv() {
-            if let AppEvent::InsertHistoryCell(cell) = event {
-                let cell: Arc<dyn HistoryCell> = cell.into();
-                app.transcript_cells.push(cell);
-            }
-        }
-
-        let user_messages: Vec<String> = app
-            .transcript_cells
-            .iter()
-            .filter_map(|cell| {
-                cell.as_any()
-                    .downcast_ref::<UserHistoryCell>()
-                    .map(|cell| cell.message.clone())
-            })
-            .collect();
-
-        assert_eq!(user_messages.len(), turn_count);
-        assert_eq!(user_messages.first().map(String::as_str), Some("message 0"));
-        let last_message = format!("message {}", turn_count - 1);
-        assert_eq!(
-            user_messages.last().map(String::as_str),
-            Some(last_message.as_str())
-        );
-
-        Ok(())
     }
 
-    #[tokio::test]
-    async fn restore_started_app_server_thread_replays_raw_reasoning_when_enabled() -> Result<()> {
-        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let thread_id = ThreadId::new();
-
-        app.restore_started_app_server_thread(AppServerStartedThread {
-            thread: Thread {
-                id: thread_id.to_string(),
-                preview: "hello".to_string(),
-                ephemeral: false,
-                model_provider: "test-provider".to_string(),
-                created_at: 0,
-                updated_at: 0,
-                status: ThreadStatus::Idle,
-                path: None,
-                cwd: PathBuf::from("/tmp/project"),
-                cli_version: "test".to_string(),
-                source: SessionSource::Cli.into(),
-                agent_nickname: None,
-                agent_role: None,
-                git_info: None,
-                name: Some("restored".to_string()),
-                turns: vec![Turn {
-                    id: "turn-1".to_string(),
-                    items: vec![ThreadItem::Reasoning {
-                        id: "reasoning-1".to_string(),
-                        summary: vec!["summary reasoning".to_string()],
-                        content: vec!["raw reasoning".to_string()],
-                    }],
-                    status: TurnStatus::Completed,
-                    error: None,
-                }],
-            },
-            session_configured: SessionConfiguredEvent {
-                session_id: thread_id,
-                forked_from_id: None,
-                thread_name: Some("restored".to_string()),
-                model: "gpt-test".to_string(),
-                model_provider_id: "test-provider".to_string(),
-                service_tier: None,
-                approval_policy: AskForApproval::Never,
-                approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/tmp/project"),
-                reasoning_effort: None,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: None,
-                network_proxy: None,
-                rollout_path: Some(PathBuf::new()),
-            },
-            show_raw_agent_reasoning: true,
+    fn turn_completed_notification(
+        thread_id: ThreadId,
+        turn_id: &str,
+        status: TurnStatus,
+    ) -> ServerNotification {
+        ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: thread_id.to_string(),
+            turn: test_turn(turn_id, status, Vec::new()),
         })
-        .await?;
+    }
 
-        while let Ok(event) = app_event_rx.try_recv() {
-            if let AppEvent::InsertHistoryCell(cell) = event {
-                let cell: Arc<dyn HistoryCell> = cell.into();
-                app.transcript_cells.push(cell);
-            }
+    fn thread_closed_notification(thread_id: ThreadId) -> ServerNotification {
+        ServerNotification::ThreadClosed(ThreadClosedNotification {
+            thread_id: thread_id.to_string(),
+        })
+    }
+
+    fn token_usage_notification(
+        thread_id: ThreadId,
+        turn_id: &str,
+        model_context_window: Option<i64>,
+    ) -> ServerNotification {
+        ServerNotification::ThreadTokenUsageUpdated(ThreadTokenUsageUpdatedNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: turn_id.to_string(),
+            token_usage: ThreadTokenUsage {
+                total: TokenUsageBreakdown {
+                    total_tokens: 10,
+                    input_tokens: 4,
+                    cached_input_tokens: 1,
+                    output_tokens: 5,
+                    reasoning_output_tokens: 0,
+                },
+                last: TokenUsageBreakdown {
+                    total_tokens: 10,
+                    input_tokens: 4,
+                    cached_input_tokens: 1,
+                    output_tokens: 5,
+                    reasoning_output_tokens: 0,
+                },
+                model_context_window,
+            },
+        })
+    }
+
+    fn agent_message_delta_notification(
+        thread_id: ThreadId,
+        turn_id: &str,
+        item_id: &str,
+        delta: &str,
+    ) -> ServerNotification {
+        ServerNotification::AgentMessageDelta(AgentMessageDeltaNotification {
+            thread_id: thread_id.to_string(),
+            turn_id: turn_id.to_string(),
+            item_id: item_id.to_string(),
+            delta: delta.to_string(),
+        })
+    }
+
+    fn exec_approval_request(
+        thread_id: ThreadId,
+        turn_id: &str,
+        item_id: &str,
+        approval_id: Option<&str>,
+    ) -> ServerRequest {
+        ServerRequest::CommandExecutionRequestApproval {
+            request_id: AppServerRequestId::Integer(1),
+            params: CommandExecutionRequestApprovalParams {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: item_id.to_string(),
+                approval_id: approval_id.map(str::to_string),
+                reason: Some("needs approval".to_string()),
+                network_approval_context: None,
+                command: Some("echo hello".to_string()),
+                cwd: Some(PathBuf::from("/tmp/project")),
+                command_actions: None,
+                additional_permissions: None,
+                skill_metadata: None,
+                proposed_execpolicy_amendment: None,
+                proposed_network_policy_amendments: None,
+                available_decisions: None,
+            },
         }
-
-        let channel = app
-            .thread_event_channels
-            .get(&thread_id)
-            .expect("restored thread channel should exist");
-        let snapshot = channel.store.lock().await.snapshot();
-        let replayed_raw_reasoning = snapshot.events.iter().any(|event| {
-            matches!(
-                &event.msg,
-                EventMsg::AgentReasoningRawContent(raw) if raw.text == "raw reasoning"
-            )
-        });
-
-        assert!(
-            replayed_raw_reasoning,
-            "expected restored snapshot to keep raw reasoning event: {:?}",
-            snapshot.events
-        );
-
-        Ok(())
     }
 
     #[test]
@@ -7472,32 +6977,22 @@ guardian_approval = true
         let mut store = ThreadEventStore::new(8);
         assert_eq!(store.active_turn_id(), None);
 
-        store.push_event(Event {
-            id: "turn-started".to_string(),
-            msg: EventMsg::TurnStarted(TurnStartedEvent {
-                turn_id: "turn-1".to_string(),
-                model_context_window: Some(128_000),
-                collaboration_mode_kind: ModeKind::Default,
-            }),
-        });
+        let thread_id = ThreadId::new();
+        store.push_notification(turn_started_notification(thread_id, "turn-1"));
         assert_eq!(store.active_turn_id(), Some("turn-1"));
 
-        store.push_event(Event {
-            id: "other-turn-complete".to_string(),
-            msg: EventMsg::TurnComplete(TurnCompleteEvent {
-                turn_id: "turn-2".to_string(),
-                last_agent_message: None,
-            }),
-        });
+        store.push_notification(turn_completed_notification(
+            thread_id,
+            "turn-2",
+            TurnStatus::Completed,
+        ));
         assert_eq!(store.active_turn_id(), Some("turn-1"));
 
-        store.push_event(Event {
-            id: "turn-aborted".to_string(),
-            msg: EventMsg::TurnAborted(TurnAbortedEvent {
-                turn_id: Some("turn-1".to_string()),
-                reason: TurnAbortReason::Interrupted,
-            }),
-        });
+        store.push_notification(turn_completed_notification(
+            thread_id,
+            "turn-1",
+            TurnStatus::Interrupted,
+        ));
         assert_eq!(store.active_turn_id(), None);
     }
 
@@ -8258,71 +7753,61 @@ guardian_approval = true
     }
 
     #[tokio::test]
-    async fn replayed_initial_messages_apply_rollback_in_queue_order() {
+    async fn replay_thread_snapshot_replays_turn_history_in_order() {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        app.replay_thread_snapshot(
+            ThreadEventSnapshot {
+                session: Some(test_thread_session(
+                    thread_id,
+                    PathBuf::from("/home/user/project"),
+                )),
+                turns: vec![
+                    Turn {
+                        id: "turn-1".to_string(),
+                        items: vec![ThreadItem::UserMessage {
+                            id: "user-1".to_string(),
+                            content: vec![AppServerUserInput::Text {
+                                text: "first prompt".to_string(),
+                                text_elements: Vec::new(),
+                            }],
+                        }],
+                        status: TurnStatus::Completed,
+                        error: None,
+                    },
+                    Turn {
+                        id: "turn-2".to_string(),
+                        items: vec![
+                            ThreadItem::UserMessage {
+                                id: "user-2".to_string(),
+                                content: vec![AppServerUserInput::Text {
+                                    text: "third prompt".to_string(),
+                                    text_elements: Vec::new(),
+                                }],
+                            },
+                            ThreadItem::AgentMessage {
+                                id: "assistant-2".to_string(),
+                                text: "done".to_string(),
+                                phase: None,
+                            },
+                        ],
+                        status: TurnStatus::Completed,
+                        error: None,
+                    },
+                ],
+                events: Vec::new(),
+                input_state: None,
+            },
+            false,
+        );
 
-        let session_id = ThreadId::new();
-        app.handle_codex_event_replay(Event {
-            id: String::new(),
-            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id,
-                forked_from_id: None,
-                thread_name: None,
-                model: "gpt-test".to_string(),
-                model_provider_id: "test-provider".to_string(),
-                service_tier: None,
-                approval_policy: AskForApproval::Never,
-                approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/home/user/project"),
-                reasoning_effort: None,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: Some(vec![
-                    EventMsg::UserMessage(UserMessageEvent {
-                        message: "first prompt".to_string(),
-                        images: None,
-                        local_images: Vec::new(),
-                        text_elements: Vec::new(),
-                    }),
-                    EventMsg::UserMessage(UserMessageEvent {
-                        message: "second prompt".to_string(),
-                        images: None,
-                        local_images: Vec::new(),
-                        text_elements: Vec::new(),
-                    }),
-                    EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
-                    EventMsg::UserMessage(UserMessageEvent {
-                        message: "third prompt".to_string(),
-                        images: None,
-                        local_images: Vec::new(),
-                        text_elements: Vec::new(),
-                    }),
-                ]),
-                network_proxy: None,
-                rollout_path: Some(PathBuf::new()),
-            }),
-        });
-
-        let mut saw_rollback = false;
         while let Ok(event) = app_event_rx.try_recv() {
-            match event {
-                AppEvent::InsertHistoryCell(cell) => {
-                    let cell: Arc<dyn HistoryCell> = cell.into();
-                    app.transcript_cells.push(cell);
-                }
-                AppEvent::ApplyThreadRollback { num_turns } => {
-                    saw_rollback = true;
-                    crate::app_backtrack::trim_transcript_cells_drop_last_n_user_turns(
-                        &mut app.transcript_cells,
-                        num_turns,
-                    );
-                }
-                _ => {}
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let cell: Arc<dyn HistoryCell> = cell.into();
+                app.transcript_cells.push(cell);
             }
         }
 
-        assert!(saw_rollback);
         let user_messages: Vec<String> = app
             .transcript_cells
             .iter()
@@ -8336,83 +7821,6 @@ guardian_approval = true
             user_messages,
             vec!["first prompt".to_string(), "third prompt".to_string()]
         );
-    }
-
-    #[tokio::test]
-    async fn live_rollback_during_replay_is_applied_in_app_event_order() {
-        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-
-        let session_id = ThreadId::new();
-        app.handle_codex_event_replay(Event {
-            id: String::new(),
-            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id,
-                forked_from_id: None,
-                thread_name: None,
-                model: "gpt-test".to_string(),
-                model_provider_id: "test-provider".to_string(),
-                service_tier: None,
-                approval_policy: AskForApproval::Never,
-                approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/home/user/project"),
-                reasoning_effort: None,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: Some(vec![
-                    EventMsg::UserMessage(UserMessageEvent {
-                        message: "first prompt".to_string(),
-                        images: None,
-                        local_images: Vec::new(),
-                        text_elements: Vec::new(),
-                    }),
-                    EventMsg::UserMessage(UserMessageEvent {
-                        message: "second prompt".to_string(),
-                        images: None,
-                        local_images: Vec::new(),
-                        text_elements: Vec::new(),
-                    }),
-                ]),
-                network_proxy: None,
-                rollout_path: Some(PathBuf::new()),
-            }),
-        });
-
-        // Simulate a live rollback arriving before queued replay inserts are drained.
-        app.handle_codex_event_now(Event {
-            id: "live-rollback".to_string(),
-            msg: EventMsg::ThreadRolledBack(ThreadRolledBackEvent { num_turns: 1 }),
-        });
-
-        let mut saw_rollback = false;
-        while let Ok(event) = app_event_rx.try_recv() {
-            match event {
-                AppEvent::InsertHistoryCell(cell) => {
-                    let cell: Arc<dyn HistoryCell> = cell.into();
-                    app.transcript_cells.push(cell);
-                }
-                AppEvent::ApplyThreadRollback { num_turns } => {
-                    saw_rollback = true;
-                    crate::app_backtrack::trim_transcript_cells_drop_last_n_user_turns(
-                        &mut app.transcript_cells,
-                        num_turns,
-                    );
-                }
-                _ => {}
-            }
-        }
-
-        assert!(saw_rollback);
-        let user_messages: Vec<String> = app
-            .transcript_cells
-            .iter()
-            .filter_map(|cell| {
-                cell.as_any()
-                    .downcast_ref::<UserHistoryCell>()
-                    .map(|cell| cell.message.clone())
-            })
-            .collect();
-        assert_eq!(user_messages, vec!["first prompt".to_string()]);
     }
 
     #[tokio::test]

@@ -1135,7 +1135,7 @@ enum ThreadItemRenderSource {
 }
 
 impl ThreadItemRenderSource {
-    fn from_replay(self) -> bool {
+    fn is_replay(self) -> bool {
         matches!(self, Self::Replay(_))
     }
 
@@ -5156,7 +5156,7 @@ impl ChatWidget {
         turn_id: String,
         render_source: ThreadItemRenderSource,
     ) {
-        let from_replay = render_source.from_replay();
+        let from_replay = render_source.is_replay();
         let replay_kind = render_source.replay_kind();
         match item {
             ThreadItem::UserMessage { id, content } => {
@@ -5340,7 +5340,7 @@ impl ChatWidget {
                 self.on_mcp_tool_call_end(codex_protocol::protocol::McpToolCallEndEvent {
                     call_id: id,
                     invocation: codex_protocol::protocol::McpInvocation {
-                        server: server.clone(),
+                        server,
                         tool,
                         arguments: Some(arguments),
                     },

@@ -65,8 +65,6 @@ use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::CreditsSnapshot;
-#[cfg(test)]
-use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::ReviewRequest;
@@ -1087,7 +1085,7 @@ mod tests {
     }
 
     #[test]
-    fn resume_response_relies_on_snapshot_replay_not_initial_messages() {
+    fn resume_response_restores_turns_from_thread_items() {
         let thread_id = ThreadId::new();
         let response = ThreadResumeResponse {
             thread: codex_app_server_protocol::Thread {
@@ -1138,11 +1136,8 @@ mod tests {
         };
 
         let started =
-            started_thread_from_resume_response(response, /*show_raw_agent_reasoning*/ false)
-                .expect("resume response should map");
-        assert!(started.session_configured.initial_messages.is_none());
-        assert!(!started.show_raw_agent_reasoning);
-        assert_eq!(started.thread.turns.len(), 1);
-        assert_eq!(started.thread.turns[0].items.len(), 2);
+            started_thread_from_resume_response(&response).expect("resume response should map");
+        assert_eq!(started.turns.len(), 1);
+        assert_eq!(started.turns[0], response.thread.turns[0]);
     }
 }

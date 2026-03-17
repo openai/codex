@@ -73,6 +73,7 @@ pub(crate) struct ConnectorsSnapshot {
 #[derive(Debug)]
 pub(crate) enum AppEvent {
     #[cfg(test)]
+    #[allow(dead_code)]
     CodexEvent(Event),
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,

@@ -466,6 +466,7 @@ impl App {
     }
 
     #[cfg(test)]
+    #[cfg_attr(test, allow(dead_code))]
     pub(crate) fn handle_backtrack_event(&mut self, event: &EventMsg) {
         match event {
             EventMsg::ThreadRolledBack(rollback) => {
