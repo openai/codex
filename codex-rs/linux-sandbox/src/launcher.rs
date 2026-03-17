@@ -24,13 +24,15 @@ pub(crate) fn exec_bwrap(argv: Vec<String>, preserved_files: Vec<File>) -> ! {
 }
 
 fn preferred_bwrap_launcher() -> BubblewrapLauncher {
-    let system_bwrap_path = AbsolutePathBuf::from_absolute_path(Path::new(SYSTEM_BWRAP_PATH))
-        .expect("system bubblewrap path should be absolute");
-    if system_bwrap_path.as_path().is_file() {
-        BubblewrapLauncher::System(system_bwrap_path)
-    } else {
-        BubblewrapLauncher::Vendored
+    if !Path::new(SYSTEM_BWRAP_PATH).is_file() {
+        return BubblewrapLauncher::Vendored;
     }
+
+    let system_bwrap_path = match AbsolutePathBuf::from_absolute_path(SYSTEM_BWRAP_PATH) {
+        Ok(path) => path,
+        Err(err) => panic!("failed to normalize system bubblewrap path {SYSTEM_BWRAP_PATH}: {err}"),
+    };
+    BubblewrapLauncher::System(system_bwrap_path)
 }
 
 fn exec_system_bwrap(
