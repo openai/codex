@@ -370,7 +370,6 @@ fn build_realtime_input_stream(
             .build_input_stream(
                 &config.clone().into(),
                 {
-                    let input_behavior = input_behavior.clone();
                     let last_peak = Arc::clone(&last_peak);
                     let tx = tx;
                     let mut allow_input_until = None;
@@ -397,7 +396,6 @@ fn build_realtime_input_stream(
             .build_input_stream(
                 &config.clone().into(),
                 {
-                    let input_behavior = input_behavior.clone();
                     let last_peak = Arc::clone(&last_peak);
                     let tx = tx;
                     let mut allow_input_until = None;
@@ -423,7 +421,6 @@ fn build_realtime_input_stream(
             .build_input_stream(
                 &config.clone().into(),
                 {
-                    let input_behavior = input_behavior.clone();
                     let last_peak = Arc::clone(&last_peak);
                     let tx = tx;
                     let mut allow_input_until = None;

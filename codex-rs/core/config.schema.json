@@ -1359,6 +1359,13 @@
       },
       "type": "object"
     },
+    "RealtimeConversationVersion": {
+      "enum": [
+        "v1",
+        "v2"
+      ],
+      "type": "string"
+    },
     "RealtimeToml": {
       "additionalProperties": false,
       "properties": {
@@ -1366,7 +1373,7 @@
           "$ref": "#/definitions/RealtimeWsMode"
         },
         "version": {
-          "$ref": "#/definitions/RealtimeWsVersion"
+          "$ref": "#/definitions/RealtimeConversationVersion"
         }
       },
       "type": "object"
@@ -1375,13 +1382,6 @@
       "enum": [
         "conversational",
         "transcription"
-      ],
-      "type": "string"
-    },
-    "RealtimeWsVersion": {
-      "enum": [
-        "v1",
-        "v2"
       ],
       "type": "string"
     },
