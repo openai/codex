@@ -5219,8 +5219,13 @@ impl ChatWidget {
             ThreadItem::Reasoning {
                 summary, content, ..
             } => {
-                for delta in summary.into_iter().chain(content) {
+                for delta in summary {
                     self.on_agent_reasoning_delta(delta);
+                }
+                if self.config.show_raw_agent_reasoning {
+                    for delta in content {
+                        self.on_agent_reasoning_delta(delta);
+                    }
                 }
                 self.on_agent_reasoning_final();
             }
@@ -5493,7 +5498,9 @@ impl ChatWidget {
                 self.on_agent_reasoning_delta(notification.delta);
             }
             ServerNotification::ReasoningTextDelta(notification) => {
-                self.on_agent_reasoning_delta(notification.delta);
+                if self.config.show_raw_agent_reasoning {
+                    self.on_agent_reasoning_delta(notification.delta);
+                }
             }
             ServerNotification::ReasoningSummaryPartAdded(_) => self.on_reasoning_section_break(),
             ServerNotification::TerminalInteraction(notification) => {

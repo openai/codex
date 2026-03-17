@@ -4314,6 +4314,95 @@ async fn replayed_thread_closed_notification_does_not_exit_tui() {
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }
 
+#[tokio::test]
+async fn replayed_reasoning_item_hides_raw_reasoning_when_disabled() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.show_raw_agent_reasoning = false;
+    chat.handle_codex_event(Event {
+        id: "configured".into(),
+        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+            session_id: ThreadId::new(),
+            forked_from_id: None,
+            thread_name: None,
+            model: "test-model".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd: PathBuf::from("/tmp/project"),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: None,
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+
+    chat.replay_thread_item(
+        AppServerThreadItem::Reasoning {
+            id: "reasoning-1".to_string(),
+            summary: vec!["Summary only".to_string()],
+            content: vec!["Raw reasoning".to_string()],
+        },
+        "turn-1".to_string(),
+        ReplayKind::ThreadSnapshot,
+    );
+
+    let rendered = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => lines_to_single_string(&cell.transcript_lines(80)),
+        other => panic!("expected InsertHistoryCell, got {other:?}"),
+    };
+    assert!(!rendered.trim().is_empty());
+    assert!(!rendered.contains("Raw reasoning"));
+}
+
+#[tokio::test]
+async fn replayed_reasoning_item_shows_raw_reasoning_when_enabled() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.show_raw_agent_reasoning = true;
+    chat.handle_codex_event(Event {
+        id: "configured".into(),
+        msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+            session_id: ThreadId::new(),
+            forked_from_id: None,
+            thread_name: None,
+            model: "test-model".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd: PathBuf::from("/tmp/project"),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: None,
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+
+    chat.replay_thread_item(
+        AppServerThreadItem::Reasoning {
+            id: "reasoning-1".to_string(),
+            summary: vec!["Summary only".to_string()],
+            content: vec!["Raw reasoning".to_string()],
+        },
+        "turn-1".to_string(),
+        ReplayKind::ThreadSnapshot,
+    );
+
+    let rendered = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => lines_to_single_string(&cell.transcript_lines(80)),
+        other => panic!("expected InsertHistoryCell, got {other:?}"),
+    };
+    assert!(rendered.contains("Raw reasoning"));
+}
+
 #[test]
 fn rendered_user_message_event_from_inputs_matches_flattened_user_message_shape() {
     let local_image = PathBuf::from("/tmp/local.png");
