@@ -9785,6 +9785,13 @@
           }
         ]
       },
+      "RealtimeConversationVersion": {
+        "enum": [
+          "v1",
+          "v2"
+        ],
+        "type": "string"
+      },
       "ReasoningEffort": {
         "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
         "enum": [
@@ -12927,7 +12934,7 @@
             "type": "string"
           },
           "version": {
-            "type": "string"
+            "$ref": "#/definitions/v2/RealtimeConversationVersion"
           }
         },
         "required": [

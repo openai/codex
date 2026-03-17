@@ -32,7 +32,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
-use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeHandoffRequested;
 use http::HeaderMap;
 use http::HeaderValue;
@@ -413,10 +412,7 @@ pub(crate) async fn handle_start(
         id: sub_id.clone(),
         msg: EventMsg::RealtimeConversationStarted(RealtimeConversationStartedEvent {
             session_id: requested_session_id,
-            version: match version {
-                RealtimeWsVersion::V1 => RealtimeConversationVersion::V1,
-                RealtimeWsVersion::V2 => RealtimeConversationVersion::V2,
-            },
+            version,
         }),
     })
     .await;

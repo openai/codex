@@ -46,7 +46,6 @@ use codex_protocol::protocol::PlanDeltaEvent;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
-use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ThreadNameUpdatedEvent;
 use codex_protocol::protocol::TokenCountEvent;
@@ -394,10 +393,7 @@ fn server_notification_thread_events(
                 id: String::new(),
                 msg: EventMsg::RealtimeConversationStarted(RealtimeConversationStartedEvent {
                     session_id: notification.session_id,
-                    version: match notification.version.as_str() {
-                        "v2" => RealtimeConversationVersion::V2,
-                        _ => RealtimeConversationVersion::V1,
-                    },
+                    version: notification.version,
                 }),
             }],
         )),

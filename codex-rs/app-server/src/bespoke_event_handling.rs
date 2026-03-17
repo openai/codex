@@ -121,7 +121,6 @@ use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewOutputEvent;
@@ -339,10 +338,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let notification = ThreadRealtimeStartedNotification {
                     thread_id: conversation_id.to_string(),
                     session_id: event.session_id,
-                    version: match event.version {
-                        RealtimeConversationVersion::V1 => "v1".to_string(),
-                        RealtimeConversationVersion::V2 => "v2".to_string(),
-                    },
+                    version: event.version,
                 };
                 outgoing
                     .send_server_notification(ServerNotification::ThreadRealtimeStarted(
