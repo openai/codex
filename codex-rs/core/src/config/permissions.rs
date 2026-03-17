@@ -281,9 +281,11 @@ fn parse_special_path(path: &str) -> Option<FileSystemSpecialPath> {
     match path {
         ":root" => Some(FileSystemSpecialPath::Root),
         ":minimal" => Some(FileSystemSpecialPath::Minimal),
-        ":project_roots" => Some(FileSystemSpecialPath::project_roots(None)),
+        ":project_roots" => Some(FileSystemSpecialPath::project_roots(/*subpath*/ None)),
         ":tmpdir" => Some(FileSystemSpecialPath::Tmpdir),
-        _ if path.starts_with(':') => Some(FileSystemSpecialPath::unknown(path, None)),
+        _ if path.starts_with(':') => {
+            Some(FileSystemSpecialPath::unknown(path, /*subpath*/ None))
+        }
         _ => None,
     }
 }

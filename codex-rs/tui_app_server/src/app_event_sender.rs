@@ -82,7 +82,7 @@ impl AppEventSender {
     pub(crate) fn exec_approval(&self, thread_id: ThreadId, id: String, decision: ReviewDecision) {
         self.send(AppEvent::SubmitThreadOp {
             thread_id,
-            op: AppCommand::exec_approval(id, None, decision).into_core(),
+            op: AppCommand::exec_approval(id, /*turn_id*/ None, decision).into_core(),
         });
     }
 

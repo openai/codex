@@ -242,7 +242,13 @@ impl Renderable for ThemePreviewWideRenderable {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        render_preview(area, buf, &WIDE_PREVIEW_ROWS, true, WIDE_PREVIEW_LEFT_INSET);
+        render_preview(
+            area,
+            buf,
+            &WIDE_PREVIEW_ROWS,
+            /*center_vertically*/ true,
+            WIDE_PREVIEW_LEFT_INSET,
+        );
     }
 }
 
@@ -252,7 +258,13 @@ impl Renderable for ThemePreviewNarrowRenderable {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        render_preview(area, buf, &NARROW_PREVIEW_ROWS, false, 0);
+        render_preview(
+            area,
+            buf,
+            &NARROW_PREVIEW_ROWS,
+            /*center_vertically*/ false,
+            /*left_inset*/ 0,
+        );
     }
 }
 
@@ -274,7 +286,7 @@ fn theme_picker_subtitle(codex_home: Option<&Path>, terminal_width: Option<u16>)
     let themes_dir = codex_home.map(|home| home.join("themes"));
     let themes_dir_display = themes_dir
         .as_deref()
-        .map(|path| format_directory_display(path, None));
+        .map(|path| format_directory_display(path, /*max_width*/ None));
     let available_width = subtitle_available_width(terminal_width);
 
     if let Some(path) = themes_dir_display

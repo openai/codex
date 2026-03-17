@@ -137,19 +137,19 @@ impl KeyboardHandler for AuthModeWidget {
 
         match key_event.code {
             KeyCode::Up | KeyCode::Char('k') => {
-                self.move_highlight(-1);
+                self.move_highlight(/*delta*/ -1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.move_highlight(1);
+                self.move_highlight(/*delta*/ 1);
             }
             KeyCode::Char('1') => {
-                self.select_option_by_index(0);
+                self.select_option_by_index(/*index*/ 0);
             }
             KeyCode::Char('2') => {
-                self.select_option_by_index(1);
+                self.select_option_by_index(/*index*/ 1);
             }
             KeyCode::Char('3') => {
-                self.select_option_by_index(2);
+                self.select_option_by_index(/*index*/ 2);
             }
             KeyCode::Enter => {
                 let sign_in_state = { (*self.sign_in_state.read().unwrap()).clone() };
@@ -182,7 +182,7 @@ impl KeyboardHandler for AuthModeWidget {
                         });
                         *sign_in_state = SignInState::PickMode;
                         drop(sign_in_state);
-                        self.set_error(None);
+                        self.set_error(/*message*/ None);
                         self.request_frame.schedule_frame();
                     }
                     SignInState::ChatGptDeviceCode(state) => {
@@ -191,7 +191,7 @@ impl KeyboardHandler for AuthModeWidget {
                         }
                         *sign_in_state = SignInState::PickMode;
                         drop(sign_in_state);
-                        self.set_error(None);
+                        self.set_error(/*message*/ None);
                         self.request_frame.schedule_frame();
                     }
                     _ => {}
@@ -585,7 +585,7 @@ impl AuthModeWidget {
                 match key_event.code {
                     KeyCode::Esc => {
                         *guard = SignInState::PickMode;
-                        self.set_error(None);
+                        self.set_error(/*message*/ None);
                         should_request_frame = true;
                     }
                     KeyCode::Enter => {
@@ -604,7 +604,7 @@ impl AuthModeWidget {
                         } else {
                             state.value.pop();
                         }
-                        self.set_error(None);
+                        self.set_error(/*message*/ None);
                         should_request_frame = true;
                     }
                     KeyCode::Char(c)
@@ -618,7 +618,7 @@ impl AuthModeWidget {
                             state.prepopulated_from_env = false;
                         }
                         state.value.push(c);
-                        self.set_error(None);
+                        self.set_error(/*message*/ None);
                         should_request_frame = true;
                     }
                     _ => {}
@@ -651,7 +651,7 @@ impl AuthModeWidget {
             } else {
                 state.value.push_str(trimmed);
             }
-            self.set_error(None);
+            self.set_error(/*message*/ None);
         } else {
             return false;
         }
@@ -666,7 +666,7 @@ impl AuthModeWidget {
             self.disallow_api_login();
             return;
         }
-        self.set_error(None);
+        self.set_error(/*message*/ None);
         let prefill_from_env = read_openai_api_key_from_env();
         let mut guard = self.sign_in_state.write().unwrap();
         match &mut *guard {
@@ -696,7 +696,7 @@ impl AuthModeWidget {
             self.disallow_api_login();
             return;
         }
-        self.set_error(None);
+        self.set_error(/*message*/ None);
         let request_handle = self.app_server_request_handle.clone();
         let sign_in_state = self.sign_in_state.clone();
         let error = self.error.clone();
@@ -758,7 +758,7 @@ impl AuthModeWidget {
             return;
         }
 
-        self.set_error(None);
+        self.set_error(/*message*/ None);
         let request_handle = self.app_server_request_handle.clone();
         let sign_in_state = self.sign_in_state.clone();
         let error = self.error.clone();
@@ -822,7 +822,7 @@ impl AuthModeWidget {
         }
 
         if notification.success {
-            self.set_error(None);
+            self.set_error(/*message*/ None);
             *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccessMessage;
         } else {
             self.set_error(notification.error);

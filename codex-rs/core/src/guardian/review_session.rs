@@ -266,7 +266,7 @@ impl GuardianReviewSessionManager {
                             params.spawn_config.clone(),
                             next_reuse_key.clone(),
                             spawn_cancel_token.clone(),
-                            None,
+                            /*initial_history*/ None,
                         )),
                     )
                     .await
@@ -297,7 +297,12 @@ impl GuardianReviewSessionManager {
 
         if trunk.reuse_key != next_reuse_key {
             return self
-                .run_ephemeral_review(params, next_reuse_key, deadline, None)
+                .run_ephemeral_review(
+                    params,
+                    next_reuse_key,
+                    deadline,
+                    /*initial_history*/ None,
+                )
                 .await;
         }
 

@@ -69,7 +69,7 @@ pub async fn run_command_under_landlock(
         config_overrides,
         codex_linux_sandbox_exe,
         SandboxType::Landlock,
-        false,
+        /*log_denials*/ false,
     )
     .await
 }
@@ -89,7 +89,7 @@ pub async fn run_command_under_windows(
         config_overrides,
         codex_linux_sandbox_exe,
         SandboxType::Windows,
-        false,
+        /*log_denials*/ false,
     )
     .await
 }
@@ -131,7 +131,10 @@ async fn run_command_under_sandbox(
     let sandbox_policy_cwd = cwd.clone();
 
     let stdio_policy = StdioPolicy::Inherit;
-    let env = create_env(&config.permissions.shell_environment_policy, None);
+    let env = create_env(
+        &config.permissions.shell_environment_policy,
+        /*thread_id*/ None,
+    );
 
     // Special-case Windows sandbox: execute and exit the process to emulate inherited stdio.
     if let SandboxType::Windows = sandbox_type {
@@ -223,8 +226,8 @@ async fn run_command_under_sandbox(
         Some(spec) => Some(
             spec.start_proxy(
                 config.permissions.sandbox_policy.get(),
-                None,
-                None,
+                /*policy_decider*/ None,
+                /*blocked_request_observer*/ None,
                 managed_network_requirements_enabled,
                 NetworkProxyAuditMetadata::default(),
             )

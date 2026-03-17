@@ -183,7 +183,10 @@ impl ConfigService {
             origins: layers.origins(),
             layers: params.include_layers.then(|| {
                 layers
-                    .get_layers(ConfigLayerStackOrdering::HighestPrecedenceFirst, true)
+                    .get_layers(
+                        ConfigLayerStackOrdering::HighestPrecedenceFirst,
+                        /*include_disabled*/ true,
+                    )
                     .iter()
                     .map(|layer| layer.as_layer())
                     .collect()

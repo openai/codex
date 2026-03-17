@@ -180,7 +180,7 @@ impl RolloutRecorder {
             allowed_sources,
             model_providers,
             default_provider,
-            false,
+            /*archived*/ false,
             search_term,
         )
         .await
@@ -206,7 +206,7 @@ impl RolloutRecorder {
             allowed_sources,
             model_providers,
             default_provider,
-            true,
+            /*archived*/ true,
             search_term,
         )
         .await
@@ -320,8 +320,8 @@ impl RolloutRecorder {
                     sort_key,
                     allowed_sources,
                     model_providers,
-                    false,
-                    None,
+                    /*archived*/ false,
+                    /*search_term*/ None,
                 )
                 .await
                 else {
@@ -889,7 +889,7 @@ async fn write_and_reconcile_items(
         state_builder,
         items,
         default_provider,
-        None,
+        /*new_thread_memory_mode*/ None,
     )
     .await;
     Ok(())

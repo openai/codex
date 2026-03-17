@@ -495,7 +495,7 @@ impl EventProcessorWithJsonOutput {
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
-            None,
+            /*prompt*/ None,
         )
     }
 
@@ -526,7 +526,7 @@ impl EventProcessorWithJsonOutput {
             CollabTool::Wait,
             ev.sender_thread_id.to_string(),
             receiver_thread_ids,
-            None,
+            /*prompt*/ None,
             agents_states,
             status,
         )
@@ -538,7 +538,7 @@ impl EventProcessorWithJsonOutput {
             CollabTool::CloseAgent,
             ev.sender_thread_id.to_string(),
             vec![ev.receiver_thread_id.to_string()],
-            None,
+            /*prompt*/ None,
         )
     }
 
@@ -555,7 +555,7 @@ impl EventProcessorWithJsonOutput {
             CollabTool::CloseAgent,
             ev.sender_thread_id.to_string(),
             vec![receiver_id.clone()],
-            None,
+            /*prompt*/ None,
             [(receiver_id, agent_state)].into_iter().collect(),
             status,
         )

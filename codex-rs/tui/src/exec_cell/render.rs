@@ -681,9 +681,9 @@ impl ExecDisplayLayout {
 
 const EXEC_DISPLAY_LAYOUT: ExecDisplayLayout = ExecDisplayLayout::new(
     PrefixedBlock::new("  │ ", "  │ "),
-    2,
+    /*command_continuation_max_lines*/ 2,
     PrefixedBlock::new("  └ ", "    "),
-    5,
+    /*output_max_lines*/ 5,
 );
 
 #[cfg(test)]

@@ -64,7 +64,7 @@ pub async fn load_auth_manager() -> Option<AuthManager> {
     let config = Config::load_with_cli_overrides(Vec::new()).await.ok()?;
     Some(AuthManager::new(
         config.codex_home,
-        false,
+        /*enable_codex_api_key_env*/ false,
         config.cli_auth_credentials_store_mode,
     ))
 }

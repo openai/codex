@@ -744,19 +744,25 @@ impl RmcpClient {
         params: Option<serde_json::Value>,
     ) -> Result<()> {
         self.refresh_oauth_if_needed().await;
-        self.run_service_operation("notifications/custom", None, move |service| {
-            let params = params.clone();
-            async move {
-                service
-                    .send_notification(ClientNotification::CustomNotification(CustomNotification {
-                        method: method.to_string(),
-                        params,
-                        extensions: Extensions::new(),
-                    }))
-                    .await
-            }
-            .boxed()
-        })
+        self.run_service_operation(
+            "notifications/custom",
+            /*timeout*/ None,
+            move |service| {
+                let params = params.clone();
+                async move {
+                    service
+                        .send_notification(ClientNotification::CustomNotification(
+                            CustomNotification {
+                                method: method.to_string(),
+                                params,
+                                extensions: Extensions::new(),
+                            },
+                        ))
+                        .await
+                }
+                .boxed()
+            },
+        )
         .await?;
         self.persist_oauth_tokens().await;
         Ok(())
@@ -769,7 +775,7 @@ impl RmcpClient {
     ) -> Result<ServerResult> {
         self.refresh_oauth_if_needed().await;
         let response = self
-            .run_service_operation("requests/custom", None, move |service| {
+            .run_service_operation("requests/custom", /*timeout*/ None, move |service| {
                 let params = params.clone();
                 async move {
                     service

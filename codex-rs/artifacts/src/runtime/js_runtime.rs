@@ -74,7 +74,7 @@ pub fn can_manage_artifact_runtime() -> bool {
 
 pub(crate) fn resolve_machine_js_runtime() -> Option<JsRuntime> {
     resolve_js_runtime_from_candidates(
-        None,
+        /*preferred_node_path*/ None,
         system_node_runtime(),
         system_electron_runtime(),
         codex_app_runtime_candidates(),
