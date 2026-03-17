@@ -55,15 +55,6 @@ use codex_app_server_protocol::TurnSteerResponse;
 use codex_core::config::Config;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
-use codex_protocol::items::AgentMessageContent;
-use codex_protocol::items::AgentMessageItem;
-use codex_protocol::items::ContextCompactionItem;
-use codex_protocol::items::ImageGenerationItem;
-use codex_protocol::items::PlanItem;
-use codex_protocol::items::ReasoningItem;
-use codex_protocol::items::TurnItem;
-use codex_protocol::items::UserMessageItem;
-use codex_protocol::items::WebSearchItem;
 use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
@@ -73,8 +64,6 @@ use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::CreditsSnapshot;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::ReviewRequest;
@@ -857,43 +846,27 @@ fn started_thread_from_start_response(
 
 fn started_thread_from_resume_response(
     response: ThreadResumeResponse,
-    show_raw_agent_reasoning: bool,
+    _show_raw_agent_reasoning: bool,
 ) -> Result<AppServerStartedThread> {
     let session_configured = session_configured_from_thread_resume_response(&response)
         .map_err(color_eyre::eyre::Report::msg)?;
     let thread = response.thread;
-    let initial_messages = thread_initial_messages(
-        &session_configured.session_id,
-        &thread.turns,
-        show_raw_agent_reasoning,
-    );
     Ok(AppServerStartedThread {
         thread,
-        session_configured: SessionConfiguredEvent {
-            initial_messages,
-            ..session_configured
-        },
+        session_configured,
     })
 }
 
 fn started_thread_from_fork_response(
     response: ThreadForkResponse,
-    show_raw_agent_reasoning: bool,
+    _show_raw_agent_reasoning: bool,
 ) -> Result<AppServerStartedThread> {
     let session_configured = session_configured_from_thread_fork_response(&response)
         .map_err(color_eyre::eyre::Report::msg)?;
     let thread = response.thread;
-    let initial_messages = thread_initial_messages(
-        &session_configured.session_id,
-        &thread.turns,
-        show_raw_agent_reasoning,
-    );
     Ok(AppServerStartedThread {
         thread,
-        session_configured: SessionConfiguredEvent {
-            initial_messages,
-            ..session_configured
-        },
+        session_configured,
     })
 }
 
@@ -1010,121 +983,6 @@ fn session_configured_from_thread_response(
     })
 }
 
-fn thread_initial_messages(
-    thread_id: &ThreadId,
-    turns: &[codex_app_server_protocol::Turn],
-    show_raw_agent_reasoning: bool,
-) -> Option<Vec<EventMsg>> {
-    let events: Vec<EventMsg> = turns
-        .iter()
-        .flat_map(|turn| turn_initial_messages(thread_id, turn, show_raw_agent_reasoning))
-        .collect();
-    (!events.is_empty()).then_some(events)
-}
-
-fn turn_initial_messages(
-    thread_id: &ThreadId,
-    turn: &codex_app_server_protocol::Turn,
-    show_raw_agent_reasoning: bool,
-) -> Vec<EventMsg> {
-    turn.items
-        .iter()
-        .cloned()
-        .filter_map(app_server_thread_item_to_core)
-        .flat_map(|item| match item {
-            TurnItem::UserMessage(item) => vec![item.as_legacy_event()],
-            TurnItem::Plan(item) => vec![EventMsg::ItemCompleted(ItemCompletedEvent {
-                thread_id: *thread_id,
-                turn_id: turn.id.clone(),
-                item: TurnItem::Plan(item),
-            })],
-            item => item.as_legacy_events(show_raw_agent_reasoning),
-        })
-        .collect()
-}
-
-fn app_server_thread_item_to_core(item: codex_app_server_protocol::ThreadItem) -> Option<TurnItem> {
-    match item {
-        codex_app_server_protocol::ThreadItem::UserMessage { id, content } => {
-            Some(TurnItem::UserMessage(UserMessageItem {
-                id,
-                content: content
-                    .into_iter()
-                    .map(codex_app_server_protocol::UserInput::into_core)
-                    .collect(),
-            }))
-        }
-        codex_app_server_protocol::ThreadItem::AgentMessage { id, text, phase } => {
-            Some(TurnItem::AgentMessage(AgentMessageItem {
-                id,
-                content: vec![AgentMessageContent::Text { text }],
-                phase,
-            }))
-        }
-        codex_app_server_protocol::ThreadItem::Plan { id, text } => {
-            Some(TurnItem::Plan(PlanItem { id, text }))
-        }
-        codex_app_server_protocol::ThreadItem::Reasoning {
-            id,
-            summary,
-            content,
-        } => Some(TurnItem::Reasoning(ReasoningItem {
-            id,
-            summary_text: summary,
-            raw_content: content,
-        })),
-        codex_app_server_protocol::ThreadItem::WebSearch { id, query, action } => {
-            Some(TurnItem::WebSearch(WebSearchItem {
-                id,
-                query,
-                action: app_server_web_search_action_to_core(action?)?,
-            }))
-        }
-        codex_app_server_protocol::ThreadItem::ImageGeneration {
-            id,
-            status,
-            revised_prompt,
-            result,
-        } => Some(TurnItem::ImageGeneration(ImageGenerationItem {
-            id,
-            status,
-            revised_prompt,
-            result,
-            saved_path: None,
-        })),
-        codex_app_server_protocol::ThreadItem::ContextCompaction { id } => {
-            Some(TurnItem::ContextCompaction(ContextCompactionItem { id }))
-        }
-        codex_app_server_protocol::ThreadItem::CommandExecution { .. }
-        | codex_app_server_protocol::ThreadItem::FileChange { .. }
-        | codex_app_server_protocol::ThreadItem::McpToolCall { .. }
-        | codex_app_server_protocol::ThreadItem::DynamicToolCall { .. }
-        | codex_app_server_protocol::ThreadItem::CollabAgentToolCall { .. }
-        | codex_app_server_protocol::ThreadItem::ImageView { .. }
-        | codex_app_server_protocol::ThreadItem::EnteredReviewMode { .. }
-        | codex_app_server_protocol::ThreadItem::ExitedReviewMode { .. } => None,
-    }
-}
-
-fn app_server_web_search_action_to_core(
-    action: codex_app_server_protocol::WebSearchAction,
-) -> Option<codex_protocol::models::WebSearchAction> {
-    match action {
-        codex_app_server_protocol::WebSearchAction::Search { query, queries } => {
-            Some(codex_protocol::models::WebSearchAction::Search { query, queries })
-        }
-        codex_app_server_protocol::WebSearchAction::OpenPage { url } => {
-            Some(codex_protocol::models::WebSearchAction::OpenPage { url })
-        }
-        codex_app_server_protocol::WebSearchAction::FindInPage { url, pattern } => {
-            Some(codex_protocol::models::WebSearchAction::FindInPage { url, pattern })
-        }
-        codex_app_server_protocol::WebSearchAction::Other => {
-            Some(codex_protocol::models::WebSearchAction::Other)
-        }
-    }
-}
-
 fn app_server_rate_limit_snapshots_to_core(
     response: GetAccountRateLimitsResponse,
 ) -> Vec<RateLimitSnapshot> {
@@ -1222,7 +1080,7 @@ mod tests {
     }
 
     #[test]
-    fn resume_response_restores_initial_messages_from_turn_items() {
+    fn resume_response_relies_on_snapshot_replay_not_initial_messages() {
         let thread_id = ThreadId::new();
         let response = ThreadResumeResponse {
             thread: codex_app_server_protocol::Thread {
@@ -1274,27 +1132,8 @@ mod tests {
         let started =
             started_thread_from_resume_response(response, /*show_raw_agent_reasoning*/ false)
                 .expect("resume response should map");
-        let initial_messages = started
-            .session_configured
-            .initial_messages
-            .expect("resume response should restore replay history");
-
-        assert_eq!(initial_messages.len(), 2);
-        match &initial_messages[0] {
-            EventMsg::UserMessage(event) => {
-                assert_eq!(event.message, "hello from history");
-                assert_eq!(event.images.as_ref(), Some(&Vec::new()));
-                assert!(event.local_images.is_empty());
-                assert!(event.text_elements.is_empty());
-            }
-            other => panic!("expected replayed user message, got {other:?}"),
-        }
-        match &initial_messages[1] {
-            EventMsg::AgentMessage(event) => {
-                assert_eq!(event.message, "assistant reply");
-                assert_eq!(event.phase, None);
-            }
-            other => panic!("expected replayed agent message, got {other:?}"),
-        }
+        assert!(started.session_configured.initial_messages.is_none());
+        assert_eq!(started.thread.turns.len(), 1);
+        assert_eq!(started.thread.turns[0].items.len(), 2);
     }
 }
