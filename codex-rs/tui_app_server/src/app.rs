@@ -1587,8 +1587,20 @@ impl App {
                                 .collect()
                         })
                         .unwrap_or_else(default_exec_approval_decisions),
-                    network_approval_context: None,
-                    additional_permissions: None,
+                    network_approval_context: params.network_approval_context.clone().and_then(
+                        |network_approval_context| {
+                            serde_json::to_value(network_approval_context)
+                                .ok()
+                                .and_then(|value| serde_json::from_value(value).ok())
+                        },
+                    ),
+                    additional_permissions: params.additional_permissions.clone().and_then(
+                        |additional_permissions| {
+                            serde_json::to_value(additional_permissions)
+                                .ok()
+                                .and_then(|value| serde_json::from_value(value).ok())
+                        },
+                    ),
                 }))
             }
             ServerRequest::FileChangeRequestApproval { params, .. } => Some(
@@ -2089,8 +2101,13 @@ impl App {
             guard
                 .buffer
                 .push_back(ThreadBufferedEvent::LegacyWarning(message.clone()));
-            if guard.buffer.len() > guard.capacity {
-                guard.buffer.pop_front();
+            if guard.buffer.len() > guard.capacity
+                && let Some(removed) = guard.buffer.pop_front()
+                && let ThreadBufferedEvent::Request(request) = &removed
+            {
+                guard
+                    .pending_interactive_replay
+                    .note_evicted_server_request(request);
             }
             guard.active
         };
@@ -4917,8 +4934,12 @@ mod tests {
     use crate::multi_agents::AgentPickerThreadEntry;
     use assert_matches::assert_matches;
 
+    use codex_app_server_protocol::AdditionalNetworkPermissions;
+    use codex_app_server_protocol::AdditionalPermissionProfile;
     use codex_app_server_protocol::AgentMessageDeltaNotification;
     use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
+    use codex_app_server_protocol::NetworkApprovalContext as AppServerNetworkApprovalContext;
+    use codex_app_server_protocol::NetworkApprovalProtocol as AppServerNetworkApprovalProtocol;
     use codex_app_server_protocol::RequestId as AppServerRequestId;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::ServerRequest;
@@ -4944,11 +4965,15 @@ mod tests {
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
     use codex_protocol::mcp::Tool;
+    use codex_protocol::models::NetworkPermissions;
+    use codex_protocol::models::PermissionProfile;
     use codex_protocol::openai_models::ModelAvailabilityNux;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::McpAuthStatus;
+    use codex_protocol::protocol::NetworkApprovalContext;
+    use codex_protocol::protocol::NetworkApprovalProtocol;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::RolloutLine;
     use codex_protocol::protocol::SandboxPolicy;
@@ -6678,6 +6703,56 @@ guardian_approval = true
     }
 
     #[tokio::test]
+    async fn inactive_thread_exec_approval_preserves_context() {
+        let app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let mut request = exec_approval_request(thread_id, "turn-approval", "call-approval", None);
+        let ServerRequest::CommandExecutionRequestApproval { params, .. } = &mut request else {
+            panic!("expected exec approval request");
+        };
+        params.network_approval_context = Some(AppServerNetworkApprovalContext {
+            host: "example.com".to_string(),
+            protocol: AppServerNetworkApprovalProtocol::Https,
+        });
+        params.additional_permissions = Some(AdditionalPermissionProfile {
+            network: Some(AdditionalNetworkPermissions {
+                enabled: Some(true),
+            }),
+            file_system: None,
+            macos: None,
+        });
+
+        let Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Exec {
+            network_approval_context,
+            additional_permissions,
+            ..
+        })) = app
+            .interactive_request_for_thread_request(thread_id, &request)
+            .await
+        else {
+            panic!("expected exec approval request");
+        };
+
+        assert_eq!(
+            network_approval_context,
+            Some(NetworkApprovalContext {
+                host: "example.com".to_string(),
+                protocol: NetworkApprovalProtocol::Https,
+            })
+        );
+        assert_eq!(
+            additional_permissions,
+            Some(PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: None,
+                macos: None,
+            })
+        );
+    }
+
+    #[tokio::test]
     async fn inactive_thread_approval_badge_clears_after_turn_completion_notification() -> Result<()>
     {
         let mut app = make_test_app().await;
@@ -6730,6 +6805,44 @@ guardian_approval = true
             app.chat_widget.pending_thread_approvals().is_empty(),
             "turn completion should clear inactive-thread approval badge immediately"
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn legacy_warning_eviction_clears_pending_interactive_replay_state() -> Result<()> {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let channel = ThreadEventChannel::new(1);
+        {
+            let mut store = channel.store.lock().await;
+            store.push_request(exec_approval_request(
+                thread_id,
+                "turn-approval",
+                "call-approval",
+                None,
+            ));
+            assert_eq!(store.has_pending_thread_approvals(), true);
+        }
+        app.thread_event_channels.insert(thread_id, channel);
+
+        app.enqueue_thread_legacy_warning(thread_id, "legacy warning".to_string())
+            .await?;
+
+        let store = app
+            .thread_event_channels
+            .get(&thread_id)
+            .expect("thread store should exist")
+            .store
+            .lock()
+            .await;
+        assert_eq!(store.has_pending_thread_approvals(), false);
+        let snapshot = store.snapshot();
+        assert_eq!(snapshot.events.len(), 1);
+        assert!(matches!(
+            snapshot.events.first(),
+            Some(ThreadBufferedEvent::LegacyWarning(message)) if message == "legacy warning"
+        ));
 
         Ok(())
     }
