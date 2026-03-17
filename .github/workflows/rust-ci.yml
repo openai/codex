@@ -451,7 +451,7 @@ jobs:
           key: apt-${{ matrix.runner }}-${{ matrix.target }}-v1
 
   tests:
-    name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}
+    name: Tests — ${{ matrix.runner }} - ${{ matrix.target_name || matrix.target }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
     needs: changed
@@ -474,6 +474,7 @@ jobs:
             profile: dev
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+            target_name: x86_64-unknown-linux-gnu (remote)
             profile: dev
             remote_env: "true"
             runs_on:
