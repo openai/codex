@@ -89,7 +89,7 @@ index 85f31b7a3..47b6372b7 100644
      ],
      outs = [
          "include/inspector/Debugger.h",
-@@ -4426,16 +4402,22 @@ genrule(
+@@ -4426,14 +4402,20 @@ genrule(
          "src/inspector/protocol/Schema.cpp",
          "src/inspector/protocol/Schema.h",
      ],
@@ -104,7 +104,7 @@ index 85f31b7a3..47b6372b7 100644
 +      markupsafe_init="$$(printf '%s\n' $(locations @v8_python_deps//markupsafe:pkg) | grep '/site-packages/markupsafe/__init__.py$$' | head -n1)"
 +      PYTHONNOUSERSITE=1 \
 +      PYTHONPATH="$${jinja2_init%/jinja2/__init__.py}:$${markupsafe_init%/markupsafe/__init__.py}" \
-+      $(PYTHON3) $(execpath :third_party/inspector_protocol/code_generator.py) \
++      $(execpath @@rules_python++python+python_3_11_host//:python) $(execpath :third_party/inspector_protocol/code_generator.py) \
 +        --jinja_dir . \
 +        --inspector_protocol_dir third_party/inspector_protocol \
 +        --config $(execpath :src/inspector/inspector_protocol_config.json) \
@@ -116,9 +116,8 @@ index 85f31b7a3..47b6372b7 100644
 -    tools = [
 -        ":code_generator",
 -    ],
-+    toolchains = ["@rules_python//python:current_py_toolchain"],
++    tools = ["@@rules_python++python+python_3_11_host//:python"],
  )
-
 @@ -4448,6 +4430,15 @@ filegroup(
      ],
  )
@@ -191,7 +190,7 @@ index 85f31b7a3..47b6372b7 100644
  )
  
 diff --git a/orig/v8-14.6.202.11/bazel/BUILD.icu b/mod/v8-14.6.202.11/bazel/BUILD.icu
-index 5fda2f468..381386cfa 100644
+index 5fda2f468..1e0c50be4 100644
 --- a/orig/v8-14.6.202.11/bazel/BUILD.icu
 +++ b/mod/v8-14.6.202.11/bazel/BUILD.icu
 @@ -1,3 +1,5 @@
@@ -200,35 +199,63 @@ index 5fda2f468..381386cfa 100644
  # Copyright 2021 the V8 project authors. All rights reserved.
  # Use of this source code is governed by a BSD-style license that can be
  # found in the LICENSE file.
-diff --git a/orig/v8-14.6.202.11/bazel/config/BUILD.bazel b/mod/v8-14.6.202.11/bazel/config/BUILD.bazel
-index 17e379b8e..0043a6589 100644
---- a/orig/v8-14.6.202.11/bazel/config/BUILD.bazel
-+++ b/mod/v8-14.6.202.11/bazel/config/BUILD.bazel
-@@ -319,6 +319,22 @@ config_setting(
-     },
- )
- 
-+selects.config_setting_group(
-+    name = "is_windows_clang",
-+    match_all = [
-+        ":is_windows",
-+        ":is_compiler_clang",
-+    ],
-+)
-+
-+selects.config_setting_group(
-+    name = "is_windows_msvc",
-+    match_all = [
-+        ":is_windows",
-+        ":is_compiler_default",
-+    ],
-+)
-+
- selects.config_setting_group(
-     name = "is_clang",
-     match_any = [
+@@ -14,15 +16,14 @@ cc_library(
+     srcs = glob([
+         "source/common/**/*.h",
+         "source/common/**/*.cpp",
+     ]),
+     copts = select({
+         "@platforms//os:windows": [
+-            "/wd4005",  # Macro redefinition.
+-            "/wd4068",  # Unknown pragmas.
+-            "/wd4267",  # Conversion from size_t on 64-bits.
+-            "/utf-8",  # ICU source files are in UTF-8.
++            "-Wno-macro-redefined",
++            "-Wno-unknown-pragmas",
++            "-Wno-shorten-64-to-32",
+         ],
+         "//conditions:default": [
+             "-Wno-deprecated-declarations",
+         ],
+     }),
+@@ -58,15 +59,14 @@ cc_library(
+     srcs = glob([
+         "source/i18n/**/*.h",
+         "source/i18n/**/*.cpp",
+     ]),
+     copts = select({
+         "@platforms//os:windows": [
+-            "/wd4005",  # Macro redefinition.
+-            "/wd4068",  # Unknown pragmas.
+-            "/wd4267",  # Conversion from size_t on 64-bits.
+-            "/utf-8",  # ICU source files are in UTF-8.
++            "-Wno-macro-redefined",
++            "-Wno-unknown-pragmas",
++            "-Wno-shorten-64-to-32",
+         ],
+         "//conditions:default": [
+             "-Wno-deprecated-declarations",
+         ],
+     }),
+@@ -86,13 +86,12 @@ cc_library(
+     hdrs = glob([
+         "source/common/unicode/*.h",
+         "source/i18n/unicode/*.h",
+     ]),
+     copts = select({
+         "@platforms//os:windows": [
+-            "/wd4005",  # Macro redefinition.
+-            "/wd4068",  # Unknown pragmas.
+-            "/wd4267",  # Conversion from size_t on 64-bits.
+-            "/utf-8",  # ICU source files are in UTF-8.
++            "-Wno-macro-redefined",
++            "-Wno-unknown-pragmas",
++            "-Wno-shorten-64-to-32",
+         ],
+         "//conditions:default": [],
+     }),
 diff --git a/orig/v8-14.6.202.11/bazel/defs.bzl b/mod/v8-14.6.202.11/bazel/defs.bzl
-index 9648e4a54..5b8c48b36 100644
+index 9648e4a54..8355ef3d2 100644
 --- a/orig/v8-14.6.202.11/bazel/defs.bzl
 +++ b/mod/v8-14.6.202.11/bazel/defs.bzl
 @@ -97,7 +97,7 @@ v8_config = rule(
@@ -253,16 +280,13 @@ index 9648e4a54..5b8c48b36 100644
              "@v8//bazel/config:is_gcc": [
                  "-Wno-extra",
                  "-Wno-array-bounds",
-@@ -152,10 +146,18 @@ def _default_args():
+@@ -152,10 +146,15 @@ def _default_args():
                  # ##__VA_ARGS__ when in standards-conforming mode.
                  "-std=gnu++2a",
              ],
--            "@v8//bazel/config:is_windows": [
-+            "@v8//bazel/config:is_windows_clang": [
+             "@v8//bazel/config:is_windows": [
+-                "/std:c++20",
 +                "-std=c++20",
-+            ],
-+            "@v8//bazel/config:is_windows_msvc": [
-                 "/std:c++20",
              ],
 -            "//conditions:default": [],
 +            "//conditions:default": [
@@ -274,20 +298,17 @@ index 9648e4a54..5b8c48b36 100644
          }) + select({
              "@v8//bazel/config:is_gcc_fastbuild": [
                  # Non-debug builds without optimizations fail because
-@@ -178,13 +180,18 @@ def _default_args():
+@@ -178,13 +175,13 @@ def _default_args():
          }),
          includes = ["include"],
          linkopts = select({
--            "@v8//bazel/config:is_windows": [
-+            "@v8//bazel/config:is_windows_clang": [
+             "@v8//bazel/config:is_windows": [
+-                "Winmm.lib",
+-                "DbgHelp.lib",
+-                "Advapi32.lib",
 +                "-lwinmm",
 +                "-ldbghelp",
 +                "-ladvapi32",
-+            ],
-+            "@v8//bazel/config:is_windows_msvc": [
-                 "Winmm.lib",
-                 "DbgHelp.lib",
-                 "Advapi32.lib",
              ],
              "@v8//bazel/config:is_macos": ["-pthread"],
 -            "//conditions:default": ["-Wl,--no-as-needed -ldl -latomic -pthread"],
