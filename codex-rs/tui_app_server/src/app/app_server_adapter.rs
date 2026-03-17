@@ -89,6 +89,17 @@ impl App {
                     );
                 }
                 notification => {
+                    if !app_server_client.is_remote()
+                        && matches!(
+                            notification,
+                            ServerNotification::TurnCompleted(_)
+                                | ServerNotification::ThreadRealtimeItemAdded(_)
+                                | ServerNotification::ThreadRealtimeOutputAudioDelta(_)
+                                | ServerNotification::ThreadRealtimeError(_)
+                        )
+                    {
+                        return;
+                    }
                     if let Some((thread_id, events)) =
                         server_notification_thread_events(notification)
                     {
@@ -208,7 +219,6 @@ fn legacy_event_is_shadowed_by_server_notification(msg: &EventMsg) -> bool {
             | EventMsg::Error(_)
             | EventMsg::ThreadNameUpdated(_)
             | EventMsg::TurnStarted(_)
-            | EventMsg::TurnComplete(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::ItemCompleted(_)
             | EventMsg::AgentMessageDelta(_)
@@ -216,7 +226,6 @@ fn legacy_event_is_shadowed_by_server_notification(msg: &EventMsg) -> bool {
             | EventMsg::AgentReasoningDelta(_)
             | EventMsg::AgentReasoningRawContentDelta(_)
             | EventMsg::RealtimeConversationStarted(_)
-            | EventMsg::RealtimeConversationRealtime(_)
             | EventMsg::RealtimeConversationClosed(_)
     )
 }
