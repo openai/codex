@@ -24,6 +24,9 @@ use serde::Serialize;
 pub(crate) use approval_request::GuardianApprovalRequest;
 pub(crate) use approval_request::GuardianMcpAnnotations;
 pub(crate) use approval_request::guardian_approval_request_to_json;
+pub(crate) use prompt::GuardianTranscriptEntry;
+pub(crate) use prompt::GuardianTranscriptEntryKind;
+pub(crate) use prompt::collect_transcript_entries;
 pub(crate) use review::GUARDIAN_REJECTION_MESSAGE;
 pub(crate) use review::is_guardian_reviewer_source;
 pub(crate) use review::review_approval_request;
@@ -66,13 +69,7 @@ use approval_request::guardian_assessment_action_value;
 #[cfg(test)]
 use approval_request::guardian_request_turn_id;
 #[cfg(test)]
-use prompt::GuardianTranscriptEntry;
-#[cfg(test)]
-use prompt::GuardianTranscriptEntryKind;
-#[cfg(test)]
 use prompt::build_guardian_prompt_items;
-#[cfg(test)]
-use prompt::collect_guardian_transcript_entries;
 #[cfg(test)]
 use prompt::guardian_output_schema;
 #[cfg(test)]
@@ -82,7 +79,7 @@ use prompt::guardian_truncate_text;
 #[cfg(test)]
 use prompt::parse_guardian_assessment;
 #[cfg(test)]
-use prompt::render_guardian_transcript_entries;
+use prompt::render_transcript_entries;
 #[cfg(test)]
 use review::GuardianReviewOutcome;
 #[cfg(test)]
