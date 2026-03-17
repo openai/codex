@@ -542,9 +542,7 @@ jobs:
             mkdir -p /run/sshd
             useradd -m -s /bin/bash codex
             install -d -m 700 -o codex -g codex /home/codex/.ssh
-            cat >/home/codex/.ssh/authorized_keys <<'EOF'
-            ${ssh_pub_key}
-            EOF
+            printf '%s\n' '${ssh_pub_key}' >/home/codex/.ssh/authorized_keys
             chown codex:codex /home/codex/.ssh/authorized_keys
             chmod 600 /home/codex/.ssh/authorized_keys
             exec /usr/sbin/sshd -D -e
