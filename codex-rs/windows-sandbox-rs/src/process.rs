@@ -189,6 +189,7 @@ pub fn spawn_process_with_pipes(
     env_map: &HashMap<String, String>,
     stdin_mode: StdinMode,
     stderr_mode: StderrMode,
+    use_private_desktop: bool,
 ) -> Result<PipeSpawnHandles> {
     let mut in_r: HANDLE = 0;
     let mut in_w: HANDLE = 0;
@@ -222,8 +223,17 @@ pub fn spawn_process_with_pipes(
     };
 
     let stdio = Some((in_r, out_w, stderr_handle));
-    let spawn_result =
-        unsafe { create_process_as_user(h_token, argv, cwd, env_map, None, stdio, false) };
+    let spawn_result = unsafe {
+        create_process_as_user(
+            h_token,
+            argv,
+            cwd,
+            env_map,
+            None,
+            stdio,
+            use_private_desktop,
+        )
+    };
     let created = match spawn_result {
         Ok(v) => v,
         Err(err) => {

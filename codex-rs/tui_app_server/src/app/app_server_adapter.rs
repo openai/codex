@@ -19,7 +19,10 @@ use crate::app_server_session::status_account_display_from_auth_mode;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::Turn;
+use codex_app_server_protocol::TurnStatus;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::items::AgentMessageContent;
@@ -48,6 +51,8 @@ use codex_protocol::protocol::ThreadNameUpdatedEvent;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use serde_json::Value;
@@ -196,6 +201,31 @@ impl App {
     }
 }
 
+/// Convert a `Thread` snapshot into a flat sequence of protocol `Event`s
+/// suitable for replaying into the TUI event store.
+///
+/// Each turn is expanded into `TurnStarted`, zero or more `ItemCompleted`,
+/// and a terminal event that matches the turn's `TurnStatus`. Returns an
+/// empty vec (with a warning log) if the thread ID is not a valid UUID.
+pub(super) fn thread_snapshot_events(
+    thread: &Thread,
+    show_raw_agent_reasoning: bool,
+) -> Vec<Event> {
+    let Ok(thread_id) = ThreadId::from_string(&thread.id) else {
+        tracing::warn!(
+            thread_id = %thread.id,
+            "ignoring app-server thread snapshot with invalid thread id"
+        );
+        return Vec::new();
+    };
+
+    thread
+        .turns
+        .iter()
+        .flat_map(|turn| turn_snapshot_events(thread_id, turn, show_raw_agent_reasoning))
+        .collect()
+}
+
 fn legacy_thread_event(params: Option<Value>) -> Option<(ThreadId, Event)> {
     let Value::Object(mut params) = params? else {
         return None;
@@ -286,16 +316,16 @@ fn server_notification_thread_events(
                 }),
             }],
         )),
-        ServerNotification::TurnCompleted(notification) => Some((
-            ThreadId::from_string(&notification.thread_id).ok()?,
-            vec![Event {
-                id: String::new(),
-                msg: EventMsg::TurnComplete(TurnCompleteEvent {
-                    turn_id: notification.turn.id,
-                    last_agent_message: None,
-                }),
-            }],
-        )),
+        ServerNotification::TurnCompleted(notification) => {
+            let thread_id = ThreadId::from_string(&notification.thread_id).ok()?;
+            let mut events = Vec::new();
+            append_terminal_turn_events(
+                &mut events,
+                &notification.turn,
+                /*include_failed_error*/ false,
+            );
+            Some((thread_id, events))
+        }
         ServerNotification::ItemStarted(notification) => Some((
             ThreadId::from_string(&notification.thread_id).ok()?,
             vec![Event {
@@ -303,7 +333,7 @@ fn server_notification_thread_events(
                 msg: EventMsg::ItemStarted(ItemStartedEvent {
                     thread_id: ThreadId::from_string(&notification.thread_id).ok()?,
                     turn_id: notification.turn_id,
-                    item: thread_item_to_core(notification.item)?,
+                    item: thread_item_to_core(&notification.item)?,
                 }),
             }],
         )),
@@ -314,7 +344,7 @@ fn server_notification_thread_events(
                 msg: EventMsg::ItemCompleted(ItemCompletedEvent {
                     thread_id: ThreadId::from_string(&notification.thread_id).ok()?,
                     turn_id: notification.turn_id,
-                    item: thread_item_to_core(notification.item)?,
+                    item: thread_item_to_core(&notification.item)?,
                 }),
             }],
         )),
@@ -418,36 +448,150 @@ fn token_usage_from_app_server(
     }
 }
 
-fn thread_item_to_core(item: ThreadItem) -> Option<TurnItem> {
+/// Expand a single `Turn` into the event sequence the TUI would have
+/// observed if it had been connected for the turn's entire lifetime.
+///
+/// Snapshot replay keeps committed-item semantics for user / plan /
+/// agent-message items, while replaying the legacy events that still
+/// drive rendering for reasoning, web-search, image-generation, and
+/// context-compaction history cells.
+fn turn_snapshot_events(
+    thread_id: ThreadId,
+    turn: &Turn,
+    show_raw_agent_reasoning: bool,
+) -> Vec<Event> {
+    let mut events = vec![Event {
+        id: String::new(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: turn.id.clone(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::default(),
+        }),
+    }];
+
+    for item in &turn.items {
+        let Some(item) = thread_item_to_core(item) else {
+            continue;
+        };
+        match item {
+            TurnItem::UserMessage(_) | TurnItem::Plan(_) | TurnItem::AgentMessage(_) => {
+                events.push(Event {
+                    id: String::new(),
+                    msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+                        thread_id,
+                        turn_id: turn.id.clone(),
+                        item,
+                    }),
+                });
+            }
+            TurnItem::Reasoning(_)
+            | TurnItem::WebSearch(_)
+            | TurnItem::ImageGeneration(_)
+            | TurnItem::ContextCompaction(_) => {
+                events.extend(
+                    item.as_legacy_events(show_raw_agent_reasoning)
+                        .into_iter()
+                        .map(|msg| Event {
+                            id: String::new(),
+                            msg,
+                        }),
+                );
+            }
+        }
+    }
+
+    append_terminal_turn_events(&mut events, turn, /*include_failed_error*/ true);
+
+    events
+}
+
+/// Append the terminal event(s) for a turn based on its `TurnStatus`.
+///
+/// This function is shared between the live notification bridge
+/// (`TurnCompleted` handling) and the snapshot replay path so that both
+/// produce identical `EventMsg` sequences for the same turn status.
+///
+/// - `Completed` → `TurnComplete`
+/// - `Interrupted` → `TurnAborted { reason: Interrupted }`
+/// - `Failed` → `Error` (if present) then `TurnComplete`
+/// - `InProgress` → no events (the turn is still running)
+fn append_terminal_turn_events(events: &mut Vec<Event>, turn: &Turn, include_failed_error: bool) {
+    match turn.status {
+        TurnStatus::Completed => events.push(Event {
+            id: String::new(),
+            msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: turn.id.clone(),
+                last_agent_message: None,
+            }),
+        }),
+        TurnStatus::Interrupted => events.push(Event {
+            id: String::new(),
+            msg: EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id: Some(turn.id.clone()),
+                reason: TurnAbortReason::Interrupted,
+            }),
+        }),
+        TurnStatus::Failed => {
+            if include_failed_error && let Some(error) = &turn.error {
+                events.push(Event {
+                    id: String::new(),
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: error.message.clone(),
+                        codex_error_info: error
+                            .codex_error_info
+                            .clone()
+                            .and_then(app_server_codex_error_info_to_core),
+                    }),
+                });
+            }
+            events.push(Event {
+                id: String::new(),
+                msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                    turn_id: turn.id.clone(),
+                    last_agent_message: None,
+                }),
+            });
+        }
+        TurnStatus::InProgress => {
+            // Preserve unfinished turns during snapshot replay without emitting completion events.
+        }
+    }
+}
+
+fn thread_item_to_core(item: &ThreadItem) -> Option<TurnItem> {
     match item {
         ThreadItem::UserMessage { id, content } => Some(TurnItem::UserMessage(UserMessageItem {
-            id,
+            id: id.clone(),
             content: content
-                .into_iter()
+                .iter()
+                .cloned()
                 .map(codex_app_server_protocol::UserInput::into_core)
                 .collect(),
         })),
         ThreadItem::AgentMessage { id, text, phase } => {
             Some(TurnItem::AgentMessage(AgentMessageItem {
-                id,
-                content: vec![AgentMessageContent::Text { text }],
-                phase,
+                id: id.clone(),
+                content: vec![AgentMessageContent::Text { text: text.clone() }],
+                phase: phase.clone(),
             }))
         }
-        ThreadItem::Plan { id, text } => Some(TurnItem::Plan(PlanItem { id, text })),
+        ThreadItem::Plan { id, text } => Some(TurnItem::Plan(PlanItem {
+            id: id.clone(),
+            text: text.clone(),
+        })),
         ThreadItem::Reasoning {
             id,
             summary,
             content,
         } => Some(TurnItem::Reasoning(ReasoningItem {
-            id,
-            summary_text: summary,
-            raw_content: content,
+            id: id.clone(),
+            summary_text: summary.clone(),
+            raw_content: content.clone(),
         })),
         ThreadItem::WebSearch { id, query, action } => Some(TurnItem::WebSearch(WebSearchItem {
-            id,
-            query,
-            action: app_server_web_search_action_to_core(action?)?,
+            id: id.clone(),
+            query: query.clone(),
+            action: app_server_web_search_action_to_core(action.clone()?)?,
         })),
         ThreadItem::ImageGeneration {
             id,
@@ -455,14 +599,16 @@ fn thread_item_to_core(item: ThreadItem) -> Option<TurnItem> {
             revised_prompt,
             result,
         } => Some(TurnItem::ImageGeneration(ImageGenerationItem {
-            id,
-            status,
-            revised_prompt,
-            result,
+            id: id.clone(),
+            status: status.clone(),
+            revised_prompt: revised_prompt.clone(),
+            result: result.clone(),
             saved_path: None,
         })),
         ThreadItem::ContextCompaction { id } => {
-            Some(TurnItem::ContextCompaction(ContextCompactionItem { id }))
+            Some(TurnItem::ContextCompaction(ContextCompactionItem {
+                id: id.clone(),
+            }))
         }
         ThreadItem::CommandExecution { .. }
         | ThreadItem::FileChange { .. }
@@ -491,7 +637,9 @@ fn app_server_web_search_action_to_core(
         codex_app_server_protocol::WebSearchAction::FindInPage { url, pattern } => {
             Some(codex_protocol::models::WebSearchAction::FindInPage { url, pattern })
         }
-        codex_app_server_protocol::WebSearchAction::Other => None,
+        codex_app_server_protocol::WebSearchAction::Other => {
+            Some(codex_protocol::models::WebSearchAction::Other)
+        }
     }
 }
 
@@ -504,13 +652,19 @@ fn app_server_codex_error_info_to_core(
 #[cfg(test)]
 mod tests {
     use super::server_notification_thread_events;
+    use super::thread_snapshot_events;
+    use super::turn_snapshot_events;
     use codex_app_server_protocol::AgentMessageDeltaNotification;
+    use codex_app_server_protocol::CodexErrorInfo;
     use codex_app_server_protocol::ItemCompletedNotification;
     use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
     use codex_app_server_protocol::ServerNotification;
+    use codex_app_server_protocol::Thread;
     use codex_app_server_protocol::ThreadItem;
+    use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
+    use codex_app_server_protocol::TurnError;
     use codex_app_server_protocol::TurnStatus;
     use codex_protocol::ThreadId;
     use codex_protocol::items::AgentMessageContent;
@@ -518,7 +672,11 @@ mod tests {
     use codex_protocol::items::TurnItem;
     use codex_protocol::models::MessagePhase;
     use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::TurnAbortReason;
+    use codex_protocol::protocol::TurnAbortedEvent;
     use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
 
     #[test]
     fn bridges_completed_agent_messages_from_server_notifications() {
@@ -602,6 +760,74 @@ mod tests {
     }
 
     #[test]
+    fn bridges_interrupted_turn_completion_from_server_notifications() {
+        let thread_id = "019cee8c-b993-7e33-88c0-014d4e62612d".to_string();
+        let turn_id = "019cee8c-b9b4-7f10-a1b0-38caa876a012".to_string();
+
+        let (actual_thread_id, events) = server_notification_thread_events(
+            ServerNotification::TurnCompleted(TurnCompletedNotification {
+                thread_id: thread_id.clone(),
+                turn: Turn {
+                    id: turn_id.clone(),
+                    items: Vec::new(),
+                    status: TurnStatus::Interrupted,
+                    error: None,
+                },
+            }),
+        )
+        .expect("notification should bridge");
+
+        assert_eq!(
+            actual_thread_id,
+            ThreadId::from_string(&thread_id).expect("valid thread id")
+        );
+        let [event] = events.as_slice() else {
+            panic!("expected one bridged event");
+        };
+        let EventMsg::TurnAborted(aborted) = &event.msg else {
+            panic!("expected turn aborted event");
+        };
+        assert_eq!(aborted.turn_id.as_deref(), Some(turn_id.as_str()));
+        assert_eq!(aborted.reason, TurnAbortReason::Interrupted);
+    }
+
+    #[test]
+    fn bridges_failed_turn_completion_from_server_notifications() {
+        let thread_id = "019cee8c-b993-7e33-88c0-014d4e62612d".to_string();
+        let turn_id = "019cee8c-b9b4-7f10-a1b0-38caa876a012".to_string();
+
+        let (actual_thread_id, events) = server_notification_thread_events(
+            ServerNotification::TurnCompleted(TurnCompletedNotification {
+                thread_id: thread_id.clone(),
+                turn: Turn {
+                    id: turn_id.clone(),
+                    items: Vec::new(),
+                    status: TurnStatus::Failed,
+                    error: Some(TurnError {
+                        message: "request failed".to_string(),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                        additional_details: None,
+                    }),
+                },
+            }),
+        )
+        .expect("notification should bridge");
+
+        assert_eq!(
+            actual_thread_id,
+            ThreadId::from_string(&thread_id).expect("valid thread id")
+        );
+        let [complete_event] = events.as_slice() else {
+            panic!("expected turn completion only");
+        };
+        let EventMsg::TurnComplete(completed) = &complete_event.msg else {
+            panic!("expected turn complete event");
+        };
+        assert_eq!(completed.turn_id, turn_id);
+        assert_eq!(completed.last_agent_message, None);
+    }
+
+    #[test]
     fn bridges_text_deltas_from_server_notifications() {
         let thread_id = "019cee8c-b993-7e33-88c0-014d4e62612d".to_string();
 
@@ -641,5 +867,178 @@ mod tests {
             panic!("expected bridged reasoning delta");
         };
         assert_eq!(delta.delta, "Thinking");
+    }
+
+    #[test]
+    fn bridges_thread_snapshot_turns_for_resume_restore() {
+        let thread_id = ThreadId::new();
+        let events = thread_snapshot_events(
+            &Thread {
+                id: thread_id.to_string(),
+                preview: "hello".to_string(),
+                ephemeral: false,
+                model_provider: "openai".to_string(),
+                created_at: 0,
+                updated_at: 0,
+                status: ThreadStatus::Idle,
+                path: None,
+                cwd: PathBuf::from("/tmp/project"),
+                cli_version: "test".to_string(),
+                source: SessionSource::Cli.into(),
+                agent_nickname: None,
+                agent_role: None,
+                git_info: None,
+                name: Some("restore".to_string()),
+                turns: vec![
+                    Turn {
+                        id: "turn-complete".to_string(),
+                        items: vec![
+                            ThreadItem::UserMessage {
+                                id: "user-1".to_string(),
+                                content: vec![codex_app_server_protocol::UserInput::Text {
+                                    text: "hello".to_string(),
+                                    text_elements: Vec::new(),
+                                }],
+                            },
+                            ThreadItem::AgentMessage {
+                                id: "assistant-1".to_string(),
+                                text: "hi".to_string(),
+                                phase: Some(MessagePhase::FinalAnswer),
+                            },
+                        ],
+                        status: TurnStatus::Completed,
+                        error: None,
+                    },
+                    Turn {
+                        id: "turn-interrupted".to_string(),
+                        items: Vec::new(),
+                        status: TurnStatus::Interrupted,
+                        error: None,
+                    },
+                    Turn {
+                        id: "turn-failed".to_string(),
+                        items: Vec::new(),
+                        status: TurnStatus::Failed,
+                        error: Some(TurnError {
+                            message: "request failed".to_string(),
+                            codex_error_info: Some(CodexErrorInfo::Other),
+                            additional_details: None,
+                        }),
+                    },
+                ],
+            },
+            /*show_raw_agent_reasoning*/ false,
+        );
+
+        assert_eq!(events.len(), 9);
+        assert!(matches!(events[0].msg, EventMsg::TurnStarted(_)));
+        assert!(matches!(events[1].msg, EventMsg::ItemCompleted(_)));
+        assert!(matches!(events[2].msg, EventMsg::ItemCompleted(_)));
+        assert!(matches!(events[3].msg, EventMsg::TurnComplete(_)));
+        assert!(matches!(events[4].msg, EventMsg::TurnStarted(_)));
+        let EventMsg::TurnAborted(TurnAbortedEvent { turn_id, reason }) = &events[5].msg else {
+            panic!("expected interrupted turn replay");
+        };
+        assert_eq!(turn_id.as_deref(), Some("turn-interrupted"));
+        assert_eq!(*reason, TurnAbortReason::Interrupted);
+        assert!(matches!(events[6].msg, EventMsg::TurnStarted(_)));
+        let EventMsg::Error(error) = &events[7].msg else {
+            panic!("expected failed turn error replay");
+        };
+        assert_eq!(error.message, "request failed");
+        assert_eq!(
+            error.codex_error_info,
+            Some(codex_protocol::protocol::CodexErrorInfo::Other)
+        );
+        assert!(matches!(events[8].msg, EventMsg::TurnComplete(_)));
+    }
+
+    #[test]
+    fn bridges_non_message_snapshot_items_via_legacy_events() {
+        let events = turn_snapshot_events(
+            ThreadId::new(),
+            &Turn {
+                id: "turn-complete".to_string(),
+                items: vec![
+                    ThreadItem::Reasoning {
+                        id: "reasoning-1".to_string(),
+                        summary: vec!["Need to inspect config".to_string()],
+                        content: vec!["hidden chain".to_string()],
+                    },
+                    ThreadItem::WebSearch {
+                        id: "search-1".to_string(),
+                        query: "ratatui stylize".to_string(),
+                        action: Some(codex_app_server_protocol::WebSearchAction::Other),
+                    },
+                    ThreadItem::ImageGeneration {
+                        id: "image-1".to_string(),
+                        status: "completed".to_string(),
+                        revised_prompt: Some("diagram".to_string()),
+                        result: "image.png".to_string(),
+                    },
+                    ThreadItem::ContextCompaction {
+                        id: "compact-1".to_string(),
+                    },
+                ],
+                status: TurnStatus::Completed,
+                error: None,
+            },
+            /*show_raw_agent_reasoning*/ false,
+        );
+
+        assert_eq!(events.len(), 6);
+        assert!(matches!(events[0].msg, EventMsg::TurnStarted(_)));
+        let EventMsg::AgentReasoning(reasoning) = &events[1].msg else {
+            panic!("expected reasoning replay");
+        };
+        assert_eq!(reasoning.text, "Need to inspect config");
+        let EventMsg::WebSearchEnd(web_search) = &events[2].msg else {
+            panic!("expected web search replay");
+        };
+        assert_eq!(web_search.call_id, "search-1");
+        assert_eq!(web_search.query, "ratatui stylize");
+        assert_eq!(
+            web_search.action,
+            codex_protocol::models::WebSearchAction::Other
+        );
+        let EventMsg::ImageGenerationEnd(image_generation) = &events[3].msg else {
+            panic!("expected image generation replay");
+        };
+        assert_eq!(image_generation.call_id, "image-1");
+        assert_eq!(image_generation.status, "completed");
+        assert_eq!(image_generation.revised_prompt.as_deref(), Some("diagram"));
+        assert_eq!(image_generation.result, "image.png");
+        assert!(matches!(events[4].msg, EventMsg::ContextCompacted(_)));
+        assert!(matches!(events[5].msg, EventMsg::TurnComplete(_)));
+    }
+
+    #[test]
+    fn bridges_raw_reasoning_snapshot_items_when_enabled() {
+        let events = turn_snapshot_events(
+            ThreadId::new(),
+            &Turn {
+                id: "turn-complete".to_string(),
+                items: vec![ThreadItem::Reasoning {
+                    id: "reasoning-1".to_string(),
+                    summary: vec!["Need to inspect config".to_string()],
+                    content: vec!["hidden chain".to_string()],
+                }],
+                status: TurnStatus::Completed,
+                error: None,
+            },
+            /*show_raw_agent_reasoning*/ true,
+        );
+
+        assert_eq!(events.len(), 4);
+        assert!(matches!(events[0].msg, EventMsg::TurnStarted(_)));
+        let EventMsg::AgentReasoning(reasoning) = &events[1].msg else {
+            panic!("expected reasoning replay");
+        };
+        assert_eq!(reasoning.text, "Need to inspect config");
+        let EventMsg::AgentReasoningRawContent(raw_reasoning) = &events[2].msg else {
+            panic!("expected raw reasoning replay");
+        };
+        assert_eq!(raw_reasoning.text, "hidden chain");
+        assert!(matches!(events[3].msg, EventMsg::TurnComplete(_)));
     }
 }

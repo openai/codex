@@ -9,6 +9,7 @@
 mod proc_thread_attr;
 
 use self::proc_thread_attr::ProcThreadAttributeList;
+use crate::desktop::LaunchDesktop;
 use crate::winutil::format_last_error;
 use crate::winutil::quote_windows_arg;
 use crate::winutil::to_wide;
@@ -36,6 +37,7 @@ pub struct ConptyInstance {
     pub hpc: HANDLE,
     pub input_write: HANDLE,
     pub output_read: HANDLE,
+    _desktop: LaunchDesktop,
 }
 
 impl Drop for ConptyInstance {
@@ -74,6 +76,7 @@ pub fn create_conpty(cols: i16, rows: i16) -> Result<ConptyInstance> {
         hpc: hpc as HANDLE,
         input_write: input_write as HANDLE,
         output_read: output_read as HANDLE,
+        _desktop: LaunchDesktop::prepare(false, None)?,
     })
 }
 
@@ -86,6 +89,8 @@ pub fn spawn_conpty_process_as_user(
     argv: &[String],
     cwd: &Path,
     env_map: &HashMap<String, String>,
+    use_private_desktop: bool,
+    logs_base_dir: Option<&Path>,
 ) -> Result<(PROCESS_INFORMATION, ConptyInstance)> {
     let cmdline_str = argv
         .iter()
@@ -100,8 +105,8 @@ pub fn spawn_conpty_process_as_user(
     si.StartupInfo.hStdInput = INVALID_HANDLE_VALUE;
     si.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;
     si.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
-    let desktop = to_wide("Winsta0\\Default");
-    si.StartupInfo.lpDesktop = desktop.as_ptr() as *mut u16;
+    let desktop = LaunchDesktop::prepare(use_private_desktop, logs_base_dir)?;
+    si.StartupInfo.lpDesktop = desktop.startup_info_desktop();
 
     let conpty = create_conpty(80, 24)?;
     let mut attrs = ProcThreadAttributeList::new(1)?;
@@ -135,5 +140,7 @@ pub fn spawn_conpty_process_as_user(
             env_block.len()
         ));
     }
+    let mut conpty = conpty;
+    conpty._desktop = desktop;
     Ok((pi, conpty))
 }
