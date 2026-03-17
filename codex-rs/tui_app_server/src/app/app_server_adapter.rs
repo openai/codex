@@ -950,7 +950,13 @@ fn split_command_string(command: &str) -> Vec<String> {
         return vec![command.to_string()];
     };
     match shlex::try_join(parts.iter().map(String::as_str)) {
-        Ok(round_trip) if round_trip == command => parts,
+        Ok(round_trip)
+            if round_trip == command
+                || (!command.contains(":\\")
+                    && shlex::split(&round_trip).as_ref() == Some(&parts)) =>
+        {
+            parts
+        }
         _ => vec![command.to_string()],
     }
 }
