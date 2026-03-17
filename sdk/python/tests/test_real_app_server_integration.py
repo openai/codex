@@ -347,6 +347,23 @@ def test_notebook_sync_cell_smoke(runtime_env: PreparedRuntimeEnv) -> None:
     assert "server:" in result.stdout
 
 
+def test_notebook_advanced_cell_smoke(runtime_env: PreparedRuntimeEnv) -> None:
+    source = "\n\n".join(
+        [
+            _notebook_cell_source(1),
+            _notebook_cell_source(2),
+            _notebook_cell_source(7),
+        ]
+    )
+    result = _run_python(runtime_env, source, timeout_s=360)
+    assert result.returncode == 0, (
+        f"Notebook advanced smoke failed.\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+    assert "selected.model:" in result.stdout
+    assert "agent.message.params:" in result.stdout
+    assert "items.params:" in result.stdout
+
+
 def test_real_streaming_smoke_turn_completed(runtime_env: PreparedRuntimeEnv) -> None:
     data = _run_json_python(
         runtime_env,
