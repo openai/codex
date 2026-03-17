@@ -51,14 +51,10 @@ pub(crate) fn preview(
     handlers: &[ConfiguredHandler],
     _request: &StopRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_handlers(
-        handlers,
-        HookEventName::Stop,
-        /*matcher_input*/ None,
-    )
-    .into_iter()
-    .map(|handler| dispatcher::running_summary(&handler))
-    .collect()
+    dispatcher::select_handlers(handlers, HookEventName::Stop, /*matcher_input*/ None)
+        .into_iter()
+        .map(|handler| dispatcher::running_summary(&handler))
+        .collect()
 }
 
 pub(crate) async fn run(
@@ -66,11 +62,8 @@ pub(crate) async fn run(
     shell: &CommandShell,
     request: StopRequest,
 ) -> StopOutcome {
-    let matched = dispatcher::select_handlers(
-        handlers,
-        HookEventName::Stop,
-        /*matcher_input*/ None,
-    );
+    let matched =
+        dispatcher::select_handlers(handlers, HookEventName::Stop, /*matcher_input*/ None);
     if matched.is_empty() {
         return StopOutcome {
             hook_events: Vec::new(),
