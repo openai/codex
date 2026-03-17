@@ -8491,6 +8491,17 @@
         "title": "LogoutAccountResponse",
         "type": "object"
       },
+      "MarketplaceInterface": {
+        "properties": {
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "McpAuthStatus": {
         "enum": [
           "unsupported",
@@ -9372,10 +9383,14 @@
       },
       "PluginMarketplaceEntry": {
         "properties": {
-          "displayName": {
-            "type": [
-              "string",
-              "null"
+          "interface": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/MarketplaceInterface"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "name": {

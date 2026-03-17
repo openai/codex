@@ -3276,8 +3276,15 @@ pub struct SkillsListEntry {
 pub struct PluginMarketplaceEntry {
     pub name: String,
     pub path: AbsolutePathBuf,
-    pub display_name: Option<String>,
+    pub interface: Option<MarketplaceInterface>,
     pub plugins: Vec<PluginSummary>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MarketplaceInterface {
+    pub display_name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]

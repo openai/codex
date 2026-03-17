@@ -5,6 +5,17 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "MarketplaceInterface": {
+      "properties": {
+        "displayName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "PluginAuthPolicy": {
       "enum": [
         "ON_INSTALL",
@@ -127,10 +138,14 @@
     },
     "PluginMarketplaceEntry": {
       "properties": {
-        "displayName": {
-          "type": [
-            "string",
-            "null"
+        "interface": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MarketplaceInterface"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "name": {

@@ -999,7 +999,7 @@ enabled = false
                 tmp.path().join("repo/.agents/plugins/marketplace.json"),
             )
             .unwrap(),
-            display_name: None,
+            interface: None,
             plugins: vec![
                 ConfiguredMarketplacePluginSummary {
                     id: "enabled-plugin@debug".to_string(),
@@ -1044,7 +1044,9 @@ async fn list_marketplaces_includes_curated_repo_marketplace() {
         curated_root.join(".agents/plugins/marketplace.json"),
         r#"{
   "name": "openai-curated",
-  "display_name": "ChatGPT Official",
+  "interface": {
+    "displayName": "ChatGPT Official"
+  },
   "plugins": [
     {
       "name": "linear",
@@ -1079,7 +1081,9 @@ async fn list_marketplaces_includes_curated_repo_marketplace() {
             name: "openai-curated".to_string(),
             path: AbsolutePathBuf::try_from(curated_root.join(".agents/plugins/marketplace.json"))
                 .unwrap(),
-            display_name: Some("ChatGPT Official".to_string()),
+            interface: Some(MarketplaceInterfaceSummary {
+                display_name: Some("ChatGPT Official".to_string()),
+            }),
             plugins: vec![ConfiguredMarketplacePluginSummary {
                 id: "linear@openai-curated".to_string(),
                 name: "linear".to_string(),
@@ -1284,7 +1288,7 @@ enabled = true
                 tmp.path().join("repo/.agents/plugins/marketplace.json"),
             )
             .unwrap(),
-            display_name: None,
+            interface: None,
             plugins: vec![ConfiguredMarketplacePluginSummary {
                 id: "sample-plugin@debug".to_string(),
                 name: "sample-plugin".to_string(),

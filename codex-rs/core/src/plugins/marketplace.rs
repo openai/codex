@@ -28,8 +28,13 @@ pub struct ResolvedMarketplacePlugin {
 pub struct MarketplaceSummary {
     pub name: String,
     pub path: AbsolutePathBuf,
-    pub display_name: Option<String>,
+    pub interface: Option<MarketplaceInterfaceSummary>,
     pub plugins: Vec<MarketplacePluginSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketplaceInterfaceSummary {
+    pub display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,7 +218,7 @@ pub(crate) fn load_marketplace_summary(
     Ok(MarketplaceSummary {
         name: marketplace.name,
         path: path.clone(),
-        display_name: marketplace.display_name,
+        interface: marketplace_interface_summary(marketplace.interface),
         plugins,
     })
 }
@@ -367,12 +372,19 @@ fn marketplace_root_dir(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct MarketplaceFile {
     name: String,
     #[serde(default)]
-    #[serde(alias = "displayName")]
-    display_name: Option<String>,
+    interface: Option<MarketplaceInterface>,
     plugins: Vec<MarketplacePlugin>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MarketplaceInterface {
+    #[serde(default)]
+    display_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -392,6 +404,19 @@ struct MarketplacePlugin {
 #[serde(tag = "source", rename_all = "lowercase")]
 enum MarketplacePluginSource {
     Local { path: String },
+}
+
+fn marketplace_interface_summary(
+    interface: Option<MarketplaceInterface>,
+) -> Option<MarketplaceInterfaceSummary> {
+    let interface = interface?;
+    if interface.display_name.is_some() {
+        Some(MarketplaceInterfaceSummary {
+            display_name: interface.display_name,
+        })
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

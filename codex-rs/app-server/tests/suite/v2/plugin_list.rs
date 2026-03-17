@@ -152,7 +152,9 @@ async fn plugin_list_includes_install_and_enabled_state_from_config() -> Result<
         repo_root.path().join(".agents/plugins/marketplace.json"),
         r#"{
   "name": "codex-curated",
-  "display_name": "ChatGPT Official",
+  "interface": {
+    "displayName": "ChatGPT Official"
+  },
   "plugins": [
     {
       "name": "enabled-plugin",
@@ -222,7 +224,10 @@ enabled = false
 
     assert_eq!(marketplace.name, "codex-curated");
     assert_eq!(
-        marketplace.display_name.as_deref(),
+        marketplace
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.display_name.as_deref()),
         Some("ChatGPT Official")
     );
     assert_eq!(marketplace.plugins.len(), 3);

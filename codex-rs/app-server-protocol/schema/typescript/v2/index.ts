@@ -139,6 +139,7 @@ export type { ListMcpServerStatusResponse } from "./ListMcpServerStatusResponse"
 export type { LoginAccountParams } from "./LoginAccountParams";
 export type { LoginAccountResponse } from "./LoginAccountResponse";
 export type { LogoutAccountResponse } from "./LogoutAccountResponse";
+export type { MarketplaceInterface } from "./MarketplaceInterface";
 export type { McpAuthStatus } from "./McpAuthStatus";
 export type { McpElicitationArrayType } from "./McpElicitationArrayType";
 export type { McpElicitationBooleanSchema } from "./McpElicitationBooleanSchema";
