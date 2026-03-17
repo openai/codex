@@ -4,10 +4,6 @@ use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
-#[cfg(test)]
-use codex_protocol::protocol::Event;
-#[cfg(test)]
-use codex_protocol::protocol::EventMsg;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -53,16 +49,6 @@ pub(super) struct PendingInteractiveReplayState {
 }
 
 impl PendingInteractiveReplayState {
-    pub(super) fn request_can_change_pending_thread_approvals(request: &ServerRequest) -> bool {
-        matches!(
-            request,
-            ServerRequest::CommandExecutionRequestApproval { .. }
-                | ServerRequest::FileChangeRequestApproval { .. }
-                | ServerRequest::McpServerElicitationRequest { .. }
-                | ServerRequest::PermissionsRequestApproval { .. }
-        )
-    }
-
     pub(super) fn op_can_change_state<T>(op: T) -> bool
     where
         T: Into<AppCommand>,

@@ -59,6 +59,7 @@ pub(super) struct RenderedUserMessageEvent {
     pub(super) text_elements: Vec<TextElement>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct PendingSteerCompareKey {
     pub(super) message: String,
@@ -91,6 +92,7 @@ impl ChatWidget {
         )
     }
 
+    #[cfg(test)]
     /// Build the compare key for a submitted pending steer without invoking the
     /// expensive request-serialization path. Pending steers only need to match the
     /// committed `ItemCompleted(UserMessage)` emitted after core drains input, which
@@ -117,6 +119,7 @@ impl ChatWidget {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn pending_steer_compare_key_from_item(
         item: &codex_protocol::items::UserMessageItem,
     ) -> PendingSteerCompareKey {
@@ -163,6 +166,7 @@ impl ChatWidget {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn should_render_realtime_user_message_event(
         &self,
         event: &UserMessageEvent,

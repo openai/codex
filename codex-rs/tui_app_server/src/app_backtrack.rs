@@ -36,7 +36,9 @@ use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_protocol::ThreadId;
+#[cfg(test)]
 use codex_protocol::protocol::CodexErrorInfo;
+#[cfg(test)]
 use codex_protocol::protocol::ErrorEvent;
 #[cfg(test)]
 use codex_protocol::protocol::EventMsg;

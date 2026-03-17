@@ -876,12 +876,6 @@ pub(crate) struct App {
     /// Set when the user confirms an update; propagated on exit.
     pub(crate) pending_update_action: Option<UpdateAction>,
 
-    /// One-shot guard used while switching threads.
-    ///
-    /// We set this when intentionally stopping the current thread before moving
-    /// to another one, then ignore exactly one `ShutdownComplete` so it is not
-    /// misclassified as an unexpected sub-agent death.
-    suppress_shutdown_complete: bool,
     /// Tracks the thread we intentionally shut down while exiting the app.
     ///
     /// When this matches the active thread, its `ShutdownComplete` should lead to
@@ -2680,7 +2674,6 @@ impl App {
             feedback_audience,
             remote_app_server_url,
             pending_update_action: None,
-            suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
@@ -7018,7 +7011,6 @@ guardian_approval = true
             feedback_audience: FeedbackAudience::External,
             remote_app_server_url: None,
             pending_update_action: None,
-            suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
@@ -7070,7 +7062,6 @@ guardian_approval = true
                 feedback_audience: FeedbackAudience::External,
                 remote_app_server_url: None,
                 pending_update_action: None,
-                suppress_shutdown_complete: false,
                 pending_shutdown_exit_thread_id: None,
                 windows_sandbox: WindowsSandboxState::default(),
                 thread_event_channels: HashMap::new(),

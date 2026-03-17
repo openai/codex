@@ -37,6 +37,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+#[cfg(test)]
 use self::realtime::PendingSteerCompareKey;
 use crate::app_command::AppCommand;
 use crate::app_event::RealtimeAudioDeviceKind;
@@ -109,18 +110,28 @@ use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
 use codex_protocol::plan_tool::StepStatus as UpdatePlanItemStatus;
+#[cfg(test)]
 use codex_protocol::protocol::AgentMessageDeltaEvent;
+#[cfg(test)]
 use codex_protocol::protocol::AgentMessageEvent;
+#[cfg(test)]
 use codex_protocol::protocol::AgentReasoningDeltaEvent;
+#[cfg(test)]
 use codex_protocol::protocol::AgentReasoningEvent;
+#[cfg(test)]
 use codex_protocol::protocol::AgentReasoningRawContentDeltaEvent;
+#[cfg(test)]
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+#[cfg(test)]
 use codex_protocol::protocol::BackgroundEventEvent;
+#[cfg(test)]
 use codex_protocol::protocol::CodexErrorInfo;
+#[cfg(test)]
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::DeprecationNoticeEvent;
+#[cfg(test)]
 use codex_protocol::protocol::ErrorEvent;
 #[cfg(test)]
 use codex_protocol::protocol::Event;
@@ -131,15 +142,21 @@ use codex_protocol::protocol::ExecCommandBeginEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecCommandSource;
+#[cfg(test)]
 use codex_protocol::protocol::ExitedReviewModeEvent;
+#[cfg(test)]
 use codex_protocol::protocol::GuardianAssessmentEvent;
+#[cfg(test)]
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::ImageGenerationBeginEvent;
 use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::ListSkillsResponseEvent;
+#[cfg(test)]
 use codex_protocol::protocol::McpListToolsResponseEvent;
+#[cfg(test)]
 use codex_protocol::protocol::McpStartupCompleteEvent;
 use codex_protocol::protocol::McpStartupStatus;
+#[cfg(test)]
 use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
@@ -149,17 +166,23 @@ use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
+#[cfg(test)]
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnAbortReason;
+#[cfg(test)]
 use codex_protocol::protocol::TurnCompleteEvent;
+#[cfg(test)]
 use codex_protocol::protocol::TurnDiffEvent;
+#[cfg(test)]
 use codex_protocol::protocol::UndoCompletedEvent;
+#[cfg(test)]
 use codex_protocol::protocol::UndoStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::ViewImageToolCallEvent;
+#[cfg(test)]
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
@@ -266,6 +289,7 @@ use crate::exec_cell::new_active_exec_command;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
+#[cfg(test)]
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
@@ -273,7 +297,9 @@ use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
+#[cfg(test)]
 use crate::markdown::append_markdown;
+#[cfg(test)]
 use crate::multi_agents;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
@@ -515,6 +541,7 @@ enum ConnectorsCacheState {
     Failed(String),
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 enum RateLimitErrorKind {
     ServerOverloaded,
@@ -522,6 +549,7 @@ enum RateLimitErrorKind {
     Generic,
 }
 
+#[cfg(test)]
 fn rate_limit_error_kind(info: &CodexErrorInfo) -> Option<RateLimitErrorKind> {
     match info {
         CodexErrorInfo::ServerOverloaded => Some(RateLimitErrorKind::ServerOverloaded),
@@ -557,22 +585,26 @@ impl StatusIndicatorState {
         }
     }
 
+    #[cfg(test)]
     fn is_guardian_review(&self) -> bool {
         self.header == "Reviewing approval request" || self.header.starts_with("Reviewing ")
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct PendingGuardianReviewStatus {
     entries: Vec<PendingGuardianReviewStatusEntry>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PendingGuardianReviewStatusEntry {
     id: String,
     detail: String,
 }
 
+#[cfg(test)]
 impl PendingGuardianReviewStatus {
     fn start_or_update(&mut self, id: String, detail: String) {
         if let Some(existing) = self.entries.iter_mut().find(|entry| entry.id == id) {
@@ -683,6 +715,7 @@ pub(crate) struct ChatWidget {
     // Latest completed user-visible Codex output that `/copy` should place on the clipboard.
     last_copyable_output: Option<String>,
     running_commands: HashMap<String, RunningCommand>,
+    #[cfg(test)]
     pending_collab_spawn_requests: HashMap<String, multi_agents::SpawnRequestSummary>,
     suppressed_exec_calls: HashSet<String>,
     skills_all: Vec<ProtocolSkillMetadata>,
@@ -717,6 +750,7 @@ pub(crate) struct ChatWidget {
     // details here so transient stream interruptions can restore the footer
     // exactly as it was shown.
     current_status: StatusIndicatorState,
+    #[cfg(test)]
     // Guardian review keeps its own pending set so it can derive a single
     // footer summary from one or more in-flight review events.
     pending_guardian_review_status: PendingGuardianReviewStatus,
@@ -767,6 +801,7 @@ pub(crate) struct ChatWidget {
     quit_shortcut_key: Option<KeyBinding>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
+    #[cfg(test)]
     // Snapshot of token usage to restore after review mode exits.
     pre_review_token_info: Option<Option<TokenUsageInfo>>,
     // Whether the next streamed assistant content should be preceded by a final message separator.
@@ -925,6 +960,7 @@ impl From<&str> for UserMessage {
 
 struct PendingSteer {
     user_message: UserMessage,
+    #[cfg(test)]
     compare_key: PendingSteerCompareKey,
 }
 
@@ -1575,6 +1611,7 @@ impl ChatWidget {
         self.collect_runtime_metrics_delta();
     }
 
+    #[cfg(test)]
     fn restore_retry_status_header_if_present(&mut self) {
         if let Some(header) = self.retry_status_header.take() {
             self.set_status_header(header);
@@ -1614,7 +1651,6 @@ impl ChatWidget {
                 Constrained::allow_only(event.sandbox_policy.clone());
         }
         self.config.approvals_reviewer = event.approvals_reviewer;
-        let initial_messages = event.initial_messages.clone();
         self.last_copyable_output = None;
         let forked_from_id = event.forked_from_id;
         let model_for_header = event.model.clone();
@@ -1634,6 +1670,8 @@ impl ChatWidget {
         self.refresh_plugin_mentions();
         let startup_tooltip_override = self.startup_tooltip_override.take();
         let show_fast_status = self.should_show_fast_status(&model_for_header, event.service_tier);
+        #[cfg(test)]
+        let initial_messages = event.initial_messages.clone();
         let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -2141,6 +2179,7 @@ impl ChatWidget {
         }
     }
 
+    #[cfg(test)]
     fn apply_turn_started_context_window(&mut self, model_context_window: Option<i64>) {
         let info = match self.token_info.take() {
             Some(mut info) => {
@@ -2184,6 +2223,7 @@ impl ChatWidget {
         Some(info.total_token_usage.tokens_in_context_window())
     }
 
+    #[cfg(test)]
     fn restore_pre_review_token_info(&mut self) {
         if let Some(saved) = self.pre_review_token_info.take() {
             match saved {
@@ -2305,6 +2345,7 @@ impl ChatWidget {
         self.maybe_show_pending_rate_limit_prompt();
     }
 
+    #[cfg(test)]
     fn on_server_overloaded_error(&mut self, message: String) {
         self.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
@@ -2335,6 +2376,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[cfg(test)]
     fn on_mcp_startup_update(&mut self, ev: McpStartupUpdateEvent) {
         let mut status = self.mcp_startup_status.take().unwrap_or_default();
         if let McpStartupStatus::Failed { error } = &ev.status {
@@ -2381,6 +2423,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[cfg(test)]
     fn on_mcp_startup_complete(&mut self, ev: McpStartupCompleteEvent) {
         let mut parts = Vec::new();
         if !ev.failed.is_empty() {
@@ -2610,6 +2653,7 @@ impl ChatWidget {
     /// aggregation. Terminal assessments clear or update that footer state and
     /// render the final approved/denied history cell when guardian returns a
     /// decision.
+    #[cfg(test)]
     fn on_guardian_assessment(&mut self, ev: GuardianAssessmentEvent) {
         // Guardian emits a compact JSON action payload; map the stable fields we
         // care about into a short footer/history summary without depending on
@@ -3119,12 +3163,14 @@ impl ChatWidget {
         self.had_work_activity = true;
     }
 
+    #[cfg(test)]
     fn on_collab_event(&mut self, cell: PlainHistoryCell) {
         self.flush_answer_stream_with_separator();
         self.add_to_history(cell);
         self.request_redraw();
     }
 
+    #[cfg(test)]
     fn on_get_history_entry_response(
         &mut self,
         event: codex_protocol::protocol::GetHistoryEntryResponseEvent,
@@ -3153,6 +3199,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[cfg(test)]
     fn on_background_event(&mut self, message: String) {
         debug!("BackgroundEvent: {message}");
         self.bottom_pane.ensure_status_indicator();
@@ -3192,6 +3239,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[cfg(test)]
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane
@@ -3202,6 +3250,7 @@ impl ChatWidget {
         self.set_status_header(message);
     }
 
+    #[cfg(test)]
     fn on_undo_completed(&mut self, event: UndoCompletedEvent) {
         let UndoCompletedEvent { success, message } = event;
         self.bottom_pane.hide_status_indicator();
@@ -3842,6 +3891,7 @@ impl ChatWidget {
             plan_stream_controller: None,
             last_copyable_output: None,
             running_commands: HashMap::new(),
+            #[cfg(test)]
             pending_collab_spawn_requests: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
@@ -3859,6 +3909,7 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             current_status: StatusIndicatorState::working(),
+            #[cfg(test)]
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             retry_status_header: None,
             pending_status_indicator_restore: false,
@@ -3878,6 +3929,7 @@ impl ChatWidget {
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,
             is_review_mode: false,
+            #[cfg(test)]
             pre_review_token_info: None,
             needs_final_message_separator: false,
             had_work_activity: false,
@@ -4929,6 +4981,7 @@ impl ChatWidget {
                 text_elements: text_elements.clone(),
                 mention_bindings: mention_bindings.clone(),
             },
+            #[cfg(test)]
             compare_key: Self::pending_steer_compare_key_from_items(&items),
         });
         let personality = self
@@ -5093,7 +5146,13 @@ impl ChatWidget {
                 };
                 self.on_user_message_event(event);
             }
-            ThreadItem::AgentMessage { text, .. } => self.on_agent_message(text),
+            ThreadItem::AgentMessage { id, text, phase } => {
+                self.on_agent_message_item_completed(AgentMessageItem {
+                    id,
+                    content: vec![AgentMessageContent::Text { text }],
+                    phase,
+                });
+            }
             ThreadItem::Plan { text, .. } => self.on_plan_item_completed(text),
             ThreadItem::Reasoning {
                 summary, content, ..
@@ -5444,12 +5503,12 @@ impl ChatWidget {
                 ));
             }
             ServerNotification::ModelRerouted(_) => {}
-            ServerNotification::DeprecationNotice(notification) => self.on_warning(
-                notification
-                    .details
-                    .map(|details| format!("{}: {details}", notification.summary))
-                    .unwrap_or(notification.summary),
-            ),
+            ServerNotification::DeprecationNotice(notification) => {
+                self.on_deprecation_notice(DeprecationNoticeEvent {
+                    summary: notification.summary,
+                    details: notification.details,
+                })
+            }
             ServerNotification::ConfigWarning(notification) => self.on_warning(
                 notification
                     .details
@@ -5472,11 +5531,49 @@ impl ChatWidget {
                     );
                 }
             }
-            ServerNotification::ThreadRealtimeItemAdded(_)
-            | ServerNotification::ThreadRealtimeOutputAudioDelta(_)
-            | ServerNotification::ThreadRealtimeError(_)
-            | ServerNotification::ThreadRealtimeClosed(_)
-            | ServerNotification::ServerRequestResolved(_)
+            ServerNotification::ThreadRealtimeItemAdded(notification) => {
+                if !from_replay {
+                    self.on_realtime_conversation_realtime(
+                        codex_protocol::protocol::RealtimeConversationRealtimeEvent {
+                            payload: codex_protocol::protocol::RealtimeEvent::ConversationItemAdded(
+                                notification.item,
+                            ),
+                        },
+                    );
+                }
+            }
+            ServerNotification::ThreadRealtimeOutputAudioDelta(notification) => {
+                if !from_replay {
+                    self.on_realtime_conversation_realtime(
+                        codex_protocol::protocol::RealtimeConversationRealtimeEvent {
+                            payload: codex_protocol::protocol::RealtimeEvent::AudioOut(
+                                notification.audio.into(),
+                            ),
+                        },
+                    );
+                }
+            }
+            ServerNotification::ThreadRealtimeError(notification) => {
+                if !from_replay {
+                    self.on_realtime_conversation_realtime(
+                        codex_protocol::protocol::RealtimeConversationRealtimeEvent {
+                            payload: codex_protocol::protocol::RealtimeEvent::Error(
+                                notification.message,
+                            ),
+                        },
+                    );
+                }
+            }
+            ServerNotification::ThreadRealtimeClosed(notification) => {
+                if !from_replay {
+                    self.on_realtime_conversation_closed(
+                        codex_protocol::protocol::RealtimeConversationClosedEvent {
+                            reason: notification.reason,
+                        },
+                    );
+                }
+            }
+            ServerNotification::ServerRequestResolved(_)
             | ServerNotification::AccountUpdated(_)
             | ServerNotification::AccountRateLimitsUpdated(_)
             | ServerNotification::ThreadStarted(_)
@@ -5982,6 +6079,7 @@ impl ChatWidget {
         }
     }
 
+    #[cfg(test)]
     fn on_entered_review_mode(&mut self, review: ReviewRequest, from_replay: bool) {
         // Enter review mode and emit a concise banner
         if self.pre_review_token_info.is_none() {
@@ -6000,6 +6098,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[cfg(test)]
     fn on_exited_review_mode(&mut self, review: ExitedReviewModeEvent) {
         // Leave review mode; if output is present, flush pending stream + show results.
         if let Some(output) = review.review_output {
@@ -9385,6 +9484,7 @@ impl ChatWidget {
         true
     }
 
+    #[cfg(test)]
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
         self.add_to_history(history_cell::new_mcp_tools_output(
             &self.config,

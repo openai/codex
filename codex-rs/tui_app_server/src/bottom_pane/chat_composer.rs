@@ -740,6 +740,7 @@ impl ChatComposer {
     /// composer rehydrates the entry immediately. This path intentionally routes through
     /// [`Self::apply_history_entry`] so cursor placement remains aligned with keyboard history
     /// recall semantics.
+    #[cfg(test)]
     pub(crate) fn on_history_entry_response(
         &mut self,
         log_id: u64,
