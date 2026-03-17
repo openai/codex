@@ -19,7 +19,10 @@ use crate::app_server_session::status_account_display_from_auth_mode;
 use crate::local_chatgpt_auth::load_local_chatgpt_auth;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
+use codex_app_server_protocol::CommandExecutionApprovalDecision;
+use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::Thread;
@@ -27,6 +30,8 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
 use codex_protocol::ThreadId;
+use codex_protocol::approvals::ElicitationRequestEvent;
+use codex_protocol::approvals::ExecApprovalRequestEvent;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
@@ -37,12 +42,19 @@ use codex_protocol::items::ReasoningItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::WebSearchItem;
+use codex_protocol::mcp::RequestId as McpRequestId;
 use codex_protocol::protocol::AgentMessageDeltaEvent;
 use codex_protocol::protocol::AgentReasoningDeltaEvent;
 use codex_protocol::protocol::AgentReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandBeginEvent;
+use codex_protocol::protocol::ExecCommandEndEvent;
+use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
+use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::ExecCommandStatus;
+use codex_protocol::protocol::ExecOutputStream;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::PlanDeltaEvent;
@@ -50,6 +62,8 @@ use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
 use codex_protocol::protocol::RealtimeEvent;
+use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_protocol::protocol::ThreadNameUpdatedEvent;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
@@ -58,7 +72,12 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::request_permissions::RequestPermissionsEvent;
+use codex_protocol::request_user_input::RequestUserInputEvent;
+use codex_protocol::request_user_input::RequestUserInputQuestion;
+use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use serde_json::Value;
+use std::time::Duration;
 
 impl App {
     pub(super) async fn handle_app_server_event(
@@ -109,26 +128,18 @@ impl App {
                     {
                         return;
                     }
-                    if let Some((thread_id, events)) =
-                        server_notification_thread_events(notification)
-                    {
+                    if let Some((thread_id, events)) = server_notification_thread_events(
+                        notification,
+                        app_server_client.is_remote(),
+                    ) {
                         for event in events {
-                            if self.primary_thread_id.is_none()
-                                || matches!(event.msg, EventMsg::SessionConfigured(_))
-                                    && self.primary_thread_id == Some(thread_id)
-                            {
-                                if let Err(err) = self.enqueue_primary_event(event).await {
-                                    tracing::warn!(
-                                        "failed to enqueue primary app-server server notification: {err}"
-                                    );
-                                }
-                            } else if let Err(err) =
-                                self.enqueue_thread_event(thread_id, event).await
-                            {
-                                tracing::warn!(
-                                    "failed to enqueue app-server server notification for {thread_id}: {err}"
-                                );
-                            }
+                            let _ = self
+                                .enqueue_app_server_thread_event(
+                                    thread_id,
+                                    event,
+                                    "app-server server notification",
+                                )
+                                .await;
                         }
                     }
                 }
@@ -163,9 +174,66 @@ impl App {
                     .await;
                     return;
                 }
-                if let Some(unsupported) = self
+                if app_server_client.is_remote() {
+                    match server_request_thread_event(&request) {
+                        Ok((thread_id, event)) => {
+                            if let Some(unsupported) =
+                                self.pending_app_server_requests.note_server_request(
+                                    &request, /*allow_legacy_exec_approvals*/ true,
+                                )
+                            {
+                                tracing::warn!(
+                                    request_id = ?unsupported.request_id,
+                                    message = unsupported.message,
+                                    "rejecting unsupported app-server request"
+                                );
+                                self.chat_widget
+                                    .add_error_message(unsupported.message.clone());
+                                if let Err(err) = self
+                                    .reject_app_server_request(
+                                        app_server_client,
+                                        unsupported.request_id,
+                                        unsupported.message,
+                                    )
+                                    .await
+                                {
+                                    tracing::warn!("{err}");
+                                }
+                                return;
+                            }
+                            let request_id = request.id().clone();
+                            let enqueue_result = self
+                                .enqueue_app_server_thread_event(
+                                    thread_id,
+                                    event,
+                                    "app-server remote server request",
+                                )
+                                .await;
+                            if enqueue_result.is_err() {
+                                self.pending_app_server_requests.clear_request(&request_id);
+                            }
+                        }
+                        Err(message) => {
+                            tracing::warn!(
+                                request_id = ?request.id(),
+                                "{message}"
+                            );
+                            self.chat_widget.add_error_message(message.clone());
+                            if let Err(err) = self
+                                .reject_app_server_request(
+                                    app_server_client,
+                                    request.id().clone(),
+                                    message,
+                                )
+                                .await
+                            {
+                                tracing::warn!("{err}");
+                            }
+                        }
+                    }
+                } else if let Some(unsupported) = self
                     .pending_app_server_requests
-                    .note_server_request(&request)
+                    .note_server_request(&request, /*allow_legacy_exec_approvals*/ false)
                 {
                     tracing::warn!(
                         request_id = ?unsupported.request_id,
@@ -276,6 +344,29 @@ impl App {
             .await
             .map_err(|err| format!("failed to reject app-server request: {err}"))
     }
+
+    async fn enqueue_app_server_thread_event(
+        &mut self,
+        thread_id: ThreadId,
+        event: Event,
+        context: &str,
+    ) -> Result<(), String> {
+        if self.primary_thread_id.is_none()
+            || matches!(event.msg, EventMsg::SessionConfigured(_))
+                && self.primary_thread_id == Some(thread_id)
+        {
+            if let Err(err) = self.enqueue_primary_event(event).await {
+                tracing::warn!("failed to enqueue primary {context}: {err}");
+                return Err(format!("failed to enqueue primary {context}: {err}"));
+            }
+        } else if let Err(err) = self.enqueue_thread_event(thread_id, event).await {
+            tracing::warn!("failed to enqueue {context} for {thread_id}: {err}");
+            return Err(format!(
+                "failed to enqueue {context} for {thread_id}: {err}"
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn resolve_chatgpt_auth_tokens_refresh_response(
@@ -325,6 +416,196 @@ pub(super) fn thread_snapshot_events(
         .collect()
 }
 
+fn server_request_thread_event(request: &ServerRequest) -> Result<(ThreadId, Event), String> {
+    match request {
+        ServerRequest::CommandExecutionRequestApproval { params, .. } => Ok((
+            thread_id_from_remote_request("command execution approval", &params.thread_id)?,
+            Event {
+                id: String::new(),
+                msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+                    call_id: params.item_id.clone(),
+                    approval_id: params.approval_id.clone(),
+                    turn_id: params.turn_id.clone(),
+                    command: params
+                        .command
+                        .as_deref()
+                        .map(split_remote_command_for_approval)
+                        .unwrap_or_default(),
+                    cwd: params.cwd.clone().unwrap_or_default(),
+                    reason: params.reason.clone(),
+                    network_approval_context: params.network_approval_context.clone().map(
+                        |context| codex_protocol::protocol::NetworkApprovalContext {
+                            host: context.host,
+                            protocol: context.protocol.to_core(),
+                        },
+                    ),
+                    proposed_execpolicy_amendment: params
+                        .proposed_execpolicy_amendment
+                        .clone()
+                        .map(codex_app_server_protocol::ExecPolicyAmendment::into_core),
+                    proposed_network_policy_amendments: params
+                        .proposed_network_policy_amendments
+                        .clone()
+                        .map(|amendments| {
+                            amendments
+                                .into_iter()
+                                .map(codex_app_server_protocol::NetworkPolicyAmendment::into_core)
+                                .collect()
+                        }),
+                    additional_permissions: params.additional_permissions.clone().map(Into::into),
+                    skill_metadata: None,
+                    available_decisions: params.available_decisions.clone().map(|decisions| {
+                        decisions
+                            .into_iter()
+                            .map(command_approval_decision_to_review_decision)
+                            .collect()
+                    }),
+                    parsed_cmd: params
+                        .command_actions
+                        .clone()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(codex_app_server_protocol::CommandAction::into_core)
+                        .collect(),
+                }),
+            },
+        )),
+        ServerRequest::ExecCommandApproval { params, .. } => Ok((
+            params.conversation_id,
+            Event {
+                id: String::new(),
+                msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
+                    call_id: params.call_id.clone(),
+                    approval_id: params.approval_id.clone(),
+                    turn_id: String::new(),
+                    command: params.command.clone(),
+                    cwd: params.cwd.clone(),
+                    reason: params.reason.clone(),
+                    network_approval_context: None,
+                    proposed_execpolicy_amendment: None,
+                    proposed_network_policy_amendments: None,
+                    additional_permissions: None,
+                    skill_metadata: None,
+                    available_decisions: None,
+                    parsed_cmd: params.parsed_cmd.clone(),
+                }),
+            },
+        )),
+        ServerRequest::PermissionsRequestApproval { params, .. } => Ok((
+            thread_id_from_remote_request("permissions approval", &params.thread_id)?,
+            Event {
+                id: String::new(),
+                msg: EventMsg::RequestPermissions(RequestPermissionsEvent {
+                    call_id: params.item_id.clone(),
+                    turn_id: params.turn_id.clone(),
+                    reason: params.reason.clone(),
+                    permissions: params.permissions.clone().into(),
+                }),
+            },
+        )),
+        ServerRequest::ToolRequestUserInput { params, .. } => Ok((
+            thread_id_from_remote_request("request_user_input", &params.thread_id)?,
+            Event {
+                id: String::new(),
+                msg: EventMsg::RequestUserInput(RequestUserInputEvent {
+                    call_id: params.item_id.clone(),
+                    turn_id: params.turn_id.clone(),
+                    questions: params
+                        .questions
+                        .iter()
+                        .map(|question| RequestUserInputQuestion {
+                            id: question.id.clone(),
+                            header: question.header.clone(),
+                            question: question.question.clone(),
+                            is_other: question.is_other,
+                            is_secret: question.is_secret,
+                            options: question.options.as_ref().map(|options| {
+                                options
+                                    .iter()
+                                    .map(|option| RequestUserInputQuestionOption {
+                                        label: option.label.clone(),
+                                        description: option.description.clone(),
+                                    })
+                                    .collect()
+                            }),
+                        })
+                        .collect(),
+                }),
+            },
+        )),
+        ServerRequest::McpServerElicitationRequest { request_id, params } => Ok((
+            thread_id_from_remote_request("MCP elicitation request", &params.thread_id)?,
+            Event {
+                id: String::new(),
+                msg: EventMsg::ElicitationRequest(ElicitationRequestEvent {
+                    turn_id: params.turn_id.clone(),
+                    server_name: params.server_name.clone(),
+                    id: app_server_request_id_to_mcp_request_id(request_id),
+                    request: serde_json::from_value(
+                        serde_json::to_value(&params.request).map_err(|err| {
+                            format!(
+                                "failed to encode remote MCP elicitation request for `{}`: {err}",
+                                params.server_name
+                            )
+                        })?,
+                    )
+                    .map_err(|err| {
+                        format!(
+                            "failed to decode remote MCP elicitation request for `{}`: {err}",
+                            params.server_name
+                        )
+                    })?,
+                }),
+            },
+        )),
+        ServerRequest::FileChangeRequestApproval { .. } => {
+            Err("Remote file change approvals are not available in app-server TUI yet.".to_string())
+        }
+        ServerRequest::DynamicToolCall { .. }
+        | ServerRequest::ChatgptAuthTokensRefresh { .. }
+        | ServerRequest::ApplyPatchApproval { .. } => {
+            Err("This app-server request is not available in app-server TUI yet.".to_string())
+        }
+    }
+}
+
+fn thread_id_from_remote_request(context: &str, thread_id: &str) -> Result<ThreadId, String> {
+    ThreadId::from_string(thread_id)
+        .map_err(|err| format!("failed to parse remote {context} thread id `{thread_id}`: {err}"))
+}
+
+fn split_remote_command_for_approval(command: &str) -> Vec<String> {
+    shlex::split(command).unwrap_or_else(|| vec![command.to_string()])
+}
+
+fn command_approval_decision_to_review_decision(
+    decision: CommandExecutionApprovalDecision,
+) -> ReviewDecision {
+    match decision {
+        CommandExecutionApprovalDecision::Accept => ReviewDecision::Approved,
+        CommandExecutionApprovalDecision::AcceptForSession => ReviewDecision::ApprovedForSession,
+        CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
+            execpolicy_amendment,
+        } => ReviewDecision::ApprovedExecpolicyAmendment {
+            proposed_execpolicy_amendment: execpolicy_amendment.into_core(),
+        },
+        CommandExecutionApprovalDecision::ApplyNetworkPolicyAmendment {
+            network_policy_amendment,
+        } => ReviewDecision::NetworkPolicyAmendment {
+            network_policy_amendment: network_policy_amendment.into_core(),
+        },
+        CommandExecutionApprovalDecision::Decline => ReviewDecision::Denied,
+        CommandExecutionApprovalDecision::Cancel => ReviewDecision::Abort,
+    }
+}
+
+fn app_server_request_id_to_mcp_request_id(request_id: &AppServerRequestId) -> McpRequestId {
+    match request_id {
+        AppServerRequestId::String(value) => McpRequestId::String(value.clone()),
+        AppServerRequestId::Integer(value) => McpRequestId::Integer(*value),
+    }
+}
+
 fn legacy_thread_event(params: Option<Value>) -> Option<(ThreadId, Event)> {
     let Value::Object(mut params) = params? else {
         return None;
@@ -361,6 +642,7 @@ fn legacy_event_is_shadowed_by_server_notification(msg: &EventMsg) -> bool {
 
 fn server_notification_thread_events(
     notification: ServerNotification,
+    is_remote: bool,
 ) -> Option<(ThreadId, Vec<Event>)> {
     match notification {
         ServerNotification::ThreadTokenUsageUpdated(notification) => Some((
@@ -425,28 +707,38 @@ fn server_notification_thread_events(
             );
             Some((thread_id, events))
         }
-        ServerNotification::ItemStarted(notification) => Some((
-            ThreadId::from_string(&notification.thread_id).ok()?,
-            vec![Event {
-                id: String::new(),
-                msg: EventMsg::ItemStarted(ItemStartedEvent {
-                    thread_id: ThreadId::from_string(&notification.thread_id).ok()?,
-                    turn_id: notification.turn_id,
-                    item: thread_item_to_core(&notification.item)?,
-                }),
-            }],
-        )),
-        ServerNotification::ItemCompleted(notification) => Some((
-            ThreadId::from_string(&notification.thread_id).ok()?,
-            vec![Event {
-                id: String::new(),
-                msg: EventMsg::ItemCompleted(ItemCompletedEvent {
-                    thread_id: ThreadId::from_string(&notification.thread_id).ok()?,
-                    turn_id: notification.turn_id,
-                    item: thread_item_to_core(&notification.item)?,
-                }),
-            }],
-        )),
+        ServerNotification::ItemStarted(notification) => {
+            let thread_id = ThreadId::from_string(&notification.thread_id).ok()?;
+            let events = if is_remote {
+                thread_item_started_events(thread_id, notification.turn_id, notification.item)?
+            } else {
+                vec![Event {
+                    id: String::new(),
+                    msg: EventMsg::ItemStarted(ItemStartedEvent {
+                        thread_id,
+                        turn_id: notification.turn_id,
+                        item: thread_item_to_core(&notification.item)?,
+                    }),
+                }]
+            };
+            Some((thread_id, events))
+        }
+        ServerNotification::ItemCompleted(notification) => {
+            let thread_id = ThreadId::from_string(&notification.thread_id).ok()?;
+            let events = if is_remote {
+                thread_item_completed_events(thread_id, notification.turn_id, notification.item)?
+            } else {
+                vec![Event {
+                    id: String::new(),
+                    msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+                        thread_id,
+                        turn_id: notification.turn_id,
+                        item: thread_item_to_core(&notification.item)?,
+                    }),
+                }]
+            };
+            Some((thread_id, events))
+        }
         ServerNotification::AgentMessageDelta(notification) => Some((
             ThreadId::from_string(&notification.thread_id).ok()?,
             vec![Event {
@@ -483,6 +775,28 @@ fn server_notification_thread_events(
                 id: String::new(),
                 msg: EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
                     delta: notification.delta,
+                }),
+            }],
+        )),
+        ServerNotification::CommandExecutionOutputDelta(notification) if is_remote => Some((
+            ThreadId::from_string(&notification.thread_id).ok()?,
+            vec![Event {
+                id: String::new(),
+                msg: EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+                    call_id: notification.item_id,
+                    stream: ExecOutputStream::Stdout,
+                    chunk: notification.delta.into_bytes(),
+                }),
+            }],
+        )),
+        ServerNotification::TerminalInteraction(notification) if is_remote => Some((
+            ThreadId::from_string(&notification.thread_id).ok()?,
+            vec![Event {
+                id: String::new(),
+                msg: EventMsg::TerminalInteraction(TerminalInteractionEvent {
+                    call_id: notification.item_id,
+                    process_id: notification.process_id,
+                    stdin: notification.stdin,
                 }),
             }],
         )),
@@ -654,6 +968,139 @@ fn append_terminal_turn_events(events: &mut Vec<Event>, turn: &Turn, include_fai
         TurnStatus::InProgress => {
             // Preserve unfinished turns during snapshot replay without emitting completion events.
         }
+    }
+}
+
+fn thread_item_started_events(
+    thread_id: ThreadId,
+    turn_id: String,
+    item: ThreadItem,
+) -> Option<Vec<Event>> {
+    if let Some(event) = command_execution_begin_event(&turn_id, &item) {
+        return Some(vec![event]);
+    }
+
+    let item = thread_item_to_core(&item)?;
+    Some(vec![Event {
+        id: String::new(),
+        msg: EventMsg::ItemStarted(ItemStartedEvent {
+            thread_id,
+            turn_id,
+            item,
+        }),
+    }])
+}
+
+fn thread_item_completed_events(
+    thread_id: ThreadId,
+    turn_id: String,
+    item: ThreadItem,
+) -> Option<Vec<Event>> {
+    if let Some(event) = command_execution_end_event(&turn_id, &item) {
+        return Some(vec![event]);
+    }
+
+    let item = thread_item_to_core(&item)?;
+    Some(vec![Event {
+        id: String::new(),
+        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id,
+            turn_id,
+            item,
+        }),
+    }])
+}
+
+fn command_execution_begin_event(turn_id: &str, item: &ThreadItem) -> Option<Event> {
+    let ThreadItem::CommandExecution {
+        id,
+        command,
+        cwd,
+        process_id,
+        status,
+        command_actions,
+        ..
+    } = item
+    else {
+        return None;
+    };
+
+    if *status != CommandExecutionStatus::InProgress {
+        return None;
+    }
+
+    Some(Event {
+        id: String::new(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: id.clone(),
+            process_id: process_id.clone(),
+            turn_id: turn_id.to_string(),
+            command: split_remote_command_for_approval(command),
+            cwd: cwd.clone(),
+            parsed_cmd: command_actions
+                .clone()
+                .into_iter()
+                .map(codex_app_server_protocol::CommandAction::into_core)
+                .collect(),
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+        }),
+    })
+}
+
+fn command_execution_end_event(turn_id: &str, item: &ThreadItem) -> Option<Event> {
+    let ThreadItem::CommandExecution {
+        id,
+        command,
+        cwd,
+        process_id,
+        status,
+        command_actions,
+        aggregated_output,
+        exit_code,
+        duration_ms,
+    } = item
+    else {
+        return None;
+    };
+
+    if *status == CommandExecutionStatus::InProgress {
+        return None;
+    }
+
+    let aggregated_output = aggregated_output.clone().unwrap_or_default();
+    Some(Event {
+        id: String::new(),
+        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: id.clone(),
+            process_id: process_id.clone(),
+            turn_id: turn_id.to_string(),
+            command: split_remote_command_for_approval(command),
+            cwd: cwd.clone(),
+            parsed_cmd: command_actions
+                .clone()
+                .into_iter()
+                .map(codex_app_server_protocol::CommandAction::into_core)
+                .collect(),
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            aggregated_output: aggregated_output.clone(),
+            exit_code: exit_code.unwrap_or(-1),
+            duration: Duration::from_millis(duration_ms.unwrap_or_default().max(0) as u64),
+            formatted_output: aggregated_output,
+            status: command_execution_status_to_core(status),
+        }),
+    })
+}
+
+fn command_execution_status_to_core(status: &CommandExecutionStatus) -> ExecCommandStatus {
+    match status {
+        CommandExecutionStatus::Completed => ExecCommandStatus::Completed,
+        CommandExecutionStatus::Failed => ExecCommandStatus::Failed,
+        CommandExecutionStatus::Declined => ExecCommandStatus::Declined,
+        CommandExecutionStatus::InProgress => ExecCommandStatus::Failed,
     }
 }
 
@@ -858,13 +1305,22 @@ fn app_server_codex_error_info_to_core(
 #[cfg(test)]
 mod tests {
     use super::server_notification_thread_events;
+    use super::server_request_thread_event;
     use super::thread_snapshot_events;
     use super::turn_snapshot_events;
     use codex_app_server_protocol::AgentMessageDeltaNotification;
     use codex_app_server_protocol::CodexErrorInfo;
+    use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
+    use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
+    use codex_app_server_protocol::CommandExecutionStatus;
+    use codex_app_server_protocol::ExecCommandApprovalParams;
     use codex_app_server_protocol::ItemCompletedNotification;
+    use codex_app_server_protocol::ItemStartedNotification;
     use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
+    use codex_app_server_protocol::RequestId as AppServerRequestId;
     use codex_app_server_protocol::ServerNotification;
+    use codex_app_server_protocol::ServerRequest;
+    use codex_app_server_protocol::TerminalInteractionNotification;
     use codex_app_server_protocol::Thread;
     use codex_app_server_protocol::ThreadItem;
     use codex_app_server_protocol::ThreadStatus;
@@ -900,6 +1356,7 @@ mod tests {
                 thread_id: thread_id.clone(),
                 turn_id: turn_id.clone(),
             }),
+            /*is_remote*/ false,
         )
         .expect("notification should bridge");
 
@@ -947,6 +1404,7 @@ mod tests {
                     error: None,
                 },
             }),
+            /*is_remote*/ false,
         )
         .expect("notification should bridge");
 
@@ -980,6 +1438,7 @@ mod tests {
                     error: None,
                 },
             }),
+            /*is_remote*/ false,
         )
         .expect("notification should bridge");
 
@@ -1016,6 +1475,7 @@ mod tests {
                     }),
                 },
             }),
+            /*is_remote*/ false,
         )
         .expect("notification should bridge");
 
@@ -1044,6 +1504,7 @@ mod tests {
                 item_id: "item".to_string(),
                 delta: "Hello".to_string(),
             }),
+            /*is_remote*/ false,
         )
         .expect("notification should bridge");
         let [agent_event] = agent_events.as_slice() else {
@@ -1063,6 +1524,7 @@ mod tests {
                 delta: "Thinking".to_string(),
                 summary_index: 0,
             }),
+            /*is_remote*/ false,
         )
         .expect("notification should bridge");
         let [reasoning_event] = reasoning_events.as_slice() else {
@@ -1246,5 +1708,137 @@ mod tests {
         };
         assert_eq!(raw_reasoning.text, "hidden chain");
         assert!(matches!(events[3].msg, EventMsg::TurnComplete(_)));
+    }
+
+    #[test]
+    fn bridges_remote_exec_command_items_and_output() {
+        let thread_id = "019cee8c-b993-7e33-88c0-014d4e62612d".to_string();
+        let turn_id = "019cee8c-b9b4-7f10-a1b0-38caa876a012".to_string();
+
+        let (_, started_events) = server_notification_thread_events(
+            ServerNotification::ItemStarted(ItemStartedNotification {
+                thread_id: thread_id.clone(),
+                turn_id: turn_id.clone(),
+                item: ThreadItem::CommandExecution {
+                    id: "call-1".to_string(),
+                    command: "pwd".to_string(),
+                    cwd: "/tmp/project".into(),
+                    process_id: Some("123".to_string()),
+                    status: CommandExecutionStatus::InProgress,
+                    command_actions: Vec::new(),
+                    aggregated_output: None,
+                    exit_code: None,
+                    duration_ms: None,
+                },
+            }),
+            /*is_remote*/ true,
+        )
+        .expect("notification should bridge");
+        assert!(matches!(
+            started_events[0].msg,
+            EventMsg::ExecCommandBegin(_)
+        ));
+
+        let (_, output_events) = server_notification_thread_events(
+            ServerNotification::CommandExecutionOutputDelta(
+                CommandExecutionOutputDeltaNotification {
+                    thread_id: thread_id.clone(),
+                    turn_id: turn_id.clone(),
+                    item_id: "call-1".to_string(),
+                    delta: "hello\n".to_string(),
+                },
+            ),
+            /*is_remote*/ true,
+        )
+        .expect("notification should bridge");
+        assert!(matches!(
+            output_events[0].msg,
+            EventMsg::ExecCommandOutputDelta(_)
+        ));
+
+        let (_, terminal_events) = server_notification_thread_events(
+            ServerNotification::TerminalInteraction(TerminalInteractionNotification {
+                thread_id,
+                turn_id: turn_id.clone(),
+                item_id: "call-1".to_string(),
+                process_id: "123".to_string(),
+                stdin: "y\n".to_string(),
+            }),
+            /*is_remote*/ true,
+        )
+        .expect("notification should bridge");
+        assert!(matches!(
+            terminal_events[0].msg,
+            EventMsg::TerminalInteraction(_)
+        ));
+
+        let (_, completed_events) = server_notification_thread_events(
+            ServerNotification::ItemCompleted(ItemCompletedNotification {
+                thread_id: "019cee8c-b993-7e33-88c0-014d4e62612d".to_string(),
+                turn_id,
+                item: ThreadItem::CommandExecution {
+                    id: "call-1".to_string(),
+                    command: "pwd".to_string(),
+                    cwd: "/tmp/project".into(),
+                    process_id: Some("123".to_string()),
+                    status: CommandExecutionStatus::Completed,
+                    command_actions: Vec::new(),
+                    aggregated_output: Some("hello\n".to_string()),
+                    exit_code: Some(0),
+                    duration_ms: Some(25),
+                },
+            }),
+            /*is_remote*/ true,
+        )
+        .expect("notification should bridge");
+        assert!(matches!(
+            completed_events[0].msg,
+            EventMsg::ExecCommandEnd(_)
+        ));
+    }
+
+    #[test]
+    fn bridges_remote_server_requests_into_core_events() {
+        let request = ServerRequest::CommandExecutionRequestApproval {
+            request_id: AppServerRequestId::Integer(7),
+            params: CommandExecutionRequestApprovalParams {
+                thread_id: ThreadId::new().to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "call-1".to_string(),
+                approval_id: Some("approval-1".to_string()),
+                reason: Some("Need shell".to_string()),
+                network_approval_context: None,
+                command: Some("pwd".to_string()),
+                cwd: Some("/tmp/project".into()),
+                command_actions: None,
+                additional_permissions: None,
+                skill_metadata: None,
+                proposed_execpolicy_amendment: None,
+                proposed_network_policy_amendments: None,
+                available_decisions: None,
+            },
+        };
+
+        let (_, event) = server_request_thread_event(&request).expect("request should bridge");
+        assert!(matches!(event.msg, EventMsg::ExecApprovalRequest(_)));
+    }
+
+    #[test]
+    fn bridges_legacy_remote_exec_approval_requests() {
+        let request = ServerRequest::ExecCommandApproval {
+            request_id: AppServerRequestId::Integer(8),
+            params: ExecCommandApprovalParams {
+                conversation_id: ThreadId::new(),
+                call_id: "call-2".to_string(),
+                approval_id: Some("approval-2".to_string()),
+                command: vec!["pwd".to_string()],
+                cwd: "/tmp/project".into(),
+                reason: Some("Need shell".to_string()),
+                parsed_cmd: Vec::new(),
+            },
+        };
+
+        let (_, event) = server_request_thread_event(&request).expect("request should bridge");
+        assert!(matches!(event.msg, EventMsg::ExecApprovalRequest(_)));
     }
 }
