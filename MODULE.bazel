@@ -32,6 +32,7 @@ use_repo(osx, "macos_sdk")
 
 # Needed to disable xcode...
 bazel_dep(name = "apple_support", version = "2.1.0")
+bazel_dep(name = "bazel_skylib", version = "1.8.2")
 bazel_dep(name = "rules_cc", version = "0.2.16")
 bazel_dep(name = "rules_platform", version = "0.1.0")
 bazel_dep(name = "rules_rs", version = "0.0.43")

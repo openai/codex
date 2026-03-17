@@ -1,3 +1,4 @@
+load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("@rules_cc//cc:cc_static_library.bzl", "cc_static_library")
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
@@ -26,11 +27,10 @@ genrule(
     """,
 )
 
-genrule(
+copy_file(
     name = "support_h",
-    srcs = ["@v8_crate_146_4_0//:support_h"],
-    outs = ["support.h"],
-    cmd = "cp $(location @v8_crate_146_4_0//:support_h) $@",
+    src = "@v8_crate_146_4_0//:support_h",
+    out = "support.h",
 )
 
 cc_library(
@@ -105,6 +105,18 @@ cc_static_library(
 )
 
 cc_static_library(
+    name = "v8_146_4_0_aarch64_pc_windows_gnullvm",
+    deps = [":v8_146_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
+    name = "v8_146_4_0_x86_64_pc_windows_gnullvm",
+    deps = [":v8_146_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
     name = "v8_146_4_0_aarch64_pc_windows_msvc",
     deps = [":v8_146_4_0_binding"],
     features = V8_STATIC_LIBRARY_FEATURES,
@@ -114,16 +126,6 @@ cc_static_library(
     name = "v8_146_4_0_x86_64_pc_windows_msvc",
     deps = [":v8_146_4_0_binding"],
     features = V8_STATIC_LIBRARY_FEATURES,
-)
-
-alias(
-    name = "v8_146_4_0_aarch64_pc_windows_gnullvm",
-    actual = ":v8_146_4_0_aarch64_pc_windows_msvc",
-)
-
-alias(
-    name = "v8_146_4_0_x86_64_pc_windows_gnullvm",
-    actual = ":v8_146_4_0_x86_64_pc_windows_msvc",
 )
 
 filegroup(
@@ -166,14 +168,16 @@ filegroup(
     srcs = ["@v8_crate_146_4_0//:src_binding_release_aarch64_pc_windows_msvc"],
 )
 
-alias(
+# rusty_v8 only publishes Windows bindings under MSVC target names, but the
+# generated FFI source is reusable for the gnullvm builds we produce here.
+filegroup(
     name = "src_binding_release_x86_64_pc_windows_gnullvm",
-    actual = ":src_binding_release_x86_64_pc_windows_msvc",
+    srcs = ["@v8_crate_146_4_0//:src_binding_release_x86_64_pc_windows_msvc"],
 )
 
-alias(
+filegroup(
     name = "src_binding_release_aarch64_pc_windows_gnullvm",
-    actual = ":src_binding_release_aarch64_pc_windows_msvc",
+    srcs = ["@v8_crate_146_4_0//:src_binding_release_aarch64_pc_windows_msvc"],
 )
 
 filegroup(
@@ -221,6 +225,22 @@ filegroup(
     srcs = [
         ":v8_146_4_0_aarch64_unknown_linux_musl",
         ":src_binding_release_aarch64_unknown_linux_musl",
+    ],
+)
+
+filegroup(
+    name = "rusty_v8_release_pair_x86_64_pc_windows_gnullvm",
+    srcs = [
+        ":v8_146_4_0_x86_64_pc_windows_gnullvm",
+        ":src_binding_release_x86_64_pc_windows_gnullvm",
+    ],
+)
+
+filegroup(
+    name = "rusty_v8_release_pair_aarch64_pc_windows_gnullvm",
+    srcs = [
+        ":v8_146_4_0_aarch64_pc_windows_gnullvm",
+        ":src_binding_release_aarch64_pc_windows_gnullvm",
     ],
 )
 

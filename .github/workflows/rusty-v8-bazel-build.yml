@@ -42,7 +42,7 @@ concurrency:
 jobs:
   bazel-canary:
     name: Bazel canary - ${{ matrix.target }}
-    runs-on: ${{ matrix.runs_on || matrix.runner }}
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       actions: read
@@ -51,30 +51,17 @@ jobs:
       matrix:
         include:
           - runner: ubuntu-24.04
-            platform: "//:linux_amd64_musl_pie_off"
+            platform: "@rules_rs//rs/experimental/platforms:x86_64-unknown-linux-musl"
             target: x86_64-unknown-linux-musl
           - runner: ubuntu-24.04-arm
-            platform: "//:linux_arm64_musl_pie_off"
+            platform: "@rules_rs//rs/experimental/platforms:aarch64-unknown-linux-musl"
             target: aarch64-unknown-linux-musl
           - runner: macos-15-large
-            platform: "@llvm//platforms:macos_amd64"
+            platform: "@rules_rs//rs/experimental/platforms:x86_64-apple-darwin"
             target: x86_64-apple-darwin
           - runner: macos-15-xlarge
-            platform: "@llvm//platforms:macos_arm64"
+            platform: "@rules_rs//rs/experimental/platforms:aarch64-apple-darwin"
             target: aarch64-apple-darwin
-          # 2026-03-16: Disabling windows since windows is disabled for all bazel atm
-          # - runner: windows-x64
-          #   platform: "//:windows_amd64_gnullvm"
-          #   target: x86_64-pc-windows-gnullvm
-          #   runs_on:
-          #     group: codex-runners
-          #     labels: codex-windows-x64
-          # - runner: windows-arm64
-          #   platform: "//:windows_arm64_gnullvm"
-          #   target: aarch64-pc-windows-gnullvm
-          #   runs_on:
-          #     group: codex-runners
-          #     labels: codex-windows-arm64
 
     steps:
       - uses: actions/checkout@v6
@@ -87,32 +74,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Provide python3 shim (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $shim_dir = Join-Path $env:RUNNER_TEMP "python3-shim"
-          New-Item -ItemType Directory -Force -Path $shim_dir | Out-Null
-          '@python %*' | Out-File -FilePath (Join-Path $shim_dir 'python3.cmd') -Encoding ascii
-          $shim_dir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Configure Bazel startup args (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          "BAZEL_STARTUP_ARGS=--output_user_root=C:\" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Configure Bazel repository caches (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $cache_root = Join-Path $env:RUNNER_TEMP "bazel-cache-${{ matrix.target }}"
-          $repo_contents_cache = Join-Path $cache_root "repo-contents"
-          $repository_cache = Join-Path $cache_root "repo"
-          New-Item -ItemType Directory -Force -Path $repo_contents_cache, $repository_cache | Out-Null
-          "BAZEL_REPO_CONTENTS_CACHE=$($repo_contents_cache -replace '\\', '/')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "BAZEL_REPOSITORY_CACHE=$($repository_cache -replace '\\', '/')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
       - name: bazel canary codex-rs/v8-poc
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
@@ -120,11 +81,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          bazel_cmd=(bazel)
-          if [[ -n "${BAZEL_STARTUP_ARGS:-}" ]]; then
-            bazel_cmd+=("${BAZEL_STARTUP_ARGS}")
-          fi
 
           bazel_args=(
             run
@@ -135,23 +91,17 @@ jobs:
             --build_metadata=ROLE=CI
             --build_metadata=VISIBILITY=PUBLIC
           )
-          if [[ -n "${BAZEL_REPO_CONTENTS_CACHE:-}" ]]; then
-            bazel_args+=("--repo_contents_cache=${BAZEL_REPO_CONTENTS_CACHE}")
-          fi
-          if [[ -n "${BAZEL_REPOSITORY_CACHE:-}" ]]; then
-            bazel_args+=("--repository_cache=${BAZEL_REPOSITORY_CACHE}")
-          fi
 
           if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
             echo "BuildBuddy API key is available; using remote Bazel configuration."
-            "${bazel_cmd[@]}" \
+            bazel \
               --noexperimental_remote_repo_contents_cache \
               --bazelrc=.github/workflows/ci.bazelrc \
               "${bazel_args[@]}" \
               "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
           else
             echo "BuildBuddy API key is not available; using local Bazel configuration."
-            "${bazel_cmd[@]}" \
+            bazel \
               --noexperimental_remote_repo_contents_cache \
               "${bazel_args[@]}" \
               --remote_cache= \

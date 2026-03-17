@@ -24,13 +24,19 @@ def bazel_execroot() -> Path:
     return Path(result.stdout.strip())
 
 
+def platform_label(platform: str) -> str:
+    if platform.startswith(("@", "//")):
+        return platform
+    return f"@llvm//platforms:{platform}"
+
+
 def bazel_output_files(platform: str, labels: list[str]) -> list[Path]:
     expression = "set(" + " ".join(labels) + ")"
     result = subprocess.run(
         [
             "bazel",
             "cquery",
-            f"--platforms=@llvm//platforms:{platform}",
+            f"--platforms={platform_label(platform)}",
             "--output=files",
             expression,
         ],

@@ -1,5 +1,5 @@
 # What: teach the Rust v8 crate build script to consume Bazel-provided prebuilt
-# archive and binding paths, including runfiles path resolution.
+# archive and binding paths using Bazel-provided execpaths directly.
 # Scope: build.rs only; affects prebuilt artifact discovery and link setup, not
 # V8 engine source or runtime behavior.
 
@@ -16,53 +16,10 @@
 +    return path;
 +  }
 +
-+  let mut candidate_roots = Vec::new();
-+  if let Ok(current_dir) = env::current_dir() {
-+    candidate_roots.push(current_dir);
-+  }
 +  if let Ok(cargo_manifest_dir) = env::var("CARGO_MANIFEST_DIR") {
-+    candidate_roots.push(PathBuf::from(cargo_manifest_dir));
-+  }
-+
-+  for root in candidate_roots {
-+    for ancestor in root.ancestors() {
-+      let candidate = ancestor.join(&path);
-+      if candidate.exists() {
-+        return candidate.to_string_lossy().into_owned();
-+      }
-+    }
-+  }
-+
-+  if let Ok(current_exe) = env::current_exe() {
-+    if let Some(exe_name) = current_exe.file_name().and_then(|name| name.to_str())
-+    {
-+      let runfiles_dir =
-+        current_exe.with_file_name(format!("{exe_name}.runfiles"));
-+      for base in [runfiles_dir.join("_main"), runfiles_dir] {
-+        let candidate = base.join(&path);
-+        if candidate.exists() {
-+          return candidate.to_string_lossy().into_owned();
-+        }
-+      }
-+    }
-+  }
-+
-+  if let Ok(runfiles_dir) = env::var("RUNFILES_DIR") {
-+    let candidate = PathBuf::from(runfiles_dir).join(&path);
++    let candidate = PathBuf::from(cargo_manifest_dir).join(&path);
 +    if candidate.exists() {
 +      return candidate.to_string_lossy().into_owned();
-+    }
-+  }
-+
-+  if let Ok(runfiles_manifest_file) = env::var("RUNFILES_MANIFEST_FILE") {
-+    if let Ok(runfiles_manifest) = fs::read_to_string(runfiles_manifest_file) {
-+      for line in runfiles_manifest.lines() {
-+        if let Some((short_path, real_path)) = line.split_once(' ') {
-+          if short_path == path {
-+            return real_path.to_owned();
-+          }
-+        }
-+      }
 +    }
 +  }
 +

@@ -23,38 +23,6 @@ platform(
     parents = ["@platforms//host"],
 )
 
-platform(
-    name = "linux_amd64_musl_pie_off",
-    constraint_values = [
-        "@llvm//constraints/pie:off",
-    ],
-    parents = ["@llvm//platforms:linux_amd64_musl"],
-)
-
-platform(
-    name = "linux_arm64_musl_pie_off",
-    constraint_values = [
-        "@llvm//constraints/pie:off",
-    ],
-    parents = ["@llvm//platforms:linux_arm64_musl"],
-)
-
-platform(
-    name = "windows_amd64_gnullvm",
-    constraint_values = [
-        "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm",
-    ],
-    parents = ["@llvm//platforms:windows_amd64"],
-)
-
-platform(
-    name = "windows_arm64_gnullvm",
-    constraint_values = [
-        "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm",
-    ],
-    parents = ["@llvm//platforms:windows_arm64"],
-)
-
 alias(
     name = "rbe",
     actual = "@rbe_platform",

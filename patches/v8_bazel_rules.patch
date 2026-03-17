@@ -3,68 +3,19 @@
 # Scope: Bazel BUILD/defs/BUILD.icu integration only, including dependency
 # wiring, generated sources, and visibility; no standalone V8 source patching.
 
-diff --git a/orig/v8-14.6.202.11/bazel/defs.bzl b/mod/v8-14.6.202.11/bazel/defs.bzl
-index 9648e4a..88efd41 100644
---- a/orig/v8-14.6.202.11/bazel/defs.bzl
-+++ b/mod/v8-14.6.202.11/bazel/defs.bzl
-@@ -97,7 +97,7 @@ v8_config = rule(
- 
- def _default_args():
-     return struct(
--        deps = [":define_flags", "@libcxx//:libc++"],
-+        deps = [":define_flags"],
-         defines = select({
-             "@v8//bazel/config:is_windows": [
-                 "UNICODE",
-@@ -128,12 +128,6 @@ def _default_args():
-             ],
-             "//conditions:default": [],
-         }) + select({
--            "@v8//bazel/config:is_clang": [
--                "-Wno-invalid-offsetof",
--                "-Wno-deprecated-this-capture",
--                "-Wno-deprecated-declarations",
--                "-std=c++20",
--            ],
-             "@v8//bazel/config:is_gcc": [
-                 "-Wno-extra",
-                 "-Wno-array-bounds",
-@@ -155,7 +149,12 @@ def _default_args():
-             "@v8//bazel/config:is_windows": [
-                 "/std:c++20",
-             ],
--            "//conditions:default": [],
-+            "//conditions:default": [
-+                "-Wno-invalid-offsetof",
-+                "-Wno-deprecated-this-capture",
-+                "-Wno-deprecated-declarations",
-+                "-std=c++20",
-+            ],
-         }) + select({
-             "@v8//bazel/config:is_gcc_fastbuild": [
-                 # Non-debug builds without optimizations fail because
-@@ -184,7 +183,7 @@ def _default_args():
-                 "Advapi32.lib",
-             ],
-             "@v8//bazel/config:is_macos": ["-pthread"],
--            "//conditions:default": ["-Wl,--no-as-needed -ldl -latomic -pthread"],
-+            "//conditions:default": ["-Wl,--no-as-needed -ldl -pthread"],
-         }) + select({
-             ":should_add_rdynamic": ["-rdynamic"],
-             "//conditions:default": [],
 diff --git a/orig/v8-14.6.202.11/BUILD.bazel b/mod/v8-14.6.202.11/BUILD.bazel
-index 85f31b7..7314584 100644
+index 85f31b7a3..47b6372b7 100644
 --- a/orig/v8-14.6.202.11/BUILD.bazel
 +++ b/mod/v8-14.6.202.11/BUILD.bazel
-@@ -303,7 +303,7 @@ v8_int(
- # If no explicit value for v8_enable_pointer_compression, we set it to 'none'.
- v8_string(
-     name = "v8_enable_pointer_compression",
--    default = "none",
-+    default = "False",
- )
- 
- # Default setting for v8_enable_pointer_compression.
+@@ -5,7 +5,7 @@
+ load("@bazel_skylib//lib:selects.bzl", "selects")
+ load("@rules_cc//cc:cc_library.bzl", "cc_library")
+ load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+-load("@rules_python//python:defs.bzl", "py_binary", "py_test")
++load("@rules_python//python:defs.bzl", "py_test")
+ load("@v8_python_deps//:requirements.bzl", "requirement")
+ load(
+     "@v8//:bazel/defs.bzl",
 @@ -4077,28 +4077,14 @@ filegroup(
      }),
  )
@@ -100,50 +51,75 @@ index 85f31b7..7314584 100644
  )
  
  filegroup(
-@@ -4405,6 +4391,20 @@ genrule(
+@@ -4374,13 +4360,13 @@ v8_torque_files(
+     noicu_srcs = [":noicu/torque_files"],
+ )
+ 
+-py_binary(
+-    name = "code_generator",
++genrule(
++    name = "generated_inspector_files",
      srcs = [
-         "include/js_protocol.pdl",
-         "src/inspector/inspector_protocol_config.json",
-+        "third_party/inspector_protocol/code_generator.py",
-+        "third_party/inspector_protocol/pdl.py",
-+        "third_party/inspector_protocol/lib/Forward_h.template",
-+        "third_party/inspector_protocol/lib/Object_cpp.template",
-+        "third_party/inspector_protocol/lib/Object_h.template",
-+        "third_party/inspector_protocol/lib/Protocol_cpp.template",
-+        "third_party/inspector_protocol/lib/ValueConversions_cpp.template",
-+        "third_party/inspector_protocol/lib/ValueConversions_h.template",
-+        "third_party/inspector_protocol/lib/Values_cpp.template",
-+        "third_party/inspector_protocol/lib/Values_h.template",
-+        "third_party/inspector_protocol/templates/Exported_h.template",
-+        "third_party/inspector_protocol/templates/Imported_h.template",
-+        "third_party/inspector_protocol/templates/TypeBuilder_cpp.template",
-+        "third_party/inspector_protocol/templates/TypeBuilder_h.template",
++        "include/js_protocol.pdl",
++        "src/inspector/inspector_protocol_config.json",
+         "third_party/inspector_protocol/code_generator.py",
+         "third_party/inspector_protocol/pdl.py",
+-    ],
+-    data = [
+         "third_party/inspector_protocol/lib/Forward_h.template",
+         "third_party/inspector_protocol/lib/Object_cpp.template",
+         "third_party/inspector_protocol/lib/Object_h.template",
+@@ -4393,18 +4379,8 @@ py_binary(
+         "third_party/inspector_protocol/templates/Imported_h.template",
+         "third_party/inspector_protocol/templates/TypeBuilder_cpp.template",
+         "third_party/inspector_protocol/templates/TypeBuilder_h.template",
+-    ],
+-    imports = ["third_party/inspector_protocol/"],
+-    deps = [
+         requirement("jinja2"),
+-    ],
+-)
+-
+-genrule(
+-    name = "generated_inspector_files",
+-    srcs = [
+-        "include/js_protocol.pdl",
+-        "src/inspector/inspector_protocol_config.json",
++        requirement("markupsafe"),
      ],
      outs = [
          "include/inspector/Debugger.h",
-@@ -4426,15 +4426,18 @@ genrule(
+@@ -4426,16 +4402,22 @@ genrule(
          "src/inspector/protocol/Schema.cpp",
          "src/inspector/protocol/Schema.h",
      ],
 -    cmd = "$(location :code_generator) --jinja_dir . \
 -           --inspector_protocol_dir third_party/inspector_protocol \
-+    cmd = "INSPECTOR_PROTOCOL_DIR=$$(dirname $(execpath third_party/inspector_protocol/code_generator.py)); \
-+           PYTHONPATH=$$INSPECTOR_PROTOCOL_DIR:external/rules_python++pip+v8_python_deps_311_jinja2/site-packages:external/rules_python++pip+v8_python_deps_311_markupsafe/site-packages:$${PYTHONPATH-} \
-+           python3 $(execpath third_party/inspector_protocol/code_generator.py) --jinja_dir . \
-+           --inspector_protocol_dir $$INSPECTOR_PROTOCOL_DIR \
-            --config $(location :src/inspector/inspector_protocol_config.json) \
-            --config_value protocol.path=$(location :include/js_protocol.pdl) \
-            --output_base $(@D)/src/inspector",
+-           --config $(location :src/inspector/inspector_protocol_config.json) \
+-           --config_value protocol.path=$(location :include/js_protocol.pdl) \
+-           --output_base $(@D)/src/inspector",
++    cmd = """
++      set -eu
++      jinja2_init="$$(printf '%s\n' $(locations @v8_python_deps//jinja2:pkg) | grep '/site-packages/jinja2/__init__.py$$' | head -n1)"
++      markupsafe_init="$$(printf '%s\n' $(locations @v8_python_deps//markupsafe:pkg) | grep '/site-packages/markupsafe/__init__.py$$' | head -n1)"
++      PYTHONNOUSERSITE=1 \
++      PYTHONPATH="$${jinja2_init%/jinja2/__init__.py}:$${markupsafe_init%/markupsafe/__init__.py}" \
++      $(PYTHON3) $(execpath :third_party/inspector_protocol/code_generator.py) \
++        --jinja_dir . \
++        --inspector_protocol_dir third_party/inspector_protocol \
++        --config $(execpath :src/inspector/inspector_protocol_config.json) \
++        --config_value protocol.path=$(execpath :include/js_protocol.pdl) \
++        --output_base $(@D)/src/inspector
++    """,
      local = 1,
      message = "Generating inspector files",
-     tools = [
+-    tools = [
 -        ":code_generator",
-+        requirement("jinja2"),
-+        requirement("markupsafe"),
-     ],
+-    ],
++    toolchains = ["@rules_python//python:current_py_toolchain"],
  )
- 
-@@ -4448,6 +4451,15 @@ filegroup(
+
+@@ -4448,6 +4430,15 @@ filegroup(
      ],
  )
  
@@ -159,7 +135,7 @@ index 85f31b7..7314584 100644
  filegroup(
      name = "d8_files",
      srcs = [
-@@ -4567,16 +4579,9 @@ cc_library(
+@@ -4567,16 +4558,9 @@ cc_library(
      ],
  )
  
@@ -179,7 +155,7 @@ index 85f31b7..7314584 100644
  )
  
  v8_library(
-@@ -4593,7 +4598,7 @@ v8_library(
+@@ -4593,7 +4577,7 @@ v8_library(
      copts = ["-Wno-implicit-fallthrough"],
      icu_deps = [
          ":icu/generated_torque_definitions_headers",
@@ -188,7 +164,7 @@ index 85f31b7..7314584 100644
      ],
      icu_srcs = [
          ":generated_regexp_special_case",
-@@ -4608,7 +4613,7 @@ v8_library(
+@@ -4608,7 +4592,7 @@ v8_library(
      ],
      deps = [
          ":lib_dragonbox",
@@ -197,7 +173,7 @@ index 85f31b7..7314584 100644
          ":lib_fp16",
          ":simdutf",
          ":v8_libbase",
-@@ -4664,6 +4669,7 @@ alias(
+@@ -4664,6 +4648,7 @@ alias(
  alias(
      name = "core_lib_icu",
      actual = "icu/v8",
@@ -205,7 +181,7 @@ index 85f31b7..7314584 100644
  )
  
  v8_library(
-@@ -4715,7 +4721,7 @@ v8_binary(
+@@ -4715,7 +4700,7 @@ v8_binary(
      ],
      deps = [
          ":v8_libbase",
@@ -215,7 +191,7 @@ index 85f31b7..7314584 100644
  )
  
 diff --git a/orig/v8-14.6.202.11/bazel/BUILD.icu b/mod/v8-14.6.202.11/bazel/BUILD.icu
-index 5fda2f4..381386c 100644
+index 5fda2f468..381386cfa 100644
 --- a/orig/v8-14.6.202.11/bazel/BUILD.icu
 +++ b/mod/v8-14.6.202.11/bazel/BUILD.icu
 @@ -1,3 +1,5 @@
@@ -224,3 +200,98 @@ index 5fda2f4..381386c 100644
  # Copyright 2021 the V8 project authors. All rights reserved.
  # Use of this source code is governed by a BSD-style license that can be
  # found in the LICENSE file.
+diff --git a/orig/v8-14.6.202.11/bazel/config/BUILD.bazel b/mod/v8-14.6.202.11/bazel/config/BUILD.bazel
+index 17e379b8e..0043a6589 100644
+--- a/orig/v8-14.6.202.11/bazel/config/BUILD.bazel
++++ b/mod/v8-14.6.202.11/bazel/config/BUILD.bazel
+@@ -319,6 +319,22 @@ config_setting(
+     },
+ )
+ 
++selects.config_setting_group(
++    name = "is_windows_clang",
++    match_all = [
++        ":is_windows",
++        ":is_compiler_clang",
++    ],
++)
++
++selects.config_setting_group(
++    name = "is_windows_msvc",
++    match_all = [
++        ":is_windows",
++        ":is_compiler_default",
++    ],
++)
++
+ selects.config_setting_group(
+     name = "is_clang",
+     match_any = [
+diff --git a/orig/v8-14.6.202.11/bazel/defs.bzl b/mod/v8-14.6.202.11/bazel/defs.bzl
+index 9648e4a54..5b8c48b36 100644
+--- a/orig/v8-14.6.202.11/bazel/defs.bzl
++++ b/mod/v8-14.6.202.11/bazel/defs.bzl
+@@ -97,7 +97,7 @@ v8_config = rule(
+ 
+ def _default_args():
+     return struct(
+-        deps = [":define_flags", "@libcxx//:libc++"],
++        deps = [":define_flags"],
+         defines = select({
+             "@v8//bazel/config:is_windows": [
+                 "UNICODE",
+@@ -128,12 +128,6 @@ def _default_args():
+             ],
+             "//conditions:default": [],
+         }) + select({
+-            "@v8//bazel/config:is_clang": [
+-                "-Wno-invalid-offsetof",
+-                "-Wno-deprecated-this-capture",
+-                "-Wno-deprecated-declarations",
+-                "-std=c++20",
+-            ],
+             "@v8//bazel/config:is_gcc": [
+                 "-Wno-extra",
+                 "-Wno-array-bounds",
+@@ -152,10 +146,18 @@ def _default_args():
+                 # ##__VA_ARGS__ when in standards-conforming mode.
+                 "-std=gnu++2a",
+             ],
+-            "@v8//bazel/config:is_windows": [
++            "@v8//bazel/config:is_windows_clang": [
++                "-std=c++20",
++            ],
++            "@v8//bazel/config:is_windows_msvc": [
+                 "/std:c++20",
+             ],
+-            "//conditions:default": [],
++            "//conditions:default": [
++                "-Wno-invalid-offsetof",
++                "-Wno-deprecated-this-capture",
++                "-Wno-deprecated-declarations",
++                "-std=c++20",
++            ],
+         }) + select({
+             "@v8//bazel/config:is_gcc_fastbuild": [
+                 # Non-debug builds without optimizations fail because
+@@ -178,13 +180,18 @@ def _default_args():
+         }),
+         includes = ["include"],
+         linkopts = select({
+-            "@v8//bazel/config:is_windows": [
++            "@v8//bazel/config:is_windows_clang": [
++                "-lwinmm",
++                "-ldbghelp",
++                "-ladvapi32",
++            ],
++            "@v8//bazel/config:is_windows_msvc": [
+                 "Winmm.lib",
+                 "DbgHelp.lib",
+                 "Advapi32.lib",
+             ],
+             "@v8//bazel/config:is_macos": ["-pthread"],
+-            "//conditions:default": ["-Wl,--no-as-needed -ldl -latomic -pthread"],
++            "//conditions:default": ["-Wl,--no-as-needed -ldl -pthread"],
+         }) + select({
+             ":should_add_rdynamic": ["-rdynamic"],
+             "//conditions:default": [],
