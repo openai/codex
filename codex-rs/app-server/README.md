@@ -37,7 +37,7 @@ Websocket transport is currently experimental and unsupported. Do not rely on it
 Security note:
 
 - Loopback websocket listeners (`ws://127.0.0.1:PORT`) remain appropriate for localhost and SSH port-forwarding workflows.
-- Non-loopback websocket listeners now require configured websocket auth by default. To opt out intentionally, pass `--allow-unauthenticated-non-loopback-ws` at startup.
+- Non-loopback websocket listeners currently allow unauthenticated connections by default during rollout. If you expose one remotely, configure websocket auth explicitly now.
 - Supported auth modes are app-server flags:
   - `--ws-auth capability-token --ws-token-file /absolute/path`
   - `--ws-auth signed-bearer-token --ws-shared-secret-file /absolute/path` with optional `--ws-issuer`, `--ws-audience`, `--ws-max-clock-skew-seconds`
