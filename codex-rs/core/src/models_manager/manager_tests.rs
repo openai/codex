@@ -3,12 +3,27 @@ use crate::CodexAuth;
 use crate::auth::AuthCredentialsStoreMode;
 use crate::config::ConfigBuilder;
 use crate::model_provider_info::WireApi;
+use base64::Engine as _;
 use chrono::Utc;
+use codex_api::TransportError;
 use codex_protocol::openai_models::ModelsResponse;
 use core_test_support::responses::mount_models_once;
+use http::HeaderMap;
+use http::StatusCode;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::sync::Mutex;
 use tempfile::tempdir;
+use tracing::Event;
+use tracing::Subscriber;
+use tracing::field::Visit;
+use tracing_subscriber::Layer;
+use tracing_subscriber::layer::Context;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::registry::LookupSpan;
+use tracing_subscriber::util::SubscriberInitExt;
 use wiremock::MockServer;
 
 fn remote_model(slug: &str, display: &str, priority: i32) -> ModelInfo {
@@ -74,6 +89,47 @@ fn provider_for(base_url: String) -> ModelProviderInfo {
         websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
+    }
+}
+
+#[derive(Default)]
+struct TagCollectorVisitor {
+    tags: BTreeMap<String, String>,
+}
+
+impl Visit for TagCollectorVisitor {
+    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+        self.tags
+            .insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.tags
+            .insert(field.name().to_string(), value.to_string());
+    }
+
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.tags
+            .insert(field.name().to_string(), format!("{value:?}"));
+    }
+}
+
+#[derive(Clone)]
+struct TagCollectorLayer {
+    tags: Arc<Mutex<BTreeMap<String, String>>>,
+}
+
+impl<S> Layer<S> for TagCollectorLayer
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        if event.metadata().target() != "feedback_tags" {
+            return;
+        }
+        let mut visitor = TagCollectorVisitor::default();
+        event.record(&mut visitor);
+        self.tags.lock().unwrap().extend(visitor.tags);
     }
 }
 
@@ -527,6 +583,104 @@ async fn refresh_available_models_skips_network_without_chatgpt_auth() {
         models_mock.requests().len(),
         0,
         "no auth should avoid /models requests"
+    );
+}
+
+#[test]
+fn models_request_telemetry_emits_auth_env_feedback_tags_on_failure() {
+    let tags = Arc::new(Mutex::new(BTreeMap::new()));
+    let _guard = tracing_subscriber::registry()
+        .with(TagCollectorLayer { tags: tags.clone() })
+        .set_default();
+
+    let telemetry = ModelsRequestTelemetry {
+        auth_mode: Some(TelemetryAuthMode::Chatgpt.to_string()),
+        auth_header_attached: true,
+        auth_header_name: Some("authorization"),
+        auth_env: crate::auth_env_telemetry::AuthEnvTelemetry {
+            openai_api_key_env_present: false,
+            codex_api_key_env_present: false,
+            codex_api_key_env_enabled: false,
+            provider_env_key_name: Some("configured".to_string()),
+            provider_env_key_present: Some(false),
+            refresh_token_url_override_present: false,
+        },
+    };
+    let mut headers = HeaderMap::new();
+    headers.insert("x-request-id", "req-models-401".parse().unwrap());
+    headers.insert("cf-ray", "ray-models-401".parse().unwrap());
+    headers.insert(
+        "x-openai-authorization-error",
+        "missing_authorization_header".parse().unwrap(),
+    );
+    headers.insert(
+        "x-error-json",
+        base64::engine::general_purpose::STANDARD
+            .encode(r#"{"error":{"code":"token_expired"}}"#)
+            .parse()
+            .unwrap(),
+    );
+    telemetry.on_request(
+        1,
+        Some(StatusCode::UNAUTHORIZED),
+        Some(&TransportError::Http {
+            status: StatusCode::UNAUTHORIZED,
+            url: Some("https://example.test/models".to_string()),
+            headers: Some(headers),
+            body: Some("plain text error".to_string()),
+        }),
+        Duration::from_millis(17),
+    );
+
+    let tags = tags.lock().unwrap().clone();
+    assert_eq!(
+        tags.get("endpoint").map(String::as_str),
+        Some("\"/models\"")
+    );
+    assert_eq!(
+        tags.get("auth_mode").map(String::as_str),
+        Some("\"Chatgpt\"")
+    );
+    assert_eq!(
+        tags.get("auth_request_id").map(String::as_str),
+        Some("\"req-models-401\"")
+    );
+    assert_eq!(
+        tags.get("auth_error").map(String::as_str),
+        Some("\"missing_authorization_header\"")
+    );
+    assert_eq!(
+        tags.get("auth_error_code").map(String::as_str),
+        Some("\"token_expired\"")
+    );
+    assert_eq!(
+        tags.get("auth_env_openai_api_key_present")
+            .map(String::as_str),
+        Some("false")
+    );
+    assert_eq!(
+        tags.get("auth_env_codex_api_key_present")
+            .map(String::as_str),
+        Some("false")
+    );
+    assert_eq!(
+        tags.get("auth_env_codex_api_key_enabled")
+            .map(String::as_str),
+        Some("false")
+    );
+    assert_eq!(
+        tags.get("auth_env_provider_key_name").map(String::as_str),
+        Some("\"configured\"")
+    );
+    assert_eq!(
+        tags.get("auth_env_provider_key_present")
+            .map(String::as_str),
+        Some("\"false\"")
+    );
+    assert_eq!(
+        tags.get("auth_env_refresh_token_url_override_present")
+            .map(String::as_str),
+        Some("false")
     );
 }
 
