@@ -4287,6 +4287,48 @@ async fn live_app_server_failed_turn_does_not_duplicate_error_history() {
 }
 
 #[tokio::test]
+async fn replayed_retryable_app_server_error_keeps_turn_running() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: AppServerTurn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::InProgress,
+                error: None,
+            },
+        }),
+        Some(ReplayKind::ThreadSnapshot),
+    );
+    drain_insert_history(&mut rx);
+
+    chat.handle_server_notification(
+        ServerNotification::Error(ErrorNotification {
+            error: AppServerTurnError {
+                message: "Reconnecting... 1/5".to_string(),
+                codex_error_info: None,
+                additional_details: Some("Idle timeout waiting for SSE".to_string()),
+            },
+            will_retry: true,
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        }),
+        Some(ReplayKind::ThreadSnapshot),
+    );
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+    assert!(chat.bottom_pane.is_task_running());
+    let status = chat
+        .bottom_pane
+        .status_widget()
+        .expect("status indicator should be visible");
+    assert_eq!(status.header(), "Working");
+    assert_eq!(status.details(), None);
+}
+
+#[tokio::test]
 async fn live_app_server_thread_closed_requests_immediate_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 

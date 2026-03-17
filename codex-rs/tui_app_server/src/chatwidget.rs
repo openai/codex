@@ -5561,11 +5561,13 @@ impl ChatWidget {
                 }
             }
             ServerNotification::Error(notification) => {
-                if notification.will_retry && !from_replay {
-                    self.on_stream_error(
-                        notification.error.message,
-                        notification.error.additional_details,
-                    );
+                if notification.will_retry {
+                    if !from_replay {
+                        self.on_stream_error(
+                            notification.error.message,
+                            notification.error.additional_details,
+                        );
+                    }
                 } else {
                     if !from_replay {
                         self.last_non_retry_error = Some((
