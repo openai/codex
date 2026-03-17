@@ -53,15 +53,8 @@ impl FromStr for ReasoningEffort {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "none" => Ok(Self::None),
-            "minimal" => Ok(Self::Minimal),
-            "low" => Ok(Self::Low),
-            "medium" => Ok(Self::Medium),
-            "high" => Ok(Self::High),
-            "xhigh" => Ok(Self::XHigh),
-            _ => Err(format!("invalid reasoning_effort: {s}")),
-        }
+        serde_json::from_value(serde_json::Value::String(s.to_string()))
+            .map_err(|_| format!("invalid reasoning_effort: {s}"))
     }
 }
 

@@ -426,3 +426,87 @@ pub struct BackfillStats {
     /// The number of rows that failed to upsert.
     pub failed: usize,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ThreadMetadata;
+    use super::ThreadRow;
+    use chrono::DateTime;
+    use chrono::Utc;
+    use codex_protocol::ThreadId;
+    use codex_protocol::openai_models::ReasoningEffort;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+
+    fn thread_row(reasoning_effort: Option<&str>) -> ThreadRow {
+        ThreadRow {
+            id: "00000000-0000-0000-0000-000000000123".to_string(),
+            rollout_path: "/tmp/rollout-123.jsonl".to_string(),
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_100,
+            source: "cli".to_string(),
+            agent_nickname: None,
+            agent_role: None,
+            model_provider: "openai".to_string(),
+            model: Some("gpt-5".to_string()),
+            reasoning_effort: reasoning_effort.map(str::to_string),
+            cwd: "/tmp/workspace".to_string(),
+            cli_version: "0.0.0".to_string(),
+            title: String::new(),
+            sandbox_policy: "read-only".to_string(),
+            approval_mode: "on-request".to_string(),
+            tokens_used: 1,
+            first_user_message: String::new(),
+            archived_at: None,
+            git_sha: None,
+            git_branch: None,
+            git_origin_url: None,
+        }
+    }
+
+    fn expected_thread_metadata(reasoning_effort: Option<ReasoningEffort>) -> ThreadMetadata {
+        ThreadMetadata {
+            id: ThreadId::from_string("00000000-0000-0000-0000-000000000123")
+                .expect("valid thread id"),
+            rollout_path: PathBuf::from("/tmp/rollout-123.jsonl"),
+            created_at: DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("timestamp"),
+            updated_at: DateTime::<Utc>::from_timestamp(1_700_000_100, 0).expect("timestamp"),
+            source: "cli".to_string(),
+            agent_nickname: None,
+            agent_role: None,
+            model_provider: "openai".to_string(),
+            model: Some("gpt-5".to_string()),
+            reasoning_effort,
+            cwd: PathBuf::from("/tmp/workspace"),
+            cli_version: "0.0.0".to_string(),
+            title: String::new(),
+            sandbox_policy: "read-only".to_string(),
+            approval_mode: "on-request".to_string(),
+            tokens_used: 1,
+            first_user_message: None,
+            archived_at: None,
+            git_sha: None,
+            git_branch: None,
+            git_origin_url: None,
+        }
+    }
+
+    #[test]
+    fn thread_row_parses_reasoning_effort() {
+        let metadata = ThreadMetadata::try_from(thread_row(Some("high")))
+            .expect("thread metadata should parse");
+
+        assert_eq!(
+            metadata,
+            expected_thread_metadata(Some(ReasoningEffort::High))
+        );
+    }
+
+    #[test]
+    fn thread_row_ignores_unknown_reasoning_effort_values() {
+        let metadata = ThreadMetadata::try_from(thread_row(Some("future")))
+            .expect("thread metadata should parse");
+
+        assert_eq!(metadata, expected_thread_metadata(None));
+    }
+}
