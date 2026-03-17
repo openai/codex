@@ -1310,6 +1310,11 @@ async fn sync_plugins_from_remote_reconciles_cache_and_config() {
     );
     write_plugin(
         &tmp.path().join("plugins/cache/openai-curated"),
+        "gmail/local",
+        "gmail",
+    );
+    write_plugin(
+        &tmp.path().join("plugins/cache/openai-curated"),
         "calendar/local",
         "calendar",
     );
@@ -1319,6 +1324,9 @@ async fn sync_plugins_from_remote_reconciles_cache_and_config() {
 plugins = true
 
 [plugins."linear@openai-curated"]
+enabled = false
+
+[plugins."gmail@openai-curated"]
 enabled = false
 
 [plugins."calendar@openai-curated"]
@@ -1354,10 +1362,13 @@ enabled = true
     assert_eq!(
         result,
         RemotePluginSyncResult {
-            installed_plugin_ids: vec!["gmail@openai-curated".to_string()],
+            installed_plugin_ids: Vec::new(),
             enabled_plugin_ids: vec!["linear@openai-curated".to_string()],
-            disabled_plugin_ids: vec!["gmail@openai-curated".to_string()],
-            uninstalled_plugin_ids: vec!["calendar@openai-curated".to_string()],
+            disabled_plugin_ids: Vec::new(),
+            uninstalled_plugin_ids: vec![
+                "gmail@openai-curated".to_string(),
+                "calendar@openai-curated".to_string(),
+            ],
         }
     );
 
@@ -1367,11 +1378,9 @@ enabled = true
             .is_dir()
     );
     assert!(
-        tmp.path()
-            .join(format!(
-                "plugins/cache/openai-curated/gmail/{TEST_CURATED_PLUGIN_SHA}"
-            ))
-            .is_dir()
+        !tmp.path()
+            .join("plugins/cache/openai-curated/gmail")
+            .exists()
     );
     assert!(
         !tmp.path()
@@ -1381,9 +1390,8 @@ enabled = true
 
     let config = fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).unwrap();
     assert!(config.contains(r#"[plugins."linear@openai-curated"]"#));
-    assert!(config.contains(r#"[plugins."gmail@openai-curated"]"#));
     assert!(config.contains("enabled = true"));
-    assert!(config.contains("enabled = false"));
+    assert!(!config.contains(r#"[plugins."gmail@openai-curated"]"#));
     assert!(!config.contains(r#"[plugins."calendar@openai-curated"]"#));
 
     let synced_config = load_config(tmp.path(), tmp.path()).await;
@@ -1401,7 +1409,7 @@ enabled = true
             .collect::<Vec<_>>(),
         vec![
             ("linear@openai-curated".to_string(), true, true),
-            ("gmail@openai-curated".to_string(), true, false),
+            ("gmail@openai-curated".to_string(), false, false),
             ("calendar@openai-curated".to_string(), false, false),
         ]
     );

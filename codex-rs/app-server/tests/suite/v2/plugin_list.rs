@@ -625,6 +625,7 @@ async fn plugin_list_force_remote_sync_reconciles_curated_plugin_state() -> Resu
     )?;
     write_openai_curated_marketplace(codex_home.path(), &["linear", "gmail", "calendar"])?;
     write_installed_plugin(&codex_home, "openai-curated", "linear")?;
+    write_installed_plugin(&codex_home, "openai-curated", "gmail")?;
     write_installed_plugin(&codex_home, "openai-curated", "calendar")?;
 
     Mock::given(method("GET"))
@@ -671,14 +672,14 @@ async fn plugin_list_force_remote_sync_reconciles_curated_plugin_state() -> Resu
             .collect::<Vec<_>>(),
         vec![
             ("linear@openai-curated".to_string(), true, true),
-            ("gmail@openai-curated".to_string(), true, false),
+            ("gmail@openai-curated".to_string(), false, false),
             ("calendar@openai-curated".to_string(), false, false),
         ]
     );
 
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     assert!(config.contains(r#"[plugins."linear@openai-curated"]"#));
-    assert!(config.contains(r#"[plugins."gmail@openai-curated"]"#));
+    assert!(!config.contains(r#"[plugins."gmail@openai-curated"]"#));
     assert!(!config.contains(r#"[plugins."calendar@openai-curated"]"#));
 
     assert!(
@@ -688,12 +689,10 @@ async fn plugin_list_force_remote_sync_reconciles_curated_plugin_state() -> Resu
             .is_dir()
     );
     assert!(
-        codex_home
+        !codex_home
             .path()
-            .join(format!(
-                "plugins/cache/openai-curated/gmail/{TEST_CURATED_PLUGIN_SHA}"
-            ))
-            .is_dir()
+            .join("plugins/cache/openai-curated/gmail")
+            .exists()
     );
     assert!(
         !codex_home
@@ -734,6 +733,9 @@ chatgpt_base_url = "{base_url}"
 plugins = true
 
 [plugins."linear@openai-curated"]
+enabled = false
+
+[plugins."gmail@openai-curated"]
 enabled = false
 
 [plugins."calendar@openai-curated"]
