@@ -198,16 +198,13 @@ genrule(
     name = "v8_146_4_0_aarch64_pc_windows_gnullvm",
     srcs = [
         ":v8_146_4_0_aarch64_pc_windows_gnullvm_base",
-    ] + CARGO_READY_RUNTIME_LIBS,
+    ],
     tools = LLVM_AR_TOOLS,
     outs = ["libv8_146_4_0_aarch64_pc_windows_gnullvm.a"],
     cmd = """
       cat > "$(@D)/merge.mri" <<'EOF'
 create $@
 addlib $(location :v8_146_4_0_aarch64_pc_windows_gnullvm_base)
-addlib $(location @llvm//runtimes/libcxx:libcxx.static)
-addlib $(location @llvm//runtimes/libcxx:libcxxabi.static)
-addlib $(location @llvm//runtimes/libunwind:libunwind.static)
 save
 end
 EOF
@@ -226,16 +223,13 @@ genrule(
     name = "v8_146_4_0_x86_64_pc_windows_gnullvm",
     srcs = [
         ":v8_146_4_0_x86_64_pc_windows_gnullvm_base",
-    ] + CARGO_READY_RUNTIME_LIBS,
+    ],
     tools = LLVM_AR_TOOLS,
     outs = ["libv8_146_4_0_x86_64_pc_windows_gnullvm.a"],
     cmd = """
       cat > "$(@D)/merge.mri" <<'EOF'
 create $@
 addlib $(location :v8_146_4_0_x86_64_pc_windows_gnullvm_base)
-addlib $(location @llvm//runtimes/libcxx:libcxx.static)
-addlib $(location @llvm//runtimes/libcxx:libcxxabi.static)
-addlib $(location @llvm//runtimes/libunwind:libunwind.static)
 save
 end
 EOF
