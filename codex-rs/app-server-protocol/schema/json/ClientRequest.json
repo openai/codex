@@ -871,24 +871,6 @@
         }
       ]
     },
-    "FunctionCallOutputPayload": {
-      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`body` serializes directly as the wire value for `function_call_output.output`. `success` remains internal metadata for downstream handling.",
-      "properties": {
-        "body": {
-          "$ref": "#/definitions/FunctionCallOutputBody"
-        },
-        "success": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "body"
-      ],
-      "type": "object"
-    },
     "FuzzyFileSearchParams": {
       "properties": {
         "cancellationToken": {
@@ -954,15 +936,6 @@
         "preexisting_untracked_files"
       ],
       "type": "object"
-    },
-    "HazelnutScope": {
-      "enum": [
-        "example",
-        "workspace-shared",
-        "all-shared",
-        "personal"
-      ],
-      "type": "string"
     },
     "ImageDetail": {
       "enum": [
@@ -1346,15 +1319,6 @@
       ],
       "type": "object"
     },
-    "ProductSurface": {
-      "enum": [
-        "chatgpt",
-        "codex",
-        "api",
-        "atlas"
-      ],
-      "type": "string"
-    },
     "ReadOnlyAccess": {
       "oneOf": [
         {
@@ -1583,10 +1547,6 @@
                 "null"
               ]
             },
-            "id": {
-              "type": "string",
-              "writeOnly": true
-            },
             "summary": {
               "items": {
                 "$ref": "#/definitions/ReasoningItemReasoningSummary"
@@ -1602,7 +1562,6 @@
             }
           },
           "required": [
-            "id",
             "summary",
             "type"
           ],
@@ -1736,7 +1695,7 @@
               "type": "string"
             },
             "output": {
-              "$ref": "#/definitions/FunctionCallOutputPayload"
+              "$ref": "#/definitions/FunctionCallOutputBody"
             },
             "type": {
               "enum": [
@@ -1801,7 +1760,7 @@
               "type": "string"
             },
             "output": {
-              "$ref": "#/definitions/FunctionCallOutputPayload"
+              "$ref": "#/definitions/FunctionCallOutputBody"
             },
             "type": {
               "enum": [
@@ -2431,42 +2390,6 @@
           ]
         }
       },
-      "type": "object"
-    },
-    "SkillsRemoteReadParams": {
-      "properties": {
-        "enabled": {
-          "default": false,
-          "type": "boolean"
-        },
-        "hazelnutScope": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/HazelnutScope"
-            }
-          ],
-          "default": "example"
-        },
-        "productSurface": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ProductSurface"
-            }
-          ],
-          "default": "codex"
-        }
-      },
-      "type": "object"
-    },
-    "SkillsRemoteWriteParams": {
-      "properties": {
-        "hazelnutId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "hazelnutId"
-      ],
       "type": "object"
     },
     "TextElement": {
@@ -3823,54 +3746,6 @@
         "params"
       ],
       "title": "Plugin/readRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "skills/remote/list"
-          ],
-          "title": "Skills/remote/listRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/SkillsRemoteReadParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Skills/remote/listRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "skills/remote/export"
-          ],
-          "title": "Skills/remote/exportRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/SkillsRemoteWriteParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Skills/remote/exportRequest",
       "type": "object"
     },
     {

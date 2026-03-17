@@ -98,15 +98,37 @@ impl ToolHandler for Handler {
             ),
             Err(_) => (None, AgentStatus::NotFound),
         };
-        let (new_agent_nickname, new_agent_role) = match new_thread_id {
-            Some(thread_id) => session
+        let agent_snapshot = match new_thread_id {
+            Some(thread_id) => {
+                session
+                    .services
+                    .agent_control
+                    .get_agent_config_snapshot(thread_id)
+                    .await
+            }
+            None => None,
+        };
+        let (new_agent_nickname, new_agent_role) = match (&agent_snapshot, new_thread_id) {
+            (Some(snapshot), _) => (
+                snapshot.session_source.get_nickname(),
+                snapshot.session_source.get_agent_role(),
+            ),
+            (None, Some(thread_id)) => session
                 .services
                 .agent_control
                 .get_agent_nickname_and_role(thread_id)
                 .await
                 .unwrap_or((None, None)),
-            None => (None, None),
+            (None, None) => (None, None),
         };
+        let effective_model = agent_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.model.clone())
+            .unwrap_or_else(|| args.model.clone().unwrap_or_default());
+        let effective_reasoning_effort = agent_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.reasoning_effort)
+            .unwrap_or(args.reasoning_effort.unwrap_or_default());
         let nickname = new_agent_nickname.clone();
         session
             .send_event(
@@ -118,8 +140,8 @@ impl ToolHandler for Handler {
                     new_agent_nickname,
                     new_agent_role,
                     prompt,
-                    model: args.model.clone().unwrap_or_default(),
-                    reasoning_effort: args.reasoning_effort.unwrap_or_default(),
+                    model: effective_model,
+                    reasoning_effort: effective_reasoning_effort,
                     status,
                 }
                 .into(),

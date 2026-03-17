@@ -4,6 +4,7 @@ use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
+use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeEvent;
 #[cfg(not(target_os = "linux"))]
 use std::sync::atomic::AtomicUsize;
@@ -22,6 +23,7 @@ pub(super) enum RealtimeConversationPhase {
 #[derive(Default)]
 pub(super) struct RealtimeConversationUiState {
     pub(super) phase: RealtimeConversationPhase,
+    audio_behavior: RealtimeAudioBehavior,
     requested_close: bool,
     session_id: Option<String>,
     warned_audio_only_submission: bool,
@@ -36,6 +38,35 @@ pub(super) struct RealtimeConversationUiState {
     // Shared queue depth lets capture suppress echoed speaker audio without
     // taking the playback queue lock from the input callback.
     playback_queued_samples: Arc<AtomicUsize>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum RealtimeAudioBehavior {
+    #[default]
+    Legacy,
+    PlaybackAware,
+}
+
+impl RealtimeAudioBehavior {
+    fn from_version(version: RealtimeConversationVersion) -> Self {
+        match version {
+            RealtimeConversationVersion::V1 => Self::Legacy,
+            RealtimeConversationVersion::V2 => Self::PlaybackAware,
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn input_behavior(
+        self,
+        playback_queued_samples: Arc<AtomicUsize>,
+    ) -> crate::voice::RealtimeInputBehavior {
+        match self {
+            Self::Legacy => crate::voice::RealtimeInputBehavior::Ungated,
+            Self::PlaybackAware => crate::voice::RealtimeInputBehavior::PlaybackAware {
+                playback_queued_samples,
+            },
+        }
+    }
 }
 
 impl RealtimeConversationUiState {
@@ -202,6 +233,7 @@ impl ChatWidget {
         self.realtime_conversation.phase = RealtimeConversationPhase::Starting;
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.session_id = None;
+        self.realtime_conversation.audio_behavior = RealtimeAudioBehavior::Legacy;
         self.realtime_conversation.warned_audio_only_submission = false;
         self.set_footer_hint_override(Some(vec![(
             "/realtime".to_string(),
@@ -241,6 +273,7 @@ impl ChatWidget {
         self.realtime_conversation.phase = RealtimeConversationPhase::Inactive;
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.session_id = None;
+        self.realtime_conversation.audio_behavior = RealtimeAudioBehavior::Legacy;
         self.realtime_conversation.warned_audio_only_submission = false;
     }
 
@@ -264,6 +297,7 @@ impl ChatWidget {
         }
         self.realtime_conversation.phase = RealtimeConversationPhase::Active;
         self.realtime_conversation.session_id = ev.session_id;
+        self.realtime_conversation.audio_behavior = RealtimeAudioBehavior::from_version(ev.version);
         self.realtime_conversation.warned_audio_only_submission = false;
         self.set_footer_hint_override(Some(vec![(
             "/realtime".to_string(),
@@ -283,7 +317,11 @@ impl ChatWidget {
             }
             RealtimeEvent::InputAudioSpeechStarted(_) | RealtimeEvent::ResponseCancelled(_) => {
                 #[cfg(not(target_os = "linux"))]
-                if let Some(player) = &self.realtime_conversation.audio_player {
+                if matches!(
+                    self.realtime_conversation.audio_behavior,
+                    RealtimeAudioBehavior::PlaybackAware
+                ) && let Some(player) = &self.realtime_conversation.audio_player
+                {
                     // Once the server detects user speech or the current response is cancelled,
                     // any buffered assistant audio is stale and should stop gating mic input.
                     player.clear();
@@ -352,7 +390,11 @@ impl ChatWidget {
         let capture = match crate::voice::VoiceCapture::start_realtime(
             &self.config,
             self.app_event_tx.clone(),
-            Arc::clone(&self.realtime_conversation.playback_queued_samples),
+            self.realtime_conversation
+                .audio_behavior
+                .input_behavior(Arc::clone(
+                    &self.realtime_conversation.playback_queued_samples,
+                )),
         ) {
             Ok(capture) => capture,
             Err(err) => {

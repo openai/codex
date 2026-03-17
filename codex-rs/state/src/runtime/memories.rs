@@ -169,6 +169,8 @@ SELECT
     agent_nickname,
     agent_role,
     model_provider,
+    model,
+    reasoning_effort,
     cwd,
     cli_version,
     title,

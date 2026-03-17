@@ -25,6 +25,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
+use codex_protocol::protocol::RealtimeConversationVersion;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -115,6 +116,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             .await?;
     assert_eq!(started.thread_id, thread_start.thread.id);
     assert!(started.session_id.is_some());
+    assert_eq!(started.version, RealtimeConversationVersion::V2);
 
     let startup_context_request = realtime_server.wait_for_request(0, 0).await;
     assert_eq!(

@@ -67,7 +67,6 @@ use codex_core::find_thread_name_by_id;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::git_info::local_git_branches;
-use codex_core::mcp::McpManager;
 use codex_core::plugins::PluginsManager;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::skills::model::SkillMetadata;
@@ -719,6 +718,10 @@ pub(crate) struct ChatWidget {
     // When resuming an existing session (selected via resume picker), avoid an
     // immediate redraw on SessionConfigured to prevent a gratuitous UI flicker.
     suppress_session_configured_redraw: bool,
+    // During snapshot restore, defer startup prompt submission until replayed
+    // history has been rendered so resumed/forked prompts keep chronological
+    // order.
+    suppress_initial_user_message_submit: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
     // Steers already submitted to core but not yet committed into history.
@@ -1427,13 +1430,32 @@ impl ChatWidget {
             self.prefetch_connectors();
         }
         if let Some(user_message) = self.initial_user_message.take() {
-            self.submit_user_message(user_message);
+            if self.suppress_initial_user_message_submit {
+                self.initial_user_message = Some(user_message);
+            } else {
+                self.submit_user_message(user_message);
+            }
         }
         if let Some(forked_from_id) = forked_from_id {
             self.emit_forked_thread_event(forked_from_id);
         }
         if !self.suppress_session_configured_redraw {
             self.request_redraw();
+        }
+    }
+
+    pub(crate) fn set_initial_user_message_submit_suppressed(&mut self, suppressed: bool) {
+        self.suppress_initial_user_message_submit = suppressed;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_initial_user_message_for_test(&mut self, user_message: Option<UserMessage>) {
+        self.initial_user_message = user_message;
+    }
+
+    pub(crate) fn submit_initial_user_message_if_pending(&mut self) {
+        if let Some(user_message) = self.initial_user_message.take() {
+            self.submit_user_message(user_message);
         }
     }
 
@@ -3624,6 +3646,7 @@ impl ChatWidget {
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
             suppress_session_configured_redraw: false,
+            suppress_initial_user_message_submit: false,
             pending_notification: None,
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,
@@ -3816,6 +3839,7 @@ impl ChatWidget {
             show_welcome_banner: false,
             startup_tooltip_override: None,
             suppress_session_configured_redraw: true,
+            suppress_initial_user_message_submit: false,
             pending_notification: None,
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,
@@ -5165,7 +5189,6 @@ impl ChatWidget {
                 );
             }
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
-            EventMsg::ListRemoteSkillsResponse(_) | EventMsg::RemoteSkillDownloaded(_) => {}
             EventMsg::SkillsUpdateAvailable => {
                 self.submit_op(AppCommand::list_skills(
                     Vec::new(),
@@ -8217,18 +8240,39 @@ impl ChatWidget {
         PlainHistoryCell::new(vec![line.into()])
     }
 
+    /// Begin the asynchronous MCP inventory flow: show a loading spinner and
+    /// request the app-server fetch via `AppEvent::FetchMcpInventory`.
+    ///
+    /// The spinner lives in `active_cell` and is cleared by
+    /// [`clear_mcp_inventory_loading`] once the result arrives.
     pub(crate) fn add_mcp_output(&mut self) {
-        let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(
-            self.config.codex_home.clone(),
+        self.flush_answer_stream_with_separator();
+        self.flush_active_cell();
+        self.active_cell = Some(Box::new(history_cell::new_mcp_inventory_loading(
+            self.config.animations,
         )));
-        if mcp_manager
-            .effective_servers(&self.config, /*auth*/ None)
-            .is_empty()
+        self.bump_active_cell_revision();
+        self.request_redraw();
+        self.app_event_tx.send(AppEvent::FetchMcpInventory);
+    }
+
+    /// Remove the MCP loading spinner if it is still the active cell.
+    ///
+    /// Uses `Any`-based type checking so that a late-arriving inventory result
+    /// does not accidentally clear an unrelated cell that was set in the meantime.
+    pub(crate) fn clear_mcp_inventory_loading(&mut self) {
+        let Some(active) = self.active_cell.as_ref() else {
+            return;
+        };
+        if !active
+            .as_any()
+            .is::<history_cell::McpInventoryLoadingCell>()
         {
-            self.add_to_history(history_cell::empty_mcp_output());
-        } else {
-            self.add_app_server_stub_message("MCP tool inventory");
+            return;
         }
+        self.active_cell = None;
+        self.bump_active_cell_revision();
+        self.request_redraw();
     }
 
     pub(crate) fn add_connectors_output(&mut self) {

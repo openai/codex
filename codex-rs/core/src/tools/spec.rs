@@ -195,9 +195,12 @@ fn close_agent_output_schema() -> JsonValue {
     json!({
         "type": "object",
         "properties": {
-            "status": agent_status_output_schema()
+            "previous_status": {
+                "description": "The agent status observed before shutdown was requested.",
+                "allOf": [agent_status_output_schema()]
+            }
         },
-        "required": ["status"],
+        "required": ["previous_status"],
         "additionalProperties": false
     })
 }
@@ -769,7 +772,7 @@ fn create_write_stdin_tool() -> ToolSpec {
     })
 }
 
-fn create_exec_wait_tool() -> ToolSpec {
+fn create_wait_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "cell_id".to_string(),
@@ -1523,7 +1526,7 @@ fn create_close_agent_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "close_agent".to_string(),
-        description: "Close an agent when it is no longer needed and return its last known status. Don't keep agents open for too long if they are not needed anymore.".to_string(),
+        description: "Close an agent when it is no longer needed and return its previous status before shutdown was requested. Don't keep agents open for too long if they are not needed anymore.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::Object {
@@ -1824,7 +1827,7 @@ fn format_discoverable_tools(discoverable_tools: &[DiscoverableTool]) -> String 
                 });
             let default_action = match tool.tool_type() {
                 DiscoverableToolType::Connector => DiscoverableToolAction::Install,
-                DiscoverableToolType::Plugin => DiscoverableToolAction::Enable,
+                DiscoverableToolType::Plugin => DiscoverableToolAction::Install,
             };
             format!(
                 "- {} (id: `{}`, type: {}, action: {}): {}",
@@ -2594,7 +2597,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler(PUBLIC_TOOL_NAME, code_mode_handler);
         push_tool_spec(
             &mut builder,
-            create_exec_wait_tool(),
+            create_wait_tool(),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );

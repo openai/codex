@@ -4076,6 +4076,7 @@ wire_api = "responses"
 request_max_retries = 4            # retry failed HTTP requests
 stream_max_retries = 10            # retry dropped SSE streams
 stream_idle_timeout_ms = 300000    # 5m idle timeout
+websocket_connect_timeout_ms = 15000
 
 [profiles.o3]
 model = "o3"
@@ -4130,6 +4131,7 @@ model_verbosity = "high"
         request_max_retries: Some(4),
         stream_max_retries: Some(10),
         stream_idle_timeout_ms: Some(300_000),
+        websocket_connect_timeout_ms: Some(15_000),
         requires_openai_auth: false,
         supports_websockets: false,
     };

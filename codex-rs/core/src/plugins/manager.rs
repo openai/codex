@@ -68,7 +68,7 @@ use tracing::warn;
 const DEFAULT_SKILLS_DIR_NAME: &str = "skills";
 const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
 const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
-const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
+pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
 const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 1024;
 
@@ -216,6 +216,19 @@ impl PluginCapabilitySummary {
                 plugin_id,
                 capability_summary: Some(self.clone()),
             })
+    }
+}
+
+impl From<PluginDetailSummary> for PluginCapabilitySummary {
+    fn from(value: PluginDetailSummary) -> Self {
+        Self {
+            config_name: value.id,
+            display_name: value.name,
+            description: prompt_safe_plugin_description(value.description.as_deref()),
+            has_skills: !value.skills.is_empty(),
+            mcp_server_names: value.mcp_server_names,
+            app_connector_ids: value.apps,
+        }
     }
 }
 

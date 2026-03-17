@@ -13,6 +13,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
+use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
@@ -188,6 +189,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
     .await
     .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
     assert!(started.session_id.is_some());
+    assert_eq!(started.version, RealtimeConversationVersion::V1);
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {

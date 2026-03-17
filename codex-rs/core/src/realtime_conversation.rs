@@ -443,6 +443,7 @@ struct PreparedRealtimeConversationStart {
     api_provider: ApiProvider,
     extra_headers: Option<HeaderMap>,
     requested_session_id: Option<String>,
+    version: RealtimeWsVersion,
     session_config: RealtimeSessionConfig,
 }
 
@@ -476,7 +477,8 @@ async fn prepare_realtime_start(
         format!("{prompt}\n\n{startup_context}")
     };
     let model = config.experimental_realtime_ws_model.clone();
-    let event_parser = match config.realtime.version {
+    let version = config.realtime.version;
+    let event_parser = match version {
         RealtimeWsVersion::V1 => RealtimeEventParser::V1,
         RealtimeWsVersion::V2 => RealtimeEventParser::RealtimeV2,
     };
@@ -498,6 +500,7 @@ async fn prepare_realtime_start(
         api_provider,
         extra_headers,
         requested_session_id,
+        version,
         session_config,
     })
 }
@@ -511,6 +514,7 @@ async fn handle_start_inner(
         api_provider,
         extra_headers,
         requested_session_id,
+        version,
         session_config,
     } = prepared_start;
     info!("starting realtime conversation");
@@ -525,6 +529,7 @@ async fn handle_start_inner(
         id: sub_id.to_string(),
         msg: EventMsg::RealtimeConversationStarted(RealtimeConversationStartedEvent {
             session_id: requested_session_id,
+            version,
         }),
     })
     .await;
