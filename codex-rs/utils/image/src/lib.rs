@@ -200,11 +200,20 @@ fn format_to_mime(format: ImageFormat) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
     use super::*;
     use image::GenericImageView;
     use image::ImageBuffer;
     use image::Rgba;
-    use tempfile::NamedTempFile;
+
+    fn image_bytes(image: &ImageBuffer<Rgba<u8>, Vec<u8>>, format: ImageFormat) -> Vec<u8> {
+        let mut encoded = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(image.clone())
+            .write_to(&mut encoded, format)
+            .expect("encode image to bytes");
+        encoded.into_inner()
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn returns_original_image_when_within_bounds() {
@@ -212,15 +221,11 @@ mod tests {
             (ImageFormat::Png, "image/png"),
             (ImageFormat::WebP, "image/webp"),
         ] {
-            let temp_file = NamedTempFile::new().expect("temp file");
             let image = ImageBuffer::from_pixel(64, 32, Rgba([10u8, 20, 30, 255]));
-            image
-                .save_with_format(temp_file.path(), format)
-                .expect("write image to temp file");
+            let original_bytes = image_bytes(&image, format);
 
-            let original_bytes = std::fs::read(temp_file.path()).expect("read written image");
             let encoded = load_for_prompt_bytes(
-                temp_file.path(),
+                Path::new("in-memory-image"),
                 original_bytes.clone(),
                 PromptImageMode::ResizeToFit,
             )
@@ -239,15 +244,12 @@ mod tests {
             (ImageFormat::Png, "image/png"),
             (ImageFormat::WebP, "image/webp"),
         ] {
-            let temp_file = NamedTempFile::new().expect("temp file");
             let image = ImageBuffer::from_pixel(4096, 2048, Rgba([200u8, 10, 10, 255]));
-            image
-                .save_with_format(temp_file.path(), format)
-                .expect("write image to temp file");
+            let original_bytes = image_bytes(&image, format);
 
             let processed = load_for_prompt_bytes(
-                temp_file.path(),
-                std::fs::read(temp_file.path()).expect("read written image"),
+                Path::new("in-memory-image"),
+                original_bytes,
                 PromptImageMode::ResizeToFit,
             )
             .expect("process image");
@@ -268,15 +270,11 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn preserves_large_image_in_original_mode() {
-        let temp_file = NamedTempFile::new().expect("temp file");
         let image = ImageBuffer::from_pixel(4096, 2048, Rgba([180u8, 30, 30, 255]));
-        image
-            .save_with_format(temp_file.path(), ImageFormat::Png)
-            .expect("write png to temp file");
+        let original_bytes = image_bytes(&image, ImageFormat::Png);
 
-        let original_bytes = std::fs::read(temp_file.path()).expect("read written image");
         let processed = load_for_prompt_bytes(
-            temp_file.path(),
+            Path::new("in-memory-image"),
             original_bytes.clone(),
             PromptImageMode::Original,
         )
@@ -290,12 +288,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fails_cleanly_for_invalid_images() {
-        let temp_file = NamedTempFile::new().expect("temp file");
-        std::fs::write(temp_file.path(), b"not an image").expect("write bytes");
-
         let err = load_for_prompt_bytes(
-            temp_file.path(),
-            std::fs::read(temp_file.path()).expect("read written image"),
+            Path::new("in-memory-image"),
+            b"not an image".to_vec(),
             PromptImageMode::ResizeToFit,
         )
         .expect_err("invalid image should fail");
@@ -311,27 +306,22 @@ mod tests {
             IMAGE_CACHE.clear();
         }
 
-        let temp_file = NamedTempFile::new().expect("temp file");
         let first_image = ImageBuffer::from_pixel(32, 16, Rgba([20u8, 120, 220, 255]));
-        first_image
-            .save_with_format(temp_file.path(), ImageFormat::Png)
-            .expect("write initial image");
+        let first_bytes = image_bytes(&first_image, ImageFormat::Png);
 
         let first = load_for_prompt_bytes(
-            temp_file.path(),
-            std::fs::read(temp_file.path()).expect("read first image"),
+            Path::new("in-memory-image"),
+            first_bytes,
             PromptImageMode::ResizeToFit,
         )
         .expect("process first image");
 
         let second_image = ImageBuffer::from_pixel(96, 48, Rgba([50u8, 60, 70, 255]));
-        second_image
-            .save_with_format(temp_file.path(), ImageFormat::Png)
-            .expect("write updated image");
+        let second_bytes = image_bytes(&second_image, ImageFormat::Png);
 
         let second = load_for_prompt_bytes(
-            temp_file.path(),
-            std::fs::read(temp_file.path()).expect("read updated image"),
+            Path::new("in-memory-image"),
+            second_bytes,
             PromptImageMode::ResizeToFit,
         )
         .expect("process updated image");
