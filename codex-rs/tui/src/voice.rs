@@ -36,7 +36,12 @@ use tracing::trace;
 const AUDIO_MODEL: &str = "gpt-4o-mini-transcribe";
 const MODEL_AUDIO_SAMPLE_RATE: u32 = 24_000;
 const MODEL_AUDIO_CHANNELS: u16 = 1;
+// While playback is buffered, ignore low-level mic input that is likely just
+// speaker echo. A user who starts talking over playback should cross this peak
+// threshold and reopen the gate.
 const REALTIME_INTERRUPT_INPUT_PEAK_THRESHOLD: u16 = 4_000;
+// After we decide an interruption is intentional, keep forwarding the next few
+// callbacks so trailing syllables are not chopped up between chunks.
 const REALTIME_INTERRUPT_GRACE_PERIOD: Duration = Duration::from_millis(900);
 
 struct TranscriptionAuthContext {
@@ -539,6 +544,8 @@ fn convert_u16_to_i16_and_peak(input: &[u16], out: &mut Vec<i16>) -> u16 {
 pub(crate) struct RealtimeAudioPlayer {
     _stream: cpal::Stream,
     queue: Arc<Mutex<VecDeque<i16>>>,
+    // Mirror the queue depth without locking so the input callback can cheaply
+    // tell whether playback is still draining.
     queued_samples: Arc<AtomicUsize>,
     output_sample_rate: u32,
     output_channels: u16,
@@ -598,6 +605,8 @@ impl RealtimeAudioPlayer {
             .lock()
             .map_err(|_| "failed to lock output audio queue".to_string())?;
         // TODO(aibrahim): Cap or trim this queue if we observe producer bursts outrunning playback.
+        // Keep the atomic in sync with the buffered PCM so capture can treat any
+        // queued output as active playback even before the audio callback drains it.
         self.queued_samples
             .fetch_add(converted.len(), Ordering::Relaxed);
         guard.extend(converted);
@@ -725,6 +734,9 @@ fn fill_output_u16(
     output.fill(32768);
 }
 
+/// Block quiet mic chunks while assistant playback is still buffered, but once a
+/// real interruption is detected keep forwarding input briefly so the full
+/// utterance reaches the server.
 fn should_send_realtime_input(
     peak: u16,
     playback_queued_samples: &Arc<AtomicUsize>,

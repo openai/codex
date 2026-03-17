@@ -33,6 +33,8 @@ pub(super) struct RealtimeConversationUiState {
     #[cfg(not(target_os = "linux"))]
     audio_player: Option<crate::voice::RealtimeAudioPlayer>,
     #[cfg(not(target_os = "linux"))]
+    // Shared queue depth lets capture suppress echoed speaker audio without
+    // taking the playback queue lock from the input callback.
     playback_queued_samples: Arc<AtomicUsize>,
 }
 
@@ -270,10 +272,11 @@ impl ChatWidget {
             RealtimeEvent::SessionUpdated { session_id, .. } => {
                 self.realtime_conversation.session_id = Some(session_id);
             }
-            RealtimeEvent::InputAudioSpeechStarted(_) | RealtimeEvent::ResponseCancelled(_) =>
-            {
+            RealtimeEvent::InputAudioSpeechStarted(_) | RealtimeEvent::ResponseCancelled(_) => {
                 #[cfg(not(target_os = "linux"))]
                 if let Some(player) = &self.realtime_conversation.audio_player {
+                    // Once the server detects user speech or the current response is cancelled,
+                    // any buffered assistant audio is stale and should stop gating mic input.
                     player.clear();
                 }
             }
