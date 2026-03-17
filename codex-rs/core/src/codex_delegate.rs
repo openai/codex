@@ -43,6 +43,7 @@ use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request_with_cancel;
 use crate::guardian::routes_approval_to_guardian;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT;
+use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
 use crate::mcp_tool_call::build_guardian_mcp_tool_review_request;
@@ -687,6 +688,16 @@ async fn maybe_auto_review_mcp_request_user_input(
     )
     .await;
     let selected_label = match decision {
+        ReviewDecision::ApprovedForAlways => question
+            .options
+            .as_ref()
+            .and_then(|options| {
+                options
+                    .iter()
+                    .find(|option| option.label == MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER)
+            })
+            .map(|option| option.label.clone())
+            .unwrap_or_else(|| MCP_TOOL_APPROVAL_ACCEPT.to_string()),
         ReviewDecision::ApprovedForSession => question
             .options
             .as_ref()

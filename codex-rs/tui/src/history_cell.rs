@@ -840,6 +840,19 @@ pub fn new_approval_decision_cell(
                 ],
             )
         }
+        ApprovedForAlways => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✔ ".green(),
+                vec![
+                    "You ".into(),
+                    "approved".bold(),
+                    " codex to run ".into(),
+                    snippet,
+                    " every time and saved it".bold(),
+                ],
+            )
+        }
         NetworkPolicyAmendment {
             network_policy_amendment,
         } => match network_policy_amendment.action {

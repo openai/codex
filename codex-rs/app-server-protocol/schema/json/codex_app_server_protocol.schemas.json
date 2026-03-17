@@ -2408,16 +2408,17 @@
       "type": "object"
     },
     "MacOsAutomationPermission": {
-      "oneOf": [
+      "anyOf": [
         {
-          "enum": [
-            "none",
-            "all"
-          ],
-          "type": "string"
+          "$ref": "#/definitions/MacOsAutomationPermissionModeSchema"
         },
         {
-          "additionalProperties": false,
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
           "properties": {
             "bundle_ids": {
               "items": {
@@ -2433,6 +2434,13 @@
           "type": "object"
         }
       ]
+    },
+    "MacOsAutomationPermissionModeSchema": {
+      "enum": [
+        "none",
+        "all"
+      ],
+      "type": "string"
     },
     "MacOsContactsPermission": {
       "enum": [
@@ -3244,7 +3252,8 @@
     "PermissionGrantScope": {
       "enum": [
         "turn",
-        "session"
+        "session",
+        "alwaysAllow"
       ],
       "type": "string"
     },
@@ -3378,6 +3387,13 @@
           "description": "User has approved this request and wants future prompts in the same session-scoped approval cache to be automatically approved for the remainder of the session.",
           "enum": [
             "approved_for_session"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "User has approved this permissions request for the current session and wants the granted subset persisted for future sessions.",
+          "enum": [
+            "approved_for_always"
           ],
           "type": "string"
         },

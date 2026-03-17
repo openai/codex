@@ -7,6 +7,13 @@ use std::path::PathBuf;
 
 use codex_network_proxy::NetworkMode;
 use codex_network_proxy::NetworkProxyConfig;
+use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::MacOsAutomationPermission;
+use codex_protocol::models::MacOsContactsPermission;
+use codex_protocol::models::MacOsPreferencesPermission;
+use codex_protocol::models::MacOsSeatbeltProfileExtensions;
+use codex_protocol::models::NetworkPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -35,6 +42,7 @@ impl PermissionsToml {
 pub struct PermissionProfileToml {
     pub filesystem: Option<FilesystemPermissionsToml>,
     pub network: Option<NetworkToml>,
+    pub macos: Option<MacOsPermissionsToml>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -73,6 +81,18 @@ pub struct NetworkToml {
     pub denied_domains: Option<Vec<String>>,
     pub allow_unix_sockets: Option<Vec<String>>,
     pub allow_local_binding: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct MacOsPermissionsToml {
+    pub preferences: Option<MacOsPreferencesPermission>,
+    pub automations: Option<MacOsAutomationPermission>,
+    pub launch_services: Option<bool>,
+    pub accessibility: Option<bool>,
+    pub calendar: Option<bool>,
+    pub reminders: Option<bool>,
+    pub contacts: Option<MacOsContactsPermission>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -160,7 +180,11 @@ pub(crate) fn compile_permission_profile(
     permissions: &PermissionsToml,
     profile_name: &str,
     startup_warnings: &mut Vec<String>,
-) -> io::Result<(FileSystemSandboxPolicy, NetworkSandboxPolicy)> {
+) -> io::Result<(
+    FileSystemSandboxPolicy,
+    NetworkSandboxPolicy,
+    Option<MacOsSeatbeltProfileExtensions>,
+)> {
     let profile = resolve_permission_profile(permissions, profile_name)?;
 
     let mut entries = Vec::new();
@@ -183,11 +207,305 @@ pub(crate) fn compile_permission_profile(
     }
 
     let network_sandbox_policy = compile_network_sandbox_policy(profile.network.as_ref());
+    let macos_seatbelt_profile_extensions = profile.macos.as_ref().map(macos_permissions_from_toml);
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(entries);
+    let file_system_sandbox_policy = if file_system_sandbox_policy.has_full_disk_write_access() {
+        FileSystemSandboxPolicy::unrestricted()
+    } else {
+        file_system_sandbox_policy
+    };
 
     Ok((
-        FileSystemSandboxPolicy::restricted(entries),
+        file_system_sandbox_policy,
         network_sandbox_policy,
+        macos_seatbelt_profile_extensions,
     ))
+}
+
+pub(crate) fn merge_permission_profile_toml(
+    base: Option<&PermissionProfileToml>,
+    permissions: &PermissionProfileToml,
+) -> PermissionProfileToml {
+    let filesystem = match (
+        base.and_then(|base| base.filesystem.as_ref()),
+        permissions.filesystem.as_ref(),
+    ) {
+        (Some(base), Some(permissions)) => {
+            Some(merge_filesystem_permissions_toml(base, permissions))
+        }
+        (Some(base), None) => Some(base.clone()),
+        (None, Some(permissions)) => Some(permissions.clone()),
+        (None, None) => None,
+    };
+    let network = match (
+        base.and_then(|base| base.network.as_ref()),
+        permissions.network.as_ref(),
+    ) {
+        (Some(base), Some(permissions)) => Some(merge_network_toml(base, permissions)),
+        (Some(base), None) => Some(base.clone()),
+        (None, Some(permissions)) => Some(permissions.clone()),
+        (None, None) => None,
+    };
+    let macos = match (
+        base.and_then(|base| base.macos.as_ref()),
+        permissions.macos.as_ref(),
+    ) {
+        (Some(base), Some(permissions)) => Some(merge_macos_permissions_toml(base, permissions)),
+        (Some(base), None) => Some(base.clone()),
+        (None, Some(permissions)) => Some(permissions.clone()),
+        (None, None) => None,
+    };
+
+    PermissionProfileToml {
+        filesystem,
+        network,
+        macos,
+    }
+}
+
+pub(crate) fn permission_profile_toml_from_runtime_permissions(
+    permissions: &PermissionProfile,
+) -> PermissionProfileToml {
+    let filesystem = permissions
+        .file_system
+        .as_ref()
+        .map(filesystem_permissions_toml_from_runtime)
+        .filter(|filesystem| !filesystem.is_empty());
+    let network = permissions
+        .network
+        .as_ref()
+        .map(network_toml_from_runtime)
+        .filter(network_toml_has_values);
+    let macos = permissions
+        .macos
+        .as_ref()
+        .map(macos_permissions_toml_from_runtime)
+        .filter(macos_permissions_toml_has_values);
+
+    PermissionProfileToml {
+        filesystem,
+        network,
+        macos,
+    }
+}
+
+fn filesystem_permissions_toml_from_runtime(
+    permissions: &FileSystemPermissions,
+) -> FilesystemPermissionsToml {
+    let mut entries = BTreeMap::new();
+
+    if let Some(read) = permissions.read.as_ref() {
+        for path in read {
+            merge_filesystem_permission_entry(
+                &mut entries,
+                path.to_string_lossy().as_ref(),
+                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+            );
+        }
+    }
+    if let Some(write) = permissions.write.as_ref() {
+        for path in write {
+            merge_filesystem_permission_entry(
+                &mut entries,
+                path.to_string_lossy().as_ref(),
+                FilesystemPermissionToml::Access(FileSystemAccessMode::Write),
+            );
+        }
+    }
+
+    FilesystemPermissionsToml { entries }
+}
+
+fn network_toml_from_runtime(permissions: &NetworkPermissions) -> NetworkToml {
+    NetworkToml {
+        enabled: permissions.enabled,
+        ..Default::default()
+    }
+}
+
+fn macos_permissions_toml_from_runtime(
+    permissions: &MacOsSeatbeltProfileExtensions,
+) -> MacOsPermissionsToml {
+    MacOsPermissionsToml {
+        preferences: Some(permissions.macos_preferences.clone()),
+        automations: Some(permissions.macos_automation.clone()),
+        launch_services: Some(permissions.macos_launch_services),
+        accessibility: Some(permissions.macos_accessibility),
+        calendar: Some(permissions.macos_calendar),
+        reminders: Some(permissions.macos_reminders),
+        contacts: Some(permissions.macos_contacts.clone()),
+    }
+}
+
+fn macos_permissions_from_toml(
+    permissions: &MacOsPermissionsToml,
+) -> MacOsSeatbeltProfileExtensions {
+    MacOsSeatbeltProfileExtensions {
+        macos_preferences: permissions.preferences.clone().unwrap_or_default(),
+        macos_automation: permissions.automations.clone().unwrap_or_default(),
+        macos_launch_services: permissions.launch_services.unwrap_or(false),
+        macos_accessibility: permissions.accessibility.unwrap_or(false),
+        macos_calendar: permissions.calendar.unwrap_or(false),
+        macos_reminders: permissions.reminders.unwrap_or(false),
+        macos_contacts: permissions.contacts.clone().unwrap_or_default(),
+    }
+}
+
+fn merge_filesystem_permissions_toml(
+    base: &FilesystemPermissionsToml,
+    permissions: &FilesystemPermissionsToml,
+) -> FilesystemPermissionsToml {
+    let mut entries = base.entries.clone();
+    for (path, permission) in &permissions.entries {
+        merge_filesystem_permission_entry(&mut entries, path, permission.clone());
+    }
+    FilesystemPermissionsToml { entries }
+}
+
+fn merge_filesystem_permission_entry(
+    entries: &mut BTreeMap<String, FilesystemPermissionToml>,
+    path: &str,
+    permission: FilesystemPermissionToml,
+) {
+    entries
+        .entry(path.to_string())
+        .and_modify(|existing| {
+            *existing = merge_filesystem_permission_toml(existing.clone(), permission.clone());
+        })
+        .or_insert(permission);
+}
+
+fn merge_filesystem_permission_toml(
+    base: FilesystemPermissionToml,
+    permissions: FilesystemPermissionToml,
+) -> FilesystemPermissionToml {
+    match (base, permissions) {
+        (FilesystemPermissionToml::Access(base), FilesystemPermissionToml::Access(permissions)) => {
+            FilesystemPermissionToml::Access(more_permissive_access(base, permissions))
+        }
+        (FilesystemPermissionToml::Scoped(base), FilesystemPermissionToml::Scoped(permissions)) => {
+            FilesystemPermissionToml::Scoped(merge_scoped_permissions(base, permissions))
+        }
+        (FilesystemPermissionToml::Access(base), FilesystemPermissionToml::Scoped(permissions)) => {
+            FilesystemPermissionToml::Scoped(merge_scoped_permissions(
+                BTreeMap::from([(".".to_string(), base)]),
+                permissions,
+            ))
+        }
+        (FilesystemPermissionToml::Scoped(base), FilesystemPermissionToml::Access(permissions)) => {
+            FilesystemPermissionToml::Scoped(merge_scoped_permissions(
+                base,
+                BTreeMap::from([(".".to_string(), permissions)]),
+            ))
+        }
+    }
+}
+
+fn merge_scoped_permissions(
+    mut base: BTreeMap<String, FileSystemAccessMode>,
+    permissions: BTreeMap<String, FileSystemAccessMode>,
+) -> BTreeMap<String, FileSystemAccessMode> {
+    for (subpath, access) in permissions {
+        base.entry(subpath)
+            .and_modify(|existing| *existing = more_permissive_access(*existing, access))
+            .or_insert(access);
+    }
+    base
+}
+
+fn more_permissive_access(
+    base: FileSystemAccessMode,
+    permissions: FileSystemAccessMode,
+) -> FileSystemAccessMode {
+    match (base, permissions) {
+        (FileSystemAccessMode::Write, _) | (_, FileSystemAccessMode::Write) => {
+            FileSystemAccessMode::Write
+        }
+        (FileSystemAccessMode::Read, _) | (_, FileSystemAccessMode::Read) => {
+            FileSystemAccessMode::Read
+        }
+        _ => FileSystemAccessMode::None,
+    }
+}
+
+fn merge_network_toml(base: &NetworkToml, permissions: &NetworkToml) -> NetworkToml {
+    NetworkToml {
+        enabled: permissions.enabled.or(base.enabled),
+        proxy_url: permissions
+            .proxy_url
+            .clone()
+            .or_else(|| base.proxy_url.clone()),
+        enable_socks5: permissions.enable_socks5.or(base.enable_socks5),
+        socks_url: permissions
+            .socks_url
+            .clone()
+            .or_else(|| base.socks_url.clone()),
+        enable_socks5_udp: permissions.enable_socks5_udp.or(base.enable_socks5_udp),
+        allow_upstream_proxy: permissions
+            .allow_upstream_proxy
+            .or(base.allow_upstream_proxy),
+        dangerously_allow_non_loopback_proxy: permissions
+            .dangerously_allow_non_loopback_proxy
+            .or(base.dangerously_allow_non_loopback_proxy),
+        dangerously_allow_all_unix_sockets: permissions
+            .dangerously_allow_all_unix_sockets
+            .or(base.dangerously_allow_all_unix_sockets),
+        mode: permissions.mode.or(base.mode),
+        allowed_domains: permissions
+            .allowed_domains
+            .clone()
+            .or_else(|| base.allowed_domains.clone()),
+        denied_domains: permissions
+            .denied_domains
+            .clone()
+            .or_else(|| base.denied_domains.clone()),
+        allow_unix_sockets: permissions
+            .allow_unix_sockets
+            .clone()
+            .or_else(|| base.allow_unix_sockets.clone()),
+        allow_local_binding: permissions.allow_local_binding.or(base.allow_local_binding),
+    }
+}
+
+fn merge_macos_permissions_toml(
+    base: &MacOsPermissionsToml,
+    permissions: &MacOsPermissionsToml,
+) -> MacOsPermissionsToml {
+    let base_runtime = macos_permissions_from_toml(base);
+    let permissions_runtime = macos_permissions_from_toml(permissions);
+    macos_permissions_toml_from_runtime(
+        &crate::sandboxing::macos_permissions::merge_macos_seatbelt_profile_extensions(
+            Some(&base_runtime),
+            Some(&permissions_runtime),
+        )
+        .unwrap_or_default(),
+    )
+}
+
+fn network_toml_has_values(network: &NetworkToml) -> bool {
+    network.enabled.is_some()
+        || network.proxy_url.is_some()
+        || network.enable_socks5.is_some()
+        || network.socks_url.is_some()
+        || network.enable_socks5_udp.is_some()
+        || network.allow_upstream_proxy.is_some()
+        || network.dangerously_allow_non_loopback_proxy.is_some()
+        || network.dangerously_allow_all_unix_sockets.is_some()
+        || network.mode.is_some()
+        || network.allowed_domains.is_some()
+        || network.denied_domains.is_some()
+        || network.allow_unix_sockets.is_some()
+        || network.allow_local_binding.is_some()
+}
+
+fn macos_permissions_toml_has_values(permissions: &MacOsPermissionsToml) -> bool {
+    permissions.preferences.is_some()
+        || permissions.automations.is_some()
+        || permissions.launch_services.is_some()
+        || permissions.accessibility.is_some()
+        || permissions.calendar.is_some()
+        || permissions.reminders.is_some()
+        || permissions.contacts.is_some()
 }
 
 fn compile_network_sandbox_policy(network: Option<&NetworkToml>) -> NetworkSandboxPolicy {
@@ -281,11 +599,11 @@ fn parse_special_path(path: &str) -> Option<FileSystemSpecialPath> {
     match path {
         ":root" => Some(FileSystemSpecialPath::Root),
         ":minimal" => Some(FileSystemSpecialPath::Minimal),
-        ":project_roots" => Some(FileSystemSpecialPath::project_roots(/*subpath*/ None)),
+        ":cwd" => Some(FileSystemSpecialPath::CurrentWorkingDirectory),
+        ":project_roots" => Some(FileSystemSpecialPath::project_roots(None)),
         ":tmpdir" => Some(FileSystemSpecialPath::Tmpdir),
-        _ if path.starts_with(':') => {
-            Some(FileSystemSpecialPath::unknown(path, /*subpath*/ None))
-        }
+        ":slash_tmp" => Some(FileSystemSpecialPath::SlashTmp),
+        _ if path.starts_with(':') => Some(FileSystemSpecialPath::unknown(path, None)),
         _ => None,
     }
 }

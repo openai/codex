@@ -987,7 +987,9 @@ impl From<CoreReviewDecision> for CommandExecutionApprovalDecision {
             } => Self::AcceptWithExecpolicyAmendment {
                 execpolicy_amendment: proposed_execpolicy_amendment.into(),
             },
-            CoreReviewDecision::ApprovedForSession => Self::AcceptForSession,
+            CoreReviewDecision::ApprovedForSession | CoreReviewDecision::ApprovedForAlways => {
+                Self::AcceptForSession
+            }
             CoreReviewDecision::NetworkPolicyAmendment {
                 network_policy_amendment,
             } => Self::ApplyNetworkPolicyAmendment {
@@ -5604,7 +5606,8 @@ v2_enum_from_core!(
     pub enum PermissionGrantScope from CorePermissionGrantScope {
         #[default]
         Turn,
-        Session
+        Session,
+        AlwaysAllow
     }
 );
 

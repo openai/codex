@@ -742,6 +742,83 @@
         }
       ]
     },
+    "MacOsAutomationPermission": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/MacOsAutomationPermissionModeSchema"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "properties": {
+            "bundle_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "bundle_ids"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "MacOsAutomationPermissionModeSchema": {
+      "enum": [
+        "none",
+        "all"
+      ],
+      "type": "string"
+    },
+    "MacOsContactsPermission": {
+      "enum": [
+        "none",
+        "read_only",
+        "read_write"
+      ],
+      "type": "string"
+    },
+    "MacOsPermissionsToml": {
+      "additionalProperties": false,
+      "properties": {
+        "accessibility": {
+          "type": "boolean"
+        },
+        "automations": {
+          "$ref": "#/definitions/MacOsAutomationPermission"
+        },
+        "calendar": {
+          "type": "boolean"
+        },
+        "contacts": {
+          "$ref": "#/definitions/MacOsContactsPermission"
+        },
+        "launch_services": {
+          "type": "boolean"
+        },
+        "preferences": {
+          "$ref": "#/definitions/MacOsPreferencesPermission"
+        },
+        "reminders": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "MacOsPreferencesPermission": {
+      "enum": [
+        "none",
+        "read_only",
+        "read_write"
+      ],
+      "type": "string"
+    },
     "MemoriesToml": {
       "additionalProperties": false,
       "description": "Memories settings loaded from config.toml.",
@@ -1199,6 +1276,9 @@
       "properties": {
         "filesystem": {
           "$ref": "#/definitions/FilesystemPermissionsToml"
+        },
+        "macos": {
+          "$ref": "#/definitions/MacOsPermissionsToml"
         },
         "network": {
           "$ref": "#/definitions/NetworkToml"

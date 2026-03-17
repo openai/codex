@@ -66,6 +66,13 @@
           "type": "string"
         },
         {
+          "description": "User has approved this permissions request for the current session and wants the granted subset persisted for future sessions.",
+          "enum": [
+            "approved_for_always"
+          ],
+          "type": "string"
+        },
+        {
           "additionalProperties": false,
           "description": "User chose to persist a network policy rule (allow/deny) for future requests to the same host.",
           "properties": {

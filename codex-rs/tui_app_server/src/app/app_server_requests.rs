@@ -350,7 +350,9 @@ struct McpLegacyRequestKey {
 fn file_change_decision(decision: &ReviewDecision) -> Result<FileChangeApprovalDecision, String> {
     match decision {
         ReviewDecision::Approved => Ok(FileChangeApprovalDecision::Accept),
-        ReviewDecision::ApprovedForSession => Ok(FileChangeApprovalDecision::AcceptForSession),
+        ReviewDecision::ApprovedForSession | ReviewDecision::ApprovedForAlways => {
+            Ok(FileChangeApprovalDecision::AcceptForSession)
+        }
         ReviewDecision::Denied => Ok(FileChangeApprovalDecision::Decline),
         ReviewDecision::Abort => Ok(FileChangeApprovalDecision::Cancel),
         ReviewDecision::ApprovedExecpolicyAmendment { .. } => {

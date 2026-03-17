@@ -371,7 +371,83 @@ permissions:
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn shell_zsh_fork_skill_script_reject_policy_with_sandbox_approval_true_still_prompts()
+async fn shell_zsh_fork_skill_script_rejects_persistent_exec_approval() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(runtime) = zsh_fork_runtime("zsh-fork skill persistent approval rejection test")?
+    else {
+        return Ok(());
+    };
+
+    let server = start_mock_server().await;
+    let tool_call_id = "zsh-fork-skill-approved-for-always";
+    let test = build_zsh_fork_test(
+        &server,
+        runtime,
+        AskForApproval::OnRequest,
+        SandboxPolicy::new_workspace_write_policy(),
+        |home| {
+            write_skill_with_shell_script(home, "mbolin-test-skill", "hello-mbolin.sh").unwrap();
+            write_skill_metadata(
+                home,
+                "mbolin-test-skill",
+                r#"
+permissions:
+  file_system:
+    write:
+      - "./output"
+"#,
+            )
+            .unwrap();
+        },
+    )
+    .await?;
+
+    let arguments = shell_command_arguments(&skill_script_command(&test, "hello-mbolin.sh")?.1)?;
+    let mocks =
+        mount_function_call_agent_response(&server, tool_call_id, &arguments, "shell_command")
+            .await;
+
+    submit_turn_with_policies(
+        &test,
+        "use $mbolin-test-skill",
+        AskForApproval::OnRequest,
+        SandboxPolicy::new_workspace_write_policy(),
+    )
+    .await?;
+
+    let approval = wait_for_exec_approval_request(&test)
+        .await
+        .expect("expected exec approval request before completion");
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::ApprovedForAlways,
+        })
+        .await?;
+
+    wait_for_turn_complete(&test).await;
+
+    let call_output = mocks
+        .completion
+        .single_request()
+        .function_call_output(tool_call_id);
+    let output = call_output["output"].as_str().unwrap_or_default();
+    assert!(
+        output.contains(
+            "Execution denied: Persistent approvals are not supported for command execution"
+        ),
+        "expected persistent-approval rejection marker in function_call_output: {output:?}"
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_zsh_fork_skill_script_reject_policy_with_sandbox_approval_true_skips_prompt()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
 

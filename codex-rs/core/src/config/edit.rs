@@ -1,3 +1,5 @@
+use crate::config::PermissionProfileToml;
+use crate::config::permissions::merge_permission_profile_toml;
 use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
 use crate::features::FEATURES;
@@ -55,6 +57,12 @@ pub enum ConfigEdit {
     SetPath {
         segments: Vec<String>,
         value: TomlItem,
+    },
+    /// Merge a permissions profile and optionally set it as the default.
+    SetPermissionProfile {
+        name: String,
+        profile: PermissionProfileToml,
+        set_as_default: bool,
     },
     /// Remove the value stored at the exact dotted path.
     ClearPath { segments: Vec<String> },
@@ -376,6 +384,11 @@ impl ConfigDocument {
                 Ok(self.set_skill_config(path.as_path(), *enabled))
             }
             ConfigEdit::SetPath { segments, value } => Ok(self.insert(segments, value.clone())),
+            ConfigEdit::SetPermissionProfile {
+                name,
+                profile,
+                set_as_default,
+            } => self.set_permission_profile(name, profile, *set_as_default),
             ConfigEdit::ClearPath { segments } => Ok(self.clear_owned(segments)),
             ConfigEdit::SetProjectTrustLevel { path, level } => {
                 // Delegate to the existing, tested logic in config.rs to
@@ -462,6 +475,45 @@ impl ConfigDocument {
         }
 
         true
+    }
+
+    fn set_permission_profile(
+        &mut self,
+        name: &str,
+        profile: &PermissionProfileToml,
+        set_as_default: bool,
+    ) -> anyhow::Result<bool> {
+        let root = self.doc.as_table_mut();
+        if !root.contains_key("permissions") {
+            root.insert(
+                "permissions",
+                TomlItem::Table(document_helpers::new_implicit_table()),
+            );
+        }
+
+        let Some(permissions_item) = root.get_mut("permissions") else {
+            return Ok(false);
+        };
+        let Some(permissions_table) = document_helpers::ensure_table_for_write(permissions_item)
+        else {
+            return Ok(false);
+        };
+
+        let merged_profile = if let Some(existing) = permissions_table.get(name) {
+            let existing = deserialize_permission_profile(existing)?;
+            merge_permission_profile_toml(Some(&existing), profile)
+        } else {
+            profile.clone()
+        };
+
+        permissions_table[name] = serialize_permission_profile(&merged_profile)?;
+
+        let mut mutated = true;
+        if set_as_default {
+            mutated |= self.write_value(Scope::Global, &["default_permissions"], value(name));
+        }
+
+        Ok(mutated)
     }
 
     fn set_skill_config(&mut self, path: &Path, enabled: bool) -> bool {
@@ -676,6 +728,18 @@ impl ConfigDocument {
             _ => {}
         }
     }
+}
+
+fn deserialize_permission_profile(item: &TomlItem) -> anyhow::Result<PermissionProfileToml> {
+    toml::from_str(&item.to_string()).context("failed to deserialize permission profile")
+}
+
+fn serialize_permission_profile(profile: &PermissionProfileToml) -> anyhow::Result<TomlItem> {
+    let serialized = toml::to_string(profile).context("failed to serialize permission profile")?;
+    let doc = serialized
+        .parse::<DocumentMut>()
+        .context("failed to parse serialized permission profile")?;
+    Ok(TomlItem::Table(doc.as_table().clone()))
 }
 
 fn normalize_skill_config_path(path: &Path) -> String {
@@ -930,6 +994,20 @@ impl ConfigEditsBuilder {
             }),
             None => self.edits.push(ConfigEdit::ClearPath { segments }),
         }
+        self
+    }
+
+    pub fn set_permission_profile(
+        mut self,
+        name: &str,
+        profile: &PermissionProfileToml,
+        set_as_default: bool,
+    ) -> Self {
+        self.edits.push(ConfigEdit::SetPermissionProfile {
+            name: name.to_string(),
+            profile: profile.clone(),
+            set_as_default,
+        });
         self
     }
 

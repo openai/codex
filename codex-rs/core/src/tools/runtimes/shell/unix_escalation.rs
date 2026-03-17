@@ -547,6 +547,10 @@ impl CoreShellActionProvider {
                                 EscalationDecision::run()
                             }
                         }
+                        ReviewDecision::ApprovedForAlways => EscalationDecision::deny(Some(
+                            "Persistent approvals are not supported for command execution"
+                                .to_string(),
+                        )),
                         ReviewDecision::ApprovedForSession => {
                             // Currently, we only add session approvals for
                             // skill scripts because we are storing only the

@@ -75,6 +75,7 @@ use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -94,7 +95,9 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use crate::config::permissions::compile_permission_profile;
+use crate::config::permissions::merge_permission_profile_toml;
 use crate::config::permissions::network_proxy_config_from_profile_network;
+use crate::config::permissions::permission_profile_toml_from_runtime_permissions;
 use crate::config::profile::ConfigProfile;
 use codex_network_proxy::NetworkProxyConfig;
 use toml::Value as TomlValue;
@@ -120,6 +123,7 @@ pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
 pub use permissions::FilesystemPermissionToml;
 pub use permissions::FilesystemPermissionsToml;
+pub use permissions::MacOsPermissionsToml;
 pub use permissions::NetworkToml;
 pub use permissions::PermissionProfileToml;
 pub use permissions::PermissionsToml;
@@ -2207,6 +2211,7 @@ impl Config {
             sandbox_policy,
             file_system_sandbox_policy,
             network_sandbox_policy,
+            macos_seatbelt_profile_extensions,
         ) = if profiles_are_active {
             let permissions = cfg.permissions.as_ref().ok_or_else(|| {
                 std::io::Error::new(
@@ -2223,12 +2228,15 @@ impl Config {
             let profile = resolve_permission_profile(permissions, default_permissions)?;
             let configured_network_proxy_config =
                 network_proxy_config_from_profile_network(profile.network.as_ref());
-            let (mut file_system_sandbox_policy, network_sandbox_policy) =
-                compile_permission_profile(
-                    permissions,
-                    default_permissions,
-                    &mut startup_warnings,
-                )?;
+            let (
+                mut file_system_sandbox_policy,
+                network_sandbox_policy,
+                macos_seatbelt_profile_extensions,
+            ) = compile_permission_profile(
+                permissions,
+                default_permissions,
+                &mut startup_warnings,
+            )?;
             let mut sandbox_policy = file_system_sandbox_policy
                 .to_legacy_sandbox_policy(network_sandbox_policy, &resolved_cwd)?;
             if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
@@ -2244,6 +2252,7 @@ impl Config {
                 sandbox_policy,
                 file_system_sandbox_policy,
                 network_sandbox_policy,
+                macos_seatbelt_profile_extensions,
             )
         } else {
             let configured_network_proxy_config = NetworkProxyConfig::default();
@@ -2269,6 +2278,7 @@ impl Config {
                 sandbox_policy,
                 file_system_sandbox_policy,
                 network_sandbox_policy,
+                None,
             )
         };
         let approval_policy_was_explicit = approval_policy_override.is_some()
@@ -2620,7 +2630,7 @@ impl Config {
                 shell_environment_policy,
                 windows_sandbox_mode,
                 windows_sandbox_private_desktop,
-                macos_seatbelt_profile_extensions: None,
+                macos_seatbelt_profile_extensions,
             },
             approvals_reviewer,
             enforce_residency: enforce_residency.value,
@@ -2865,6 +2875,43 @@ impl Config {
     pub fn bundled_skills_enabled(&self) -> bool {
         crate::skills::manager::bundled_skills_enabled_from_stack(&self.config_layer_stack)
     }
+}
+
+pub(crate) fn user_default_permissions_profile_name(config: &Config) -> Option<String> {
+    config
+        .config_layer_stack
+        .get_user_layer()
+        .map(|layer| layer.config.clone())
+        .and_then(|config| config.try_into::<PermissionSelectionToml>().ok())
+        .and_then(|selection| selection.default_permissions)
+}
+
+pub(crate) async fn persist_granted_permission_profile(
+    codex_home: &Path,
+    config: &Config,
+    granted_permissions: &PermissionProfile,
+) -> anyhow::Result<String> {
+    let granted_profile = permission_profile_toml_from_runtime_permissions(granted_permissions);
+    let Some(profile_name) = user_default_permissions_profile_name(config) else {
+        anyhow::bail!(
+            "cannot persist granted permissions without user-configured `default_permissions`"
+        );
+    };
+    let existing = config
+        .config_layer_stack
+        .get_user_layer()
+        .map(|layer| layer.config.clone())
+        .and_then(|config| config.try_into::<ConfigToml>().ok())
+        .and_then(|config_toml| config_toml.permissions)
+        .and_then(|permissions| permissions.entries.get(&profile_name).cloned());
+    let profile = merge_permission_profile_toml(existing.as_ref(), &granted_profile);
+
+    ConfigEditsBuilder::new(codex_home)
+        .set_permission_profile(&profile_name, &profile, true)
+        .apply()
+        .await?;
+
+    Ok(profile_name)
 }
 
 pub(crate) fn uses_deprecated_instructions_file(config_layer_stack: &ConfigLayerStack) -> bool {

@@ -428,7 +428,7 @@ pub(crate) const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Allow for this se
 // real "Decline" answer, so this lets guardian denials round-trip distinctly from user cancel.
 // This is not a user-facing option.
 pub(crate) const MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC: &str = "__codex_mcp_decline__";
-const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER: &str = "Allow and don't ask me again";
+pub(crate) const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER: &str = "Allow and don't ask me again";
 const MCP_TOOL_APPROVAL_CANCEL: &str = "Cancel";
 const MCP_TOOL_APPROVAL_KIND_KEY: &str = "codex_approval_kind";
 const MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL: &str = "mcp_tool_call";
@@ -723,7 +723,9 @@ fn mcp_tool_approval_decision_from_guardian(decision: ReviewDecision) -> McpTool
         ReviewDecision::Approved
         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
         | ReviewDecision::NetworkPolicyAmendment { .. } => McpToolApprovalDecision::Accept,
-        ReviewDecision::ApprovedForSession => McpToolApprovalDecision::AcceptForSession,
+        ReviewDecision::ApprovedForSession | ReviewDecision::ApprovedForAlways => {
+            McpToolApprovalDecision::AcceptForSession
+        }
         ReviewDecision::Denied | ReviewDecision::Abort => McpToolApprovalDecision::Decline,
     }
 }
