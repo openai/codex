@@ -21,9 +21,12 @@ jobs:
           echo "head=$(git rev-parse HEAD^2)" >> "$GITHUB_OUTPUT"
 
       - name: Check changed blob sizes
+        env:
+          BASE_SHA: ${{ steps.range.outputs.base }}
+          HEAD_SHA: ${{ steps.range.outputs.head }}
         run: |
           python3 scripts/check_blob_size.py \
-            --base "${{ steps.range.outputs.base }}" \
-            --head "${{ steps.range.outputs.head }}" \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
             --max-bytes 512000 \
             --allowlist .github/blob-size-allowlist.txt

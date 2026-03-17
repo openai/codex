@@ -268,9 +268,11 @@ impl ChatWidget {
             RealtimeEvent::SessionUpdated { session_id, .. } => {
                 self.realtime_conversation.session_id = Some(session_id);
             }
+            RealtimeEvent::InputAudioSpeechStarted(_) => self.interrupt_realtime_audio_playback(),
             RealtimeEvent::InputTranscriptDelta(_) => {}
             RealtimeEvent::OutputTranscriptDelta(_) => {}
             RealtimeEvent::AudioOut(frame) => self.enqueue_realtime_audio_out(&frame),
+            RealtimeEvent::ResponseCancelled(_) => self.interrupt_realtime_audio_playback(),
             RealtimeEvent::ConversationItemAdded(_item) => {}
             RealtimeEvent::ConversationItemDone { .. } => {}
             RealtimeEvent::HandoffRequested(_) => {}
@@ -312,6 +314,16 @@ impl ChatWidget {
             let _ = frame;
         }
     }
+
+    #[cfg(not(target_os = "linux"))]
+    fn interrupt_realtime_audio_playback(&mut self) {
+        if let Some(player) = &self.realtime_conversation.audio_player {
+            player.clear();
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn interrupt_realtime_audio_playback(&mut self) {}
 
     #[cfg(not(target_os = "linux"))]
     fn start_realtime_local_audio(&mut self) {

@@ -139,6 +139,8 @@ pub struct RealtimeAudioFrame {
     pub num_channels: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub samples_per_channel: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -161,14 +163,26 @@ pub struct RealtimeHandoffRequested {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeInputAudioSpeechStarted {
+    pub item_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeResponseCancelled {
+    pub response_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub enum RealtimeEvent {
     SessionUpdated {
         session_id: String,
         instructions: Option<String>,
     },
+    InputAudioSpeechStarted(RealtimeInputAudioSpeechStarted),
     InputTranscriptDelta(RealtimeTranscriptDelta),
     OutputTranscriptDelta(RealtimeTranscriptDelta),
     AudioOut(RealtimeAudioFrame),
+    ResponseCancelled(RealtimeResponseCancelled),
     ConversationItemAdded(Value),
     ConversationItemDone {
         item_id: String,
@@ -4078,6 +4092,7 @@ mod tests {
                 sample_rate: 24_000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
+                item_id: None,
             },
         });
         let start = Op::RealtimeConversationStart(ConversationStartParams {

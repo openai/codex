@@ -4,6 +4,7 @@ mod injection;
 mod manager;
 mod manifest;
 mod marketplace;
+mod remote;
 mod render;
 mod store;
 mod toggles;

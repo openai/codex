@@ -72,6 +72,7 @@ use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::LoginApiKeyParams;
 use codex_app_server_protocol::LogoutAccountResponse;
+use codex_app_server_protocol::MarketplaceInterface;
 use codex_app_server_protocol::McpServerOauthLoginCompletedNotification;
 use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
@@ -5452,6 +5453,9 @@ impl CodexMessageProcessor {
                     .map(|marketplace| PluginMarketplaceEntry {
                         name: marketplace.name,
                         path: marketplace.path,
+                        interface: marketplace.interface.map(|interface| MarketplaceInterface {
+                            display_name: interface.display_name,
+                        }),
                         plugins: marketplace
                             .plugins
                             .into_iter()
@@ -5678,6 +5682,7 @@ impl CodexMessageProcessor {
         let PluginInstallParams {
             marketplace_path,
             plugin_name,
+            force_remote_sync,
         } = params;
         let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
 
@@ -5687,7 +5692,23 @@ impl CodexMessageProcessor {
             marketplace_path,
         };
 
-        match plugins_manager.install_plugin(request).await {
+        let install_result = if force_remote_sync {
+            let config = match self.load_latest_config(config_cwd.clone()).await {
+                Ok(config) => config,
+                Err(err) => {
+                    self.outgoing.send_error(request_id, err).await;
+                    return;
+                }
+            };
+            let auth = self.auth_manager.auth().await;
+            plugins_manager
+                .install_plugin_with_remote_sync(&config, auth.as_ref(), request)
+                .await
+        } else {
+            plugins_manager.install_plugin(request).await
+        };
+
+        match install_result {
             Ok(result) => {
                 let config = match self.load_latest_config(config_cwd).await {
                     Ok(config) => config,
@@ -5788,6 +5809,13 @@ impl CodexMessageProcessor {
                         )
                         .await;
                     }
+                    CorePluginInstallError::Remote(err) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!("failed to enable remote plugin: {err}"),
+                        )
+                        .await;
+                    }
                     CorePluginInstallError::Join(err) => {
                         self.send_internal_error(
                             request_id,
@@ -5812,9 +5840,29 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: PluginUninstallParams,
     ) {
+        let PluginUninstallParams {
+            plugin_id,
+            force_remote_sync,
+        } = params;
         let plugins_manager = self.thread_manager.plugins_manager();
 
-        match plugins_manager.uninstall_plugin(params.plugin_id).await {
+        let uninstall_result = if force_remote_sync {
+            let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
+                Ok(config) => config,
+                Err(err) => {
+                    self.outgoing.send_error(request_id, err).await;
+                    return;
+                }
+            };
+            let auth = self.auth_manager.auth().await;
+            plugins_manager
+                .uninstall_plugin_with_remote_sync(&config, auth.as_ref(), plugin_id)
+                .await
+        } else {
+            plugins_manager.uninstall_plugin(plugin_id).await
+        };
+
+        match uninstall_result {
             Ok(()) => {
                 self.clear_plugin_related_caches();
                 self.outgoing
@@ -5833,6 +5881,13 @@ impl CodexMessageProcessor {
                         self.send_internal_error(
                             request_id,
                             format!("failed to clear plugin config: {err}"),
+                        )
+                        .await;
+                    }
+                    CorePluginUninstallError::Remote(err) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!("failed to uninstall remote plugin: {err}"),
                         )
                         .await;
                     }

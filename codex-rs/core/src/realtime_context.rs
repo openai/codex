@@ -1,8 +1,11 @@
 use crate::codex::Session;
+use crate::compact::content_items_to_text;
+use crate::event_mapping::is_contextual_user_message_content;
 use crate::git_info::resolve_root_git_project_for_trust;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
 use chrono::Utc;
+use codex_protocol::models::ResponseItem;
 use codex_state::SortKey;
 use codex_state::ThreadMetadata;
 use dirs::home_dir;
@@ -19,9 +22,11 @@ use tracing::info;
 use tracing::warn;
 
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.\nThis is background context about recent work and machine/workspace layout. It may be incomplete or stale. Use it to inform responses, and do not repeat it back unless relevant.";
+const CURRENT_THREAD_SECTION_TOKEN_BUDGET: usize = 1_200;
 const RECENT_WORK_SECTION_TOKEN_BUDGET: usize = 2_200;
 const WORKSPACE_SECTION_TOKEN_BUDGET: usize = 1_600;
 const NOTES_SECTION_TOKEN_BUDGET: usize = 300;
+const MAX_CURRENT_THREAD_TURNS: usize = 2;
 const MAX_RECENT_THREADS: usize = 40;
 const MAX_RECENT_WORK_GROUPS: usize = 8;
 const MAX_CURRENT_CWD_ASKS: usize = 8;
@@ -49,20 +54,33 @@ pub(crate) async fn build_realtime_startup_context(
 ) -> Option<String> {
     let config = sess.get_config().await;
     let cwd = config.cwd.clone();
+    let history = sess.clone_history().await;
+    let current_thread_section = build_current_thread_section(history.raw_items());
     let recent_threads = load_recent_threads(sess).await;
     let recent_work_section = build_recent_work_section(&cwd, &recent_threads);
-    let workspace_section = build_workspace_section(&cwd);
+    let workspace_section = build_workspace_section_with_user_root(&cwd, home_dir());
 
-    if recent_work_section.is_none() && workspace_section.is_none() {
+    if current_thread_section.is_none()
+        && recent_work_section.is_none()
+        && workspace_section.is_none()
+    {
         debug!("realtime startup context unavailable; skipping injection");
         return None;
     }
 
     let mut parts = vec![STARTUP_CONTEXT_HEADER.to_string()];
 
+    let has_current_thread_section = current_thread_section.is_some();
     let has_recent_work_section = recent_work_section.is_some();
     let has_workspace_section = workspace_section.is_some();
 
+    if let Some(section) = format_section(
+        "Current Thread",
+        current_thread_section,
+        CURRENT_THREAD_SECTION_TOKEN_BUDGET,
+    ) {
+        parts.push(section);
+    }
     if let Some(section) = format_section(
         "Recent Work",
         recent_work_section,
@@ -79,7 +97,7 @@ pub(crate) async fn build_realtime_startup_context(
     }
     if let Some(section) = format_section(
         "Notes",
-        Some("Built at realtime startup from persisted thread metadata in the state DB and a bounded local workspace scan. This excludes repo memory instructions, AGENTS files, project-doc prompt blends, and memory summaries.".to_string()),
+        Some("Built at realtime startup from the current thread history, persisted thread metadata in the state DB, and a bounded local workspace scan. This excludes repo memory instructions, AGENTS files, project-doc prompt blends, and memory summaries.".to_string()),
         NOTES_SECTION_TOKEN_BUDGET,
     ) {
         parts.push(section);
@@ -89,6 +107,7 @@ pub(crate) async fn build_realtime_startup_context(
     debug!(
         approx_tokens = approx_token_count(&context),
         bytes = context.len(),
+        has_current_thread_section,
         has_recent_work_section,
         has_workspace_section,
         "built realtime startup context"
@@ -167,8 +186,88 @@ fn build_recent_work_section(cwd: &Path, recent_threads: &[ThreadMetadata]) -> O
     (!sections.is_empty()).then(|| sections.join("\n\n"))
 }
 
-fn build_workspace_section(cwd: &Path) -> Option<String> {
-    build_workspace_section_with_user_root(cwd, home_dir())
+fn build_current_thread_section(items: &[ResponseItem]) -> Option<String> {
+    let mut turns = Vec::new();
+    let mut current_user = Vec::new();
+    let mut current_assistant = Vec::new();
+
+    for item in items {
+        match item {
+            ResponseItem::Message { role, content, .. } if role == "user" => {
+                if is_contextual_user_message_content(content) {
+                    continue;
+                }
+                let Some(text) = content_items_to_text(content)
+                    .map(|text| text.trim().to_string())
+                    .filter(|text| !text.is_empty())
+                else {
+                    continue;
+                };
+                if !current_user.is_empty() || !current_assistant.is_empty() {
+                    turns.push((
+                        std::mem::take(&mut current_user),
+                        std::mem::take(&mut current_assistant),
+                    ));
+                }
+                current_user.push(text);
+            }
+            ResponseItem::Message { role, content, .. } if role == "assistant" => {
+                let Some(text) = content_items_to_text(content)
+                    .map(|text| text.trim().to_string())
+                    .filter(|text| !text.is_empty())
+                else {
+                    continue;
+                };
+                if current_user.is_empty() && current_assistant.is_empty() {
+                    continue;
+                }
+                current_assistant.push(text);
+            }
+            _ => {}
+        }
+    }
+
+    if !current_user.is_empty() || !current_assistant.is_empty() {
+        turns.push((current_user, current_assistant));
+    }
+
+    let retained_turns = turns
+        .into_iter()
+        .rev()
+        .take(MAX_CURRENT_THREAD_TURNS)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>();
+    if retained_turns.is_empty() {
+        return None;
+    }
+
+    let mut lines = vec![
+        "Most recent user/assistant turns from this exact thread. Use them for continuity when responding.".to_string(),
+    ];
+
+    let retained_turn_count = retained_turns.len();
+    for (index, (user_messages, assistant_messages)) in retained_turns.into_iter().enumerate() {
+        lines.push(String::new());
+        if retained_turn_count == 1 || index + 1 == retained_turn_count {
+            lines.push("### Latest turn".to_string());
+        } else {
+            lines.push(format!("### Prior turn {}", index + 1));
+        }
+
+        if !user_messages.is_empty() {
+            lines.push("User:".to_string());
+            lines.push(user_messages.join("\n\n"));
+        }
+        if !assistant_messages.is_empty() {
+            lines.push(String::new());
+            lines.push("Assistant:".to_string());
+            lines.push(assistant_messages.join("\n\n"));
+        }
+    }
+
+    Some(lines.join("\n"))
 }
 
 fn build_workspace_section_with_user_root(
@@ -197,12 +296,12 @@ fn build_workspace_section_with_user_root(
 
     let mut lines = vec![
         format!("Current working directory: {}", cwd.display()),
-        format!("Working directory name: {}", display_name(cwd)),
+        format!("Working directory name: {}", file_name_string(cwd)),
     ];
 
     if let Some(git_root) = &git_root {
         lines.push(format!("Git root: {}", git_root.display()));
-        lines.push(format!("Git project: {}", display_name(git_root)));
+        lines.push(format!("Git project: {}", file_name_string(git_root)));
     }
     if let Some(user_root) = &user_root {
         lines.push(format!("User root: {}", user_root.display()));
@@ -374,13 +473,6 @@ fn format_thread_group(
     }
 
     (lines.len() > 5).then(|| lines.join("\n"))
-}
-
-fn display_name(path: &Path) -> String {
-    path.file_name()
-        .and_then(OsStr::to_str)
-        .map(str::to_owned)
-        .unwrap_or_else(|| path.display().to_string())
 }
 
 fn file_name_string(path: &Path) -> String {

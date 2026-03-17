@@ -3,15 +3,22 @@ use super::curated_plugins_repo_path;
 use super::load_plugin_manifest;
 use super::manifest::PluginManifestInterfaceSummary;
 use super::marketplace::MarketplaceError;
+use super::marketplace::MarketplaceInterfaceSummary;
 use super::marketplace::MarketplacePluginAuthPolicy;
 use super::marketplace::MarketplacePluginInstallPolicy;
 use super::marketplace::MarketplacePluginSourceSummary;
+use super::marketplace::ResolvedMarketplacePlugin;
 use super::marketplace::list_marketplaces;
 use super::marketplace::load_marketplace_summary;
 use super::marketplace::resolve_marketplace_plugin;
 use super::plugin_manifest_name;
 use super::plugin_manifest_paths;
 use super::read_curated_plugins_sha;
+use super::remote::RemotePluginFetchError;
+use super::remote::RemotePluginMutationError;
+use super::remote::enable_remote_plugin;
+use super::remote::fetch_remote_plugin_status;
+use super::remote::uninstall_remote_plugin;
 use super::store::DEFAULT_PLUGIN_VERSION;
 use super::store::PluginId;
 use super::store::PluginIdError;
@@ -31,7 +38,6 @@ use crate::config::profile::ConfigProfile;
 use crate::config::types::McpServerConfig;
 use crate::config::types::PluginConfig;
 use crate::config_loader::ConfigLayerStack;
-use crate::default_client::build_reqwest_client;
 use crate::features::Feature;
 use crate::features::FeatureOverrides;
 use crate::features::Features;
@@ -55,7 +61,6 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
 use toml_edit::value;
 use tracing::info;
 use tracing::warn;
@@ -64,7 +69,6 @@ const DEFAULT_SKILLS_DIR_NAME: &str = "skills";
 const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
 const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
-const REMOTE_PLUGIN_SYNC_TIMEOUT: Duration = Duration::from_secs(30);
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
 const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 1024;
 
@@ -118,6 +122,7 @@ pub struct PluginDetailSummary {
 pub struct ConfiguredMarketplaceSummary {
     pub name: String,
     pub path: AbsolutePathBuf,
+    pub interface: Option<MarketplaceInterfaceSummary>,
     pub plugins: Vec<ConfiguredMarketplacePluginSummary>,
 }
 
@@ -310,6 +315,7 @@ pub struct RemotePluginSyncResult {
     /// Plugin ids whose local config was changed to enabled.
     pub enabled_plugin_ids: Vec<String>,
     /// Plugin ids whose local config was changed to disabled.
+    /// This is not populated by `sync_plugins_from_remote`.
     pub disabled_plugin_ids: Vec<String>,
     /// Plugin ids removed from local cache or plugin config.
     pub uninstalled_plugin_ids: Vec<String>,
@@ -383,29 +389,24 @@ pub enum PluginRemoteSyncError {
 }
 
 impl PluginRemoteSyncError {
-    fn auth_token(source: std::io::Error) -> Self {
-        Self::AuthToken(source)
-    }
-
-    fn request(url: String, source: reqwest::Error) -> Self {
-        Self::Request { url, source }
-    }
-
     fn join(source: tokio::task::JoinError) -> Self {
         Self::Join(source)
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct RemotePluginStatusSummary {
-    name: String,
-    #[serde(default = "default_remote_marketplace_name")]
-    marketplace_name: String,
-    enabled: bool,
-}
-
-fn default_remote_marketplace_name() -> String {
-    OPENAI_CURATED_MARKETPLACE_NAME.to_string()
+impl From<RemotePluginFetchError> for PluginRemoteSyncError {
+    fn from(value: RemotePluginFetchError) -> Self {
+        match value {
+            RemotePluginFetchError::AuthRequired => Self::AuthRequired,
+            RemotePluginFetchError::UnsupportedAuthMode => Self::UnsupportedAuthMode,
+            RemotePluginFetchError::AuthToken(source) => Self::AuthToken(source),
+            RemotePluginFetchError::Request { url, source } => Self::Request { url, source },
+            RemotePluginFetchError::UnexpectedStatus { url, status, body } => {
+                Self::UnexpectedStatus { url, status, body }
+            }
+            RemotePluginFetchError::Decode { url, source } => Self::Decode { url, source },
+        }
+    }
 }
 
 pub struct PluginsManager {
@@ -485,6 +486,30 @@ impl PluginsManager {
         request: PluginInstallRequest,
     ) -> Result<PluginInstallOutcome, PluginInstallError> {
         let resolved = resolve_marketplace_plugin(&request.marketplace_path, &request.plugin_name)?;
+        self.install_resolved_plugin(resolved).await
+    }
+
+    pub async fn install_plugin_with_remote_sync(
+        &self,
+        config: &Config,
+        auth: Option<&CodexAuth>,
+        request: PluginInstallRequest,
+    ) -> Result<PluginInstallOutcome, PluginInstallError> {
+        let resolved = resolve_marketplace_plugin(&request.marketplace_path, &request.plugin_name)?;
+        let plugin_id = resolved.plugin_id.as_key();
+        // This only forwards the backend mutation before the local install flow. We rely on
+        // `plugin/list(forceRemoteSync=true)` to sync local state rather than doing an extra
+        // reconcile pass here.
+        enable_remote_plugin(config, auth, &plugin_id)
+            .await
+            .map_err(PluginInstallError::from)?;
+        self.install_resolved_plugin(resolved).await
+    }
+
+    async fn install_resolved_plugin(
+        &self,
+        resolved: ResolvedMarketplacePlugin,
+    ) -> Result<PluginInstallOutcome, PluginInstallError> {
         let auth_policy = resolved.auth_policy;
         let plugin_version =
             if resolved.plugin_id.marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME {
@@ -544,6 +569,27 @@ impl PluginsManager {
 
     pub async fn uninstall_plugin(&self, plugin_id: String) -> Result<(), PluginUninstallError> {
         let plugin_id = PluginId::parse(&plugin_id)?;
+        self.uninstall_plugin_id(plugin_id).await
+    }
+
+    pub async fn uninstall_plugin_with_remote_sync(
+        &self,
+        config: &Config,
+        auth: Option<&CodexAuth>,
+        plugin_id: String,
+    ) -> Result<(), PluginUninstallError> {
+        let plugin_id = PluginId::parse(&plugin_id)?;
+        let plugin_key = plugin_id.as_key();
+        // This only forwards the backend mutation before the local uninstall flow. We rely on
+        // `plugin/list(forceRemoteSync=true)` to sync local state rather than doing an extra
+        // reconcile pass here.
+        uninstall_remote_plugin(config, auth, &plugin_key)
+            .await
+            .map_err(PluginUninstallError::from)?;
+        self.uninstall_plugin_id(plugin_id).await
+    }
+
+    async fn uninstall_plugin_id(&self, plugin_id: PluginId) -> Result<(), PluginUninstallError> {
         let plugin_telemetry = self
             .store
             .active_plugin_root(&plugin_id)
@@ -580,7 +626,9 @@ impl PluginsManager {
         auth: Option<&CodexAuth>,
     ) -> Result<RemotePluginSyncResult, PluginRemoteSyncError> {
         info!("starting remote plugin sync");
-        let remote_plugins = fetch_remote_plugin_status(config, auth).await?;
+        let remote_plugins = fetch_remote_plugin_status(config, auth)
+            .await
+            .map_err(PluginRemoteSyncError::from)?;
         let configured_plugins = configured_plugins_from_stack(&config.config_layer_stack);
         let curated_marketplace_root = curated_plugins_repo_path(self.codex_home.as_path());
         let curated_marketplace_path = AbsolutePathBuf::try_from(
@@ -639,7 +687,7 @@ impl PluginsManager {
             ));
         }
 
-        let mut remote_enabled_by_name = HashMap::<String, bool>::new();
+        let mut remote_installed_plugin_names = HashSet::<String>::new();
         for plugin in remote_plugins {
             if plugin.marketplace_name != marketplace_name {
                 return Err(PluginRemoteSyncError::UnknownRemoteMarketplace {
@@ -654,10 +702,13 @@ impl PluginsManager {
                 );
                 continue;
             }
-            if remote_enabled_by_name
-                .insert(plugin.name.clone(), plugin.enabled)
-                .is_some()
-            {
+            // For now, sync treats remote `enabled = false` as uninstall rather than a distinct
+            // disabled state.
+            // TODO: Switch sync to `plugins/installed` so install and enable states stay distinct.
+            if !plugin.enabled {
+                continue;
+            }
+            if !remote_installed_plugin_names.insert(plugin.name.clone()) {
                 return Err(PluginRemoteSyncError::DuplicateRemotePlugin {
                     plugin_name: plugin.name,
                 });
@@ -668,7 +719,7 @@ impl PluginsManager {
         let mut installs = Vec::new();
         let mut uninstalls = Vec::new();
         let mut result = RemotePluginSyncResult::default();
-        let remote_plugin_count = remote_enabled_by_name.len();
+        let remote_plugin_count = remote_installed_plugin_names.len();
         let local_plugin_count = local_plugins.len();
 
         for (plugin_name, plugin_id, source_path, current_enabled, installed_version) in
@@ -676,7 +727,7 @@ impl PluginsManager {
         {
             let plugin_key = plugin_id.as_key();
             let is_installed = installed_version.is_some();
-            if let Some(enabled) = remote_enabled_by_name.get(&plugin_name).copied() {
+            if remote_installed_plugin_names.contains(&plugin_name) {
                 if !is_installed {
                     installs.push((
                         source_path,
@@ -688,16 +739,11 @@ impl PluginsManager {
                     result.installed_plugin_ids.push(plugin_key.clone());
                 }
 
-                if current_enabled != Some(enabled) {
-                    if enabled {
-                        result.enabled_plugin_ids.push(plugin_key.clone());
-                    } else {
-                        result.disabled_plugin_ids.push(plugin_key.clone());
-                    }
-
+                if current_enabled != Some(true) {
+                    result.enabled_plugin_ids.push(plugin_key.clone());
                     config_edits.push(ConfigEdit::SetPath {
                         segments: vec!["plugins".to_string(), plugin_key, "enabled".to_string()],
-                        value: value(enabled),
+                        value: value(true),
                     });
                 }
             } else {
@@ -801,6 +847,7 @@ impl PluginsManager {
                 (!plugins.is_empty()).then_some(ConfiguredMarketplaceSummary {
                     name: marketplace.name,
                     path: marketplace.path,
+                    interface: marketplace.interface,
                     plugins,
                 })
             })
@@ -988,51 +1035,13 @@ impl PluginsManager {
     }
 }
 
-async fn fetch_remote_plugin_status(
-    config: &Config,
-    auth: Option<&CodexAuth>,
-) -> Result<Vec<RemotePluginStatusSummary>, PluginRemoteSyncError> {
-    let Some(auth) = auth else {
-        return Err(PluginRemoteSyncError::AuthRequired);
-    };
-    if !auth.is_chatgpt_auth() {
-        return Err(PluginRemoteSyncError::UnsupportedAuthMode);
-    }
-
-    let base_url = config.chatgpt_base_url.trim_end_matches('/');
-    let url = format!("{base_url}/plugins/list");
-    let client = build_reqwest_client();
-    let token = auth
-        .get_token()
-        .map_err(PluginRemoteSyncError::auth_token)?;
-    let mut request = client
-        .get(&url)
-        .timeout(REMOTE_PLUGIN_SYNC_TIMEOUT)
-        .bearer_auth(token);
-    if let Some(account_id) = auth.get_account_id() {
-        request = request.header("chatgpt-account-id", account_id);
-    }
-
-    let response = request
-        .send()
-        .await
-        .map_err(|source| PluginRemoteSyncError::request(url.clone(), source))?;
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(PluginRemoteSyncError::UnexpectedStatus { url, status, body });
-    }
-
-    serde_json::from_str(&body).map_err(|source| PluginRemoteSyncError::Decode {
-        url: url.clone(),
-        source,
-    })
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum PluginInstallError {
     #[error("{0}")]
     Marketplace(#[from] MarketplaceError),
+
+    #[error("{0}")]
+    Remote(#[from] RemotePluginMutationError),
 
     #[error("{0}")]
     Store(#[from] PluginStoreError),
@@ -1067,6 +1076,9 @@ impl PluginInstallError {
 pub enum PluginUninstallError {
     #[error("{0}")]
     InvalidPluginId(#[from] PluginIdError),
+
+    #[error("{0}")]
+    Remote(#[from] RemotePluginMutationError),
 
     #[error("{0}")]
     Store(#[from] PluginStoreError),

@@ -12,7 +12,6 @@ use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
 use crate::endpoint::realtime_websocket::protocol::SessionUpdateSession;
 
 pub(super) const REALTIME_AUDIO_SAMPLE_RATE: u32 = 24_000;
-pub(super) const REALTIME_AUDIO_FORMAT: &str = "audio/pcm";
 
 pub(super) fn normalized_session_mode(
     event_parser: RealtimeEventParser,

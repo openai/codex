@@ -2735,6 +2735,7 @@ fn submission_dispatch_span_uses_debug_for_realtime_audio() {
                 sample_rate: 16_000,
                 num_channels: 1,
                 samples_per_channel: Some(160),
+                item_id: None,
             },
         }),
         trace: None,
