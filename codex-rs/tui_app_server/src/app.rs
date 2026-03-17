@@ -114,11 +114,13 @@ use toml::Value as TomlValue;
 mod agent_navigation;
 mod app_server_adapter;
 mod app_server_requests;
+mod btw;
 mod pending_interactive_replay;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
+use self::btw::BtwThreadState;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
@@ -753,6 +755,7 @@ pub(crate) struct App {
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_navigation: AgentNavigationState,
+    btw_threads: HashMap<ThreadId, BtwThreadState>,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<Event>>,
     primary_thread_id: Option<ThreadId>,
@@ -1413,6 +1416,7 @@ impl App {
             .agent_navigation
             .active_agent_label(self.current_displayed_thread_id(), self.primary_thread_id);
         self.chat_widget.set_active_agent_label(label);
+        self.sync_btw_thread_ui();
     }
 
     async fn thread_cwd(&self, thread_id: ThreadId) -> Option<PathBuf> {
@@ -1889,6 +1893,9 @@ impl App {
     async fn open_agent_picker(&mut self) {
         let thread_ids: Vec<ThreadId> = self.thread_event_channels.keys().cloned().collect();
         for thread_id in thread_ids {
+            if self.btw_threads.contains_key(&thread_id) {
+                continue;
+            }
             if self.thread_event_listener_tasks.contains_key(&thread_id) {
                 if self.agent_navigation.get(&thread_id).is_none() {
                     self.upsert_agent_picker_thread(
@@ -2015,6 +2022,9 @@ impl App {
 
         let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
         self.chat_widget = ChatWidget::new_with_app_event(init);
+        let next_fork_banner_parent_label = self.take_next_btw_fork_banner_parent_label(thread_id);
+        self.chat_widget
+            .set_next_fork_banner_parent_label(next_fork_banner_parent_label);
         self.sync_active_agent_label();
 
         self.reset_for_thread_switch(tui)?;
@@ -2047,6 +2057,7 @@ impl App {
         self.abort_all_thread_event_listeners();
         self.thread_event_channels.clear();
         self.agent_navigation.clear();
+        self.btw_threads.clear();
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
@@ -2467,6 +2478,7 @@ impl App {
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
+            btw_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
@@ -2568,7 +2580,7 @@ impl App {
                         AppRunControl::Continue
                     }
                     Some(event) = tui_events.next() => {
-                        match app.handle_tui_event(tui, event).await {
+                        match app.handle_tui_event(tui, &mut app_server, event).await {
                             Ok(control) => control,
                             Err(err) => break Err(err),
                         }
@@ -2624,6 +2636,7 @@ impl App {
     pub(crate) async fn handle_tui_event(
         &mut self,
         tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
         if matches!(event, TuiEvent::Draw) {
@@ -2638,7 +2651,7 @@ impl App {
         } else {
             match event {
                 TuiEvent::Key(key_event) => {
-                    self.handle_key_event(tui, key_event).await;
+                    self.handle_key_event(tui, app_server, key_event).await;
                 }
                 TuiEvent::Paste(pasted) => {
                     // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
@@ -3782,7 +3795,16 @@ impl App {
                 self.open_agent_picker().await;
             }
             AppEvent::SelectAgentThread(thread_id) => {
-                self.select_agent_thread(tui, thread_id).await?;
+                self.select_agent_thread_and_discard_btw_chain(tui, app_server, thread_id)
+                    .await?;
+            }
+            AppEvent::StartBtw {
+                parent_thread_id,
+                user_message,
+            } => {
+                return self
+                    .handle_start_btw(tui, app_server, parent_thread_id, user_message)
+                    .await;
             }
             AppEvent::OpenSkillsList => {
                 self.chat_widget.open_skills_list();
@@ -4255,7 +4277,12 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
-    async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
+    async fn handle_key_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        key_event: KeyEvent,
+    ) {
         // Some terminals, especially on macOS, encode Option+Left/Right as Option+b/f unless
         // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
         // agent-switch shortcuts when the composer is empty so we never steal the expected
@@ -4274,7 +4301,9 @@ impl App {
                 self.current_displayed_thread_id(),
                 AgentNavigationDirection::Previous,
             ) {
-                let _ = self.select_agent_thread(tui, thread_id).await;
+                let _ = self
+                    .select_agent_thread_and_discard_btw_chain(tui, app_server, thread_id)
+                    .await;
             }
             return;
         }
@@ -4289,7 +4318,9 @@ impl App {
                 self.current_displayed_thread_id(),
                 AgentNavigationDirection::Next,
             ) {
-                let _ = self.select_agent_thread(tui, thread_id).await;
+                let _ = self
+                    .select_agent_thread_and_discard_btw_chain(tui, app_server, thread_id)
+                    .await;
             }
             return;
         }
@@ -4345,11 +4376,23 @@ impl App {
             // Esc so the active UI (e.g. status indicator, modals, popups)
             // handles it.
             KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                if self.maybe_return_from_btw(tui, app_server).await {
+                } else {
+                    self.chat_widget.handle_key_event(key_event);
+                }
+            }
+            KeyEvent {
                 code: KeyCode::Esc,
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
-                if self.chat_widget.is_normal_backtrack_mode()
+                if self.maybe_return_from_btw(tui, app_server).await {
+                } else if self.chat_widget.is_normal_backtrack_mode()
                     && self.chat_widget.composer_is_empty()
                 {
                     self.handle_backtrack_esc_key(tui);
@@ -6616,6 +6659,7 @@ guardian_approval = true
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
+            btw_threads: HashMap::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
@@ -6668,6 +6712,7 @@ guardian_approval = true
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
                 agent_navigation: AgentNavigationState::default(),
+                btw_threads: HashMap::new(),
                 active_thread_id: None,
                 active_thread_rx: None,
                 primary_thread_id: None,
@@ -6678,6 +6723,45 @@ guardian_approval = true
             rx,
             op_rx,
         )
+    }
+
+    #[tokio::test]
+    async fn btw_threads_to_discard_after_switch_discards_only_unreachable_suffix() {
+        let mut app = make_test_app().await;
+        let main_thread_id = ThreadId::new();
+        let child_thread_id = ThreadId::new();
+        let grandchild_thread_id = ThreadId::new();
+        let sibling_thread_id = ThreadId::new();
+
+        app.primary_thread_id = Some(main_thread_id);
+        app.active_thread_id = Some(grandchild_thread_id);
+        app.btw_threads.insert(
+            child_thread_id,
+            BtwThreadState {
+                parent_thread_id: main_thread_id,
+                next_fork_banner_parent_label: None,
+            },
+        );
+        app.btw_threads.insert(
+            grandchild_thread_id,
+            BtwThreadState {
+                parent_thread_id: child_thread_id,
+                next_fork_banner_parent_label: None,
+            },
+        );
+
+        assert_eq!(
+            app.btw_threads_to_discard_after_switch(main_thread_id),
+            vec![grandchild_thread_id, child_thread_id]
+        );
+        assert_eq!(
+            app.btw_threads_to_discard_after_switch(child_thread_id),
+            vec![grandchild_thread_id]
+        );
+        assert_eq!(
+            app.btw_threads_to_discard_after_switch(sibling_thread_id),
+            vec![grandchild_thread_id, child_thread_id]
+        );
     }
 
     #[test]

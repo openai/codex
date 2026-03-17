@@ -24,6 +24,7 @@ use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillsManager;
+use crate::tasks::interrupted_turn_history_marker;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelPreset;
@@ -494,8 +495,61 @@ impl ThreadManager {
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
+        self.fork_thread_with_history_suffix(
+            nth_user_message,
+            config,
+            path,
+            persist_extended_history,
+            parent_trace,
+            Vec::new(),
+        )
+        .await
+    }
+
+    /// Fork an existing thread as though the parent had been interrupted at this point.
+    ///
+    /// This preserves the durable rollout history and appends the same model-visible
+    /// `<turn_aborted>` marker that a real interrupt would record before the child continues
+    /// with a new task.
+    pub async fn fork_thread_from_interrupted_snapshot(
+        &self,
+        nth_user_message: usize,
+        config: Config,
+        path: PathBuf,
+        persist_extended_history: bool,
+        parent_trace: Option<W3cTraceContext>,
+    ) -> CodexResult<NewThread> {
+        // BTW side questions use this when the parent turn is still running so the child sees the
+        // same `<turn_aborted>` marker a real interrupt would have recorded before the new task.
+        self.fork_thread_with_history_suffix(
+            nth_user_message,
+            config,
+            path,
+            persist_extended_history,
+            parent_trace,
+            vec![RolloutItem::ResponseItem(interrupted_turn_history_marker())],
+        )
+        .await
+    }
+
+    async fn fork_thread_with_history_suffix(
+        &self,
+        nth_user_message: usize,
+        config: Config,
+        path: PathBuf,
+        persist_extended_history: bool,
+        parent_trace: Option<W3cTraceContext>,
+        history_suffix: Vec<RolloutItem>,
+    ) -> CodexResult<NewThread> {
         let history = RolloutRecorder::get_rollout_history(&path).await?;
-        let history = truncate_before_nth_user_message(history, nth_user_message);
+        let mut items =
+            truncate_before_nth_user_message(history, nth_user_message).get_rollout_items();
+        items.extend(history_suffix);
+        let history = if items.is_empty() {
+            InitialHistory::New
+        } else {
+            InitialHistory::Forked(items)
+        };
         Box::pin(self.state.spawn_thread(
             config,
             history,
