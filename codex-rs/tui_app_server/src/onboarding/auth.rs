@@ -104,8 +104,6 @@ pub(crate) enum SignInOption {
 }
 
 const API_KEY_DISABLED_MESSAGE: &str = "API key login is disabled.";
-const APP_SERVER_TUI_UNSUPPORTED_MESSAGE: &str = "Not available in app-server TUI yet.";
-
 fn onboarding_request_id() -> codex_app_server_protocol::RequestId {
     codex_app_server_protocol::RequestId::String(Uuid::new_v4().to_string())
 }
@@ -741,6 +739,7 @@ impl AuthModeWidget {
         if matches!(
             self.login_status,
             LoginStatus::AuthMode(AppServerAuthMode::Chatgpt)
+                | LoginStatus::AuthMode(AppServerAuthMode::ChatgptAuthTokens)
         ) {
             *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccess;
             self.request_frame.schedule_frame();
@@ -799,9 +798,8 @@ impl AuthModeWidget {
             return;
         }
 
-        self.set_error(Some(APP_SERVER_TUI_UNSUPPORTED_MESSAGE.to_string()));
-        *self.sign_in_state.write().unwrap() = SignInState::PickMode;
-        self.request_frame.schedule_frame();
+        self.set_error(/*message*/ None);
+        headless_chatgpt_login::start_headless_chatgpt_login(self);
     }
 
     pub(crate) fn on_account_login_completed(
@@ -976,6 +974,20 @@ mod tests {
             SignInState::PickMode
         ));
         assert_eq!(widget.login_status, LoginStatus::NotAuthenticated);
+    }
+
+    #[tokio::test]
+    async fn existing_chatgpt_auth_tokens_login_counts_as_signed_in() {
+        let (mut widget, _tmp) = widget_forced_chatgpt().await;
+        widget.login_status = LoginStatus::AuthMode(AppServerAuthMode::ChatgptAuthTokens);
+
+        let handled = widget.handle_existing_chatgpt_login();
+
+        assert_eq!(handled, true);
+        assert!(matches!(
+            &*widget.sign_in_state.read().unwrap(),
+            SignInState::ChatGptSuccess
+        ));
     }
 
     /// Collects all buffer cell symbols that contain the OSC 8 open sequence
