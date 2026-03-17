@@ -341,9 +341,11 @@ impl ThreadHistoryBuilder {
             command,
             cwd: payload.cwd.clone(),
             process_id: payload.process_id.clone(),
+            source: payload.source.into(),
             status: CommandExecutionStatus::InProgress,
             command_actions,
             aggregated_output: None,
+            formatted_output: String::new(),
             exit_code: None,
             duration_ms: None,
         };
@@ -371,9 +373,11 @@ impl ThreadHistoryBuilder {
             command,
             cwd: payload.cwd.clone(),
             process_id: payload.process_id.clone(),
+            source: payload.source.into(),
             status,
             command_actions,
             aggregated_output,
+            formatted_output: payload.formatted_output.clone(),
             exit_code: Some(payload.exit_code),
             duration_ms: Some(duration_ms),
         };
@@ -1144,6 +1148,7 @@ impl From<&PendingTurn> for Turn {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::v2::CommandExecutionSource;
     use codex_protocol::ThreadId;
     use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
     use codex_protocol::items::TurnItem as CoreTurnItem;
@@ -1745,11 +1750,13 @@ mod tests {
                 command: "echo 'hello world'".into(),
                 cwd: PathBuf::from("/tmp"),
                 process_id: Some("pid-1".into()),
+                source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Completed,
                 command_actions: vec![CommandAction::Unknown {
                     command: "echo hello world".into(),
                 }],
                 aggregated_output: Some("hello world\n".into()),
+                formatted_output: String::new(),
                 exit_code: Some(0),
                 duration_ms: Some(12),
             }
@@ -1893,11 +1900,13 @@ mod tests {
                 command: "ls".into(),
                 cwd: PathBuf::from("/tmp"),
                 process_id: Some("pid-2".into()),
+                source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Declined,
                 command_actions: vec![CommandAction::Unknown {
                     command: "ls".into(),
                 }],
                 aggregated_output: Some("exec command rejected by user".into()),
+                formatted_output: String::new(),
                 exit_code: Some(-1),
                 duration_ms: Some(0),
             }
@@ -1987,11 +1996,13 @@ mod tests {
                 command: "echo done".into(),
                 cwd: PathBuf::from("/tmp"),
                 process_id: Some("pid-42".into()),
+                source: CommandExecutionSource::Agent,
                 status: CommandExecutionStatus::Completed,
                 command_actions: vec![CommandAction::Unknown {
                     command: "echo done".into(),
                 }],
                 aggregated_output: Some("done\n".into()),
+                formatted_output: "done\n".into(),
                 exit_code: Some(0),
                 duration_ms: Some(5),
             }

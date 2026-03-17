@@ -353,6 +353,15 @@
         }
       ]
     },
+    "CommandExecutionSource": {
+      "enum": [
+        "agent",
+        "userShell",
+        "unifiedExecStartup",
+        "unifiedExecInteraction"
+      ],
+      "type": "string"
+    },
     "CommandExecutionStatus": {
       "enum": [
         "inProgress",
@@ -1239,6 +1248,11 @@
                 "null"
               ]
             },
+            "formattedOutput": {
+              "default": "",
+              "description": "The command's output after applying the model-facing formatter/truncation policy.",
+              "type": "string"
+            },
             "id": {
               "type": "string"
             },
@@ -1248,6 +1262,14 @@
                 "string",
                 "null"
               ]
+            },
+            "source": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/CommandExecutionSource"
+                }
+              ],
+              "default": "agent"
             },
             "status": {
               "$ref": "#/definitions/CommandExecutionStatus"

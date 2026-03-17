@@ -27,6 +27,7 @@ use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionRequestApprovalSkillMetadata;
+use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ContextCompactedNotification;
 use codex_app_server_protocol::DeprecationNoticeNotification;
@@ -1563,9 +1564,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 command,
                 cwd,
                 process_id,
+                source: exec_command_begin_event.source.into(),
                 status: CommandExecutionStatus::InProgress,
                 command_actions,
                 aggregated_output: None,
+                formatted_output: String::new(),
                 exit_code: None,
                 duration_ms: None,
             };
@@ -1639,8 +1642,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                 parsed_cmd,
                 process_id,
                 aggregated_output,
+                formatted_output,
                 exit_code,
                 duration,
+                source,
                 status,
                 ..
             } = exec_command_end_event;
@@ -1672,9 +1677,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                 command: shlex_join(&command),
                 cwd,
                 process_id,
+                source: source.into(),
                 status,
                 command_actions,
                 aggregated_output,
+                formatted_output,
                 exit_code: Some(exit_code),
                 duration_ms: Some(duration_ms),
             };
@@ -1935,6 +1942,7 @@ async fn complete_command_execution_item(
     command: String,
     cwd: PathBuf,
     process_id: Option<String>,
+    source: CommandExecutionSource,
     command_actions: Vec<V2ParsedCommand>,
     status: CommandExecutionStatus,
     outgoing: &ThreadScopedOutgoingMessageSender,
@@ -1944,9 +1952,11 @@ async fn complete_command_execution_item(
         command,
         cwd,
         process_id,
+        source,
         status,
         command_actions,
         aggregated_output: None,
+        formatted_output: String::new(),
         exit_code: None,
         duration_ms: None,
     };
@@ -2607,6 +2617,7 @@ async fn on_command_execution_request_approval_response(
             completion_item.command,
             completion_item.cwd,
             /*process_id*/ None,
+            CommandExecutionSource::Agent,
             completion_item.command_actions,
             status,
             &outgoing,

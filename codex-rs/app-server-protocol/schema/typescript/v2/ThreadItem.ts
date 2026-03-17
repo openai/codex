@@ -8,6 +8,7 @@ import type { CollabAgentState } from "./CollabAgentState";
 import type { CollabAgentTool } from "./CollabAgentTool";
 import type { CollabAgentToolCallStatus } from "./CollabAgentToolCallStatus";
 import type { CommandAction } from "./CommandAction";
+import type { CommandExecutionSource } from "./CommandExecutionSource";
 import type { CommandExecutionStatus } from "./CommandExecutionStatus";
 import type { DynamicToolCallOutputContentItem } from "./DynamicToolCallOutputContentItem";
 import type { DynamicToolCallStatus } from "./DynamicToolCallStatus";
@@ -32,7 +33,7 @@ cwd: string,
 /**
  * Identifier for the underlying PTY process (when available).
  */
-processId: string | null, status: CommandExecutionStatus, 
+processId: string | null, source: CommandExecutionSource, status: CommandExecutionStatus, 
 /**
  * A best-effort parsing of the command to understand the action(s) it will perform.
  * This returns a list of CommandAction objects because a single shell command may
@@ -43,6 +44,10 @@ commandActions: Array<CommandAction>,
  * The command's output, aggregated from stdout and stderr.
  */
 aggregatedOutput: string | null, 
+/**
+ * The command's output after applying the model-facing formatter/truncation policy.
+ */
+formattedOutput: string, 
 /**
  * The command's exit code.
  */

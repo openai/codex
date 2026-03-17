@@ -5134,13 +5134,7 @@ impl ChatWidget {
                 )));
                 return;
             }
-            // TODO: Restore `!` support in app-server TUI once command execution can
-            // persist transcript-visible output into thread history with parity to the
-            // legacy TUI.
-            self.add_to_history(history_cell::new_error_event(
-                "`!` shell commands are unavailable in app-server TUI because command output is not yet persisted in thread history.".to_string(),
-            ));
-            self.request_redraw();
+            self.submit_op(AppCommand::run_user_shell_command(cmd.to_string()));
             return;
         }
 

@@ -139,6 +139,7 @@ Example with notification opt-out:
 - `thread/name/set` — set or update a thread’s user-facing name for either a loaded thread or a persisted rollout; returns `{}` on success and emits `thread/name/updated` to initialized, opted-in clients. Thread names are not required to be unique; name lookups resolve to the most recently updated thread.
 - `thread/unarchive` — move an archived rollout file back into the sessions directory; returns the restored `thread` on success and emits `thread/unarchived`.
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
+- `thread/shellCommand` — run a user-initiated `!` shell command against a thread; returns `{}` immediately while progress streams through standard turn/item notifications and any active turn receives the formatted output in its message stream.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
@@ -409,6 +410,23 @@ While compaction is running, the thread is effectively in a turn so clients shou
 ```json
 { "method": "thread/compact/start", "id": 25, "params": { "threadId": "thr_b" } }
 { "id": 25, "result": {} }
+```
+
+### Example: Run a thread shell command
+
+Use `thread/shellCommand` for the TUI `!` workflow. The request returns immediately with `{}`.
+
+Progress is emitted as standard `item/*` notifications on the same `threadId`:
+
+- `item/started` with `item: { "type": "commandExecution", "source": "userShell", ... }`
+- zero or more `item/commandExecution/outputDelta`
+- `item/completed` with the same `commandExecution` item id
+
+If the thread already has an active turn, the command runs as an auxiliary action on that turn and the formatted output is injected into the turn’s message stream with the same behavior as legacy TUI `!` commands.
+
+```json
+{ "method": "thread/shellCommand", "id": 26, "params": { "threadId": "thr_b", "command": "git status --short" } }
+{ "id": 26, "result": {} }
 ```
 
 ### Example: Start a turn (send user input)
