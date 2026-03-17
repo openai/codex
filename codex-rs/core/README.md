@@ -61,10 +61,9 @@ cases like `/repo = write`, `/repo/a = none`, `/repo/a/b = write`, where the
 more specific writable child must reopen under a denied parent.
 
 The Linux sandbox helper prefers `/usr/bin/bwrap` whenever it is available and
-falls back to the vendored bubblewrap path otherwise. On Ubuntu/AppArmor hosts
-that ship `/etc/apparmor.d/bwrap-userns-restrict`, Codex also surfaces a
-startup warning when `/usr/bin/bwrap` is missing because the distro's userns
-exception is path-specific to `/usr/bin/bwrap`.
+falls back to the vendored bubblewrap path otherwise. When `/usr/bin/bwrap` is
+missing, Codex also surfaces a startup warning through its normal notification
+path instead of printing directly from the sandbox helper.
 
 ### All Platforms
 

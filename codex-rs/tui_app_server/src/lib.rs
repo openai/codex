@@ -120,15 +120,11 @@ mod shimmer;
 mod skills_helpers;
 
 #[cfg(target_os = "linux")]
-const UBUNTU_APPARMOR_BWRAP_USERNS_RESTRICT_PROFILE: &str = "/etc/apparmor.d/bwrap-userns-restrict";
-#[cfg(target_os = "linux")]
 const SYSTEM_BWRAP_PATH: &str = "/usr/bin/bwrap";
 
 #[cfg(target_os = "linux")]
 fn missing_system_bwrap_warning() -> Option<String> {
-    if Path::new(UBUNTU_APPARMOR_BWRAP_USERNS_RESTRICT_PROFILE).is_file()
-        && !Path::new(SYSTEM_BWRAP_PATH).is_file()
-    {
+    if !Path::new(SYSTEM_BWRAP_PATH).is_file() {
         return Some(format!(
             "Codex could not find system bubblewrap at {SYSTEM_BWRAP_PATH}. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime."
         ));

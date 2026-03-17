@@ -10,10 +10,8 @@ This crate is responsible for producing:
 On Linux, the bubblewrap pipeline prefers the system `/usr/bin/bwrap` whenever
 it is available. If `/usr/bin/bwrap` is missing, the helper still falls back to
 the vendored bubblewrap path compiled into this binary.
-
-On Ubuntu/AppArmor hosts that ship `/etc/apparmor.d/bwrap-userns-restrict`,
-Codex also surfaces a startup warning when `/usr/bin/bwrap` is missing because
-the distro's user-namespace exception is path-specific to `/usr/bin/bwrap`.
+Codex also surfaces a startup warning when `/usr/bin/bwrap` is missing so users
+know it is falling back to the vendored helper.
 
 **Current Behavior**
 - Legacy `SandboxPolicy` / `sandbox_mode` configs remain supported.
@@ -21,9 +19,8 @@ the distro's user-namespace exception is path-specific to `/usr/bin/bwrap`.
 - If `/usr/bin/bwrap` is present, the helper uses it.
 - If `/usr/bin/bwrap` is missing, the helper falls back to the vendored
   bubblewrap path.
-- On Ubuntu/AppArmor hosts with `bwrap-userns-restrict`, Codex surfaces a
-  startup warning when `/usr/bin/bwrap` is missing because the distro policy
-  exception is path-specific to `/usr/bin/bwrap`.
+- If `/usr/bin/bwrap` is missing, Codex also surfaces a startup warning instead
+  of printing directly from the sandbox helper.
 - Legacy Landlock + mount protections remain available as an explicit legacy
   fallback path.
 - Set `features.use_legacy_landlock = true` (or CLI `-c use_legacy_landlock=true`)
