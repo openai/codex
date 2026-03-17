@@ -103,7 +103,6 @@ mod prompt_caching;
 mod quota_exceeded;
 mod read_file;
 mod realtime_conversation;
-#[cfg(target_os = "linux")]
 mod remote_env;
 mod remote_models;
 mod request_compression;
