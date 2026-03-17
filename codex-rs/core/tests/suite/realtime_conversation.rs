@@ -176,6 +176,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
                 sample_rate: 24000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
+                item_id: None,
             },
         }))
         .await?;
@@ -409,6 +410,7 @@ async fn conversation_audio_before_start_emits_error() -> Result<()> {
                 sample_rate: 24000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
+                item_id: None,
             },
         }))
         .await?;
@@ -518,6 +520,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
                 sample_rate: 24000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
+                item_id: None,
             },
         }))
         .await?;
@@ -1469,6 +1472,7 @@ async fn inbound_handoff_request_clears_active_transcript_after_each_handoff() -
                 sample_rate: 24000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
+                item_id: None,
             },
         }))
         .await?;
@@ -1954,6 +1958,7 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
                 sample_rate: 24000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
+                item_id: None,
             },
         }))
         .await?;

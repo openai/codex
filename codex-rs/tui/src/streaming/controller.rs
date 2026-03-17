@@ -167,13 +167,16 @@ impl PlanStreamController {
         }
 
         self.state.clear();
-        self.emit(out_lines, true)
+        self.emit(out_lines, /*include_bottom_padding*/ true)
     }
 
     /// Step animation: commit at most one queued line and handle end-of-drain cleanup.
     pub(crate) fn on_commit_tick(&mut self) -> (Option<Box<dyn HistoryCell>>, bool) {
         let step = self.state.step();
-        (self.emit(step, false), self.state.is_idle())
+        (
+            self.emit(step, /*include_bottom_padding*/ false),
+            self.state.is_idle(),
+        )
     }
 
     /// Step animation: commit at most `max_lines` queued lines.
@@ -185,7 +188,10 @@ impl PlanStreamController {
         max_lines: usize,
     ) -> (Option<Box<dyn HistoryCell>>, bool) {
         let step = self.state.drain_n(max_lines.max(1));
-        (self.emit(step, false), self.state.is_idle())
+        (
+            self.emit(step, /*include_bottom_padding*/ false),
+            self.state.is_idle(),
+        )
     }
 
     /// Returns the current number of queued plan lines waiting to be displayed.

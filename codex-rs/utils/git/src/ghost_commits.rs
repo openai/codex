@@ -489,7 +489,7 @@ fn restore_to_commit_inner(
         restore_args.push(OsString::from("."));
     }
 
-    run_git_for_status(repo_root, restore_args, None)?;
+    run_git_for_status(repo_root, restore_args, /*env*/ None)?;
     Ok(())
 }
 
@@ -532,7 +532,7 @@ fn capture_status_snapshot(
         args.push(prefix.as_os_str().to_os_string());
     }
 
-    let output = run_git_for_stdout_all(repo_root, args, None)?;
+    let output = run_git_for_stdout_all(repo_root, args, /*env*/ None)?;
     if output.is_empty() {
         return Ok(StatusSnapshot::default());
     }
@@ -599,20 +599,26 @@ fn capture_status_snapshot(
                 }
             }
             b'1' => {
-                if let Some(path) = extract_status_path_after_fields(entry, 8) {
+                if let Some(path) =
+                    extract_status_path_after_fields(entry, /*fields_before_path*/ 8)
+                {
                     let normalized = normalize_relative_path(Path::new(path))?;
                     snapshot.tracked_paths.push(normalized);
                 }
             }
             b'2' => {
-                if let Some(path) = extract_status_path_after_fields(entry, 9) {
+                if let Some(path) =
+                    extract_status_path_after_fields(entry, /*fields_before_path*/ 9)
+                {
                     let normalized = normalize_relative_path(Path::new(path))?;
                     snapshot.tracked_paths.push(normalized);
                 }
                 expect_rename_source = true;
             }
             b'u' => {
-                if let Some(path) = extract_status_path_after_fields(entry, 10) {
+                if let Some(path) =
+                    extract_status_path_after_fields(entry, /*fields_before_path*/ 10)
+                {
                     let normalized = normalize_relative_path(Path::new(path))?;
                     snapshot.tracked_paths.push(normalized);
                 }

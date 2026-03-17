@@ -3276,7 +3276,15 @@ pub struct SkillsListEntry {
 pub struct PluginMarketplaceEntry {
     pub name: String,
     pub path: AbsolutePathBuf,
+    pub interface: Option<MarketplaceInterface>,
     pub plugins: Vec<PluginSummary>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MarketplaceInterface {
+    pub display_name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -3395,6 +3403,9 @@ pub struct SkillsConfigWriteResponse {
 pub struct PluginInstallParams {
     pub marketplace_path: AbsolutePathBuf,
     pub plugin_name: String,
+    /// When true, apply the remote plugin change before the local install flow.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force_remote_sync: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3410,6 +3421,9 @@ pub struct PluginInstallResponse {
 #[ts(export_to = "v2/")]
 pub struct PluginUninstallParams {
     pub plugin_id: String,
+    /// When true, apply the remote plugin change before the local uninstall flow.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force_remote_sync: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3652,6 +3666,7 @@ pub struct ThreadRealtimeAudioChunk {
     pub sample_rate: u32,
     pub num_channels: u16,
     pub samples_per_channel: Option<u32>,
+    pub item_id: Option<String>,
 }
 
 impl From<CoreRealtimeAudioFrame> for ThreadRealtimeAudioChunk {
@@ -3661,12 +3676,14 @@ impl From<CoreRealtimeAudioFrame> for ThreadRealtimeAudioChunk {
             sample_rate,
             num_channels,
             samples_per_channel,
+            item_id,
         } = value;
         Self {
             data,
             sample_rate,
             num_channels,
             samples_per_channel,
+            item_id,
         }
     }
 }
@@ -3678,12 +3695,14 @@ impl From<ThreadRealtimeAudioChunk> for CoreRealtimeAudioFrame {
             sample_rate,
             num_channels,
             samples_per_channel,
+            item_id,
         } = value;
         Self {
             data,
             sample_rate,
             num_channels,
             samples_per_channel,
+            item_id,
         }
     }
 }
@@ -7565,6 +7584,69 @@ mod tests {
             .unwrap(),
             json!({
                 "cwds": null,
+                "forceRemoteSync": true,
+            }),
+        );
+    }
+
+    #[test]
+    fn plugin_install_params_serialization_uses_force_remote_sync() {
+        let marketplace_path = if cfg!(windows) {
+            r"C:\plugins\marketplace.json"
+        } else {
+            "/plugins/marketplace.json"
+        };
+        let marketplace_path = AbsolutePathBuf::try_from(PathBuf::from(marketplace_path)).unwrap();
+        let marketplace_path_json = marketplace_path.as_path().display().to_string();
+        assert_eq!(
+            serde_json::to_value(PluginInstallParams {
+                marketplace_path: marketplace_path.clone(),
+                plugin_name: "gmail".to_string(),
+                force_remote_sync: false,
+            })
+            .unwrap(),
+            json!({
+                "marketplacePath": marketplace_path_json,
+                "pluginName": "gmail",
+            }),
+        );
+
+        assert_eq!(
+            serde_json::to_value(PluginInstallParams {
+                marketplace_path,
+                plugin_name: "gmail".to_string(),
+                force_remote_sync: true,
+            })
+            .unwrap(),
+            json!({
+                "marketplacePath": marketplace_path_json,
+                "pluginName": "gmail",
+                "forceRemoteSync": true,
+            }),
+        );
+    }
+
+    #[test]
+    fn plugin_uninstall_params_serialization_uses_force_remote_sync() {
+        assert_eq!(
+            serde_json::to_value(PluginUninstallParams {
+                plugin_id: "gmail@openai-curated".to_string(),
+                force_remote_sync: false,
+            })
+            .unwrap(),
+            json!({
+                "pluginId": "gmail@openai-curated",
+            }),
+        );
+
+        assert_eq!(
+            serde_json::to_value(PluginUninstallParams {
+                plugin_id: "gmail@openai-curated".to_string(),
+                force_remote_sync: true,
+            })
+            .unwrap(),
+            json!({
+                "pluginId": "gmail@openai-curated",
                 "forceRemoteSync": true,
             }),
         );

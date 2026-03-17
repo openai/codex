@@ -104,7 +104,7 @@ impl FeedbackNoteView {
             self.include_logs,
             &attachment_paths,
             Some(SessionSource::Cli),
-            None,
+            /*logs_override*/ None,
         );
 
         match result {

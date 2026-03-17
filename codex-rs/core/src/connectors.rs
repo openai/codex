@@ -104,9 +104,11 @@ pub async fn list_accessible_connectors_from_mcp_tools(
     config: &Config,
 ) -> anyhow::Result<Vec<AppInfo>> {
     Ok(
-        list_accessible_connectors_from_mcp_tools_with_options_and_status(config, false)
-            .await?
-            .connectors,
+        list_accessible_connectors_from_mcp_tools_with_options_and_status(
+            config, /*force_refetch*/ false,
+        )
+        .await?
+        .connectors,
     )
 }
 
@@ -186,7 +188,12 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         });
     }
 
-    let mcp_servers = with_codex_apps_mcp(HashMap::new(), true, auth.as_ref(), config);
+    let mcp_servers = with_codex_apps_mcp(
+        HashMap::new(),
+        /*connectors_enabled*/ true,
+        auth.as_ref(),
+        config,
+    );
     if mcp_servers.is_empty() {
         return Ok(AccessibleConnectorsStatus {
             connectors: Vec::new(),
@@ -408,7 +415,7 @@ async fn list_directory_connectors_for_tool_suggest_with_auth(
     codex_connectors::list_all_connectors_with_options(
         cache_key,
         is_workspace_account,
-        false,
+        /*force_refetch*/ false,
         |path| {
             let access_token = access_token.clone();
             let account_id = account_id.clone();
@@ -459,7 +466,7 @@ async fn chatgpt_get_request_with_token<T: DeserializeOwned>(
 fn auth_manager_from_config(config: &Config) -> std::sync::Arc<AuthManager> {
     AuthManager::shared(
         config.codex_home.clone(),
-        false,
+        /*enable_codex_api_key_env*/ false,
         config.cli_auth_credentials_store_mode,
     )
 }

@@ -564,7 +564,7 @@ impl ModelClient {
             auth_context.recovery_mode,
             auth_context.recovery_phase,
             request_route_telemetry.endpoint,
-            false,
+            /*connection_reused*/ false,
             response_debug.request_id.as_deref(),
             response_debug.cf_ray.as_deref(),
             response_debug.auth_error.as_deref(),
@@ -796,9 +796,11 @@ impl ModelClientSession {
         let Some(last_response) = self.get_last_response() else {
             return ResponsesWsRequest::ResponseCreate(payload);
         };
-        let Some(incremental_items) =
-            self.get_incremental_items(request, Some(&last_response), true)
-        else {
+        let Some(incremental_items) = self.get_incremental_items(
+            request,
+            Some(&last_response),
+            /*allow_empty_delta*/ true,
+        ) else {
             return ResponsesWsRequest::ResponseCreate(payload);
         };
 
@@ -846,13 +848,14 @@ impl ModelClientSession {
                 client_setup.api_provider,
                 client_setup.api_auth,
                 Some(Arc::clone(&self.turn_state)),
-                None,
+                /*turn_metadata_header*/ None,
                 auth_context,
                 RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
             )
             .await?;
         self.websocket_session.connection = Some(connection);
-        self.websocket_session.set_connection_reused(false);
+        self.websocket_session
+            .set_connection_reused(/*connection_reused*/ false);
         Ok(())
     }
     /// Returns a websocket connection for this turn.
@@ -906,9 +909,11 @@ impl ModelClientSession {
                 )
                 .await?;
             self.websocket_session.connection = Some(new_conn);
-            self.websocket_session.set_connection_reused(false);
+            self.websocket_session
+                .set_connection_reused(/*connection_reused*/ false);
         } else {
-            self.websocket_session.set_connection_reused(true);
+            self.websocket_session
+                .set_connection_reused(/*connection_reused*/ true);
         }
 
         self.websocket_session
@@ -1202,7 +1207,7 @@ impl ModelClientSession {
                 summary,
                 service_tier,
                 turn_metadata_header,
-                true,
+                /*warmup*/ true,
             )
             .await
         {
@@ -1255,7 +1260,7 @@ impl ModelClientSession {
                             summary,
                             service_tier,
                             turn_metadata_header,
-                            false,
+                            /*warmup*/ false,
                         )
                         .await?
                     {
@@ -1297,14 +1302,15 @@ impl ModelClientSession {
             warn!("falling back to HTTP");
             session_telemetry.counter(
                 "codex.transport.fallback_to_http",
-                1,
+                /*inc*/ 1,
                 &[("from_wire_api", "responses_websocket")],
             );
 
             self.websocket_session.connection = None;
             self.websocket_session.last_request = None;
             self.websocket_session.last_response_rx = None;
-            self.websocket_session.set_connection_reused(false);
+            self.websocket_session
+                .set_connection_reused(/*connection_reused*/ false);
         }
         activated
     }
@@ -1527,7 +1533,7 @@ async fn handle_unauthorized(
                     debug.cf_ray.as_deref(),
                     debug.auth_error.as_deref(),
                     debug.auth_error_code.as_deref(),
-                    None,
+                    /*recovery_reason*/ None,
                     step_result.auth_state_changed(),
                 );
                 emit_feedback_auth_recovery_tags(
@@ -1550,8 +1556,8 @@ async fn handle_unauthorized(
                     debug.cf_ray.as_deref(),
                     debug.auth_error.as_deref(),
                     debug.auth_error_code.as_deref(),
-                    None,
-                    None,
+                    /*recovery_reason*/ None,
+                    /*auth_state_changed*/ None,
                 );
                 emit_feedback_auth_recovery_tags(
                     mode,
@@ -1573,8 +1579,8 @@ async fn handle_unauthorized(
                     debug.cf_ray.as_deref(),
                     debug.auth_error.as_deref(),
                     debug.auth_error_code.as_deref(),
-                    None,
-                    None,
+                    /*recovery_reason*/ None,
+                    /*auth_state_changed*/ None,
                 );
                 emit_feedback_auth_recovery_tags(
                     mode,
@@ -1607,7 +1613,7 @@ async fn handle_unauthorized(
         debug.auth_error.as_deref(),
         debug.auth_error_code.as_deref(),
         recovery_reason,
-        None,
+        /*auth_state_changed*/ None,
     );
     emit_feedback_auth_recovery_tags(
         mode,

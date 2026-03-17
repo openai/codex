@@ -350,6 +350,20 @@ pub(crate) async fn apply_bespoke_event_handling(
             if let ApiVersion::V2 = api_version {
                 match event.payload {
                     RealtimeEvent::SessionUpdated { .. } => {}
+                    RealtimeEvent::InputAudioSpeechStarted(event) => {
+                        let notification = ThreadRealtimeItemAddedNotification {
+                            thread_id: conversation_id.to_string(),
+                            item: serde_json::json!({
+                                "type": "input_audio_buffer.speech_started",
+                                "item_id": event.item_id,
+                            }),
+                        };
+                        outgoing
+                            .send_server_notification(ServerNotification::ThreadRealtimeItemAdded(
+                                notification,
+                            ))
+                            .await;
+                    }
                     RealtimeEvent::InputTranscriptDelta(_) => {}
                     RealtimeEvent::OutputTranscriptDelta(_) => {}
                     RealtimeEvent::AudioOut(audio) => {
@@ -361,6 +375,20 @@ pub(crate) async fn apply_bespoke_event_handling(
                             .send_server_notification(
                                 ServerNotification::ThreadRealtimeOutputAudioDelta(notification),
                             )
+                            .await;
+                    }
+                    RealtimeEvent::ResponseCancelled(event) => {
+                        let notification = ThreadRealtimeItemAddedNotification {
+                            thread_id: conversation_id.to_string(),
+                            item: serde_json::json!({
+                                "type": "response.cancelled",
+                                "response_id": event.response_id,
+                            }),
+                        };
+                        outgoing
+                            .send_server_notification(ServerNotification::ThreadRealtimeItemAdded(
+                                notification,
+                            ))
                             .await;
                     }
                     RealtimeEvent::ConversationItemAdded(item) => {
@@ -1988,7 +2016,7 @@ async fn handle_turn_interrupted(
         conversation_id,
         event_turn_id,
         TurnStatus::Interrupted,
-        None,
+        /*error*/ None,
         outgoing,
     )
     .await;
@@ -2379,7 +2407,7 @@ fn render_review_output_text(output: &ReviewOutputEvent) -> String {
         sections.push(explanation.to_string());
     }
     if !output.findings.is_empty() {
-        let findings = format_review_findings_block(&output.findings, None);
+        let findings = format_review_findings_block(&output.findings, /*selection*/ None);
         let trimmed = findings.trim();
         if !trimmed.is_empty() {
             sections.push(trimmed.to_string());
@@ -2577,7 +2605,7 @@ async fn on_command_execution_request_approval_response(
             item_id.clone(),
             completion_item.command,
             completion_item.cwd,
-            None,
+            /*process_id*/ None,
             completion_item.command_actions,
             status,
             &outgoing,

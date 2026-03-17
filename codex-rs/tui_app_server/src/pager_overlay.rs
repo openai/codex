@@ -457,7 +457,7 @@ impl TranscriptOverlay {
     pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>) -> Self {
         Self {
             view: PagerView::new(
-                Self::render_cells(&transcript_cells, None),
+                Self::render_cells(&transcript_cells, /*highlight_cell*/ None),
                 "T R A N S C R I P T".to_string(),
                 usize::MAX,
             ),
@@ -495,7 +495,9 @@ impl TranscriptOverlay {
                 if !c.is_stream_continuation() && i > 0 {
                     cell_renderable = Box::new(InsetRenderable::new(
                         cell_renderable,
-                        Insets::tlbr(1, 0, 0, 0),
+                        Insets::tlbr(
+                            /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
+                        ),
                     ));
                 }
                 v.push(cell_renderable);
@@ -528,8 +530,12 @@ impl TranscriptOverlay {
             {
                 // The tail was rendered as the only entry, so it lacks a top
                 // inset; add one now that it follows a committed cell.
-                Box::new(InsetRenderable::new(tail, Insets::tlbr(1, 0, 0, 0)))
-                    as Box<dyn Renderable>
+                Box::new(InsetRenderable::new(
+                    tail,
+                    Insets::tlbr(
+                        /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
+                    ),
+                )) as Box<dyn Renderable>
             } else {
                 tail
             };
@@ -649,7 +655,12 @@ impl TranscriptOverlay {
         let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
         let mut renderable: Box<dyn Renderable> = Box::new(CachedRenderable::new(paragraph));
         if has_prior_cells && !is_stream_continuation {
-            renderable = Box::new(InsetRenderable::new(renderable, Insets::tlbr(1, 0, 0, 0)));
+            renderable = Box::new(InsetRenderable::new(
+                renderable,
+                Insets::tlbr(
+                    /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
+                ),
+            ));
         }
         renderable
     }
@@ -721,7 +732,7 @@ impl StaticOverlay {
 
     pub(crate) fn with_renderables(renderables: Vec<Box<dyn Renderable>>, title: String) -> Self {
         Self {
-            view: PagerView::new(renderables, title, 0),
+            view: PagerView::new(renderables, title, /*scroll_offset*/ 0),
             is_done: false,
         }
     }

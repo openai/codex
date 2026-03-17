@@ -137,6 +137,7 @@ fn list_marketplaces_returns_home_and_repo_marketplaces() {
                 path:
                     AbsolutePathBuf::try_from(home_root.join(".agents/plugins/marketplace.json"),)
                         .unwrap(),
+                interface: None,
                 plugins: vec![
                     MarketplacePluginSummary {
                         name: "shared-plugin".to_string(),
@@ -163,6 +164,7 @@ fn list_marketplaces_returns_home_and_repo_marketplaces() {
                 path:
                     AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json"),)
                         .unwrap(),
+                interface: None,
                 plugins: vec![
                     MarketplacePluginSummary {
                         name: "shared-plugin".to_string(),
@@ -245,6 +247,7 @@ fn list_marketplaces_keeps_distinct_entries_for_same_name() {
             MarketplaceSummary {
                 name: "codex-curated".to_string(),
                 path: AbsolutePathBuf::try_from(home_marketplace).unwrap(),
+                interface: None,
                 plugins: vec![MarketplacePluginSummary {
                     name: "local-plugin".to_string(),
                     source: MarketplacePluginSourceSummary::Local {
@@ -258,6 +261,7 @@ fn list_marketplaces_keeps_distinct_entries_for_same_name() {
             MarketplaceSummary {
                 name: "codex-curated".to_string(),
                 path: AbsolutePathBuf::try_from(repo_marketplace.clone()).unwrap(),
+                interface: None,
                 plugins: vec![MarketplacePluginSummary {
                     name: "local-plugin".to_string(),
                     source: MarketplacePluginSourceSummary::Local {
@@ -324,6 +328,7 @@ fn list_marketplaces_dedupes_multiple_roots_in_same_repo() {
             name: "codex-curated".to_string(),
             path: AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json"))
                 .unwrap(),
+            interface: None,
             plugins: vec![MarketplacePluginSummary {
                 name: "local-plugin".to_string(),
                 source: MarketplacePluginSourceSummary::Local {
@@ -334,6 +339,45 @@ fn list_marketplaces_dedupes_multiple_roots_in_same_repo() {
                 interface: None,
             }],
         }]
+    );
+}
+
+#[test]
+fn list_marketplaces_reads_marketplace_display_name() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "openai-curated",
+  "interface": {
+    "displayName": "ChatGPT Official"
+  },
+  "plugins": [
+    {
+      "name": "local-plugin",
+      "source": {
+        "source": "local",
+        "path": "./plugin"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let marketplaces =
+        list_marketplaces_with_home(&[AbsolutePathBuf::try_from(repo_root).unwrap()], None)
+            .unwrap();
+
+    assert_eq!(
+        marketplaces[0].interface,
+        Some(MarketplaceInterfaceSummary {
+            display_name: Some("ChatGPT Official".to_string()),
+        })
     );
 }
 

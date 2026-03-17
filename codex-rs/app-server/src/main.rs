@@ -37,7 +37,7 @@ fn main() -> anyhow::Result<()> {
             arg0_paths,
             CliConfigOverrides::default(),
             loader_overrides,
-            false,
+            /*default_analytics_enabled*/ false,
             transport,
         )
         .await?;

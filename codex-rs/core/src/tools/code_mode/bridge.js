@@ -27,6 +27,7 @@ Object.defineProperty(globalThis, '__codexContentItems', {
   }
 
   defineGlobal('ALL_TOOLS', __codexRuntime.ALL_TOOLS);
+  defineGlobal('exit', __codexRuntime.exit);
   defineGlobal('image', __codexRuntime.image);
   defineGlobal('load', __codexRuntime.load);
   defineGlobal('store', __codexRuntime.store);

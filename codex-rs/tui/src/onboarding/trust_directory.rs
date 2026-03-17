@@ -56,7 +56,7 @@ impl WidgetRef for &TrustDirectoryWidget {
                 "Do you trust the contents of this directory? Working with untrusted contents comes with higher risk of prompt injection.".to_string(),
             )
                 .wrap(Wrap { trim: true })
-                .inset(Insets::tlbr(0, 2, 0, 0)),
+                .inset(Insets::tlbr(/*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0)),
         );
         column.push("");
 
@@ -80,7 +80,9 @@ impl WidgetRef for &TrustDirectoryWidget {
                 Paragraph::new(error.to_string())
                     .red()
                     .wrap(Wrap { trim: true })
-                    .inset(Insets::tlbr(0, 2, 0, 0)),
+                    .inset(Insets::tlbr(
+                        /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
+                    )),
             );
             column.push("");
         }
@@ -95,7 +97,9 @@ impl WidgetRef for &TrustDirectoryWidget {
                     " to continue".dim()
                 },
             ])
-            .inset(Insets::tlbr(0, 2, 0, 0)),
+            .inset(Insets::tlbr(
+                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
+            )),
         );
 
         column.render(area, buf);
