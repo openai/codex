@@ -353,7 +353,10 @@ impl ContextManager {
         match item {
             ResponseItem::Notification { id, content } => ResponseItem::Notification {
                 id: id.clone(),
-                content: truncate_function_output_payload(content, policy_with_serialization_budget),
+                content: truncate_function_output_payload(
+                    content,
+                    policy_with_serialization_budget,
+                ),
             },
             ResponseItem::FunctionCallOutput { call_id, output } => {
                 ResponseItem::FunctionCallOutput {
