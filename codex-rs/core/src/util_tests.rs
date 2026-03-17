@@ -69,6 +69,7 @@ impl Visit for TagCollectorVisitor {
 #[derive(Clone)]
 struct TagCollectorLayer {
     tags: Arc<Mutex<BTreeMap<String, String>>>,
+    event_count: Arc<Mutex<usize>>,
 }
 
 impl<S> Layer<S> for TagCollectorLayer
@@ -82,14 +83,19 @@ where
         let mut visitor = TagCollectorVisitor::default();
         event.record(&mut visitor);
         self.tags.lock().unwrap().extend(visitor.tags);
+        *self.event_count.lock().unwrap() += 1;
     }
 }
 
 #[test]
 fn emit_feedback_request_tags_records_sentry_feedback_fields() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
+    let event_count = Arc::new(Mutex::new(0));
     let _guard = tracing_subscriber::registry()
-        .with(TagCollectorLayer { tags: tags.clone() })
+        .with(TagCollectorLayer {
+            tags: tags.clone(),
+            event_count: event_count.clone(),
+        })
         .set_default();
 
     let auth_env = AuthEnvTelemetry {
@@ -181,13 +187,18 @@ fn emit_feedback_request_tags_records_sentry_feedback_fields() {
             .map(String::as_str),
         Some("\"200\"")
     );
+    assert_eq!(*event_count.lock().unwrap(), 1);
 }
 
 #[test]
 fn emit_feedback_auth_recovery_tags_preserves_401_specific_fields() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
+    let event_count = Arc::new(Mutex::new(0));
     let _guard = tracing_subscriber::registry()
-        .with(TagCollectorLayer { tags: tags.clone() })
+        .with(TagCollectorLayer {
+            tags: tags.clone(),
+            event_count: event_count.clone(),
+        })
         .set_default();
 
     emit_feedback_auth_recovery_tags(
@@ -217,13 +228,18 @@ fn emit_feedback_auth_recovery_tags_preserves_401_specific_fields() {
         tags.get("auth_401_error_code").map(String::as_str),
         Some("\"token_expired\"")
     );
+    assert_eq!(*event_count.lock().unwrap(), 1);
 }
 
 #[test]
 fn emit_feedback_auth_recovery_tags_clears_stale_401_fields() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
+    let event_count = Arc::new(Mutex::new(0));
     let _guard = tracing_subscriber::registry()
-        .with(TagCollectorLayer { tags: tags.clone() })
+        .with(TagCollectorLayer {
+            tags: tags.clone(),
+            event_count: event_count.clone(),
+        })
         .set_default();
 
     emit_feedback_auth_recovery_tags(
@@ -259,13 +275,18 @@ fn emit_feedback_auth_recovery_tags_clears_stale_401_fields() {
         tags.get("auth_401_error_code").map(String::as_str),
         Some("\"\"")
     );
+    assert_eq!(*event_count.lock().unwrap(), 2);
 }
 
 #[test]
 fn emit_feedback_request_tags_preserves_latest_auth_fields_after_unauthorized() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
+    let event_count = Arc::new(Mutex::new(0));
     let _guard = tracing_subscriber::registry()
-        .with(TagCollectorLayer { tags: tags.clone() })
+        .with(TagCollectorLayer {
+            tags: tags.clone(),
+            event_count: event_count.clone(),
+        })
         .set_default();
 
     emit_feedback_request_tags(&FeedbackRequestTags {
@@ -307,13 +328,18 @@ fn emit_feedback_request_tags_preserves_latest_auth_fields_after_unauthorized() 
             .map(String::as_str),
         Some("\"false\"")
     );
+    assert_eq!(*event_count.lock().unwrap(), 1);
 }
 
 #[test]
 fn emit_feedback_request_tags_preserves_auth_env_fields_for_legacy_emitters() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
+    let event_count = Arc::new(Mutex::new(0));
     let _guard = tracing_subscriber::registry()
-        .with(TagCollectorLayer { tags: tags.clone() })
+        .with(TagCollectorLayer {
+            tags: tags.clone(),
+            event_count: event_count.clone(),
+        })
         .set_default();
 
     let auth_env = AuthEnvTelemetry {
@@ -416,6 +442,7 @@ fn emit_feedback_request_tags_preserves_auth_env_fields_for_legacy_emitters() {
             .map(String::as_str),
         Some("\"\"")
     );
+    assert_eq!(*event_count.lock().unwrap(), 2);
 }
 
 #[test]
