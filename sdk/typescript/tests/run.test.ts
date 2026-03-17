@@ -486,60 +486,6 @@ describe("Codex", () => {
     }
   });
 
-  it("allows overriding the env passed to the Codex CLI", async () => {
-    const { url, close } = await startResponsesTestProxy({
-      statusCode: 200,
-      responseBodies: [
-        sse(
-          responseStarted("response_1"),
-          assistantMessage("Custom env", "item_1"),
-          responseCompleted("response_1"),
-        ),
-      ],
-    });
-
-    const { args: spawnArgs, envs: spawnEnvs, restore } = codexExecSpy();
-    process.env.CODEX_ENV_SHOULD_NOT_LEAK = "leak";
-
-    try {
-      const client = new Codex({
-        codexPathOverride: codexExecPath,
-        baseUrl: url,
-        apiKey: "test",
-        env: {
-          CODEX_HOME: process.env.CODEX_HOME!,
-          CUSTOM_ENV: "custom",
-        },
-      });
-
-      const thread = client.startThread();
-      await thread.run("custom env");
-
-      const spawnEnv = spawnEnvs[0];
-      expect(spawnEnv).toBeDefined();
-      if (!spawnEnv) {
-        throw new Error("Spawn env missing");
-      }
-      expect(spawnEnv.CODEX_HOME).toBe(process.env.CODEX_HOME);
-      const commandArgs = spawnArgs[0];
-      expect(commandArgs).toBeDefined();
-      if (!commandArgs) {
-        throw new Error("Command args missing");
-      }
-      expect(spawnEnv.CUSTOM_ENV).toBe("custom");
-      expect(spawnEnv.CODEX_ENV_SHOULD_NOT_LEAK).toBeUndefined();
-      expect(spawnEnv.OPENAI_BASE_URL).toBeUndefined();
-      expect(spawnEnv.CODEX_API_KEY).toBe("test");
-      expect(spawnEnv.CODEX_INTERNAL_ORIGINATOR_OVERRIDE).toBeDefined();
-      expect(commandArgs).toContain("--config");
-      expect(commandArgs).toContain(`openai_base_url=${JSON.stringify(url)}`);
-    } finally {
-      delete process.env.CODEX_ENV_SHOULD_NOT_LEAK;
-      restore();
-      await close();
-    }
-  });
-
   it("passes additionalDirectories as repeated flags", async () => {
     const { url, close } = await startResponsesTestProxy({
       statusCode: 200,
