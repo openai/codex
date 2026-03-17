@@ -61,8 +61,8 @@ mod threads;
 // - one bucket per non-null thread_id
 // - one bucket per threadless (thread_id IS NULL) non-null process_uuid
 // - one bucket for threadless rows with process_uuid IS NULL
-// This budget tracks the larger of each row's `message` and `feedback_log_body`
-// payloads, rather than the exact sum of all persisted SQLite column bytes.
+// This budget tracks each row's persisted rendered log body plus non-body
+// metadata, rather than the exact sum of all persisted SQLite column bytes.
 const LOG_PARTITION_SIZE_LIMIT_BYTES: i64 = 10 * 1024 * 1024;
 const LOG_PARTITION_ROW_LIMIT: i64 = 1_000;
 

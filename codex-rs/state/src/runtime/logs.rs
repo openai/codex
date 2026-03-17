@@ -13,20 +13,15 @@ impl StateRuntime {
 
         let mut tx = self.logs_pool.begin().await?;
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "INSERT INTO logs (ts, ts_nanos, level, target, message, feedback_log_body, thread_id, process_uuid, module_path, file, line, estimated_bytes) ",
+            "INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body, thread_id, process_uuid, module_path, file, line, estimated_bytes) ",
         );
         builder.push_values(entries, |mut row, entry| {
             let feedback_log_body = entry.feedback_log_body.as_ref().or(entry.message.as_ref());
             // Keep about 10 MiB of reader-visible log content per partition.
-            // `query_logs` uses `message`, while `/feedback` exports
-            // `feedback_log_body`, so charge the larger payload without
-            // double-counting the same event.
-            let estimated_bytes = entry
-                .message
-                .as_ref()
-                .map_or(0, String::len)
-                .max(feedback_log_body.map_or(0, String::len))
-                as i64
+            // Both `query_logs` and `/feedback` read the persisted
+            // `feedback_log_body`, while `LogEntry.message` is only a write-time
+            // fallback for callers that still populate the old field.
+            let estimated_bytes = feedback_log_body.map_or(0, String::len) as i64
                 + entry.level.len() as i64
                 + entry.target.len() as i64
                 + entry.module_path.as_ref().map_or(0, String::len) as i64
@@ -35,7 +30,6 @@ impl StateRuntime {
                 .push_bind(entry.ts_nanos)
                 .push_bind(&entry.level)
                 .push_bind(&entry.target)
-                .push_bind(&entry.message)
                 .push_bind(feedback_log_body)
                 .push_bind(&entry.thread_id)
                 .push_bind(&entry.process_uuid)
@@ -300,7 +294,7 @@ WHERE id IN (
     /// Query logs with optional filters.
     pub async fn query_logs(&self, query: &LogQuery) -> anyhow::Result<Vec<LogRow>> {
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "SELECT id, ts, ts_nanos, level, target, message, thread_id, process_uuid, file, line FROM logs WHERE 1 = 1",
+            "SELECT id, ts, ts_nanos, level, target, feedback_log_body AS message, thread_id, process_uuid, file, line FROM logs WHERE 1 = 1",
         );
         push_log_filters(&mut builder, query);
         if query.descending {
@@ -462,7 +456,7 @@ fn push_log_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, query: &'a LogQu
         builder.push(" AND id > ").push_bind(after_id);
     }
     if let Some(search) = query.search.as_ref() {
-        builder.push(" AND INSTR(message, ");
+        builder.push(" AND INSTR(COALESCE(feedback_log_body, ''), ");
         builder.push_bind(search.as_str());
         builder.push(") > 0");
     }
@@ -498,10 +492,13 @@ mod tests {
     use crate::LogEntry;
     use crate::LogQuery;
     use crate::logs_db_path;
+    use crate::migrations::LOGS_MIGRATOR;
     use crate::state_db_path;
     use pretty_assertions::assert_eq;
     use sqlx::SqlitePool;
+    use sqlx::migrate::Migrator;
     use sqlx::sqlite::SqliteConnectOptions;
+    use std::borrow::Cow;
     use std::path::Path;
 
     async fn open_db_pool(path: &Path) -> SqlitePool {
@@ -557,6 +554,87 @@ mod tests {
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
 
+    #[tokio::test]
+    async fn init_migrates_message_only_logs_db_to_feedback_log_body_schema() {
+        let codex_home = unique_temp_dir();
+        tokio::fs::create_dir_all(&codex_home)
+            .await
+            .expect("create codex home");
+        let logs_path = logs_db_path(codex_home.as_path());
+        let old_logs_migrator = Migrator {
+            migrations: Cow::Owned(vec![LOGS_MIGRATOR.migrations[0].clone()]),
+            ignore_missing: false,
+            locking: true,
+            no_tx: false,
+        };
+        let pool = SqlitePool::connect_with(
+            SqliteConnectOptions::new()
+                .filename(&logs_path)
+                .create_if_missing(true),
+        )
+        .await
+        .expect("open old logs db");
+        old_logs_migrator
+            .run(&pool)
+            .await
+            .expect("apply old logs schema");
+        sqlx::query(
+            "INSERT INTO logs (ts, ts_nanos, level, target, message, module_path, file, line, thread_id, process_uuid, estimated_bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(1_i64)
+        .bind(0_i64)
+        .bind("INFO")
+        .bind("cli")
+        .bind("legacy-body")
+        .bind("mod")
+        .bind("main.rs")
+        .bind(7_i64)
+        .bind("thread-1")
+        .bind("proc-1")
+        .bind(16_i64)
+        .execute(&pool)
+        .await
+        .expect("insert legacy log row");
+        pool.close().await;
+
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+
+        let rows = runtime
+            .query_logs(&LogQuery::default())
+            .await
+            .expect("query migrated logs");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].message.as_deref(), Some("legacy-body"));
+
+        let migrated_pool = open_db_pool(logs_path.as_path()).await;
+        let columns = sqlx::query_scalar::<_, String>("SELECT name FROM pragma_table_info('logs')")
+            .fetch_all(&migrated_pool)
+            .await
+            .expect("load migrated columns");
+        assert_eq!(
+            columns,
+            vec![
+                "id".to_string(),
+                "ts".to_string(),
+                "ts_nanos".to_string(),
+                "level".to_string(),
+                "target".to_string(),
+                "feedback_log_body".to_string(),
+                "module_path".to_string(),
+                "file".to_string(),
+                "line".to_string(),
+                "thread_id".to_string(),
+                "process_uuid".to_string(),
+                "estimated_bytes".to_string(),
+            ]
+        );
+        migrated_pool.close().await;
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
     #[test]
     fn format_feedback_log_line_matches_feedback_formatter_shape() {
         assert_eq!(
@@ -574,7 +652,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn query_logs_with_search_matches_substring() {
+    async fn query_logs_with_search_matches_rendered_body_substring() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -588,7 +666,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some("alpha".to_string()),
-                    feedback_log_body: None,
+                    feedback_log_body: Some("foo=1 alpha".to_string()),
                     thread_id: Some("thread-1".to_string()),
                     process_uuid: None,
                     file: Some("main.rs".to_string()),
@@ -601,7 +679,7 @@ mod tests {
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
                     message: Some("alphabet".to_string()),
-                    feedback_log_body: None,
+                    feedback_log_body: Some("foo=2 alphabet".to_string()),
                     thread_id: Some("thread-1".to_string()),
                     process_uuid: None,
                     file: Some("main.rs".to_string()),
@@ -614,14 +692,14 @@ mod tests {
 
         let rows = runtime
             .query_logs(&LogQuery {
-                search: Some("alphab".to_string()),
+                search: Some("foo=2".to_string()),
                 ..Default::default()
             })
             .await
             .expect("query matching logs");
 
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].message.as_deref(), Some("alphabet"));
+        assert_eq!(rows[0].message.as_deref(), Some("foo=2 alphabet"));
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
