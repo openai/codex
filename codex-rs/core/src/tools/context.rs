@@ -363,7 +363,8 @@ pub(crate) fn response_input_to_code_mode_result(response: ResponseInputItem) ->
                 .collect::<Vec<_>>(),
         ),
         ResponseInputItem::FunctionCallOutput { output, .. }
-        | ResponseInputItem::CustomToolCallOutput { output, .. } => match output.body {
+        | ResponseInputItem::CustomToolCallOutput { output, .. }
+        | ResponseInputItem::Notification { content: output } => match output.body {
             FunctionCallOutputBody::Text(text) => JsonValue::String(text),
             FunctionCallOutputBody::ContentItems(items) => {
                 content_items_to_code_mode_result(&items)

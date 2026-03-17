@@ -737,6 +737,14 @@ impl JsReplManager {
     fn summarize_tool_call_response(response: &ResponseInputItem) -> JsReplToolCallResponseSummary {
         match response {
             ResponseInputItem::Message { content, .. } => Self::summarize_message_payload(content),
+            ResponseInputItem::Notification { content } => {
+                let payload_kind = if content.content_items().is_some() {
+                    JsReplToolCallPayloadKind::FunctionContentItems
+                } else {
+                    JsReplToolCallPayloadKind::FunctionText
+                };
+                Self::summarize_function_output_payload("notification", payload_kind, content)
+            }
             ResponseInputItem::FunctionCallOutput { output, .. } => {
                 let payload_kind = if output.content_items().is_some() {
                     JsReplToolCallPayloadKind::FunctionContentItems

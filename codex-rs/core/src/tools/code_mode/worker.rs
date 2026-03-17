@@ -3,7 +3,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::warn;
 
-use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 
 use super::ExecContext;
@@ -81,9 +81,8 @@ impl CodeModeProcess {
                         }
                         if exec
                             .session
-                            .inject_response_items(vec![ResponseInputItem::Message {
-                                role: "developer".to_string(),
-                                content: vec![ContentItem::InputText { text: notify.text }],
+                            .inject_response_items(vec![ResponseInputItem::Notification {
+                                content: FunctionCallOutputPayload::from_text(notify.text),
                             }])
                             .await
                             .is_err()

@@ -351,6 +351,10 @@ impl ContextManager {
     fn process_item(&self, item: &ResponseItem, policy: TruncationPolicy) -> ResponseItem {
         let policy_with_serialization_budget = policy * 1.2;
         match item {
+            ResponseItem::Notification { id, content } => ResponseItem::Notification {
+                id: id.clone(),
+                content: truncate_function_output_payload(content, policy_with_serialization_budget),
+            },
             ResponseItem::FunctionCallOutput { call_id, output } => {
                 ResponseItem::FunctionCallOutput {
                     call_id: call_id.clone(),
@@ -410,7 +414,8 @@ fn truncate_function_output_payload(
 fn is_api_message(message: &ResponseItem) -> bool {
     match message {
         ResponseItem::Message { role, .. } => role.as_str() != "system",
-        ResponseItem::FunctionCallOutput { .. }
+        ResponseItem::Notification { .. }
+        | ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::ToolSearchCall { .. }
         | ResponseItem::ToolSearchOutput { .. }
@@ -584,7 +589,10 @@ fn image_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
             }
         }
         ResponseItem::FunctionCallOutput { output, .. }
-        | ResponseItem::CustomToolCallOutput { output, .. } => {
+        | ResponseItem::CustomToolCallOutput { output, .. }
+        | ResponseItem::Notification {
+            content: output, ..
+        } => {
             if let FunctionCallOutputBody::ContentItems(items) = &output.body {
                 for content_item in items {
                     if let FunctionCallOutputContentItem::InputImage { image_url, detail } =
@@ -612,7 +620,8 @@ fn is_model_generated_item(item: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::Compaction { .. } => true,
-        ResponseItem::FunctionCallOutput { .. }
+        ResponseItem::Notification { .. }
+        | ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::ToolSearchOutput { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::GhostSnapshot { .. }
@@ -623,7 +632,8 @@ fn is_model_generated_item(item: &ResponseItem) -> bool {
 pub(crate) fn is_codex_generated_item(item: &ResponseItem) -> bool {
     matches!(
         item,
-        ResponseItem::FunctionCallOutput { .. }
+        ResponseItem::Notification { .. }
+            | ResponseItem::FunctionCallOutput { .. }
             | ResponseItem::ToolSearchOutput { .. }
             | ResponseItem::CustomToolCallOutput { .. }
     ) || matches!(item, ResponseItem::Message { role, .. } if role == "developer")

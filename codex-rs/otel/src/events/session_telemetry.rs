@@ -1017,6 +1017,7 @@ impl SessionTelemetry {
     fn responses_item_type(item: &ResponseItem) -> String {
         match item {
             ResponseItem::Message { role, .. } => format!("message_from_{role}"),
+            ResponseItem::Notification { .. } => "notification".into(),
             ResponseItem::Reasoning { .. } => "reasoning".into(),
             ResponseItem::LocalShellCall { .. } => "local_shell_call".into(),
             ResponseItem::FunctionCall { .. } => "function_call".into(),

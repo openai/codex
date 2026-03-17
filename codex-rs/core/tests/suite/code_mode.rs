@@ -1552,7 +1552,7 @@ text({ json: true });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_notify_injects_context_message_into_active_context() -> Result<()> {
+async fn code_mode_notify_injects_notification_into_active_context() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1568,14 +1568,17 @@ text("done");
     .await?;
 
     let req = second_mock.single_request();
+    let input = req.input();
+    let has_notification = input.iter().any(|item| {
+        item.get("type").and_then(serde_json::Value::as_str) == Some("notification")
+            && item
+                .get("content")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|text| text.contains("code_mode_notify_marker"))
+    });
     assert!(
-        req.has_message_with_input_texts("developer", |texts| {
-            texts
-                .iter()
-                .any(|text| text.contains("code_mode_notify_marker"))
-        }),
-        "expected notify marker in developer message input: {:?}",
-        req.message_input_text_groups("developer")
+        has_notification,
+        "expected notify marker in notification input item: {input:?}"
     );
 
     Ok(())

@@ -14,6 +14,6 @@
 - `image(imageUrl: string)`: Appends an image item and returns it. `image_url` can be an HTTPS URL or a base64-encoded `data:` URL.
 - `store(key: string, value: any)`: stores a serializable value under a string key for later `exec` calls in the same session.
 - `load(key: string)`: returns the stored value for a string key, or `undefined` if it is missing.
-- `notify(value: string | number | boolean | undefined | null)`: immediately injects a developer message into the active turn context. Values are stringified like `text(...)`.
+- `notify(value: string | number | boolean | undefined | null)`: immediately injects a `notification` item into the active turn context. Values are stringified like `text(...)`.
 - `ALL_TOOLS`: metadata for the enabled nested tools as `{ name, description }` entries.
 - `yield_control()`: yields the accumulated output to the model immediately while the script keeps running.

@@ -393,6 +393,7 @@ fn build_arc_monitor_message_item(
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::ToolSearchCall { .. }
         | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::Notification { .. }
         | ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::ToolSearchOutput { .. }
