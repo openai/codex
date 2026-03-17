@@ -148,23 +148,6 @@ const RESERVED_MODEL_PROVIDER_IDS: [&str; 3] = [
     LMSTUDIO_OSS_PROVIDER_ID,
 ];
 
-#[cfg(target_os = "linux")]
-fn push_missing_system_bwrap_startup_warning(startup_warnings: &mut Vec<String>) {
-    if Path::new(SYSTEM_BWRAP_PATH).is_file() {
-        return;
-    }
-
-    let message = format!(
-        "Codex could not find system bubblewrap at {SYSTEM_BWRAP_PATH}. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime."
-    );
-    if !startup_warnings.contains(&message) {
-        startup_warnings.push(message);
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn push_missing_system_bwrap_startup_warning(_startup_warnings: &mut Vec<String>) {}
-
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
     let trimmed = raw.trim();
@@ -2098,7 +2081,12 @@ impl Config {
 
         let user_instructions = Self::load_instructions(Some(&codex_home));
         let mut startup_warnings = Vec::new();
-        push_missing_system_bwrap_startup_warning(&mut startup_warnings);
+        #[cfg(target_os = "linux")]
+        if !Path::new(SYSTEM_BWRAP_PATH).is_file() {
+            startup_warnings.push(format!(
+                "Codex could not find system bubblewrap at {SYSTEM_BWRAP_PATH}. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime."
+            ));
+        }
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {

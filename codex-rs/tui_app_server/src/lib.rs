@@ -387,7 +387,7 @@ pub(crate) async fn start_embedded_app_server_for_picker(
 
 async fn start_embedded_app_server_with<F, Fut>(
     arg0_paths: Arg0DispatchPaths,
-    mut config: Config,
+    config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
