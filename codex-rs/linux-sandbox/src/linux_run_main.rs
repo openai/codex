@@ -433,11 +433,7 @@ fn run_bwrap_with_proc_fallback(
         command_cwd,
         options,
     );
-    exec_bwrap(
-        bwrap_args.args,
-        bwrap_args.preserved_files,
-        /*emit_missing_system_bwrap_warning*/ true,
-    );
+    exec_bwrap(bwrap_args.args, bwrap_args.preserved_files);
 }
 
 fn bwrap_network_mode(
@@ -571,11 +567,7 @@ fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> Str
             close_fd_or_panic(write_fd, "close write end in bubblewrap child");
         }
 
-        exec_bwrap(
-            bwrap_args.args,
-            bwrap_args.preserved_files,
-            /*emit_missing_system_bwrap_warning*/ false,
-        );
+        exec_bwrap(bwrap_args.args, bwrap_args.preserved_files);
     }
 
     // Parent: close the write end and read stderr while the child runs.

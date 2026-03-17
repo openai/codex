@@ -118,6 +118,29 @@ mod selection_list;
 mod session_log;
 mod shimmer;
 mod skills_helpers;
+
+#[cfg(target_os = "linux")]
+const UBUNTU_APPARMOR_BWRAP_USERNS_RESTRICT_PROFILE: &str = "/etc/apparmor.d/bwrap-userns-restrict";
+#[cfg(target_os = "linux")]
+const SYSTEM_BWRAP_PATH: &str = "/usr/bin/bwrap";
+
+#[cfg(target_os = "linux")]
+fn missing_system_bwrap_warning() -> Option<String> {
+    if Path::new(UBUNTU_APPARMOR_BWRAP_USERNS_RESTRICT_PROFILE).is_file()
+        && !Path::new(SYSTEM_BWRAP_PATH).is_file()
+    {
+        return Some(format!(
+            "Codex could not find system bubblewrap at {SYSTEM_BWRAP_PATH}. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime."
+        ));
+    }
+
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+fn missing_system_bwrap_warning() -> Option<String> {
+    None
+}
 mod slash_command;
 mod status;
 mod status_indicator_widget;
@@ -387,7 +410,7 @@ pub(crate) async fn start_embedded_app_server_for_picker(
 
 async fn start_embedded_app_server_with<F, Fut>(
     arg0_paths: Arg0DispatchPaths,
-    config: Config,
+    mut config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
@@ -398,6 +421,10 @@ where
     F: FnOnce(InProcessClientStartArgs) -> Fut,
     Fut: Future<Output = std::io::Result<InProcessAppServerClient>>,
 {
+    if let Some(warning) = missing_system_bwrap_warning() {
+        config.startup_warnings.push(warning);
+    }
+
     let config_warnings = config
         .startup_warnings
         .iter()

@@ -8,17 +8,22 @@ This crate is responsible for producing:
   - this should also be true of the `codex` multitool CLI
 
 On Linux, the bubblewrap pipeline prefers the system `/usr/bin/bwrap` whenever
-it is available. If `/usr/bin/bwrap` is missing, the helper warns and uses the
-vendored bubblewrap path compiled into this binary.
+it is available. If `/usr/bin/bwrap` is missing, the helper still falls back to
+the vendored bubblewrap path compiled into this binary.
+
+On Ubuntu/AppArmor hosts that ship `/etc/apparmor.d/bwrap-userns-restrict`,
+Codex also surfaces a startup warning when `/usr/bin/bwrap` is missing because
+the distro's user-namespace exception is path-specific to `/usr/bin/bwrap`.
 
 **Current Behavior**
 - Legacy `SandboxPolicy` / `sandbox_mode` configs remain supported.
 - Bubblewrap is the default filesystem sandbox pipeline.
 - If `/usr/bin/bwrap` is present, the helper uses it.
-- If `/usr/bin/bwrap` is missing, the helper warns on stderr and falls back to
-  the vendored bubblewrap path.
-- This also covers the Ubuntu/AppArmor case where the distro policy exception
-  is path-specific to `/usr/bin/bwrap`.
+- If `/usr/bin/bwrap` is missing, the helper falls back to the vendored
+  bubblewrap path.
+- On Ubuntu/AppArmor hosts with `bwrap-userns-restrict`, Codex surfaces a
+  startup warning when `/usr/bin/bwrap` is missing because the distro policy
+  exception is path-specific to `/usr/bin/bwrap`.
 - Legacy Landlock + mount protections remain available as an explicit legacy
   fallback path.
 - Set `features.use_legacy_landlock = true` (or CLI `-c use_legacy_landlock=true`)

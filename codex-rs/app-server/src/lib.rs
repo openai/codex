@@ -13,6 +13,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::io::Result as IoResult;
+#[cfg(target_os = "linux")]
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
@@ -81,6 +83,10 @@ pub use crate::error_code::INVALID_PARAMS_ERROR_CODE;
 pub use crate::transport::AppServerTransport;
 
 const LOG_FORMAT_ENV_VAR: &str = "LOG_FORMAT";
+#[cfg(target_os = "linux")]
+const UBUNTU_APPARMOR_BWRAP_USERNS_RESTRICT_PROFILE: &str = "/etc/apparmor.d/bwrap-userns-restrict";
+#[cfg(target_os = "linux")]
+const SYSTEM_BWRAP_PATH: &str = "/usr/bin/bwrap";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LogFormat {
@@ -310,6 +316,24 @@ fn project_config_warning(config: &Config) -> Option<ConfigWarningNotification> 
     })
 }
 
+#[cfg(target_os = "linux")]
+fn missing_system_bwrap_warning() -> Option<String> {
+    if Path::new(UBUNTU_APPARMOR_BWRAP_USERNS_RESTRICT_PROFILE).is_file()
+        && !Path::new(SYSTEM_BWRAP_PATH).is_file()
+    {
+        return Some(format!(
+            "Codex could not find system bubblewrap at {SYSTEM_BWRAP_PATH}. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime."
+        ));
+    }
+
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+fn missing_system_bwrap_warning() -> Option<String> {
+    None
+}
+
 impl LogFormat {
     fn from_env_value(value: Option<&str>) -> Self {
         match value.map(str::trim).map(str::to_ascii_lowercase) {
@@ -435,7 +459,7 @@ pub async fn run_main_with_transport(
     };
     let loader_overrides_for_config_api = loader_overrides.clone();
     let mut config_warnings = Vec::new();
-    let config = match ConfigBuilder::default()
+    let mut config = match ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides.clone())
         .loader_overrides(loader_overrides)
         .cloud_requirements(cloud_requirements.clone())
@@ -454,6 +478,10 @@ pub async fn run_main_with_transport(
             })?
         }
     };
+
+    if let Some(warning) = missing_system_bwrap_warning() {
+        config.startup_warnings.push(warning);
+    }
 
     if let Ok(Some(err)) = check_execpolicy_for_warnings(&config.config_layer_stack).await {
         let (path, range) = exec_policy_warning_location(&err);

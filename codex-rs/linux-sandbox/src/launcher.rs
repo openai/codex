@@ -1,6 +1,5 @@
 use std::ffi::CString;
 use std::fs::File;
-use std::io::IsTerminal;
 use std::os::fd::AsRawFd;
 use std::os::raw::c_char;
 use std::os::unix::ffi::OsStrExt;
@@ -17,21 +16,10 @@ enum BubblewrapLauncher {
     Vendored,
 }
 
-pub(crate) fn exec_bwrap(
-    argv: Vec<String>,
-    preserved_files: Vec<File>,
-    emit_missing_system_bwrap_warning: bool,
-) -> ! {
+pub(crate) fn exec_bwrap(argv: Vec<String>, preserved_files: Vec<File>) -> ! {
     match preferred_bwrap_launcher() {
         BubblewrapLauncher::System(program) => exec_system_bwrap(&program, argv, preserved_files),
-        BubblewrapLauncher::Vendored => {
-            if emit_missing_system_bwrap_warning && std::io::stderr().is_terminal() {
-                eprintln!(
-                    "warning: Codex could not find system bubblewrap at {SYSTEM_BWRAP_PATH}. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime."
-                );
-            }
-            exec_vendored_bwrap(argv, preserved_files)
-        }
+        BubblewrapLauncher::Vendored => exec_vendored_bwrap(argv, preserved_files),
     }
 }
 
