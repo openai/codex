@@ -1,4 +1,5 @@
 use super::*;
+use crate::auth_env_telemetry::AuthEnvTelemetry;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -68,6 +69,7 @@ impl Visit for TagCollectorVisitor {
 #[derive(Clone)]
 struct TagCollectorLayer {
     tags: Arc<Mutex<BTreeMap<String, String>>>,
+    event_count: Arc<Mutex<usize>>,
 }
 
 impl<S> Layer<S> for TagCollectorLayer
@@ -81,32 +83,49 @@ where
         let mut visitor = TagCollectorVisitor::default();
         event.record(&mut visitor);
         self.tags.lock().unwrap().extend(visitor.tags);
+        *self.event_count.lock().unwrap() += 1;
     }
 }
 
 #[test]
 fn emit_feedback_request_tags_records_sentry_feedback_fields() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
+    let event_count = Arc::new(Mutex::new(0));
     let _guard = tracing_subscriber::registry()
-        .with(TagCollectorLayer { tags: tags.clone() })
+        .with(TagCollectorLayer {
+            tags: tags.clone(),
+            event_count: event_count.clone(),
+        })
         .set_default();
 
-    emit_feedback_request_tags(&FeedbackRequestTags {
-        endpoint: "/responses",
-        auth_header_attached: true,
-        auth_header_name: Some("authorization"),
-        auth_mode: Some("chatgpt"),
-        auth_retry_after_unauthorized: Some(false),
-        auth_recovery_mode: Some("managed"),
-        auth_recovery_phase: Some("refresh_token"),
-        auth_connection_reused: Some(true),
-        auth_request_id: Some("req-123"),
-        auth_cf_ray: Some("ray-123"),
-        auth_error: Some("missing_authorization_header"),
-        auth_error_code: Some("token_expired"),
-        auth_recovery_followup_success: Some(true),
-        auth_recovery_followup_status: Some(200),
-    });
+    let auth_env = AuthEnvTelemetry {
+        openai_api_key_env_present: true,
+        codex_api_key_env_present: false,
+        codex_api_key_env_enabled: true,
+        provider_env_key_name: Some("configured".to_string()),
+        provider_env_key_present: Some(true),
+        refresh_token_url_override_present: true,
+    };
+
+    emit_feedback_request_tags_with_auth_env(
+        &FeedbackRequestTags {
+            endpoint: "/responses",
+            auth_header_attached: true,
+            auth_header_name: Some("authorization"),
+            auth_mode: Some("chatgpt"),
+            auth_retry_after_unauthorized: Some(false),
+            auth_recovery_mode: Some("managed"),
+            auth_recovery_phase: Some("refresh_token"),
+            auth_connection_reused: Some(true),
+            auth_request_id: Some("req-123"),
+            auth_cf_ray: Some("ray-123"),
+            auth_error: Some("missing_authorization_header"),
+            auth_error_code: Some("token_expired"),
+            auth_recovery_followup_success: Some(true),
+            auth_recovery_followup_status: Some(200),
+        },
+        &auth_env,
+    );
 
     let tags = tags.lock().unwrap().clone();
     assert_eq!(
@@ -120,6 +139,35 @@ fn emit_feedback_request_tags_records_sentry_feedback_fields() {
     assert_eq!(
         tags.get("auth_header_name").map(String::as_str),
         Some("\"authorization\"")
+    );
+    assert_eq!(
+        tags.get("auth_env_openai_api_key_present")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        tags.get("auth_env_codex_api_key_present")
+            .map(String::as_str),
+        Some("false")
+    );
+    assert_eq!(
+        tags.get("auth_env_codex_api_key_enabled")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        tags.get("auth_env_provider_key_name").map(String::as_str),
+        Some("\"configured\"")
+    );
+    assert_eq!(
+        tags.get("auth_env_provider_key_present")
+            .map(String::as_str),
+        Some("\"true\"")
+    );
+    assert_eq!(
+        tags.get("auth_env_refresh_token_url_override_present")
+            .map(String::as_str),
+        Some("true")
     );
     assert_eq!(
         tags.get("auth_request_id").map(String::as_str),
@@ -139,13 +187,18 @@ fn emit_feedback_request_tags_records_sentry_feedback_fields() {
             .map(String::as_str),
         Some("\"200\"")
     );
+    assert_eq!(*event_count.lock().unwrap(), 1);
 }
 
 #[test]
 fn emit_feedback_auth_recovery_tags_preserves_401_specific_fields() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
+    let event_count = Arc::new(Mutex::new(0));
     let _guard = tracing_subscriber::registry()
-        .with(TagCollectorLayer { tags: tags.clone() })
+        .with(TagCollectorLayer {
+            tags: tags.clone(),
+            event_count: event_count.clone(),
+        })
         .set_default();
 
     emit_feedback_auth_recovery_tags(
@@ -175,13 +228,18 @@ fn emit_feedback_auth_recovery_tags_preserves_401_specific_fields() {
         tags.get("auth_401_error_code").map(String::as_str),
         Some("\"token_expired\"")
     );
+    assert_eq!(*event_count.lock().unwrap(), 1);
 }
 
 #[test]
 fn emit_feedback_auth_recovery_tags_clears_stale_401_fields() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
+    let event_count = Arc::new(Mutex::new(0));
     let _guard = tracing_subscriber::registry()
-        .with(TagCollectorLayer { tags: tags.clone() })
+        .with(TagCollectorLayer {
+            tags: tags.clone(),
+            event_count: event_count.clone(),
+        })
         .set_default();
 
     emit_feedback_auth_recovery_tags(
@@ -217,13 +275,18 @@ fn emit_feedback_auth_recovery_tags_clears_stale_401_fields() {
         tags.get("auth_401_error_code").map(String::as_str),
         Some("\"\"")
     );
+    assert_eq!(*event_count.lock().unwrap(), 2);
 }
 
 #[test]
 fn emit_feedback_request_tags_preserves_latest_auth_fields_after_unauthorized() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
+    let event_count = Arc::new(Mutex::new(0));
     let _guard = tracing_subscriber::registry()
-        .with(TagCollectorLayer { tags: tags.clone() })
+        .with(TagCollectorLayer {
+            tags: tags.clone(),
+            event_count: event_count.clone(),
+        })
         .set_default();
 
     emit_feedback_request_tags(&FeedbackRequestTags {
@@ -265,31 +328,48 @@ fn emit_feedback_request_tags_preserves_latest_auth_fields_after_unauthorized() 
             .map(String::as_str),
         Some("\"false\"")
     );
+    assert_eq!(*event_count.lock().unwrap(), 1);
 }
 
 #[test]
-fn emit_feedback_request_tags_clears_stale_latest_auth_fields() {
+fn emit_feedback_request_tags_preserves_auth_env_fields_for_legacy_emitters() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
+    let event_count = Arc::new(Mutex::new(0));
     let _guard = tracing_subscriber::registry()
-        .with(TagCollectorLayer { tags: tags.clone() })
+        .with(TagCollectorLayer {
+            tags: tags.clone(),
+            event_count: event_count.clone(),
+        })
         .set_default();
 
-    emit_feedback_request_tags(&FeedbackRequestTags {
-        endpoint: "/responses",
-        auth_header_attached: true,
-        auth_header_name: Some("authorization"),
-        auth_mode: Some("chatgpt"),
-        auth_retry_after_unauthorized: Some(false),
-        auth_recovery_mode: Some("managed"),
-        auth_recovery_phase: Some("refresh_token"),
-        auth_connection_reused: Some(true),
-        auth_request_id: Some("req-123"),
-        auth_cf_ray: Some("ray-123"),
-        auth_error: Some("missing_authorization_header"),
-        auth_error_code: Some("token_expired"),
-        auth_recovery_followup_success: Some(true),
-        auth_recovery_followup_status: Some(200),
-    });
+    let auth_env = AuthEnvTelemetry {
+        openai_api_key_env_present: true,
+        codex_api_key_env_present: true,
+        codex_api_key_env_enabled: true,
+        provider_env_key_name: Some("configured".to_string()),
+        provider_env_key_present: Some(true),
+        refresh_token_url_override_present: true,
+    };
+
+    emit_feedback_request_tags_with_auth_env(
+        &FeedbackRequestTags {
+            endpoint: "/responses",
+            auth_header_attached: true,
+            auth_header_name: Some("authorization"),
+            auth_mode: Some("chatgpt"),
+            auth_retry_after_unauthorized: Some(false),
+            auth_recovery_mode: Some("managed"),
+            auth_recovery_phase: Some("refresh_token"),
+            auth_connection_reused: Some(true),
+            auth_request_id: Some("req-123"),
+            auth_cf_ray: Some("ray-123"),
+            auth_error: Some("missing_authorization_header"),
+            auth_error_code: Some("token_expired"),
+            auth_recovery_followup_success: Some(true),
+            auth_recovery_followup_status: Some(200),
+        },
+        &auth_env,
+    );
     emit_feedback_request_tags(&FeedbackRequestTags {
         endpoint: "/responses",
         auth_header_attached: true,
@@ -324,6 +404,35 @@ fn emit_feedback_request_tags_clears_stale_latest_auth_fields() {
         Some("\"\"")
     );
     assert_eq!(
+        tags.get("auth_env_openai_api_key_present")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        tags.get("auth_env_codex_api_key_present")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        tags.get("auth_env_codex_api_key_enabled")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        tags.get("auth_env_provider_key_name").map(String::as_str),
+        Some("\"configured\"")
+    );
+    assert_eq!(
+        tags.get("auth_env_provider_key_present")
+            .map(String::as_str),
+        Some("\"true\"")
+    );
+    assert_eq!(
+        tags.get("auth_env_refresh_token_url_override_present")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
         tags.get("auth_recovery_followup_success")
             .map(String::as_str),
         Some("\"\"")
@@ -333,6 +442,7 @@ fn emit_feedback_request_tags_clears_stale_latest_auth_fields() {
             .map(String::as_str),
         Some("\"\"")
     );
+    assert_eq!(*event_count.lock().unwrap(), 2);
 }
 
 #[test]

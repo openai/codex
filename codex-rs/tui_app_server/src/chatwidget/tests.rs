@@ -6043,6 +6043,17 @@ async fn slash_memory_drop_reports_stubbed_feature() {
 }
 
 #[tokio::test]
+async fn slash_mcp_requests_inventory_via_app_server() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Mcp);
+
+    assert!(active_blob(&chat).contains("Loading MCP inventory"));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::FetchMcpInventory));
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
 async fn slash_memory_update_reports_stubbed_feature() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 

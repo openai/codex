@@ -772,7 +772,7 @@ fn create_write_stdin_tool() -> ToolSpec {
     })
 }
 
-fn create_exec_wait_tool() -> ToolSpec {
+fn create_wait_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "cell_id".to_string(),
@@ -1827,7 +1827,7 @@ fn format_discoverable_tools(discoverable_tools: &[DiscoverableTool]) -> String 
                 });
             let default_action = match tool.tool_type() {
                 DiscoverableToolType::Connector => DiscoverableToolAction::Install,
-                DiscoverableToolType::Plugin => DiscoverableToolAction::Enable,
+                DiscoverableToolType::Plugin => DiscoverableToolAction::Install,
             };
             format!(
                 "- {} (id: `{}`, type: {}, action: {}): {}",
@@ -2597,7 +2597,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler(PUBLIC_TOOL_NAME, code_mode_handler);
         push_tool_spec(
             &mut builder,
-            create_exec_wait_tool(),
+            create_wait_tool(),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );

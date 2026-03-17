@@ -88,6 +88,7 @@ pub(crate) async fn run_codex_thread_interactive(
         persist_extended_history: false,
         metrics_service_name: None,
         inherited_shell_snapshot: None,
+        user_shell_override: None,
         parent_trace: None,
     })
     .await?;

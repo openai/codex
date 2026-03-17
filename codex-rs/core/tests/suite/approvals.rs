@@ -122,7 +122,11 @@ impl ActionKind {
             ActionKind::WriteFile { target, content } => {
                 let (path, _) = target.resolve_for_patch(test);
                 let _ = fs::remove_file(&path);
-                let command = format!("printf {content:?} > {path:?} && cat {path:?}");
+                let path_str = path.display().to_string();
+                let script = format!(
+                    "from pathlib import Path; path = Path({path_str:?}); content = {content:?}; path.write_text(content, encoding='utf-8'); print(path.read_text(encoding='utf-8'), end='')",
+                );
+                let command = format!("python3 -c {script:?}");
                 let event = shell_event(call_id, &command, 5_000, sandbox_permissions)?;
                 Ok((event, Some(command)))
             }
@@ -1611,6 +1615,9 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
         .action
         .prepare(&test, &server, call_id, scenario.sandbox_permissions)
         .await?;
+    if let Some(command) = expected_command.as_deref() {
+        eprintln!("approval scenario {} command: {command}", scenario.name);
+    }
 
     let _ = mount_sse_once(
         &server,
@@ -1692,6 +1699,10 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
 
     let output_item = results_mock.single_request().function_call_output(call_id);
     let result = parse_result(&output_item);
+    eprintln!(
+        "approval scenario {} result: exit_code={:?} stdout={:?}",
+        scenario.name, result.exit_code, result.stdout
+    );
     scenario.expectation.verify(&test, &result)?;
 
     Ok(())
