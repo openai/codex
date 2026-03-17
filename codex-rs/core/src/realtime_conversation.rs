@@ -612,7 +612,7 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
     let active_transcript = handoff
         .active_transcript
         .iter()
-        .map(|entry| format!("{}: {}", entry.role, entry.text))
+        .map(|entry| format!("{role}: {text}", role = entry.role, text = entry.text))
         .collect::<Vec<_>>()
         .join("\n");
     (!active_transcript.is_empty())
