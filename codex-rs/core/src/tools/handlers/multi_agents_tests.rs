@@ -971,7 +971,7 @@ async fn wait_agent_returns_final_status_without_timeout() {
 }
 
 #[tokio::test]
-async fn close_agent_submits_shutdown_and_returns_status() {
+async fn close_agent_submits_shutdown_and_returns_previous_status() {
     let (mut session, turn) = make_session_and_context().await;
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
@@ -993,7 +993,7 @@ async fn close_agent_submits_shutdown_and_returns_status() {
     let (content, success) = expect_text_output(output);
     let result: close_agent::CloseAgentResult =
         serde_json::from_str(&content).expect("close_agent result should be json");
-    assert_eq!(result.status, status_before);
+    assert_eq!(result.previous_status, status_before);
     assert_eq!(success, Some(true));
 
     let ops = manager.captured_ops();
