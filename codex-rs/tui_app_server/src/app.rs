@@ -118,6 +118,7 @@ mod pending_interactive_replay;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
+use self::app_server_adapter::thread_snapshot_events;
 use self::app_server_requests::PendingAppServerRequests;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 
@@ -2050,6 +2051,7 @@ impl App {
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
+        self.primary_session_configured = None;
         self.pending_primary_events.clear();
         self.pending_app_server_requests.clear();
         self.chat_widget.set_pending_thread_approvals(Vec::new());
@@ -2117,11 +2119,66 @@ impl App {
         let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
         self.chat_widget = ChatWidget::new_with_app_event(init);
         self.reset_thread_event_state();
-        self.enqueue_primary_event(Event {
+        self.restore_started_app_server_thread(started).await
+    }
+
+    /// Hydrate thread state from an `AppServerStartedThread` returned by the
+    /// app-server start/resume/fork handshake.
+    ///
+    /// This is the single path that every session-start variant funnels
+    /// through. It performs four things in order:
+    ///
+    /// 1. Converts the `Thread` snapshot into protocol-level `Event`s.
+    /// 2. Builds a **lossless** replay snapshot from a temporary store so that
+    ///    the initial render sees all history even when the thread has more
+    ///    turns than the bounded channel capacity.
+    /// 3. Pushes the same events into the real channel store for backtrack and
+    ///    navigation.
+    /// 4. Activates the thread channel and replays the snapshot into the chat
+    ///    widget.
+    async fn restore_started_app_server_thread(
+        &mut self,
+        started: AppServerStartedThread,
+    ) -> Result<()> {
+        let session_configured = started.session_configured;
+        let thread_id = session_configured.session_id;
+        let session_event = Event {
             id: String::new(),
-            msg: EventMsg::SessionConfigured(started.session_configured),
-        })
-        .await
+            msg: EventMsg::SessionConfigured(session_configured.clone()),
+        };
+        let history_events =
+            thread_snapshot_events(&started.thread, started.show_raw_agent_reasoning);
+        let replay_snapshot = {
+            let mut replay_store = ThreadEventStore::new(history_events.len().saturating_add(1));
+            replay_store.push_event(session_event.clone());
+            for event in &history_events {
+                replay_store.push_event(event.clone());
+            }
+            replay_store.snapshot()
+        };
+
+        self.primary_thread_id = Some(thread_id);
+        self.primary_session_configured = Some(session_configured);
+        self.upsert_agent_picker_thread(
+            thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
+            /*is_closed*/ false,
+        );
+
+        let store = {
+            let channel = self.ensure_thread_channel(thread_id);
+            Arc::clone(&channel.store)
+        };
+        {
+            let mut store = store.lock().await;
+            store.push_event(session_event);
+            for event in history_events {
+                store.push_event(event);
+            }
+        }
+
+        self.activate_thread_channel(thread_id).await;
+        self.replay_thread_snapshot(replay_snapshot, /*resume_restored_queue*/ false);
+        Ok(())
     }
 
     fn fresh_session_config(&self) -> Config {
@@ -2187,6 +2244,8 @@ impl App {
         snapshot: ThreadEventSnapshot,
         resume_restored_queue: bool,
     ) {
+        self.chat_widget
+            .set_initial_user_message_submit_suppressed(/*suppressed*/ true);
         if let Some(event) = snapshot.session_configured {
             self.handle_codex_event_replay(event);
         }
@@ -2199,6 +2258,9 @@ impl App {
         }
         self.chat_widget
             .set_queue_autosend_suppressed(/*suppressed*/ false);
+        self.chat_widget
+            .set_initial_user_message_submit_suppressed(/*suppressed*/ false);
+        self.chat_widget.submit_initial_user_message_if_pending();
         if resume_restored_queue {
             self.chat_widget.maybe_send_next_queued_input();
         }
@@ -2313,7 +2375,7 @@ impl App {
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
             Self::should_wait_for_initial_session(&session_selection);
-        let (mut chat_widget, initial_session_configured) = match session_selection {
+        let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
                 let started = app_server.start_thread(&config).await?;
                 let startup_tooltip_override =
@@ -2342,10 +2404,7 @@ impl App {
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                (
-                    ChatWidget::new_with_app_event(init),
-                    Some(started.session_configured),
-                )
+                (ChatWidget::new_with_app_event(init), started)
             }
             SessionSelection::Resume(target_session) => {
                 let resumed = app_server
@@ -2378,10 +2437,7 @@ impl App {
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                (
-                    ChatWidget::new_with_app_event(init),
-                    Some(resumed.session_configured),
-                )
+                (ChatWidget::new_with_app_event(init), resumed)
             }
             SessionSelection::Fork(target_session) => {
                 session_telemetry.counter(
@@ -2419,10 +2475,7 @@ impl App {
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                (
-                    ChatWidget::new_with_app_event(init),
-                    Some(forked.session_configured),
-                )
+                (ChatWidget::new_with_app_event(init), forked)
             }
         };
 
@@ -2474,13 +2527,8 @@ impl App {
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
         };
-        if let Some(session_configured) = initial_session_configured {
-            app.enqueue_primary_event(Event {
-                id: String::new(),
-                msg: EventMsg::SessionConfigured(session_configured),
-            })
+        app.restore_started_app_server_thread(initial_started_thread)
             .await?;
-        }
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -4427,6 +4475,7 @@ mod tests {
     use crate::app_backtrack::BacktrackSelection;
     use crate::app_backtrack::BacktrackState;
     use crate::app_backtrack::user_count;
+    use crate::app_server_session::AppServerStartedThread;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use crate::chatwidget::tests::set_chatgpt_auth;
     use crate::file_search::FileSearchManager;
@@ -4437,6 +4486,11 @@ mod tests {
     use crate::multi_agents::AgentPickerThreadEntry;
     use assert_matches::assert_matches;
 
+    use codex_app_server_protocol::Thread;
+    use codex_app_server_protocol::ThreadItem;
+    use codex_app_server_protocol::ThreadStatus;
+    use codex_app_server_protocol::Turn;
+    use codex_app_server_protocol::TurnStatus;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::types::ModelAvailabilityNuxConfig;
@@ -6678,6 +6732,392 @@ guardian_approval = true
             rx,
             op_rx,
         )
+    }
+
+    #[tokio::test]
+    async fn restore_started_app_server_thread_replays_remote_history() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+
+        app.restore_started_app_server_thread(AppServerStartedThread {
+            thread: Thread {
+                id: thread_id.to_string(),
+                preview: "hello".to_string(),
+                ephemeral: false,
+                model_provider: "test-provider".to_string(),
+                created_at: 0,
+                updated_at: 0,
+                status: ThreadStatus::Idle,
+                path: None,
+                cwd: PathBuf::from("/tmp/project"),
+                cli_version: "test".to_string(),
+                source: SessionSource::Cli.into(),
+                agent_nickname: None,
+                agent_role: None,
+                git_info: None,
+                name: Some("restored".to_string()),
+                turns: vec![Turn {
+                    id: "turn-1".to_string(),
+                    items: vec![
+                        ThreadItem::UserMessage {
+                            id: "user-1".to_string(),
+                            content: vec![codex_app_server_protocol::UserInput::Text {
+                                text: "hello from remote".to_string(),
+                                text_elements: Vec::new(),
+                            }],
+                        },
+                        ThreadItem::AgentMessage {
+                            id: "assistant-1".to_string(),
+                            text: "restored response".to_string(),
+                            phase: None,
+                        },
+                    ],
+                    status: TurnStatus::Completed,
+                    error: None,
+                }],
+            },
+            session_configured: SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: Some("restored".to_string()),
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            },
+            show_raw_agent_reasoning: false,
+        })
+        .await?;
+
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let cell: Arc<dyn HistoryCell> = cell.into();
+                app.transcript_cells.push(cell);
+            }
+        }
+
+        assert_eq!(app.primary_thread_id, Some(thread_id));
+        assert_eq!(app.active_thread_id, Some(thread_id));
+
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+        let agent_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<AgentMessageCell>()
+                    .map(|cell| {
+                        cell.display_lines(80)
+                            .into_iter()
+                            .map(|line| line.to_string())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+            })
+            .collect();
+
+        assert_eq!(user_messages, vec!["hello from remote".to_string()]);
+        assert_eq!(agent_messages, vec!["• restored response".to_string()]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn restore_started_app_server_thread_submits_initial_prompt_after_history_replay()
+    -> Result<()> {
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        app.chat_widget.set_initial_user_message_for_test(
+            crate::chatwidget::create_initial_user_message(
+                Some("resume prompt".to_string()),
+                Vec::new(),
+                Vec::new(),
+            ),
+        );
+
+        app.restore_started_app_server_thread(AppServerStartedThread {
+            thread: Thread {
+                id: thread_id.to_string(),
+                preview: "hello".to_string(),
+                ephemeral: false,
+                model_provider: "test-provider".to_string(),
+                created_at: 0,
+                updated_at: 0,
+                status: ThreadStatus::Idle,
+                path: None,
+                cwd: PathBuf::from("/tmp/project"),
+                cli_version: "test".to_string(),
+                source: SessionSource::Cli.into(),
+                agent_nickname: None,
+                agent_role: None,
+                git_info: None,
+                name: Some("restored".to_string()),
+                turns: vec![Turn {
+                    id: "turn-1".to_string(),
+                    items: vec![
+                        ThreadItem::UserMessage {
+                            id: "user-1".to_string(),
+                            content: vec![codex_app_server_protocol::UserInput::Text {
+                                text: "hello from remote".to_string(),
+                                text_elements: Vec::new(),
+                            }],
+                        },
+                        ThreadItem::AgentMessage {
+                            id: "assistant-1".to_string(),
+                            text: "restored response".to_string(),
+                            phase: None,
+                        },
+                    ],
+                    status: TurnStatus::Completed,
+                    error: None,
+                }],
+            },
+            session_configured: SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: Some("restored".to_string()),
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            },
+            show_raw_agent_reasoning: false,
+        })
+        .await?;
+
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let cell: Arc<dyn HistoryCell> = cell.into();
+                app.transcript_cells.push(cell);
+            }
+        }
+
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+
+        assert_eq!(
+            user_messages,
+            vec!["hello from remote".to_string(), "resume prompt".to_string()]
+        );
+        match next_user_turn_op(&mut op_rx) {
+            Op::UserTurn { items, .. } => assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "resume prompt".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            ),
+            other => panic!("expected resume prompt submission, got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn restore_started_app_server_thread_replays_history_beyond_store_capacity() -> Result<()>
+    {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let turn_count = THREAD_EVENT_CHANNEL_CAPACITY + 5;
+
+        let turns = (0..turn_count)
+            .map(|index| Turn {
+                id: format!("turn-{index}"),
+                items: vec![ThreadItem::UserMessage {
+                    id: format!("user-{index}"),
+                    content: vec![codex_app_server_protocol::UserInput::Text {
+                        text: format!("message {index}"),
+                        text_elements: Vec::new(),
+                    }],
+                }],
+                status: TurnStatus::Completed,
+                error: None,
+            })
+            .collect();
+
+        app.restore_started_app_server_thread(AppServerStartedThread {
+            thread: Thread {
+                id: thread_id.to_string(),
+                preview: "hello".to_string(),
+                ephemeral: false,
+                model_provider: "test-provider".to_string(),
+                created_at: 0,
+                updated_at: 0,
+                status: ThreadStatus::Idle,
+                path: None,
+                cwd: PathBuf::from("/tmp/project"),
+                cli_version: "test".to_string(),
+                source: SessionSource::Cli.into(),
+                agent_nickname: None,
+                agent_role: None,
+                git_info: None,
+                name: Some("restored".to_string()),
+                turns,
+            },
+            session_configured: SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: Some("restored".to_string()),
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            },
+            show_raw_agent_reasoning: false,
+        })
+        .await?;
+
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let cell: Arc<dyn HistoryCell> = cell.into();
+                app.transcript_cells.push(cell);
+            }
+        }
+
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+
+        assert_eq!(user_messages.len(), turn_count);
+        assert_eq!(user_messages.first().map(String::as_str), Some("message 0"));
+        let last_message = format!("message {}", turn_count - 1);
+        assert_eq!(
+            user_messages.last().map(String::as_str),
+            Some(last_message.as_str())
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn restore_started_app_server_thread_replays_raw_reasoning_when_enabled() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+
+        app.restore_started_app_server_thread(AppServerStartedThread {
+            thread: Thread {
+                id: thread_id.to_string(),
+                preview: "hello".to_string(),
+                ephemeral: false,
+                model_provider: "test-provider".to_string(),
+                created_at: 0,
+                updated_at: 0,
+                status: ThreadStatus::Idle,
+                path: None,
+                cwd: PathBuf::from("/tmp/project"),
+                cli_version: "test".to_string(),
+                source: SessionSource::Cli.into(),
+                agent_nickname: None,
+                agent_role: None,
+                git_info: None,
+                name: Some("restored".to_string()),
+                turns: vec![Turn {
+                    id: "turn-1".to_string(),
+                    items: vec![ThreadItem::Reasoning {
+                        id: "reasoning-1".to_string(),
+                        summary: vec!["summary reasoning".to_string()],
+                        content: vec!["raw reasoning".to_string()],
+                    }],
+                    status: TurnStatus::Completed,
+                    error: None,
+                }],
+            },
+            session_configured: SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: Some("restored".to_string()),
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            },
+            show_raw_agent_reasoning: true,
+        })
+        .await?;
+
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let cell: Arc<dyn HistoryCell> = cell.into();
+                app.transcript_cells.push(cell);
+            }
+        }
+
+        let channel = app
+            .thread_event_channels
+            .get(&thread_id)
+            .expect("restored thread channel should exist");
+        let snapshot = channel.store.lock().await.snapshot();
+        let replayed_raw_reasoning = snapshot.events.iter().any(|event| {
+            matches!(
+                &event.msg,
+                EventMsg::AgentReasoningRawContent(raw) if raw.text == "raw reasoning"
+            )
+        });
+
+        assert!(
+            replayed_raw_reasoning,
+            "expected restored snapshot to keep raw reasoning event: {:?}",
+            snapshot.events
+        );
+
+        Ok(())
     }
 
     #[test]
