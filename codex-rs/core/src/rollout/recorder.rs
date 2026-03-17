@@ -168,8 +168,8 @@ mod recorder_tests {
 
     use super::PERSISTED_EXEC_OUTPUT_MAX_BYTES;
     use super::sanitize_rollout_item_for_persistence;
-    use crate::parse_command::ParsedCommand;
     use crate::rollout::policy::EventPersistenceMode;
+    use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::ExecCommandEndEvent;
     use codex_protocol::protocol::ExecCommandSource;
@@ -185,9 +185,8 @@ mod recorder_tests {
             turn_id: "turn-123".to_string(),
             command: vec!["echo".to_string(), "hello".to_string()],
             cwd: std::env::temp_dir(),
-            parsed_cmd: vec![ParsedCommand::Simple {
-                raw: "echo hello".to_string(),
-                args: vec!["echo".to_string(), "hello".to_string()],
+            parsed_cmd: vec![ParsedCommand::Unknown {
+                cmd: "echo hello".to_string(),
             }],
             source: ExecCommandSource::UserShell,
             interaction_input: None,
