@@ -4439,17 +4439,13 @@ impl From<&CoreExecCommandStatus> for CommandExecutionStatus {
 }
 
 v2_enum_from_core! {
+    #[derive(Default)]
     pub enum CommandExecutionSource from CoreExecCommandSource {
+        #[default]
         Agent,
         UserShell,
         UnifiedExecStartup,
         UnifiedExecInteraction,
-    }
-}
-
-impl Default for CommandExecutionSource {
-    fn default() -> Self {
-        Self::Agent
     }
 }
 
