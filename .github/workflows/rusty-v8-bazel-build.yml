@@ -50,24 +50,30 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - runner: macos-15-xlarge
+            platform: "@rules_rs//rs/experimental/platforms:aarch64-apple-darwin"
+            target: aarch64-apple-darwin
+          - runner: macos-15-large
+            platform: "@rules_rs//rs/experimental/platforms:x86_64-apple-darwin"
+            target: x86_64-apple-darwin
           - runner: ubuntu-24.04
             platform: "@rules_rs//rs/experimental/platforms:x86_64-unknown-linux-musl"
             target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04
+            platform: "@rules_rs//rs/experimental/platforms:x86_64-unknown-linux-gnu"
+            target: x86_64-unknown-linux-gnu
           - runner: ubuntu-24.04-arm
             platform: "@rules_rs//rs/experimental/platforms:aarch64-unknown-linux-musl"
             target: aarch64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            platform: "@rules_rs//rs/experimental/platforms:aarch64-unknown-linux-gnu"
+            target: aarch64-unknown-linux-gnu
           - runner: ubuntu-24.04
             platform: "@rules_rs//rs/experimental/platforms:x86_64-pc-windows-gnullvm"
             target: x86_64-pc-windows-gnullvm
           - runner: ubuntu-24.04-arm
             platform: "@rules_rs//rs/experimental/platforms:aarch64-pc-windows-gnullvm"
             target: aarch64-pc-windows-gnullvm
-          - runner: macos-15-large
-            platform: "@rules_rs//rs/experimental/platforms:x86_64-apple-darwin"
-            target: x86_64-apple-darwin
-          - runner: macos-15-xlarge
-            platform: "@rules_rs//rs/experimental/platforms:aarch64-apple-darwin"
-            target: aarch64-apple-darwin
 
     steps:
       - uses: actions/checkout@v6
