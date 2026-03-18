@@ -5,6 +5,20 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use codex_app_server_protocol::FsCopyParams;
+use codex_app_server_protocol::FsCopyResponse;
+use codex_app_server_protocol::FsCreateDirectoryParams;
+use codex_app_server_protocol::FsCreateDirectoryResponse;
+use codex_app_server_protocol::FsGetMetadataParams;
+use codex_app_server_protocol::FsGetMetadataResponse;
+use codex_app_server_protocol::FsReadDirectoryParams;
+use codex_app_server_protocol::FsReadDirectoryResponse;
+use codex_app_server_protocol::FsReadFileParams;
+use codex_app_server_protocol::FsReadFileResponse;
+use codex_app_server_protocol::FsRemoveParams;
+use codex_app_server_protocol::FsRemoveResponse;
+use codex_app_server_protocol::FsWriteFileParams;
+use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::TerminalSize;
@@ -30,6 +44,7 @@ use crate::rpc::RpcNotificationSender;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
 use crate::rpc::invalid_request;
+use crate::server::filesystem::ExecServerFileSystem;
 
 const RETAINED_OUTPUT_BYTES_PER_PROCESS: usize = 1024 * 1024;
 #[cfg(test)]
@@ -61,6 +76,7 @@ enum ProcessEntry {
 
 pub(crate) struct ExecServerHandler {
     notifications: RpcNotificationSender,
+    file_system: ExecServerFileSystem,
     processes: Arc<Mutex<HashMap<String, ProcessEntry>>>,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
@@ -70,6 +86,7 @@ impl ExecServerHandler {
     pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
         Self {
             notifications,
+            file_system: ExecServerFileSystem::default(),
             processes: Arc::new(Mutex::new(HashMap::new())),
             initialize_requested: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
@@ -111,22 +128,22 @@ impl ExecServerHandler {
         Ok(())
     }
 
-    fn require_initialized(&self) -> Result<(), JSONRPCErrorError> {
+    fn require_initialized_for(&self, method_family: &str) -> Result<(), JSONRPCErrorError> {
         if !self.initialize_requested.load(Ordering::SeqCst) {
-            return Err(invalid_request(
-                "client must call initialize before using exec methods".to_string(),
-            ));
+            return Err(invalid_request(format!(
+                "client must call initialize before using {method_family} methods"
+            )));
         }
         if !self.initialized.load(Ordering::SeqCst) {
-            return Err(invalid_request(
-                "client must send initialized before using exec methods".to_string(),
-            ));
+            return Err(invalid_request(format!(
+                "client must send initialized before using {method_family} methods"
+            )));
         }
         Ok(())
     }
 
     pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
-        self.require_initialized()?;
+        self.require_initialized_for("exec")?;
         let process_id = params.process_id.clone();
 
         let (program, args) = params
@@ -231,7 +248,7 @@ impl ExecServerHandler {
         &self,
         params: ReadParams,
     ) -> Result<ReadResponse, JSONRPCErrorError> {
-        self.require_initialized()?;
+        self.require_initialized_for("exec")?;
         let after_seq = params.after_seq.unwrap_or(0);
         let max_bytes = params.max_bytes.unwrap_or(usize::MAX);
         let wait = Duration::from_millis(params.wait_ms.unwrap_or(0));
@@ -300,7 +317,7 @@ impl ExecServerHandler {
         &self,
         params: WriteParams,
     ) -> Result<WriteResponse, JSONRPCErrorError> {
-        self.require_initialized()?;
+        self.require_initialized_for("exec")?;
         let writer_tx = {
             let process_map = self.processes.lock().await;
             let process = process_map.get(&params.process_id).ok_or_else(|| {
@@ -333,7 +350,7 @@ impl ExecServerHandler {
         &self,
         params: TerminateParams,
     ) -> Result<TerminateResponse, JSONRPCErrorError> {
-        self.require_initialized()?;
+        self.require_initialized_for("exec")?;
         let running = {
             let process_map = self.processes.lock().await;
             match process_map.get(&params.process_id) {
@@ -346,6 +363,62 @@ impl ExecServerHandler {
         };
 
         Ok(TerminateResponse { running })
+    }
+
+    pub(crate) async fn fs_read_file(
+        &self,
+        params: FsReadFileParams,
+    ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.read_file(params).await
+    }
+
+    pub(crate) async fn fs_write_file(
+        &self,
+        params: FsWriteFileParams,
+    ) -> Result<FsWriteFileResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.write_file(params).await
+    }
+
+    pub(crate) async fn fs_create_directory(
+        &self,
+        params: FsCreateDirectoryParams,
+    ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.create_directory(params).await
+    }
+
+    pub(crate) async fn fs_get_metadata(
+        &self,
+        params: FsGetMetadataParams,
+    ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.get_metadata(params).await
+    }
+
+    pub(crate) async fn fs_read_directory(
+        &self,
+        params: FsReadDirectoryParams,
+    ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.read_directory(params).await
+    }
+
+    pub(crate) async fn fs_remove(
+        &self,
+        params: FsRemoveParams,
+    ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.remove(params).await
+    }
+
+    pub(crate) async fn fs_copy(
+        &self,
+        params: FsCopyParams,
+    ) -> Result<FsCopyResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.copy(params).await
     }
 }
 

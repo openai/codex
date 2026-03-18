@@ -1,6 +1,20 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_app_server_protocol::FsCopyParams;
+use codex_app_server_protocol::FsCopyResponse;
+use codex_app_server_protocol::FsCreateDirectoryParams;
+use codex_app_server_protocol::FsCreateDirectoryResponse;
+use codex_app_server_protocol::FsGetMetadataParams;
+use codex_app_server_protocol::FsGetMetadataResponse;
+use codex_app_server_protocol::FsReadDirectoryParams;
+use codex_app_server_protocol::FsReadDirectoryResponse;
+use codex_app_server_protocol::FsReadFileParams;
+use codex_app_server_protocol::FsReadFileResponse;
+use codex_app_server_protocol::FsRemoveParams;
+use codex_app_server_protocol::FsRemoveResponse;
+use codex_app_server_protocol::FsWriteFileParams;
+use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::JSONRPCNotification;
 use serde_json::Value;
 use tokio::io::AsyncRead;
@@ -26,6 +40,13 @@ use crate::protocol::ExecExitedNotification;
 use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
+use crate::protocol::FS_COPY_METHOD;
+use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
+use crate::protocol::FS_GET_METADATA_METHOD;
+use crate::protocol::FS_READ_DIRECTORY_METHOD;
+use crate::protocol::FS_READ_FILE_METHOD;
+use crate::protocol::FS_REMOVE_METHOD;
+use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
@@ -322,6 +343,129 @@ impl ExecServerClient {
         };
         remote
             .call(EXEC_TERMINATE_METHOD, &params)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn fs_read_file(
+        &self,
+        params: FsReadFileParams,
+    ) -> Result<FsReadFileResponse, ExecServerError> {
+        if let Some(backend) = self.inner.backend.as_local() {
+            return backend.fs_read_file(params).await;
+        }
+        let Some(remote) = self.inner.backend.as_remote() else {
+            return Err(ExecServerError::Protocol(
+                "remote backend missing during fs/readFile".to_string(),
+            ));
+        };
+        remote
+            .call(FS_READ_FILE_METHOD, &params)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn fs_write_file(
+        &self,
+        params: FsWriteFileParams,
+    ) -> Result<FsWriteFileResponse, ExecServerError> {
+        if let Some(backend) = self.inner.backend.as_local() {
+            return backend.fs_write_file(params).await;
+        }
+        let Some(remote) = self.inner.backend.as_remote() else {
+            return Err(ExecServerError::Protocol(
+                "remote backend missing during fs/writeFile".to_string(),
+            ));
+        };
+        remote
+            .call(FS_WRITE_FILE_METHOD, &params)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn fs_create_directory(
+        &self,
+        params: FsCreateDirectoryParams,
+    ) -> Result<FsCreateDirectoryResponse, ExecServerError> {
+        if let Some(backend) = self.inner.backend.as_local() {
+            return backend.fs_create_directory(params).await;
+        }
+        let Some(remote) = self.inner.backend.as_remote() else {
+            return Err(ExecServerError::Protocol(
+                "remote backend missing during fs/createDirectory".to_string(),
+            ));
+        };
+        remote
+            .call(FS_CREATE_DIRECTORY_METHOD, &params)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn fs_get_metadata(
+        &self,
+        params: FsGetMetadataParams,
+    ) -> Result<FsGetMetadataResponse, ExecServerError> {
+        if let Some(backend) = self.inner.backend.as_local() {
+            return backend.fs_get_metadata(params).await;
+        }
+        let Some(remote) = self.inner.backend.as_remote() else {
+            return Err(ExecServerError::Protocol(
+                "remote backend missing during fs/getMetadata".to_string(),
+            ));
+        };
+        remote
+            .call(FS_GET_METADATA_METHOD, &params)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn fs_read_directory(
+        &self,
+        params: FsReadDirectoryParams,
+    ) -> Result<FsReadDirectoryResponse, ExecServerError> {
+        if let Some(backend) = self.inner.backend.as_local() {
+            return backend.fs_read_directory(params).await;
+        }
+        let Some(remote) = self.inner.backend.as_remote() else {
+            return Err(ExecServerError::Protocol(
+                "remote backend missing during fs/readDirectory".to_string(),
+            ));
+        };
+        remote
+            .call(FS_READ_DIRECTORY_METHOD, &params)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn fs_remove(
+        &self,
+        params: FsRemoveParams,
+    ) -> Result<FsRemoveResponse, ExecServerError> {
+        if let Some(backend) = self.inner.backend.as_local() {
+            return backend.fs_remove(params).await;
+        }
+        let Some(remote) = self.inner.backend.as_remote() else {
+            return Err(ExecServerError::Protocol(
+                "remote backend missing during fs/remove".to_string(),
+            ));
+        };
+        remote
+            .call(FS_REMOVE_METHOD, &params)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn fs_copy(&self, params: FsCopyParams) -> Result<FsCopyResponse, ExecServerError> {
+        if let Some(backend) = self.inner.backend.as_local() {
+            return backend.fs_copy(params).await;
+        }
+        let Some(remote) = self.inner.backend.as_remote() else {
+            return Err(ExecServerError::Protocol(
+                "remote backend missing during fs/copy".to_string(),
+            ));
+        };
+        remote
+            .call(FS_COPY_METHOD, &params)
             .await
             .map_err(Into::into)
     }

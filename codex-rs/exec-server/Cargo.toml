@@ -15,6 +15,7 @@ workspace = true
 base64 = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-app-server-protocol = { workspace = true }
+codex-environment = { workspace = true }
 codex-utils-pty = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

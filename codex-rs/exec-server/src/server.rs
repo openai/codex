@@ -1,3 +1,4 @@
+mod filesystem;
 mod handler;
 mod processor;
 mod registry;

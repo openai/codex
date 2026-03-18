@@ -2011,6 +2011,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "codex-app-server-protocol",
+ "codex-environment",
  "codex-utils-cargo-bin",
  "codex-utils-pty",
  "futures",

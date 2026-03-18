@@ -4,6 +4,8 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::Context;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
@@ -15,6 +17,13 @@ use codex_exec_server::ExecServerClient;
 use codex_exec_server::ExecServerClientConnectOptions;
 use codex_exec_server::ExecServerEvent;
 use codex_exec_server::ExecServerLaunchCommand;
+use codex_exec_server::FsCopyParams;
+use codex_exec_server::FsCreateDirectoryParams;
+use codex_exec_server::FsGetMetadataParams;
+use codex_exec_server::FsReadDirectoryParams;
+use codex_exec_server::FsReadFileParams;
+use codex_exec_server::FsRemoveParams;
+use codex_exec_server::FsWriteFileParams;
 use codex_exec_server::InitializeParams;
 use codex_exec_server::InitializeResponse;
 use codex_exec_server::RemoteExecServerConnectArgs;
@@ -197,6 +206,102 @@ async fn exec_server_client_connects_over_websocket() -> anyhow::Result<()> {
 
     client.terminate(&process_id).await?;
     child.start_kill()?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_client_filesystem_round_trip_over_stdio() -> anyhow::Result<()> {
+    let server = spawn_local_exec_server(
+        ExecServerLaunchCommand {
+            program: cargo_bin("codex-exec-server")?,
+            args: Vec::new(),
+        },
+        ExecServerClientConnectOptions {
+            client_name: "exec-server-test".to_string(),
+            initialize_timeout: Duration::from_secs(5),
+        },
+    )
+    .await?;
+    let client = server.client();
+
+    let root = std::env::temp_dir().join(format!(
+        "codex-exec-server-fs-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    ));
+    let directory = root.join("dir");
+    let file_path = directory.join("hello.txt");
+    let copy_path = directory.join("copy.txt");
+
+    client
+        .fs_create_directory(FsCreateDirectoryParams {
+            path: directory.clone().try_into()?,
+            recursive: Some(true),
+        })
+        .await?;
+
+    client
+        .fs_write_file(FsWriteFileParams {
+            path: file_path.clone().try_into()?,
+            data_base64: BASE64_STANDARD.encode(b"hello"),
+        })
+        .await?;
+
+    let metadata = client
+        .fs_get_metadata(FsGetMetadataParams {
+            path: file_path.clone().try_into()?,
+        })
+        .await?;
+    assert!(metadata.is_file);
+    assert!(!metadata.is_directory);
+
+    let read_file = client
+        .fs_read_file(FsReadFileParams {
+            path: file_path.clone().try_into()?,
+        })
+        .await?;
+    assert_eq!(read_file.data_base64, BASE64_STANDARD.encode(b"hello"));
+
+    let read_directory = client
+        .fs_read_directory(FsReadDirectoryParams {
+            path: directory.clone().try_into()?,
+        })
+        .await?;
+    assert!(
+        read_directory
+            .entries
+            .iter()
+            .any(|entry| entry.file_name == "hello.txt" && entry.is_file)
+    );
+
+    client
+        .fs_copy(FsCopyParams {
+            source_path: file_path.clone().try_into()?,
+            destination_path: copy_path.clone().try_into()?,
+            recursive: false,
+        })
+        .await?;
+    let copied = client
+        .fs_read_file(FsReadFileParams {
+            path: copy_path.clone().try_into()?,
+        })
+        .await?;
+    assert_eq!(copied.data_base64, BASE64_STANDARD.encode(b"hello"));
+
+    client
+        .fs_remove(FsRemoveParams {
+            path: root.clone().try_into()?,
+            recursive: Some(true),
+            force: Some(true),
+        })
+        .await?;
+
+    assert!(
+        !root.exists(),
+        "filesystem cleanup should remove the test tree"
+    );
     Ok(())
 }
 

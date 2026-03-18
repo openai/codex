@@ -13,6 +13,13 @@ pub const EXEC_WRITE_METHOD: &str = "process/write";
 pub const EXEC_TERMINATE_METHOD: &str = "process/terminate";
 pub const EXEC_OUTPUT_DELTA_METHOD: &str = "process/output";
 pub const EXEC_EXITED_METHOD: &str = "process/exited";
+pub const FS_READ_FILE_METHOD: &str = "fs/readFile";
+pub const FS_WRITE_FILE_METHOD: &str = "fs/writeFile";
+pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
+pub const FS_GET_METADATA_METHOD: &str = "fs/getMetadata";
+pub const FS_READ_DIRECTORY_METHOD: &str = "fs/readDirectory";
+pub const FS_REMOVE_METHOD: &str = "fs/remove";
+pub const FS_COPY_METHOD: &str = "fs/copy";
 pub const PROTOCOL_VERSION: &str = "exec-server.v0";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
