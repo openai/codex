@@ -4502,6 +4502,27 @@ async fn live_app_server_server_overloaded_error_renders_warning() {
 }
 
 #[tokio::test]
+async fn live_app_server_invalid_thread_name_update_is_ignored() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.thread_name = Some("original name".to_string());
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadNameUpdated(
+            codex_app_server_protocol::ThreadNameUpdatedNotification {
+                thread_id: "not-a-thread-id".to_string(),
+                thread_name: Some("bad update".to_string()),
+            },
+        ),
+        None,
+    );
+
+    assert_eq!(chat.thread_id, Some(thread_id));
+    assert_eq!(chat.thread_name, Some("original name".to_string()));
+}
+
+#[tokio::test]
 async fn live_app_server_thread_closed_requests_immediate_exit() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 

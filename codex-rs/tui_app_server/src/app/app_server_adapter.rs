@@ -102,19 +102,30 @@ impl App {
             _ => {}
         }
 
-        if let Some(thread_id) = server_notification_thread_id(&notification) {
-            let result =
-                if self.primary_thread_id == Some(thread_id) || self.primary_thread_id.is_none() {
+        match server_notification_thread_target(&notification) {
+            ServerNotificationThreadTarget::Thread(thread_id) => {
+                let result = if self.primary_thread_id == Some(thread_id)
+                    || self.primary_thread_id.is_none()
+                {
                     self.enqueue_primary_thread_notification(notification).await
                 } else {
                     self.enqueue_thread_notification(thread_id, notification)
                         .await
                 };
 
-            if let Err(err) = result {
-                tracing::warn!("failed to enqueue app-server notification: {err}");
+                if let Err(err) = result {
+                    tracing::warn!("failed to enqueue app-server notification: {err}");
+                }
+                return;
             }
-            return;
+            ServerNotificationThreadTarget::InvalidThreadId(thread_id) => {
+                tracing::warn!(
+                    thread_id,
+                    "ignoring app-server notification with invalid thread_id"
+                );
+                return;
+            }
+            ServerNotificationThreadTarget::Global => {}
         }
 
         self.chat_widget
@@ -1072,8 +1083,14 @@ fn legacy_warning_notification(notification: JSONRPCNotification) -> Option<(Thr
 
 #[cfg(test)]
 mod tests {
+    use super::ServerNotificationThreadTarget;
     use super::legacy_warning_notification;
+    use super::server_notification_thread_target;
     use codex_app_server_protocol::JSONRPCNotification;
+    use codex_app_server_protocol::ServerNotification;
+    use codex_app_server_protocol::Turn;
+    use codex_app_server_protocol::TurnStartedNotification;
+    use codex_app_server_protocol::TurnStatus;
     use codex_protocol::ThreadId;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -1113,5 +1130,23 @@ mod tests {
         });
 
         assert_eq!(notification, None);
+    }
+
+    #[test]
+    fn thread_scoped_notification_with_invalid_thread_id_is_not_treated_as_global() {
+        let notification = ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: "not-a-thread-id".to_string(),
+            turn: Turn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: TurnStatus::InProgress,
+                error: None,
+            },
+        });
+
+        assert_eq!(
+            server_notification_thread_target(&notification),
+            ServerNotificationThreadTarget::InvalidThreadId("not-a-thread-id".to_string())
+        );
     }
 }

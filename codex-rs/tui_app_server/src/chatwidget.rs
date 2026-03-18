@@ -5542,11 +5542,21 @@ impl ChatWidget {
                 )));
             }
             ServerNotification::ThreadNameUpdated(notification) => {
-                self.on_thread_name_updated(codex_protocol::protocol::ThreadNameUpdatedEvent {
-                    thread_id: ThreadId::from_string(&notification.thread_id)
-                        .unwrap_or_else(|_| ThreadId::new()),
-                    thread_name: notification.thread_name,
-                })
+                match ThreadId::from_string(&notification.thread_id) {
+                    Ok(thread_id) => self.on_thread_name_updated(
+                        codex_protocol::protocol::ThreadNameUpdatedEvent {
+                            thread_id,
+                            thread_name: notification.thread_name,
+                        },
+                    ),
+                    Err(err) => {
+                        tracing::warn!(
+                            thread_id = notification.thread_id,
+                            error = %err,
+                            "ignoring app-server ThreadNameUpdated with invalid thread_id"
+                        );
+                    }
+                }
             }
             ServerNotification::TurnStarted(_) => {
                 self.last_non_retry_error = None;
