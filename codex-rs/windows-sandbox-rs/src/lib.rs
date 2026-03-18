@@ -144,6 +144,8 @@ pub use token::get_current_token_for_restriction;
 #[cfg(target_os = "windows")]
 pub use windows_impl::run_windows_sandbox_capture;
 #[cfg(target_os = "windows")]
+pub use windows_impl::run_windows_sandbox_capture_with_extra_deny_write_paths;
+#[cfg(target_os = "windows")]
 pub use windows_impl::run_windows_sandbox_legacy_preflight;
 #[cfg(target_os = "windows")]
 pub use windows_impl::CaptureResult;
