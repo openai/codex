@@ -282,6 +282,26 @@ fn find_rpc_span_with_trace<'a>(
         })
 }
 
+fn find_span_with_trace<'a, F>(
+    spans: &'a [SpanData],
+    trace_id: TraceId,
+    description: &str,
+    predicate: F,
+) -> &'a SpanData
+where
+    F: Fn(&SpanData) -> bool,
+{
+    spans
+        .iter()
+        .find(|span| span.span_context.trace_id() == trace_id && predicate(span))
+        .unwrap_or_else(|| {
+            panic!(
+                "missing span matching {description} for trace={trace_id}; exported spans:\n{}",
+                format_spans(spans)
+            )
+        })
+}
+
 fn format_spans(spans: &[SpanData]) -> String {
     spans
         .iter()
@@ -324,6 +344,19 @@ fn span_depth_from_ancestor(
     }
 
     None
+}
+
+fn assert_span_descends_from(spans: &[SpanData], child: &SpanData, ancestor: &SpanData) {
+    if span_depth_from_ancestor(spans, child, ancestor).is_some() {
+        return;
+    }
+
+    panic!(
+        "span {} does not descend from {}; exported spans:\n{}",
+        child.name,
+        ancestor.name,
+        format_spans(spans)
+    );
 }
 
 fn assert_has_internal_descendant_at_min_depth(
@@ -579,20 +612,23 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
                 && span_attr(span, "rpc.method") == Some("turn/start")
                 && span.span_context.trace_id() == remote_trace_id
         }) && spans.iter().any(|span| {
-            span.span_kind == SpanKind::Internal && span.span_context.trace_id() == remote_trace_id
+            span_attr(span, "codex.op") == Some("user_input")
+                && span.span_context.trace_id() == remote_trace_id
         })
     })
     .await;
 
     let server_request_span =
         find_rpc_span_with_trace(&spans, SpanKind::Server, "turn/start", remote_trace_id);
+    let core_turn_span =
+        find_span_with_trace(&spans, remote_trace_id, "codex.op=user_input", |span| {
+            span_attr(span, "codex.op") == Some("user_input")
+        });
 
     assert_eq!(server_request_span.parent_span_id, remote_parent_span_id);
     assert!(server_request_span.parent_span_is_remote);
     assert_eq!(server_request_span.span_context.trace_id(), remote_trace_id);
-    assert!(spans.iter().any(|span| {
-        span.span_kind == SpanKind::Internal && span.span_context.trace_id() == remote_trace_id
-    }));
+    assert_span_descends_from(&spans, core_turn_span, server_request_span);
     harness.shutdown().await;
 
     Ok(())
