@@ -241,7 +241,9 @@ impl ChatWidget {
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.session_id = None;
         #[cfg(not(target_os = "linux"))]
-        self.realtime_conversation.audio_behavior = RealtimeAudioBehavior::Legacy;
+        {
+            self.realtime_conversation.audio_behavior = RealtimeAudioBehavior::Legacy;
+        }
         self.realtime_conversation.warned_audio_only_submission = false;
         self.set_footer_hint_override(Some(vec![(
             "/realtime".to_string(),
@@ -282,7 +284,9 @@ impl ChatWidget {
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.session_id = None;
         #[cfg(not(target_os = "linux"))]
-        self.realtime_conversation.audio_behavior = RealtimeAudioBehavior::Legacy;
+        {
+            self.realtime_conversation.audio_behavior = RealtimeAudioBehavior::Legacy;
+        }
         self.realtime_conversation.warned_audio_only_submission = false;
     }
 
@@ -307,7 +311,10 @@ impl ChatWidget {
         self.realtime_conversation.phase = RealtimeConversationPhase::Active;
         self.realtime_conversation.session_id = ev.session_id;
         #[cfg(not(target_os = "linux"))]
-        self.realtime_conversation.audio_behavior = RealtimeAudioBehavior::from_version(ev.version);
+        {
+            self.realtime_conversation.audio_behavior =
+                RealtimeAudioBehavior::from_version(ev.version);
+        }
         self.realtime_conversation.warned_audio_only_submission = false;
         self.set_footer_hint_override(Some(vec![(
             "/realtime".to_string(),
@@ -327,14 +334,16 @@ impl ChatWidget {
             }
             RealtimeEvent::InputAudioSpeechStarted(_) | RealtimeEvent::ResponseCancelled(_) => {
                 #[cfg(not(target_os = "linux"))]
-                if matches!(
-                    self.realtime_conversation.audio_behavior,
-                    RealtimeAudioBehavior::PlaybackAware
-                ) && let Some(player) = &self.realtime_conversation.audio_player
                 {
-                    // Once the server detects user speech or the current response is cancelled,
-                    // any buffered assistant audio is stale and should stop gating mic input.
-                    player.clear();
+                    if matches!(
+                        self.realtime_conversation.audio_behavior,
+                        RealtimeAudioBehavior::PlaybackAware
+                    ) && let Some(player) = &self.realtime_conversation.audio_player
+                    {
+                        // Once the server detects user speech or the current response is cancelled,
+                        // any buffered assistant audio is stale and should stop gating mic input.
+                        player.clear();
+                    }
                 }
             }
             RealtimeEvent::InputTranscriptDelta(_) => {}
