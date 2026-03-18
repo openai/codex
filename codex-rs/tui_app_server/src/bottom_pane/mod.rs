@@ -914,12 +914,27 @@ impl BottomPane {
     }
 
     pub(crate) fn remove_resolved_exec_approvals(&mut self, approval_ids: &[String]) {
+        let active_view_ptr = self
+            .view_stack
+            .last()
+            .map(|view| (&**view) as *const dyn BottomPaneView as *const ());
         let mut changed = false;
         self.view_stack.retain_mut(|view| {
             changed |= view.remove_resolved_exec_approvals(approval_ids);
             !view.is_complete()
         });
         if changed {
+            let active_view_removed = active_view_ptr.is_some_and(|active_view_ptr| {
+                !self.view_stack.iter().any(|view| {
+                    std::ptr::eq(
+                        (&**view) as *const dyn BottomPaneView as *const (),
+                        active_view_ptr,
+                    )
+                })
+            });
+            if active_view_removed && self.view_stack.is_empty() {
+                self.on_active_view_complete();
+            }
             self.request_redraw();
         }
     }
@@ -1510,6 +1525,40 @@ mod tests {
         assert!(
             pane.view_stack.is_empty(),
             "the hidden approval overlay should no longer resurface after the top modal closes"
+        );
+    }
+
+    #[test]
+    fn removing_active_resolved_exec_approval_resumes_status_timer() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let features = Features::with_defaults();
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.set_task_running(true);
+        pane.push_approval_request(exec_request(), &features);
+        assert!(
+            pane.status
+                .as_ref()
+                .is_some_and(StatusIndicatorWidget::is_paused),
+            "approval modal should pause the running-task timer"
+        );
+
+        pane.remove_resolved_exec_approvals(&["1".to_string()]);
+        assert!(
+            pane.status
+                .as_ref()
+                .is_some_and(|status| !status.is_paused()),
+            "removing the active resolved approval should resume the running-task timer"
         );
     }
 
