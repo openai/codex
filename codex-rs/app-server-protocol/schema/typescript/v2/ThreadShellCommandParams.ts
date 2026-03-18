@@ -6,6 +6,8 @@ export type ThreadShellCommandParams = { threadId: string,
 /**
  * Shell command string evaluated by the thread's configured shell.
  * Unlike `command/exec`, this intentionally preserves shell syntax
- * such as pipes, redirects, and quoting.
+ * such as pipes, redirects, and quoting. This matches legacy TUI `!`
+ * behavior and runs unsandboxed with full access rather than inheriting
+ * the thread sandbox policy.
  */
 command: string, };
