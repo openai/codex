@@ -1561,6 +1561,7 @@ async fn code_mode_notify_injects_additional_exec_tool_output_into_active_contex
         "use exec notify helper",
         r#"
 notify("code_mode_notify_marker");
+await tools.test_sync_tool({});
 text("done");
 "#,
         false,
