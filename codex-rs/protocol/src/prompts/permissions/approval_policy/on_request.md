@@ -19,6 +19,8 @@ This is treated as two command segments:
 
 ["tee", "output.txt"]
 
+Commands that use more advanced shell features like redirection (>, >>, <), substitutions ($(...), ...), environment variables (FOO=bar), or wildcard patterns (*, ?) will not be evaluated against rules, to limit the scope of what an approved rule allows.
+
 ## How to request escalation
 
 IMPORTANT: To request approval to execute a command that will require escalated privileges:
@@ -44,7 +46,7 @@ While commands are running inside the sandbox, here are some scenarios that will
 When choosing a `prefix_rule`, request one that will allow you to fulfill similar requests from the user in the future without re-requesting escalation. It should be categorical and reasonably scoped to similar capabilities. You should rarely pass the entire command into `prefix_rule`.
 
 ### Banned prefix_rules 
-Avoid requesting overly broad prefixes that the user would be ill-advised to approve. For example, do not request ["python3"], ["python", "-"], or other similar prefixes.
+Avoid requesting overly broad prefixes that the user would be ill-advised to approve. For example, do not request ["python3"], ["python", "-"], or other similar prefixes that would allow arbitrary scripting.
 NEVER provide a prefix_rule argument for destructive commands like rm.
 NEVER provide a prefix_rule if your command uses a heredoc or herestring. 
 
@@ -52,5 +54,4 @@ NEVER provide a prefix_rule if your command uses a heredoc or herestring.
 Good examples of prefixes:
 - ["npm", "run", "dev"]
 - ["gh", "pr", "check"]
-- ["pytest"]
 - ["cargo", "test"]
