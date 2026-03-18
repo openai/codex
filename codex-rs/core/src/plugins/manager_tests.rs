@@ -59,18 +59,8 @@ fn plugin_config_toml(enabled: bool, plugins_feature_enabled: bool) -> String {
 
 fn load_plugins_from_config(config_toml: &str, codex_home: &Path) -> PluginLoadOutcome {
     write_file(&codex_home.join(CONFIG_TOML_FILE), config_toml);
-    let stack = ConfigLayerStack::new(
-        vec![ConfigLayerEntry::new(
-            ConfigLayerSource::User {
-                file: AbsolutePathBuf::try_from(codex_home.join(CONFIG_TOML_FILE)).unwrap(),
-            },
-            toml::from_str(config_toml).expect("plugin test config should parse"),
-        )],
-        ConfigRequirements::default(),
-        ConfigRequirementsToml::default(),
-    )
-    .expect("config layer stack should build");
-    PluginsManager::new(codex_home.to_path_buf()).plugins_for_layer_stack(codex_home, &stack, false)
+    let config = load_config_blocking(codex_home, codex_home);
+    PluginsManager::new(codex_home.to_path_buf()).plugins_for_config(&config)
 }
 
 async fn load_config(codex_home: &Path, cwd: &Path) -> crate::config::Config {
@@ -80,6 +70,14 @@ async fn load_config(codex_home: &Path, cwd: &Path) -> crate::config::Config {
         .build()
         .await
         .expect("config should load")
+}
+
+fn load_config_blocking(codex_home: &Path, cwd: &Path) -> crate::config::Config {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime should build")
+        .block_on(load_config(codex_home, cwd))
 }
 
 #[test]
@@ -749,8 +747,13 @@ fn load_plugins_returns_empty_when_feature_disabled() {
         &plugin_root.join("skills/sample-search/SKILL.md"),
         "---\nname: sample-search\ndescription: search sample data\n---\n",
     );
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        &plugin_config_toml(true, false),
+    );
 
-    let outcome = load_plugins_from_config(&plugin_config_toml(true, false), codex_home.path());
+    let config = load_config_blocking(codex_home.path(), codex_home.path());
+    let outcome = PluginsManager::new(codex_home.path().to_path_buf()).plugins_for_config(&config);
 
     assert_eq!(outcome, PluginLoadOutcome::default());
 }
@@ -1723,11 +1726,8 @@ fn load_plugins_ignores_project_config_files() {
     )
     .expect("config layer stack should build");
 
-    let outcome = PluginsManager::new(codex_home.path().to_path_buf()).plugins_for_layer_stack(
-        &project_root,
-        &stack,
-        false,
-    );
+    let outcome =
+        load_plugins_from_layer_stack(&stack, &PluginStore::new(codex_home.path().to_path_buf()));
 
     assert_eq!(outcome, PluginLoadOutcome::default());
 }

@@ -29,16 +29,12 @@ use crate::auth::CodexAuth;
 use crate::config::Config;
 use crate::config::ConfigService;
 use crate::config::ConfigServiceError;
-use crate::config::ConfigToml;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
-use crate::config::profile::ConfigProfile;
 use crate::config::types::McpServerConfig;
 use crate::config::types::PluginConfig;
 use crate::config_loader::ConfigLayerStack;
 use crate::features::Feature;
-use crate::features::FeatureOverrides;
-use crate::features::Features;
 use crate::skills::SkillMetadata;
 use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
@@ -421,7 +417,7 @@ impl From<RemotePluginFetchError> for PluginRemoteSyncError {
 pub struct PluginsManager {
     codex_home: PathBuf,
     store: PluginStore,
-    cache_by_cwd: RwLock<HashMap<PathBuf, PluginLoadOutcome>>,
+    cached_enabled_outcome: RwLock<Option<PluginLoadOutcome>>,
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
 }
 
@@ -430,7 +426,7 @@ impl PluginsManager {
         Self {
             codex_home: codex_home.clone(),
             store: PluginStore::new(codex_home),
-            cache_by_cwd: RwLock::new(HashMap::new()),
+            cached_enabled_outcome: RwLock::new(None),
             analytics_events_client: RwLock::new(None),
         }
     }
@@ -444,49 +440,36 @@ impl PluginsManager {
     }
 
     pub fn plugins_for_config(&self, config: &Config) -> PluginLoadOutcome {
-        self.plugins_for_layer_stack(
-            &config.cwd,
-            &config.config_layer_stack,
-            /*force_reload*/ false,
-        )
-    }
-
-    pub fn plugins_for_layer_stack(
-        &self,
-        cwd: &Path,
-        config_layer_stack: &ConfigLayerStack,
-        force_reload: bool,
-    ) -> PluginLoadOutcome {
-        if !plugins_feature_enabled_from_stack(config_layer_stack) {
+        if !config.features.enabled(Feature::Plugins) {
             return PluginLoadOutcome::default();
         }
 
-        if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(cwd) {
+        if let Some(outcome) = self.cached_enabled_outcome() {
             return outcome;
         }
 
-        let outcome = load_plugins_from_layer_stack(config_layer_stack, &self.store);
+        let outcome = load_plugins_from_layer_stack(&config.config_layer_stack, &self.store);
         log_plugin_load_errors(&outcome);
-        let mut cache = match self.cache_by_cwd.write() {
+        let mut cache = match self.cached_enabled_outcome.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
-        cache.insert(cwd.to_path_buf(), outcome.clone());
+        *cache = Some(outcome.clone());
         outcome
     }
 
     pub fn clear_cache(&self) {
-        let mut cache_by_cwd = match self.cache_by_cwd.write() {
+        let mut cached_enabled_outcome = match self.cached_enabled_outcome.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
-        cache_by_cwd.clear();
+        *cached_enabled_outcome = None;
     }
 
-    fn cached_outcome_for_cwd(&self, cwd: &Path) -> Option<PluginLoadOutcome> {
-        match self.cache_by_cwd.read() {
-            Ok(cache) => cache.get(cwd).cloned(),
-            Err(err) => err.into_inner().get(cwd).cloned(),
+    fn cached_enabled_outcome(&self) -> Option<PluginLoadOutcome> {
+        match self.cached_enabled_outcome.read() {
+            Ok(cache) => cache.clone(),
+            Err(err) => err.into_inner().clone(),
         }
     }
 
@@ -939,7 +922,7 @@ impl PluginsManager {
     }
 
     pub fn maybe_start_curated_repo_sync_for_config(self: &Arc<Self>, config: &Config) {
-        if plugins_feature_enabled_from_stack(&config.config_layer_stack) {
+        if config.features.enabled(Feature::Plugins) {
             let mut configured_curated_plugin_ids =
                 configured_plugins_from_stack(&config.config_layer_stack)
                     .into_keys()
@@ -1107,24 +1090,6 @@ impl PluginUninstallError {
     }
 }
 
-fn plugins_feature_enabled_from_stack(config_layer_stack: &ConfigLayerStack) -> bool {
-    // Plugins are intentionally opt-in from the persisted user config only. Project config
-    // layers should not be able to enable plugin loading for a checkout.
-    let Some(user_layer) = config_layer_stack.get_user_layer() else {
-        return false;
-    };
-    let Ok(config_toml) = user_layer.config.clone().try_into::<ConfigToml>() else {
-        warn!("failed to deserialize config when checking plugin feature flag");
-        return false;
-    };
-    let config_profile = config_toml
-        .get_config_profile(config_toml.profile.clone())
-        .unwrap_or_else(|_| ConfigProfile::default());
-    let features =
-        Features::from_config(&config_toml, &config_profile, FeatureOverrides::default());
-    features.enabled(Feature::Plugins)
-}
-
 fn log_plugin_load_errors(outcome: &PluginLoadOutcome) {
     for plugin in outcome
         .plugins
@@ -1263,7 +1228,7 @@ fn refresh_curated_plugin_cache(
 fn configured_plugins_from_stack(
     config_layer_stack: &ConfigLayerStack,
 ) -> HashMap<String, PluginConfig> {
-    // Keep plugin entries aligned with the same user-layer-only semantics as the feature gate.
+    // Plugin entries remain persisted user config only.
     let Some(user_layer) = config_layer_stack.get_user_layer() else {
         return HashMap::new();
     };
