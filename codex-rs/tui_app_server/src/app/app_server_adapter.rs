@@ -18,9 +18,9 @@ use crate::app_server_session::app_server_rate_limit_snapshot_to_core;
 use crate::app_server_session::status_account_display_from_auth_mode;
 use crate::local_chatgpt_auth::load_local_chatgpt_auth;
 use codex_app_server_client::AppServerEvent;
-use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::Thread;
@@ -1095,8 +1095,8 @@ fn app_server_codex_error_info_to_core(
 
 #[cfg(test)]
 mod tests {
-    use super::command_execution_started_event;
     use super::LegacyThreadNotification;
+    use super::command_execution_started_event;
     use super::legacy_thread_notification;
     use super::server_notification_thread_events;
     use super::thread_snapshot_events;
