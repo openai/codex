@@ -83,6 +83,7 @@ impl CodeModeProcess {
                             .session
                             .inject_response_items(vec![ResponseInputItem::CustomToolCallOutput {
                                 call_id: notify.call_id.clone(),
+                                name: Some(PUBLIC_TOOL_NAME.to_string()),
                                 output: FunctionCallOutputPayload::from_text(notify.text),
                             }])
                             .await

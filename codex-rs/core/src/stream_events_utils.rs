@@ -365,12 +365,15 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
                 output: output.clone(),
             })
         }
-        ResponseInputItem::CustomToolCallOutput { call_id, output } => {
-            Some(ResponseItem::CustomToolCallOutput {
-                call_id: call_id.clone(),
-                output: output.clone(),
-            })
-        }
+        ResponseInputItem::CustomToolCallOutput {
+            call_id,
+            name,
+            output,
+        } => Some(ResponseItem::CustomToolCallOutput {
+            call_id: call_id.clone(),
+            name: name.clone(),
+            output: output.clone(),
+        }),
         ResponseInputItem::McpToolCallOutput { call_id, output } => {
             let output = output.as_function_call_output_payload();
             Some(ResponseItem::FunctionCallOutput {

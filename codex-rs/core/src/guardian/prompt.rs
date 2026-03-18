@@ -264,20 +264,22 @@ pub(crate) fn collect_guardian_transcript_entries(
                     serde_json::to_string(action).ok(),
                 )
             }),
-            ResponseItem::FunctionCallOutput { call_id, output }
-            | ResponseItem::CustomToolCallOutput { call_id, output } => {
-                output.body.to_text().and_then(|text| {
-                    non_empty_entry(
-                        GuardianTranscriptEntryKind::Tool(
-                            tool_names_by_call_id.get(call_id).map_or_else(
-                                || "tool result".to_string(),
-                                |name| format!("tool {name} result"),
-                            ),
-                        ),
-                        text,
-                    )
-                })
+            ResponseItem::FunctionCallOutput {
+                call_id, output, ..
             }
+            | ResponseItem::CustomToolCallOutput {
+                call_id, output, ..
+            } => output.body.to_text().and_then(|text| {
+                non_empty_entry(
+                    GuardianTranscriptEntryKind::Tool(
+                        tool_names_by_call_id.get(call_id).map_or_else(
+                            || "tool result".to_string(),
+                            |name| format!("tool {name} result"),
+                        ),
+                    ),
+                    text,
+                )
+            }),
             _ => None,
         };
 

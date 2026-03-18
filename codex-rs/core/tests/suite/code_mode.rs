@@ -1577,6 +1577,7 @@ text("done");
                     .get("output")
                     .and_then(serde_json::Value::as_str)
                     .is_some_and(|text| text.contains("code_mode_notify_marker"))
+                && item.get("name").and_then(serde_json::Value::as_str) == Some("exec")
         });
     assert!(
         has_notify_output,

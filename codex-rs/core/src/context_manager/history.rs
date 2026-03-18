@@ -360,15 +360,15 @@ impl ContextManager {
                     ),
                 }
             }
-            ResponseItem::CustomToolCallOutput { call_id, output } => {
-                ResponseItem::CustomToolCallOutput {
-                    call_id: call_id.clone(),
-                    output: truncate_function_output_payload(
-                        output,
-                        policy_with_serialization_budget,
-                    ),
-                }
-            }
+            ResponseItem::CustomToolCallOutput {
+                call_id,
+                name,
+                output,
+            } => ResponseItem::CustomToolCallOutput {
+                call_id: call_id.clone(),
+                name: name.clone(),
+                output: truncate_function_output_payload(output, policy_with_serialization_budget),
+            },
             ResponseItem::Message { .. }
             | ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }
