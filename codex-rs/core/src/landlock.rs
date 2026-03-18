@@ -75,7 +75,7 @@ pub(crate) fn allow_network_for_proxy(enforce_managed_network: bool) -> bool {
 /// flags so the argv order matches the helper's CLI shape. See
 /// `docs/linux_sandbox.md` for the Linux semantics.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn create_linux_sandbox_command_args_for_policies(
+pub fn create_linux_sandbox_command_args_for_policies(
     command: Vec<String>,
     command_cwd: &Path,
     sandbox_policy: &SandboxPolicy,
