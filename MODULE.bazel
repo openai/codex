@@ -193,18 +193,18 @@ crate.annotation(
 
 inject_repo(crate, "alsa_lib")
 
-bazel_dep(name = "v8", version = "14.6.202.11")
+bazel_dep(name = "v8", version = "14.6.202.9")
 archive_override(
     module_name = "v8",
-    integrity = "sha256-Ju45oFJMyCWyT/r+d+MDsCbCeoDBisGaj4+KZYIIYSU=",
+    integrity = "sha256-JphDwLAzsd9KvgRZ7eQvNtPU6qGd3XjFt/a/1QITAJU=",
     patch_strip = 3,
     patches = [
         "//patches:v8_module_deps.patch",
         "//patches:v8_bazel_rules.patch",
         "//patches:v8_source_portability.patch",
     ],
-    strip_prefix = "v8-14.6.202.11",
-    urls = ["https://github.com/v8/v8/archive/refs/tags/14.6.202.11.tar.gz"],
+    strip_prefix = "v8-14.6.202.9",
+    urls = ["https://github.com/v8/v8/archive/refs/tags/14.6.202.9.tar.gz"],
 )
 
 http_archive(

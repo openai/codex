@@ -6,7 +6,7 @@ target-specific `rusty_v8` release artifacts for `codex-rs/v8-poc`.
 Current pinned versions:
 
 - Rust crate: `v8 = =146.4.0`
-- Embedded upstream V8 source: `14.6.202.11`
+- Embedded upstream V8 source: `14.6.202.9`
 
 The generated release pairs include:
 
