@@ -5,6 +5,8 @@ use codex_core::ModelClientSession;
 use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
+use codex_core::WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY;
+use codex_core::WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY;
 use codex_core::WireApi;
 use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 use codex_core::features::Feature;
@@ -68,9 +70,11 @@ fn trace_id(traceparent: &str) -> &str {
 }
 
 fn assert_request_trace_matches(body: &serde_json::Value, expected_trace: &W3cTraceContext) {
-    let trace = body["trace"].as_object().expect("missing trace payload");
-    let actual_traceparent = trace
-        .get("traceparent")
+    let client_metadata = body["client_metadata"]
+        .as_object()
+        .expect("missing client_metadata payload");
+    let actual_traceparent = client_metadata
+        .get(WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY)
         .and_then(serde_json::Value::as_str)
         .expect("missing traceparent");
     let expected_traceparent = expected_trace
@@ -80,8 +84,14 @@ fn assert_request_trace_matches(body: &serde_json::Value, expected_trace: &W3cTr
 
     assert_eq!(trace_id(actual_traceparent), trace_id(expected_traceparent));
     assert_eq!(
-        trace.get("tracestate").and_then(serde_json::Value::as_str),
+        client_metadata
+            .get(WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY)
+            .and_then(serde_json::Value::as_str),
         expected_trace.tracestate.as_deref()
+    );
+    assert!(
+        body.get("trace").is_none(),
+        "top-level trace should not be sent"
     );
 }
 
@@ -216,10 +226,12 @@ async fn responses_websocket_reuses_connection_with_per_turn_trace_payloads() {
     assert_request_trace_matches(&first_request, &first_trace);
     assert_request_trace_matches(&second_request, &second_trace);
 
-    let first_traceparent = first_request["trace"]["traceparent"]
+    let first_traceparent = first_request["client_metadata"]
+        [WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY]
         .as_str()
         .expect("missing first traceparent");
-    let second_traceparent = second_request["trace"]["traceparent"]
+    let second_traceparent = second_request["client_metadata"]
+        [WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY]
         .as_str()
         .expect("missing second traceparent");
     assert_ne!(trace_id(first_traceparent), trace_id(second_traceparent));
