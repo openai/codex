@@ -74,12 +74,8 @@ pub fn load_for_prompt_bytes(
             _ => None,
         };
 
-        let dynamic = image::load_from_memory(&file_bytes).map_err(|source| {
-            ImageProcessingError::Decode {
-                path: path_buf.clone(),
-                source,
-            }
-        })?;
+        let dynamic = image::load_from_memory(&file_bytes)
+            .map_err(|source| ImageProcessingError::decode_error(&path_buf, source))?;
 
         let (width, height) = dynamic.dimensions();
 
@@ -294,10 +290,11 @@ mod tests {
             PromptImageMode::ResizeToFit,
         )
         .expect_err("invalid image should fail");
-        match err {
-            ImageProcessingError::Decode { .. } => {}
-            _ => panic!("unexpected error variant"),
-        }
+        assert!(matches!(
+            err,
+            ImageProcessingError::Decode { .. }
+                | ImageProcessingError::UnsupportedImageFormat { .. }
+        ));
     }
 
     #[tokio::test(flavor = "multi_thread")]

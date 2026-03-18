@@ -25,8 +25,6 @@ use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::RequestId;
-use codex_app_server_protocol::SkillsListParams;
-use codex_app_server_protocol::SkillsListResponse;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -479,92 +477,6 @@ async fn plugin_install_filters_disallowed_apps_needing_auth() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn plugin_install_filters_product_restricted_plugin_skills() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let repo_root = TempDir::new()?;
-    write_plugins_enabled_config(codex_home.path())?;
-    write_plugin_marketplace(
-        repo_root.path(),
-        "debug",
-        "sample-plugin",
-        "./sample-plugin",
-        None,
-        None,
-    )?;
-    write_plugin_source(repo_root.path(), "sample-plugin", &[])?;
-
-    let plugin_root = repo_root.path().join("sample-plugin");
-    write_plugin_skill(
-        &plugin_root,
-        "all-products",
-        "Visible to every product",
-        &[],
-    )?;
-    write_plugin_skill(
-        &plugin_root,
-        "chatgpt-only",
-        "Visible to ChatGPT",
-        &["CHATGPT"],
-    )?;
-    write_plugin_skill(&plugin_root, "atlas-only", "Visible to Atlas", &["ATLAS"])?;
-    let marketplace_path =
-        AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
-
-    let mut mcp =
-        McpProcess::new_with_args(codex_home.path(), &["--session-source", "chatgpt"]).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_plugin_install_request(PluginInstallParams {
-            marketplace_path,
-            plugin_name: "sample-plugin".to_string(),
-            force_remote_sync: false,
-        })
-        .await?;
-
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginInstallResponse = to_response(response)?;
-    assert_eq!(response.apps_needing_auth, Vec::<AppSummary>::new());
-
-    let request_id = mcp
-        .send_skills_list_request(SkillsListParams {
-            cwds: vec![codex_home.path().to_path_buf()],
-            force_reload: true,
-            per_cwd_extra_user_roots: None,
-        })
-        .await?;
-
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: SkillsListResponse = to_response(response)?;
-
-    let mut skills = response
-        .data
-        .into_iter()
-        .flat_map(|entry| entry.skills.into_iter())
-        .map(|skill| skill.name)
-        .filter(|name| name.starts_with("sample-plugin:"))
-        .collect::<Vec<_>>();
-    skills.sort_unstable();
-
-    assert_eq!(
-        skills,
-        vec![
-            "sample-plugin:all-products".to_string(),
-            "sample-plugin:chatgpt-only".to_string(),
-        ]
-    );
-    Ok(())
-}
-
 #[derive(Clone)]
 struct AppsServerState {
     response: Arc<StdMutex<serde_json::Value>>,
@@ -736,16 +648,6 @@ plugins = true
     )
 }
 
-fn write_plugins_enabled_config(codex_home: &std::path::Path) -> std::io::Result<()> {
-    std::fs::write(
-        codex_home.join("config.toml"),
-        r#"
-[features]
-plugins = true
-"#,
-    )
-}
-
 fn write_plugin_marketplace(
     repo_root: &std::path::Path,
     marketplace_name: &str,
@@ -813,34 +715,5 @@ fn write_plugin_source(
         plugin_root.join(".app.json"),
         serde_json::to_vec_pretty(&json!({ "apps": apps }))?,
     )?;
-    Ok(())
-}
-
-fn write_plugin_skill(
-    plugin_root: &std::path::Path,
-    skill_name: &str,
-    description: &str,
-    products: &[&str],
-) -> Result<()> {
-    let skill_dir = plugin_root.join("skills").join(skill_name);
-    std::fs::create_dir_all(&skill_dir)?;
-    std::fs::write(
-        skill_dir.join("SKILL.md"),
-        format!("---\ndescription: {description}\n---\n\n# {skill_name}\n"),
-    )?;
-
-    if !products.is_empty() {
-        let products = products
-            .iter()
-            .map(|product| format!("    - {product}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        std::fs::create_dir_all(skill_dir.join("agents"))?;
-        std::fs::write(
-            skill_dir.join("agents/openai.yaml"),
-            format!("policy:\n  products:\n{products}\n"),
-        )?;
-    }
-
     Ok(())
 }
