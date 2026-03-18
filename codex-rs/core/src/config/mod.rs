@@ -559,6 +559,9 @@ pub struct Config {
     /// Defaults to `true`.
     pub feedback_enabled: bool,
 
+    /// Additional connector IDs that should be suggestable as discoverable tools.
+    pub discoverable_connectors: Vec<String>,
+
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: crate::config::types::OtelConfig,
 }
@@ -1454,6 +1457,9 @@ pub struct ConfigToml {
     /// Settings for app-specific controls.
     #[serde(default)]
     pub apps: Option<AppsConfigToml>,
+
+    /// Additional connector IDs that should be surfaced as discoverable connector suggestions.
+    pub discoverable_connectors: Option<Vec<String>>,
 
     /// OTEL configuration.
     pub otel: Option<crate::config::types::OtelConfigToml>,
@@ -2734,6 +2740,19 @@ impl Config {
                 .as_ref()
                 .and_then(|feedback| feedback.enabled)
                 .unwrap_or(true),
+            discoverable_connectors: cfg
+                .discoverable_connectors
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|connector_id| {
+                    let trimmed = connector_id.trim();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    }
+                })
+                .collect(),
             tui_notifications: cfg
                 .tui
                 .as_ref()

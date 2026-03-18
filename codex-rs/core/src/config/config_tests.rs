@@ -4281,6 +4281,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
+            discoverable_connectors: Vec::new(),
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
             tui_theme: None,
@@ -4420,6 +4421,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         analytics_enabled: Some(true),
         feedback_enabled: true,
+        discoverable_connectors: Vec::new(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
         tui_theme: None,
@@ -4557,6 +4559,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         analytics_enabled: Some(false),
         feedback_enabled: true,
+        discoverable_connectors: Vec::new(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
         tui_theme: None,
@@ -4680,6 +4683,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         analytics_enabled: Some(true),
         feedback_enabled: true,
+        discoverable_connectors: Vec::new(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
         tui_theme: None,
@@ -5800,6 +5804,38 @@ async fn feature_requirements_reject_collab_legacy_alias() {
             .contains("use canonical feature key `multi_agent`"),
         "{err}"
     );
+}
+
+#[test]
+fn discoverable_connectors_load_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+discoverable_connectors = ["connector_alpha", "   ", "connector_beta"]
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.discoverable_connectors,
+        Some(vec![
+            "connector_alpha".to_string(),
+            "   ".to_string(),
+            "connector_beta".to_string(),
+        ])
+    );
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.discoverable_connectors,
+        vec!["connector_alpha".to_string(), "connector_beta".to_string(),]
+    );
+    Ok(())
 }
 
 #[test]

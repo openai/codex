@@ -1856,6 +1856,13 @@
       "description": "When true, disables burst-paste detection for typed input entirely. All characters are inserted as they are received, and no buffering or placeholder replacement will occur for fast keypress bursts.",
       "type": "boolean"
     },
+    "discoverable_connectors": {
+      "description": "Additional connector IDs that should be surfaced as discoverable connector suggestions.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
     },
