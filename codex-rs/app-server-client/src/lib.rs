@@ -1166,6 +1166,7 @@ mod tests {
         client.shutdown().await.expect("shutdown should complete");
     }
 
+    #[tokio::test]
     async fn remote_connect_includes_auth_header_when_configured() {
         let auth_token = "remote-bearer-token".to_string();
         let websocket_url = start_test_remote_server_with_auth(
