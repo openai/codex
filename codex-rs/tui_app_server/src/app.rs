@@ -475,6 +475,13 @@ struct ThreadEventStore {
 }
 
 impl ThreadEventStore {
+    fn event_survives_session_refresh(event: &ThreadBufferedEvent) -> bool {
+        matches!(
+            event,
+            ThreadBufferedEvent::Request(_) | ThreadBufferedEvent::LegacyWarning(_)
+        )
+    }
+
     fn new(capacity: usize) -> Self {
         Self {
             session: None,
@@ -500,6 +507,16 @@ impl ThreadEventStore {
     fn set_session(&mut self, session: ThreadSessionState, turns: Vec<Turn>) {
         self.session = Some(session);
         self.set_turns(turns);
+    }
+
+    fn rebase_buffer_after_session_refresh(&mut self) {
+        self.buffer.retain(Self::event_survives_session_refresh);
+        self.pending_interactive_replay = PendingInteractiveReplayState::default();
+        for event in &self.buffer {
+            if let ThreadBufferedEvent::Request(request) = event {
+                self.pending_interactive_replay.note_server_request(request);
+            }
+        }
     }
 
     fn set_turns(&mut self, turns: Vec<Turn>) {
@@ -2375,9 +2392,13 @@ impl App {
         if let Some(channel) = self.thread_event_channels.get(&thread_id) {
             let mut store = channel.store.lock().await;
             store.set_session(session.clone(), turns.clone());
+            store.rebase_buffer_after_session_refresh();
         }
         snapshot.session = Some(session);
         snapshot.turns = turns;
+        snapshot
+            .events
+            .retain(ThreadEventStore::event_survives_session_refresh);
     }
 
     /// Opens the `/agent` picker after refreshing cached labels for known threads.
