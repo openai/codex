@@ -1736,7 +1736,6 @@ mod tests {
                 "audience",
                 "--ws-max-clock-skew-seconds",
                 "9",
-                "--allow-unauthenticated-non-loopback-ws",
             ]
             .as_ref(),
         );
@@ -1751,7 +1750,16 @@ mod tests {
         assert_eq!(app_server.auth.ws_issuer.as_deref(), Some("issuer"));
         assert_eq!(app_server.auth.ws_audience.as_deref(), Some("audience"));
         assert_eq!(app_server.auth.ws_max_clock_skew_seconds, Some(9));
-        assert!(app_server.auth.allow_unauthenticated_non_loopback_ws);
+    }
+
+    #[test]
+    fn app_server_rejects_removed_insecure_non_loopback_flag() {
+        let parse_result = MultitoolCli::try_parse_from([
+            "codex",
+            "app-server",
+            "--allow-unauthenticated-non-loopback-ws",
+        ]);
+        assert!(parse_result.is_err());
     }
 
     #[test]
