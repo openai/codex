@@ -137,7 +137,7 @@ impl ApprovalOverlay {
         self.queue.push(req);
     }
 
-    fn remove_resolved_exec_approvals(&mut self, approval_ids: &[String]) -> bool {
+    fn remove_resolved_exec_approvals_inner(&mut self, approval_ids: &[String]) -> bool {
         let mut changed = false;
 
         self.queue.retain(|request| {
@@ -493,7 +493,7 @@ impl BottomPaneView for ApprovalOverlay {
     }
 
     fn remove_resolved_exec_approvals(&mut self, approval_ids: &[String]) -> bool {
-        self.remove_resolved_exec_approvals(approval_ids)
+        self.remove_resolved_exec_approvals_inner(approval_ids)
     }
 }
 
