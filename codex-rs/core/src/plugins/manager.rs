@@ -440,7 +440,7 @@ impl PluginsManager {
     }
 
     pub fn plugins_for_config(&self, config: &Config) -> PluginLoadOutcome {
-        self.plugins_for_config_with_force_reload(config, false)
+        self.plugins_for_config_with_force_reload(config, /*force_reload*/ false)
     }
 
     pub(crate) fn plugins_for_config_with_force_reload(

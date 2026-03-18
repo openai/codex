@@ -1116,6 +1116,12 @@ async fn list_marketplaces_includes_curated_repo_marketplace() {
     let curated_root = curated_plugins_repo_path(tmp.path());
     let plugin_root = curated_root.join("plugins/linear");
 
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
     fs::create_dir_all(curated_root.join(".agents/plugins")).unwrap();
     fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
     fs::write(
