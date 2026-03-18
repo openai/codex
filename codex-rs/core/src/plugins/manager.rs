@@ -1056,7 +1056,6 @@ impl PluginsManager {
     pub fn maybe_start_curated_repo_sync_for_config(
         self: &Arc<Self>,
         config: &Config,
-        session_source: &SessionSource,
         auth_manager: &Arc<AuthManager>,
     ) {
         if plugins_feature_enabled_from_stack(&config.config_layer_stack) {
