@@ -7441,7 +7441,12 @@ fn merge_persisted_resume_metadata(
     typesafe_overrides: &mut ConfigOverrides,
     persisted_metadata: &ThreadMetadata,
 ) {
-    if typesafe_overrides.model.is_none() {
+    if typesafe_overrides.model.is_none()
+        && typesafe_overrides.model_provider.is_none()
+        && !request_overrides
+            .as_ref()
+            .is_some_and(|overrides| overrides.contains_key("model"))
+    {
         typesafe_overrides.model = persisted_metadata.model.clone();
     }
     if !request_overrides
@@ -8422,6 +8427,69 @@ mod tests {
             Some(HashMap::from([(
                 "model_reasoning_effort".to_string(),
                 serde_json::Value::String("low".to_string()),
+            )]))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn merge_persisted_resume_metadata_preserves_explicit_model_in_request_overrides() -> Result<()>
+    {
+        let mut request_overrides = Some(HashMap::from([(
+            "model".to_string(),
+            serde_json::Value::String("gpt-5.2-codex".to_string()),
+        )]));
+        let mut typesafe_overrides = ConfigOverrides::default();
+        let persisted_metadata =
+            test_thread_metadata(Some("gpt-5.1-codex-max"), Some(ReasoningEffort::High))?;
+
+        merge_persisted_resume_metadata(
+            &mut request_overrides,
+            &mut typesafe_overrides,
+            &persisted_metadata,
+        );
+
+        assert_eq!(typesafe_overrides.model, None);
+        assert_eq!(
+            request_overrides,
+            Some(HashMap::from([
+                (
+                    "model".to_string(),
+                    serde_json::Value::String("gpt-5.2-codex".to_string()),
+                ),
+                (
+                    "model_reasoning_effort".to_string(),
+                    serde_json::Value::String("high".to_string()),
+                ),
+            ]))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn merge_persisted_resume_metadata_skips_persisted_model_when_provider_overridden() -> Result<()>
+    {
+        let mut request_overrides = None;
+        let mut typesafe_overrides = ConfigOverrides {
+            model_provider: Some("oss".to_string()),
+            ..Default::default()
+        };
+        let persisted_metadata =
+            test_thread_metadata(Some("gpt-5.1-codex-max"), Some(ReasoningEffort::High))?;
+
+        merge_persisted_resume_metadata(
+            &mut request_overrides,
+            &mut typesafe_overrides,
+            &persisted_metadata,
+        );
+
+        assert_eq!(typesafe_overrides.model, None);
+        assert_eq!(typesafe_overrides.model_provider, Some("oss".to_string()));
+        assert_eq!(
+            request_overrides,
+            Some(HashMap::from([(
+                "model_reasoning_effort".to_string(),
+                serde_json::Value::String("high".to_string()),
             )]))
         );
         Ok(())
