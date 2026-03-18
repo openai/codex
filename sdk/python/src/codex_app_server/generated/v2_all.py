@@ -1799,11 +1799,6 @@ class ReadOnlyAccess(RootModel[RestrictedReadOnlyAccess | FullAccessReadOnlyAcce
     root: RestrictedReadOnlyAccess | FullAccessReadOnlyAccess
 
 
-class RealtimeConversationVersion(Enum):
-    v1 = "v1"
-    v2 = "v2"
-
-
 class ReasoningEffort(Enum):
     none = "none"
     minimal = "minimal"
@@ -3063,7 +3058,6 @@ class ThreadRealtimeStartedNotification(BaseModel):
     )
     session_id: Annotated[str | None, Field(alias="sessionId")] = None
     thread_id: Annotated[str, Field(alias="threadId")]
-    version: RealtimeConversationVersion
 
 
 class ThreadResumeParams(BaseModel):
