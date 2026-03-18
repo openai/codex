@@ -96,11 +96,19 @@ jobs:
 
           target_suffix="${TARGET//-/_}"
           pair_target="//third_party/v8:rusty_v8_release_pair_${target_suffix}"
+          extra_targets=()
+          if [[ "${TARGET}" == *-unknown-linux-musl ]]; then
+            extra_targets=(
+              "@llvm//runtimes/libcxx:libcxx.static"
+              "@llvm//runtimes/libcxx:libcxxabi.static"
+            )
+          fi
 
           bazel_args=(
             build
             "--platforms=@llvm//platforms:${PLATFORM}"
             "${pair_target}"
+            "${extra_targets[@]}"
             --build_metadata=REPO_URL=https://github.com/${GITHUB_REPOSITORY}.git
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
             --build_metadata=ROLE=CI

@@ -48,3 +48,8 @@ That workflow currently stages musl artifacts:
 - `librusty_v8_release_aarch64-unknown-linux-musl.a.gz`
 - `src_binding_release_x86_64-unknown-linux-musl.rs`
 - `src_binding_release_aarch64-unknown-linux-musl.rs`
+
+During musl staging, the produced static archive is merged with the target's
+LLVM `libc++` and `libc++abi` static runtime archives. Rust's musl toolchain
+already provides the matching `libunwind`, so staging does not bundle a second
+copy.
