@@ -2262,11 +2262,8 @@ impl App {
             .await
         {
             Ok(started) => {
-                if let Some(channel) = self.thread_event_channels.get(&thread_id) {
-                    let mut store = channel.store.lock().await;
-                    store.session = Some(started.session.clone());
-                }
-                snapshot.session = Some(started.session);
+                self.apply_refreshed_snapshot_thread(thread_id, started, snapshot)
+                    .await
             }
             Err(err) => {
                 tracing::warn!(
@@ -2276,6 +2273,21 @@ impl App {
                 );
             }
         }
+    }
+
+    async fn apply_refreshed_snapshot_thread(
+        &mut self,
+        thread_id: ThreadId,
+        started: AppServerStartedThread,
+        snapshot: &mut ThreadEventSnapshot,
+    ) {
+        let AppServerStartedThread { session, turns } = started;
+        if let Some(channel) = self.thread_event_channels.get(&thread_id) {
+            let mut store = channel.store.lock().await;
+            store.set_session(session.clone(), turns.clone());
+        }
+        snapshot.session = Some(session);
+        snapshot.turns = turns;
     }
 
     /// Opens the `/agent` picker after refreshing cached labels for known threads.
@@ -8565,6 +8577,63 @@ guardian_approval = true
             user_messages,
             vec!["first prompt".to_string(), "third prompt".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn refreshed_snapshot_session_persists_resumed_turns() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let initial_session = test_thread_session(thread_id, PathBuf::from("/tmp/original"));
+        app.thread_event_channels.insert(
+            thread_id,
+            ThreadEventChannel::new_with_session(4, initial_session.clone(), Vec::new()),
+        );
+
+        let resumed_turns = vec![test_turn(
+            "turn-1",
+            TurnStatus::Completed,
+            vec![ThreadItem::UserMessage {
+                id: "user-1".to_string(),
+                content: vec![AppServerUserInput::Text {
+                    text: "restored prompt".to_string(),
+                    text_elements: Vec::new(),
+                }],
+            }],
+        )];
+        let resumed_session = ThreadSessionState {
+            cwd: PathBuf::from("/tmp/refreshed"),
+            ..initial_session.clone()
+        };
+        let mut snapshot = ThreadEventSnapshot {
+            session: Some(initial_session),
+            turns: Vec::new(),
+            events: Vec::new(),
+            input_state: None,
+        };
+
+        app.apply_refreshed_snapshot_thread(
+            thread_id,
+            AppServerStartedThread {
+                session: resumed_session.clone(),
+                turns: resumed_turns.clone(),
+            },
+            &mut snapshot,
+        )
+        .await;
+
+        assert_eq!(snapshot.session, Some(resumed_session.clone()));
+        assert_eq!(snapshot.turns, resumed_turns);
+
+        let store = app
+            .thread_event_channels
+            .get(&thread_id)
+            .expect("thread channel")
+            .store
+            .lock()
+            .await;
+        let store_snapshot = store.snapshot();
+        assert_eq!(store_snapshot.session, Some(resumed_session));
+        assert_eq!(store_snapshot.turns, snapshot.turns);
     }
 
     #[tokio::test]
