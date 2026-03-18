@@ -592,9 +592,10 @@ impl PluginsManager {
         config: &Config,
         auth: Option<&CodexAuth>,
     ) -> Result<Vec<String>, RemotePluginFetchError> {
-        if !plugins_feature_enabled_from_stack(&config.config_layer_stack) {
+        if !config.features.enabled(Feature::Plugins) {
             return Ok(Vec::new());
         }
+
         let cache_key = featured_plugin_ids_cache_key(config, auth);
         if let Some(featured_plugin_ids) = self.cached_featured_plugin_ids(&cache_key) {
             return Ok(featured_plugin_ids);
