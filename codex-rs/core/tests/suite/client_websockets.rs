@@ -1,12 +1,12 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
+use codex_api::WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY;
+use codex_api::WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY;
 use codex_core::CodexAuth;
 use codex_core::ModelClient;
 use codex_core::ModelClientSession;
 use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
-use codex_core::WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY;
-use codex_core::WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY;
 use codex_core::WireApi;
 use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 use codex_core::features::Feature;
@@ -53,6 +53,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 use tracing::Instrument;
+use tracing::dispatcher::DefaultGuard;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_test::traced_test;
@@ -93,6 +94,25 @@ fn assert_request_trace_matches(body: &serde_json::Value, expected_trace: &W3cTr
         body.get("trace").is_none(),
         "top-level trace should not be sent"
     );
+}
+
+struct TraceTestContext {
+    _provider: SdkTracerProvider,
+    _guard: DefaultGuard,
+}
+
+fn install_trace_test_context() -> TraceTestContext {
+    global::set_text_map_propagator(TraceContextPropagator::new());
+
+    let provider = SdkTracerProvider::builder().build();
+    let tracer = provider.tracer("client-websocket-test");
+    let subscriber =
+        tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+
+    TraceTestContext {
+        _provider: provider,
+        _guard: subscriber.set_default(),
+    }
 }
 
 struct WebsocketTestHarness {
@@ -169,13 +189,7 @@ async fn responses_websocket_streams_without_feature_flag_when_provider_supports
 async fn responses_websocket_reuses_connection_with_per_turn_trace_payloads() {
     skip_if_no_network!();
 
-    global::set_text_map_propagator(TraceContextPropagator::new());
-
-    let provider = SdkTracerProvider::builder().build();
-    let tracer = provider.tracer("client-websocket-test");
-    let subscriber =
-        tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
-    let _guard = subscriber.set_default();
+    let _trace_test_context = install_trace_test_context();
 
     let server = start_websocket_server(vec![vec![
         vec![ev_response_created("resp-1"), ev_completed("resp-1")],
@@ -244,13 +258,7 @@ async fn responses_websocket_reuses_connection_with_per_turn_trace_payloads() {
 async fn responses_websocket_preconnect_does_not_replace_turn_trace_payload() {
     skip_if_no_network!();
 
-    global::set_text_map_propagator(TraceContextPropagator::new());
-
-    let provider = SdkTracerProvider::builder().build();
-    let tracer = provider.tracer("client-websocket-test");
-    let subscriber =
-        tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
-    let _guard = subscriber.set_default();
+    let _trace_test_context = install_trace_test_context();
 
     let server = start_websocket_server(vec![vec![vec![
         ev_response_created("resp-1"),

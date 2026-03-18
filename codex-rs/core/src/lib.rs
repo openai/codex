@@ -162,8 +162,6 @@ pub(crate) use codex_shell_command::powershell;
 
 pub use client::ModelClient;
 pub use client::ModelClientSession;
-pub use client::WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY;
-pub use client::WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY;
 pub use client::X_CODEX_TURN_METADATA_HEADER;
 pub use client_common::Prompt;
 pub use client_common::REVIEW_PROMPT;

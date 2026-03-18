@@ -59,6 +59,7 @@ use codex_api::common::ResponsesWsRequest;
 use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
 use codex_api::requests::responses::Compression;
+use codex_api::response_create_client_metadata;
 use codex_otel::SessionTelemetry;
 use codex_otel::current_span_w3c_trace_context;
 
@@ -70,7 +71,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::W3cTraceContext;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
 use futures::StreamExt;
@@ -114,8 +114,6 @@ use crate::util::emit_feedback_request_tags_with_auth_env;
 pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
-pub const WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY: &str = "ws_request_header_traceparent";
-pub const WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY: &str = "ws_request_header_tracestate";
 pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
@@ -1130,8 +1128,8 @@ impl ModelClientSession {
             )?;
             let request_trace = current_span_w3c_trace_context();
             let mut ws_payload = ResponseCreateWsRequest {
-                client_metadata: build_ws_client_metadata(
-                    turn_metadata_header,
+                client_metadata: response_create_client_metadata(
+                    build_ws_client_metadata(turn_metadata_header),
                     request_trace.as_ref(),
                 ),
                 ..ResponseCreateWsRequest::from(&request)
@@ -1361,35 +1359,12 @@ fn parse_turn_metadata_header(turn_metadata_header: Option<&str>) -> Option<Head
     turn_metadata_header.and_then(|value| HeaderValue::from_str(value).ok())
 }
 
-fn build_ws_client_metadata(
-    turn_metadata_header: Option<&str>,
-    trace: Option<&W3cTraceContext>,
-) -> Option<HashMap<String, String>> {
+fn build_ws_client_metadata(turn_metadata_header: Option<&str>) -> Option<HashMap<String, String>> {
+    let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header)?;
+    let turn_metadata = turn_metadata_header.to_str().ok()?.to_string();
     let mut client_metadata = HashMap::new();
-
-    if let Some(turn_metadata_header) = parse_turn_metadata_header(turn_metadata_header)
-        && let Ok(turn_metadata) = turn_metadata_header.to_str()
-    {
-        client_metadata.insert(
-            X_CODEX_TURN_METADATA_HEADER.to_string(),
-            turn_metadata.to_string(),
-        );
-    }
-
-    if let Some(traceparent) = trace.and_then(|trace| trace.traceparent.as_deref()) {
-        client_metadata.insert(
-            WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY.to_string(),
-            traceparent.to_string(),
-        );
-    }
-    if let Some(tracestate) = trace.and_then(|trace| trace.tracestate.as_deref()) {
-        client_metadata.insert(
-            WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY.to_string(),
-            tracestate.to_string(),
-        );
-    }
-
-    (!client_metadata.is_empty()).then_some(client_metadata)
+    client_metadata.insert(X_CODEX_TURN_METADATA_HEADER.to_string(), turn_metadata);
+    Some(client_metadata)
 }
 
 /// Builds the extra headers attached to Responses API requests.
