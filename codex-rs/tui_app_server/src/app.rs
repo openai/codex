@@ -467,6 +467,7 @@ struct ThreadEventStore {
     turns: Vec<Turn>,
     buffer: VecDeque<ThreadBufferedEvent>,
     pending_interactive_replay: PendingInteractiveReplayState,
+    pending_local_legacy_rollbacks: VecDeque<u32>,
     active_turn_id: Option<String>,
     input_state: Option<ThreadInputState>,
     capacity: usize,
@@ -480,6 +481,7 @@ impl ThreadEventStore {
             turns: Vec::new(),
             buffer: VecDeque::new(),
             pending_interactive_replay: PendingInteractiveReplayState::default(),
+            pending_local_legacy_rollbacks: VecDeque::new(),
             active_turn_id: None,
             input_state: None,
             capacity,
@@ -501,6 +503,7 @@ impl ThreadEventStore {
     }
 
     fn set_turns(&mut self, turns: Vec<Turn>) {
+        self.pending_local_legacy_rollbacks.clear();
         self.active_turn_id = turns
             .iter()
             .rev()
@@ -557,6 +560,23 @@ impl ThreadEventStore {
         self.active_turn_id = None;
     }
 
+    fn note_local_thread_rollback(&mut self, num_turns: u32) {
+        self.pending_local_legacy_rollbacks.push_back(num_turns);
+        while self.pending_local_legacy_rollbacks.len() > self.capacity {
+            self.pending_local_legacy_rollbacks.pop_front();
+        }
+    }
+
+    fn consume_pending_local_legacy_rollback(&mut self, num_turns: u32) -> bool {
+        match self.pending_local_legacy_rollbacks.front() {
+            Some(pending_num_turns) if *pending_num_turns == num_turns => {
+                self.pending_local_legacy_rollbacks.pop_front();
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn apply_legacy_thread_rollback(&mut self, num_turns: u32) {
         let num_turns = usize::try_from(num_turns).unwrap_or(usize::MAX);
         if num_turns >= self.turns.len() {
@@ -567,6 +587,7 @@ impl ThreadEventStore {
         }
         self.buffer.clear();
         self.pending_interactive_replay = PendingInteractiveReplayState::default();
+        self.pending_local_legacy_rollbacks.clear();
         self.active_turn_id = None;
     }
 
@@ -2202,8 +2223,12 @@ impl App {
 
         let should_send = {
             let mut guard = store.lock().await;
-            guard.apply_legacy_thread_rollback(num_turns);
-            guard.active
+            if guard.consume_pending_local_legacy_rollback(num_turns) {
+                false
+            } else {
+                guard.apply_legacy_thread_rollback(num_turns);
+                guard.active
+            }
         };
 
         if should_send {
@@ -4558,6 +4583,7 @@ impl App {
         if let Some(channel) = self.thread_event_channels.get(&thread_id) {
             let mut store = channel.store.lock().await;
             store.apply_thread_rollback(response);
+            store.note_local_thread_rollback(num_turns);
         }
         if self.active_thread_id == Some(thread_id)
             && let Some(mut rx) = self.active_thread_rx.take()
@@ -7901,6 +7927,16 @@ guardian_approval = true
         assert_eq!(refreshed_store.active_turn_id(), Some("turn-2"));
     }
 
+    #[test]
+    fn thread_event_store_consumes_matching_local_legacy_rollback_once() {
+        let mut store = ThreadEventStore::new(8);
+        store.note_local_thread_rollback(2);
+
+        assert!(store.consume_pending_local_legacy_rollback(2));
+        assert!(!store.consume_pending_local_legacy_rollback(2));
+        assert!(!store.consume_pending_local_legacy_rollback(1));
+    }
+
     fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
         let mut seen = Vec::new();
         while let Ok(op) = op_rx.try_recv() {
@@ -8895,6 +8931,62 @@ guardian_approval = true
             .as_mut()
             .expect("active receiver should remain attached");
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[tokio::test]
+    async fn local_rollback_response_suppresses_matching_legacy_rollback() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
+        let initial_turns = vec![
+            test_turn("turn-1", TurnStatus::Completed, Vec::new()),
+            test_turn("turn-2", TurnStatus::Completed, Vec::new()),
+        ];
+        app.thread_event_channels.insert(
+            thread_id,
+            ThreadEventChannel::new_with_session(8, session, initial_turns),
+        );
+
+        app.handle_thread_rollback_response(
+            thread_id,
+            1,
+            &ThreadRollbackResponse {
+                thread: Thread {
+                    id: thread_id.to_string(),
+                    preview: String::new(),
+                    ephemeral: false,
+                    model_provider: "openai".to_string(),
+                    created_at: 0,
+                    updated_at: 0,
+                    status: codex_app_server_protocol::ThreadStatus::Idle,
+                    path: None,
+                    cwd: PathBuf::from("/tmp/project"),
+                    cli_version: "0.0.0".to_string(),
+                    source: SessionSource::Cli.into(),
+                    agent_nickname: None,
+                    agent_role: None,
+                    git_info: None,
+                    name: None,
+                    turns: vec![test_turn("turn-1", TurnStatus::Completed, Vec::new())],
+                },
+            },
+        )
+        .await;
+
+        app.enqueue_thread_legacy_rollback(thread_id, 1)
+            .await
+            .expect("legacy rollback should not fail");
+
+        let store = app
+            .thread_event_channels
+            .get(&thread_id)
+            .expect("thread channel")
+            .store
+            .lock()
+            .await;
+        let snapshot = store.snapshot();
+        assert_eq!(snapshot.turns.len(), 1);
+        assert!(snapshot.events.is_empty());
     }
 
     #[tokio::test]

@@ -67,7 +67,7 @@ impl App {
                         tracing::warn!("failed to enqueue app-server legacy notification: {err}");
                     }
                 } else {
-                    tracing::warn!("ignoring legacy app-server notification in tui_app_server");
+                    tracing::debug!("ignoring legacy app-server notification in tui_app_server");
                 }
             }
             AppServerEvent::ServerRequest(request) => {
