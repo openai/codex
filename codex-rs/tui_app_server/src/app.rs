@@ -1595,6 +1595,8 @@ impl App {
                 .unwrap_or_else(|| params.item_id.clone());
             !resolved.exec_approval_ids.contains(&approval_id)
         });
+        self.remove_resolved_exec_approvals_from_active_queue(&resolved.exec_approval_ids)
+            .await;
         self.chat_widget
             .remove_resolved_exec_approvals(&resolved.exec_approval_ids);
 
@@ -1608,6 +1610,62 @@ impl App {
         }
 
         self.refresh_pending_thread_approvals().await;
+    }
+
+    async fn remove_resolved_exec_approvals_from_active_queue(&mut self, approval_ids: &[String]) {
+        let Some(thread_id) = self.active_thread_id else {
+            return;
+        };
+        let Some(mut rx) = self.active_thread_rx.take() else {
+            return;
+        };
+        let Some(channel) = self.thread_event_channels.get(&thread_id) else {
+            self.active_thread_rx = Some(rx);
+            return;
+        };
+
+        let sender = channel.sender.clone();
+        let mut disconnected = false;
+        let mut retained_events = Vec::new();
+
+        loop {
+            match rx.try_recv() {
+                Ok(event) => {
+                    let ThreadBufferedEvent::Request(
+                        ServerRequest::CommandExecutionRequestApproval { params, .. },
+                    ) = &event
+                    else {
+                        retained_events.push(event);
+                        continue;
+                    };
+                    let approval_id = params
+                        .approval_id
+                        .clone()
+                        .unwrap_or_else(|| params.item_id.clone());
+                    if !approval_ids.contains(&approval_id) {
+                        retained_events.push(event);
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
+            }
+        }
+
+        if disconnected {
+            self.clear_active_thread().await;
+            return;
+        }
+
+        for event in retained_events {
+            if sender.send(event).await.is_err() {
+                self.clear_active_thread().await;
+                return;
+            }
+        }
+        self.active_thread_rx = Some(rx);
     }
 
     async fn active_turn_id_for_thread(&self, thread_id: ThreadId) -> Option<String> {
@@ -5533,6 +5591,43 @@ mod tests {
                 .await
                 .is_err(),
             "resolved buffered approval should not replay after session configured"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resolved_active_exec_approval_is_removed_from_active_thread_queue() -> Result<()> {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+
+        app.enqueue_primary_thread_session(
+            test_thread_session(thread_id, PathBuf::from("/tmp/project")),
+            Vec::new(),
+        )
+        .await?;
+        app.enqueue_primary_thread_request(exec_approval_request(
+            thread_id,
+            "",
+            "call-1",
+            Some("approval-1"),
+        ))
+        .await?;
+
+        app.note_app_server_request_resolved(ResolvedAppServerRequest {
+            exec_approval_ids: vec!["approval-1".to_string()],
+        })
+        .await;
+
+        let rx = app
+            .active_thread_rx
+            .as_mut()
+            .expect("primary thread receiver should be active");
+        assert!(
+            time::timeout(Duration::from_millis(50), rx.recv())
+                .await
+                .is_err(),
+            "resolved active approval should be removed from the live queue"
         );
 
         Ok(())
