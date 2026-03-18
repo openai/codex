@@ -59,6 +59,7 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::Turn;
+use codex_app_server_protocol::TurnStatus;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -489,12 +490,21 @@ impl ThreadEventStore {
     fn new_with_session(capacity: usize, session: ThreadSessionState, turns: Vec<Turn>) -> Self {
         let mut store = Self::new(capacity);
         store.session = Some(session);
-        store.turns = turns;
+        store.set_turns(turns);
         store
     }
 
     fn set_session(&mut self, session: ThreadSessionState, turns: Vec<Turn>) {
         self.session = Some(session);
+        self.set_turns(turns);
+    }
+
+    fn set_turns(&mut self, turns: Vec<Turn>) {
+        self.active_turn_id = turns
+            .iter()
+            .rev()
+            .find(|turn| matches!(turn.status, TurnStatus::InProgress))
+            .map(|turn| turn.id.clone());
         self.turns = turns;
     }
 
@@ -5499,6 +5509,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn active_turn_id_for_thread_uses_snapshot_turns() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
+        app.thread_event_channels.insert(
+            thread_id,
+            ThreadEventChannel::new_with_session(
+                THREAD_EVENT_CHANNEL_CAPACITY,
+                session,
+                vec![test_turn("turn-1", TurnStatus::InProgress, Vec::new())],
+            ),
+        );
+
+        assert_eq!(
+            app.active_turn_id_for_thread(thread_id).await,
+            Some("turn-1".to_string())
+        );
+    }
+
+    #[tokio::test]
     async fn replayed_turn_complete_submits_restored_queued_follow_up() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
@@ -7737,6 +7767,23 @@ guardian_approval = true
             TurnStatus::Interrupted,
         ));
         assert_eq!(store.active_turn_id(), None);
+    }
+
+    #[test]
+    fn thread_event_store_restores_active_turn_from_snapshot_turns() {
+        let thread_id = ThreadId::new();
+        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
+        let turns = vec![
+            test_turn("turn-1", TurnStatus::Completed, Vec::new()),
+            test_turn("turn-2", TurnStatus::InProgress, Vec::new()),
+        ];
+
+        let store = ThreadEventStore::new_with_session(8, session.clone(), turns.clone());
+        assert_eq!(store.active_turn_id(), Some("turn-2"));
+
+        let mut refreshed_store = ThreadEventStore::new(8);
+        refreshed_store.set_session(session, turns);
+        assert_eq!(refreshed_store.active_turn_id(), Some("turn-2"));
     }
 
     fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
