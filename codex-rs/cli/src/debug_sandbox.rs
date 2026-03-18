@@ -134,7 +134,10 @@ async fn run_command_under_sandbox(
     // separately.
     let sandbox_policy_cwd = cwd.clone();
 
-    let env = create_env(&config.permissions.shell_environment_policy, None);
+    let env = create_env(
+        &config.permissions.shell_environment_policy,
+        /*thread_id*/ None,
+    );
 
     // Special-case Windows sandbox: execute and exit the process to emulate inherited stdio.
     if let SandboxType::Windows = sandbox_type {
@@ -283,7 +286,7 @@ async fn run_command_under_sandbox(
                 config.permissions.network_sandbox_policy,
                 sandbox_policy_cwd.as_path(),
                 use_legacy_landlock,
-                false,
+                /*allow_network_for_proxy*/ false,
             );
             let network_policy = config.permissions.network_sandbox_policy;
             spawn_debug_sandbox_child(
@@ -377,7 +380,7 @@ async fn load_debug_sandbox_config(
         cli_overrides,
         codex_linux_sandbox_exe,
         full_auto,
-        None,
+        /*codex_home*/ None,
     )
     .await
 }
