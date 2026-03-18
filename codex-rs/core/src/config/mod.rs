@@ -1940,6 +1940,68 @@ fn add_additional_file_system_writes(
     }
 }
 
+/// Returns implicit readable roots for runtime-managed helper executables that
+/// must stay usable under restricted filesystem policies without requiring
+/// explicit user permission-profile entries.
+///
+/// When the execve wrapper lives under `$CODEX_HOME/tmp/arg0`, we allowlist the
+/// shared arg0 temp root instead of a single session-specific wrapper path so
+/// future helper paths created in that tree remain readable too.
+fn helper_readable_roots(
+    codex_home: &Path,
+    zsh_path: Option<&PathBuf>,
+    main_execve_wrapper_exe: Option<&PathBuf>,
+) -> Vec<AbsolutePathBuf> {
+    let arg0_root = AbsolutePathBuf::from_absolute_path(codex_home.join("tmp").join("arg0")).ok();
+    let zsh_path = zsh_path.and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok());
+    let execve_wrapper_root = main_execve_wrapper_exe.and_then(|path| {
+        let path = AbsolutePathBuf::from_absolute_path(path).ok()?;
+        if let Some(arg0_root) = arg0_root.as_ref()
+            && path.as_path().starts_with(arg0_root.as_path())
+        {
+            Some(arg0_root.clone())
+        } else {
+            Some(path)
+        }
+    });
+
+    let mut readable_roots = Vec::new();
+    if let Some(zsh_path) = zsh_path {
+        readable_roots.push(zsh_path);
+    }
+    if let Some(execve_wrapper_root) = execve_wrapper_root {
+        readable_roots.push(execve_wrapper_root);
+    }
+    readable_roots
+}
+
+fn add_additional_file_system_reads(
+    file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
+    additional_readable_roots: &[AbsolutePathBuf],
+) {
+    if file_system_sandbox_policy.has_full_disk_read_access() {
+        return;
+    }
+
+    for path in additional_readable_roots {
+        let exists = file_system_sandbox_policy.entries.iter().any(|entry| {
+            matches!(
+                &entry.path,
+                codex_protocol::permissions::FileSystemPath::Path { path: existing }
+                    if existing == path && entry.access == codex_protocol::permissions::FileSystemAccessMode::Read
+            )
+        });
+        if !exists {
+            file_system_sandbox_policy.entries.push(
+                codex_protocol::permissions::FileSystemSandboxEntry {
+                    path: codex_protocol::permissions::FileSystemPath::Path { path: path.clone() },
+                    access: codex_protocol::permissions::FileSystemAccessMode::Read,
+                },
+            );
+        }
+    }
+}
+
 /// Optional overrides for user configuration (e.g., from CLI flags).
 #[derive(Default, Debug, Clone)]
 pub struct ConfigOverrides {
@@ -2646,8 +2708,13 @@ impl Config {
         } else {
             network.enabled().then_some(network)
         };
+        let helper_readable_roots = helper_readable_roots(
+            &codex_home,
+            zsh_path.as_ref(),
+            main_execve_wrapper_exe.as_ref(),
+        );
         let effective_sandbox_policy = constrained_sandbox_policy.value.get().clone();
-        let effective_file_system_sandbox_policy =
+        let mut effective_file_system_sandbox_policy =
             if effective_sandbox_policy == original_sandbox_policy {
                 file_system_sandbox_policy
             } else {
@@ -2656,6 +2723,10 @@ impl Config {
                     &resolved_cwd,
                 )
             };
+        add_additional_file_system_reads(
+            &mut effective_file_system_sandbox_policy,
+            &helper_readable_roots,
+        );
         let effective_network_sandbox_policy =
             if effective_sandbox_policy == original_sandbox_policy {
                 network_sandbox_policy
