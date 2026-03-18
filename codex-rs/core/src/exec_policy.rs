@@ -553,8 +553,8 @@ pub fn render_decision_for_unmatched_command(
         cfg!(windows) && matches!(sandbox_policy, SandboxPolicy::ReadOnly { .. });
 
     let sandbox_is_explicitly_disabled = matches!(
-        file_system_sandbox_policy.kind,
-        FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox
+        sandbox_policy,
+        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
     );
 
     // If the command is flagged as dangerous or we have no sandbox protection,
