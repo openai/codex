@@ -4728,7 +4728,7 @@ async fn ctrl_c_shutdown_works_with_caps_lock() {
 
 #[tokio::test]
 async fn ctrl_c_closes_realtime_conversation_before_interrupt_or_quit() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
     chat.bottom_pane
         .set_composer_text("recording meter".to_string(), Vec::new(), Vec::new());
@@ -4796,7 +4796,7 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
 
 #[tokio::test]
 async fn realtime_error_closes_without_followup_closed_info() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
 
     chat.on_realtime_conversation_realtime(RealtimeConversationRealtimeEvent {
@@ -4818,7 +4818,7 @@ async fn realtime_error_closes_without_followup_closed_info() {
 #[cfg(not(target_os = "linux"))]
 #[tokio::test]
 async fn removing_active_realtime_placeholder_closes_realtime_conversation() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
     let placeholder_id = chat.bottom_pane.insert_transcription_placeholder("⠤⠤⠤⠤");
     chat.realtime_conversation.meter_placeholder_id = Some(placeholder_id.clone());
