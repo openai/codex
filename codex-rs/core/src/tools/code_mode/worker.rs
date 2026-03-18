@@ -34,20 +34,15 @@ impl CodeModeProcess {
     ) -> CodeModeWorker {
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
         let stdin = self.stdin.clone();
-        let tool_call_rx = self.tool_call_rx.clone();
-        let notify_rx = self.notify_rx.clone();
+        let message_rx = self.message_rx.clone();
         tokio::spawn(async move {
             loop {
                 let next_message = tokio::select! {
                     _ = &mut shutdown_rx => break,
-                    tool_call = async {
-                        let mut tool_call_rx = tool_call_rx.lock().await;
-                        tool_call_rx.recv().await
-                    } => tool_call.map(|tool_call| NodeToHostMessage::ToolCall { tool_call }),
-                    notify = async {
-                        let mut notify_rx = notify_rx.lock().await;
-                        notify_rx.recv().await
-                    } => notify.map(|notify| NodeToHostMessage::Notify { notify }),
+                    message = async {
+                        let mut message_rx = message_rx.lock().await;
+                        message_rx.recv().await
+                    } => message,
                 };
                 let Some(next_message) = next_message else {
                     break;
