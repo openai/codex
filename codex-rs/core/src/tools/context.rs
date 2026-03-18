@@ -377,6 +377,16 @@ pub(crate) fn response_input_to_code_mode_result(response: ResponseInputItem) ->
                 raw_arguments: String::new(),
             })
         }
+        ResponseInputItem::FunctionCall {
+            name,
+            arguments,
+            call_id,
+        } => serde_json::json!({
+            "type": "function_call",
+            "name": name,
+            "arguments": arguments,
+            "call_id": call_id,
+        }),
     }
 }
 

@@ -1677,6 +1677,28 @@ fn feature_table_overrides_legacy_flags() -> std::io::Result<()> {
 }
 
 #[test]
+fn feature_table_enables_agent_function_call_inbox() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut entries = BTreeMap::new();
+    entries.insert("agent_function_call_inbox".to_string(), true);
+    let cfg = ConfigToml {
+        features: Some(crate::features::FeaturesToml { entries }),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert!(config.features.enabled(Feature::AgentFunctionCallInbox));
+    assert!(config.agent_use_function_call_inbox);
+
+    Ok(())
+}
+
+#[test]
 fn legacy_toggles_map_to_features() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml {
@@ -4287,6 +4309,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
+            agent_use_function_call_inbox: false,
             codex_home: fixture.codex_home(),
             sqlite_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
@@ -4428,6 +4451,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
+        agent_use_function_call_inbox: false,
         codex_home: fixture.codex_home(),
         sqlite_home: fixture.codex_home(),
         log_dir: fixture.codex_home().join("log"),
@@ -4567,6 +4591,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
+        agent_use_function_call_inbox: false,
         codex_home: fixture.codex_home(),
         sqlite_home: fixture.codex_home(),
         log_dir: fixture.codex_home().join("log"),
@@ -4692,6 +4717,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
+        agent_use_function_call_inbox: false,
         codex_home: fixture.codex_home(),
         sqlite_home: fixture.codex_home(),
         log_dir: fixture.codex_home().join("log"),
