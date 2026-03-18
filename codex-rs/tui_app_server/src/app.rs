@@ -511,12 +511,6 @@ impl ThreadEventStore {
 
     fn rebase_buffer_after_session_refresh(&mut self) {
         self.buffer.retain(Self::event_survives_session_refresh);
-        self.pending_interactive_replay = PendingInteractiveReplayState::default();
-        for event in &self.buffer {
-            if let ThreadBufferedEvent::Request(request) = event {
-                self.pending_interactive_replay.note_server_request(request);
-            }
-        }
     }
 
     fn set_turns(&mut self, turns: Vec<Turn>) {
@@ -2726,14 +2720,14 @@ impl App {
         if let Some(session) = snapshot.session {
             self.chat_widget.handle_thread_session(session);
         }
-        if !snapshot.turns.is_empty() {
-            self.chat_widget
-                .replay_thread_turns(snapshot.turns, ReplayKind::ThreadSnapshot);
-        }
         self.chat_widget
             .set_queue_autosend_suppressed(/*suppressed*/ true);
         self.chat_widget
             .restore_thread_input_state(snapshot.input_state);
+        if !snapshot.turns.is_empty() {
+            self.chat_widget
+                .replay_thread_turns(snapshot.turns, ReplayKind::ThreadSnapshot);
+        }
         for event in snapshot.events {
             self.handle_thread_event_replay(event);
         }
@@ -5867,6 +5861,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replay_thread_snapshot_in_progress_turn_restores_running_state_without_input_state() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
+        let (chat_widget, _app_event_tx, _rx, _new_op_rx) =
+            make_chatwidget_manual_with_sender().await;
+        app.chat_widget = chat_widget;
+        app.chat_widget.handle_thread_session(session);
+
+        app.replay_thread_snapshot(
+            ThreadEventSnapshot {
+                session: None,
+                turns: vec![test_turn("turn-1", TurnStatus::InProgress, Vec::new())],
+                events: Vec::new(),
+                input_state: None,
+            },
+            false,
+        );
+
+        assert!(app.chat_widget.is_task_running_for_test());
+    }
+
+    #[tokio::test]
     async fn replay_thread_snapshot_does_not_submit_queue_before_replay_catches_up() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
@@ -7945,6 +7962,30 @@ guardian_approval = true
         let mut refreshed_store = ThreadEventStore::new(8);
         refreshed_store.set_session(session, turns);
         assert_eq!(refreshed_store.active_turn_id(), Some("turn-2"));
+    }
+
+    #[test]
+    fn thread_event_store_rebase_preserves_resolved_request_state() {
+        let thread_id = ThreadId::new();
+        let mut store = ThreadEventStore::new(8);
+        store.push_request(exec_approval_request(
+            thread_id,
+            "turn-approval",
+            "call-approval",
+            None,
+        ));
+        store.push_notification(ServerNotification::ServerRequestResolved(
+            codex_app_server_protocol::ServerRequestResolvedNotification {
+                request_id: AppServerRequestId::Integer(1),
+                thread_id: thread_id.to_string(),
+            },
+        ));
+
+        store.rebase_buffer_after_session_refresh();
+
+        let snapshot = store.snapshot();
+        assert!(snapshot.events.is_empty());
+        assert_eq!(store.has_pending_thread_approvals(), false);
     }
 
     #[test]
