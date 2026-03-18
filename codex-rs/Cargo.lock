@@ -2756,6 +2756,7 @@ dependencies = [
  "base64 0.22.1",
  "codex-utils-cache",
  "image",
+ "mime_guess",
  "thiserror 2.0.18",
  "tokio",
 ]
