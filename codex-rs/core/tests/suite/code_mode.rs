@@ -1659,9 +1659,7 @@ image("data:image/png;base64,AAA");
         Some(false),
         "code_mode image output failed unexpectedly"
     );
-    if items.len() != 3 {
-        panic!("unexpected items: {items:?}");
-    }
+    assert_eq!(items.len(), 3);
     assert_regex_match(
         concat!(
             r"(?s)\A",
