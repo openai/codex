@@ -153,7 +153,9 @@ impl SkillsManager {
             }
         };
 
-        let loaded_plugins = self.plugins_manager.plugins_for_config(config);
+        let loaded_plugins = self
+            .plugins_manager
+            .plugins_for_config_with_force_reload(config, force_reload);
         let mut roots = skill_roots(
             &config_layer_stack,
             cwd,

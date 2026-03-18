@@ -440,11 +440,19 @@ impl PluginsManager {
     }
 
     pub fn plugins_for_config(&self, config: &Config) -> PluginLoadOutcome {
+        self.plugins_for_config_with_force_reload(config, false)
+    }
+
+    pub(crate) fn plugins_for_config_with_force_reload(
+        &self,
+        config: &Config,
+        force_reload: bool,
+    ) -> PluginLoadOutcome {
         if !config.features.enabled(Feature::Plugins) {
             return PluginLoadOutcome::default();
         }
 
-        if let Some(outcome) = self.cached_enabled_outcome() {
+        if !force_reload && let Some(outcome) = self.cached_enabled_outcome() {
             return outcome;
         }
 
@@ -808,7 +816,7 @@ impl PluginsManager {
             return Ok(Vec::new());
         }
 
-        let (installed_plugins, configured_plugins) = self.configured_plugin_states(config);
+        let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
         let marketplaces = list_marketplaces(&self.marketplace_roots(additional_roots))?;
         let mut seen_plugin_keys = HashSet::new();
 
@@ -831,10 +839,7 @@ impl PluginsManager {
                             // resolve to the first discovered source.
                             id: plugin_key.clone(),
                             installed: installed_plugins.contains(&plugin_key),
-                            enabled: configured_plugins
-                                .get(&plugin_key)
-                                .copied()
-                                .unwrap_or(false),
+                            enabled: enabled_plugins.contains(&plugin_key),
                             name: plugin.name,
                             source: plugin.source,
                             policy: plugin.policy,
@@ -881,7 +886,7 @@ impl PluginsManager {
             },
         )?;
         let plugin_key = plugin_id.as_key();
-        let (installed_plugins, configured_plugins) = self.configured_plugin_states(config);
+        let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
         let source_path = match &plugin.source {
             MarketplacePluginSource::Local { path } => path.clone(),
         };
@@ -922,10 +927,7 @@ impl PluginsManager {
                 policy: plugin.policy,
                 interface: plugin.interface,
                 installed: installed_plugins.contains(&plugin_key),
-                enabled: configured_plugins
-                    .get(&plugin_key)
-                    .copied()
-                    .unwrap_or(false),
+                enabled: enabled_plugins.contains(&plugin_key),
                 skills,
                 apps,
                 mcp_server_names,
@@ -1000,25 +1002,22 @@ impl PluginsManager {
         }
     }
 
-    fn configured_plugin_states(
-        &self,
-        config: &Config,
-    ) -> (HashSet<String>, HashMap<String, bool>) {
-        let installed_plugins = configured_plugins_from_stack(&config.config_layer_stack)
-            .into_keys()
+    fn configured_plugin_states(&self, config: &Config) -> (HashSet<String>, HashSet<String>) {
+        let configured_plugins = configured_plugins_from_stack(&config.config_layer_stack);
+        let installed_plugins = configured_plugins
+            .keys()
             .filter(|plugin_key| {
                 PluginId::parse(plugin_key)
                     .ok()
                     .is_some_and(|plugin_id| self.store.is_installed(&plugin_id))
             })
+            .cloned()
             .collect::<HashSet<_>>();
-        let configured_plugins = self
-            .plugins_for_config(config)
-            .plugins()
-            .iter()
-            .map(|plugin| (plugin.config_name.clone(), plugin.enabled))
-            .collect::<HashMap<String, bool>>();
-        (installed_plugins, configured_plugins)
+        let enabled_plugins = configured_plugins
+            .into_iter()
+            .filter_map(|(plugin_key, plugin)| plugin.enabled.then_some(plugin_key))
+            .collect::<HashSet<_>>();
+        (installed_plugins, enabled_plugins)
     }
 
     fn marketplace_roots(&self, additional_roots: &[AbsolutePathBuf]) -> Vec<AbsolutePathBuf> {

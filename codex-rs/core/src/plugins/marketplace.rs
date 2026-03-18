@@ -246,7 +246,7 @@ fn list_marketplaces_with_home(
             Ok(marketplace) => marketplaces.push(marketplace),
             Err(err) => {
                 warn!(
-                    path = %marketplace_path,
+                    path = %marketplace_path.display(),
                     error = %err,
                     "skipping marketplace that failed to load"
                 );
