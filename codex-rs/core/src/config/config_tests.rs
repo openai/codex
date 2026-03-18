@@ -11,6 +11,7 @@ use crate::config::types::MemoriesToml;
 use crate::config::types::ModelAvailabilityNuxConfig;
 use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
+use crate::config::types::ToolSuggestDiscoverableType;
 use crate::config_loader::RequirementSource;
 use crate::features::Feature;
 use assert_matches::assert_matches;
