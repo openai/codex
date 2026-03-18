@@ -416,13 +416,19 @@ While compaction is running, the thread is effectively in a turn so clients shou
 
 Use `thread/shellCommand` for the TUI `!` workflow. The request returns immediately with `{}`.
 
-Progress is emitted as standard `item/*` notifications on the same `threadId`:
+If the thread already has an active turn, the command runs as an auxiliary action on that turn. In that case, progress is emitted as standard `item/*` notifications on the existing turn and the formatted output is injected into the turn’s message stream with the same behavior as legacy TUI `!` commands:
 
 - `item/started` with `item: { "type": "commandExecution", "source": "userShell", ... }`
 - zero or more `item/commandExecution/outputDelta`
 - `item/completed` with the same `commandExecution` item id
 
-If the thread already has an active turn, the command runs as an auxiliary action on that turn and the formatted output is injected into the turn’s message stream with the same behavior as legacy TUI `!` commands.
+If the thread does not already have an active turn, the server starts a standalone turn for the shell command. In that case clients should expect:
+
+- `turn/started`
+- `item/started` with `item: { "type": "commandExecution", "source": "userShell", ... }`
+- zero or more `item/commandExecution/outputDelta`
+- `item/completed` with the same `commandExecution` item id
+- `turn/completed`
 
 ```json
 { "method": "thread/shellCommand", "id": 26, "params": { "threadId": "thr_b", "command": "git status --short" } }
