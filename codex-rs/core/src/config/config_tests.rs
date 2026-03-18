@@ -2994,6 +2994,67 @@ fn loads_compact_prompt_from_file() -> std::io::Result<()> {
 }
 
 #[test]
+fn load_config_uses_requirements_guardian_developer_instructions() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        Default::default(),
+        crate::config_loader::ConfigRequirementsToml {
+            guardian_developer_instructions: Some(
+                "  Use the workspace-managed guardian policy.  ".to_string(),
+            ),
+            ..Default::default()
+        },
+    )
+    .map_err(std::io::Error::other)?;
+
+    let config = Config::load_config_with_layer_stack(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+        config_layer_stack,
+    )?;
+
+    assert_eq!(
+        config.guardian_developer_instructions.as_deref(),
+        Some("Use the workspace-managed guardian policy.")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn load_config_ignores_empty_requirements_guardian_developer_instructions() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        Default::default(),
+        crate::config_loader::ConfigRequirementsToml {
+            guardian_developer_instructions: Some("   ".to_string()),
+            ..Default::default()
+        },
+    )
+    .map_err(std::io::Error::other)?;
+
+    let config = Config::load_config_with_layer_stack(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+        config_layer_stack,
+    )?;
+
+    assert_eq!(config.guardian_developer_instructions, None);
+
+    Ok(())
+}
+
+#[test]
 fn load_config_rejects_missing_agent_role_config_file() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let missing_path = codex_home.path().join("agents").join("researcher.toml");
@@ -4257,6 +4318,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             experimental_realtime_ws_startup_context: None,
             base_instructions: None,
             developer_instructions: None,
+            guardian_developer_instructions: None,
             compact_prompt: None,
             commit_attribution: None,
             forced_chatgpt_workspace_id: None,
@@ -4396,6 +4458,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
+        guardian_developer_instructions: None,
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
@@ -4533,6 +4596,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
+        guardian_developer_instructions: None,
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
@@ -4656,6 +4720,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
+        guardian_developer_instructions: None,
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
@@ -4708,6 +4773,7 @@ fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() -> any
         rules: None,
         enforce_residency: None,
         network: None,
+        guardian_developer_instructions: None,
     };
     let requirement_source = crate::config_loader::RequirementSource::Unknown;
     let requirement_source_for_error = requirement_source.clone();
@@ -5307,6 +5373,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         rules: None,
         enforce_residency: None,
         network: None,
+        guardian_developer_instructions: None,
     };
 
     let config = ConfigBuilder::default()
