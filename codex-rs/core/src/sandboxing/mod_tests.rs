@@ -225,7 +225,7 @@ fn transform_rejects_unsupported_windows_split_only_filesystem_policies() {
                     access: FileSystemAccessMode::Write,
                 },
                 FileSystemSandboxEntry {
-                    path: FileSystemPath::Path { path: docs.clone() },
+                    path: FileSystemPath::Path { path: docs },
                     access: FileSystemAccessMode::Read,
                 },
             ]),
@@ -289,7 +289,7 @@ fn transform_allows_supported_windows_split_write_read_carveouts() {
                     access: FileSystemAccessMode::Write,
                 },
                 FileSystemSandboxEntry {
-                    path: FileSystemPath::Path { path: docs.clone() },
+                    path: FileSystemPath::Path { path: docs },
                     access: FileSystemAccessMode::Read,
                 },
             ]),
