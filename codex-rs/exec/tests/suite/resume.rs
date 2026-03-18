@@ -1,9 +1,19 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use anyhow::Context;
+use codex_core::RolloutRecorder;
+use codex_core::ThreadSortKey;
+use codex_core::config::ConfigBuilder;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::TurnContextItem;
 use codex_utils_cargo_bin::find_resource;
 use core_test_support::test_codex_exec::test_codex_exec;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use std::io::Write;
 use std::string::ToString;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -220,112 +230,120 @@ fn exec_resume_last_accepts_prompt_after_flag_in_json_mode() -> anyhow::Result<(
     Ok(())
 }
 
-#[test]
-fn exec_resume_last_respects_cwd_filter_and_all_flag() -> anyhow::Result<()> {
-    let test = test_codex_exec();
-    let fixture = exec_fixture()?;
-
+#[tokio::test]
+async fn exec_resume_last_respects_cwd_filter_and_all_flag() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
     let dir_a = TempDir::new()?;
     let dir_b = TempDir::new()?;
+    let mut config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .build()
+        .await?;
+    config.cwd = dir_a.path().to_path_buf();
+    let model_provider = config.model_provider_id.clone();
+    let provider_filter = [model_provider.clone()];
 
-    let marker_a = format!("resume-cwd-a-{}", Uuid::new_v4());
-    let prompt_a = format!("echo {marker_a}");
-    test.cmd()
-        .env("CODEX_RS_SSE_FIXTURE", &fixture)
-        .env("OPENAI_BASE_URL", "http://unused.local")
-        .arg("--skip-git-repo-check")
-        .arg("-C")
-        .arg(dir_a.path())
-        .arg(&prompt_a)
-        .assert()
-        .success();
+    let write_rollout = |id: Uuid, cwd: &std::path::Path| -> anyhow::Result<std::path::PathBuf> {
+        let sessions_dir = home.path().join("sessions/2024/01/01");
+        std::fs::create_dir_all(&sessions_dir)?;
+        let path = sessions_dir.join(format!("rollout-2024-01-01T00-00-00-{id}.jsonl"));
+        let mut file = std::fs::File::create(&path)?;
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "timestamp": "2024-01-01T00:00:00.000Z",
+                "type": "session_meta",
+                "payload": {
+                    "id": id,
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "cwd": cwd,
+                    "originator": "test",
+                    "cli_version": "test",
+                    "model_provider": model_provider,
+                }
+            })
+        )?;
+        writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "timestamp": "2024-01-01T00:00:00.000Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "user_message",
+                    "message": "seed",
+                    "local_images": [],
+                    "text_elements": [],
+                }
+            })
+        )?;
+        Ok(path)
+    };
 
-    let marker_b = format!("resume-cwd-b-{}", Uuid::new_v4());
-    let prompt_b = format!("echo {marker_b}");
-    test.cmd()
-        .env("CODEX_RS_SSE_FIXTURE", &fixture)
-        .env("OPENAI_BASE_URL", "http://unused.local")
-        .arg("--skip-git-repo-check")
-        .arg("-C")
-        .arg(dir_b.path())
-        .arg(&prompt_b)
-        .assert()
-        .success();
+    let _path_a = write_rollout(Uuid::new_v4(), dir_a.path())?;
 
-    let sessions_dir = test.home_path().join("sessions");
-    find_session_file_containing_marker(&sessions_dir, &marker_a)
-        .expect("no session file found for marker_a");
-    let path_b = find_session_file_containing_marker(&sessions_dir, &marker_b)
-        .expect("no session file found for marker_b");
-
-    // `updated_at` is second-granularity, so ensure the touch lands in a later second
-    // than the initial session creation on fast CI (especially Windows).
+    // `updated_at` is second-granularity, so ensure the second rollout sorts newer.
     std::thread::sleep(std::time::Duration::from_millis(1100));
+    let path_b = write_rollout(Uuid::new_v4(), dir_b.path())?;
 
-    // Make thread B deterministically newest according to rollout metadata.
-    let session_id_b = extract_conversation_id(&path_b);
-    let marker_b_touch = format!("resume-cwd-b-touch-{}", Uuid::new_v4());
-    let prompt_b_touch = format!("echo {marker_b_touch}");
-    test.cmd()
-        .env("CODEX_RS_SSE_FIXTURE", &fixture)
-        .env("OPENAI_BASE_URL", "http://unused.local")
-        .arg("--skip-git-repo-check")
-        .arg("-C")
-        .arg(dir_b.path())
-        .arg("resume")
-        .arg(&session_id_b)
-        .arg(&prompt_b_touch)
-        .assert()
-        .success();
-
-    // `resume --last` sorts by `updated_at`, which is second-granularity. Sleep so
-    // the upcoming `resume --last --all` write lands in a later second and becomes
-    // deterministically newest (instead of tying and falling back to UUID order).
-    std::thread::sleep(std::time::Duration::from_millis(1100));
-
-    let marker_b2 = format!("resume-cwd-b-2-{}", Uuid::new_v4());
-    let prompt_b2 = format!("echo {marker_b2}");
-    test.cmd()
-        .env("CODEX_RS_SSE_FIXTURE", &fixture)
-        .env("OPENAI_BASE_URL", "http://unused.local")
-        .arg("--skip-git-repo-check")
-        .arg("-C")
-        .arg(dir_a.path())
-        .arg("resume")
-        .arg("--last")
-        .arg("--all")
-        .arg(&prompt_b2)
-        .assert()
-        .success();
-
-    let resumed_path_all = find_session_file_containing_marker(&sessions_dir, &marker_b2)
-        .expect("no resumed session file containing marker_b2");
+    let latest_any = RolloutRecorder::find_latest_thread_path(
+        &config,
+        /*page_size*/ 1,
+        /*cursor*/ None,
+        ThreadSortKey::UpdatedAt,
+        &[],
+        Some(provider_filter.as_slice()),
+        &model_provider,
+        /*filter_cwd*/ None,
+    )
+    .await?
+    .expect("resume --last --all should find a session");
     assert_eq!(
-        resumed_path_all, path_b,
+        latest_any, path_b,
         "resume --last --all should pick newest session"
     );
 
-    let marker_a2 = format!("resume-cwd-a-2-{}", Uuid::new_v4());
-    let prompt_a2 = format!("echo {marker_a2}");
-    test.cmd()
-        .env("CODEX_RS_SSE_FIXTURE", &fixture)
-        .env("OPENAI_BASE_URL", "http://unused.local")
-        .arg("--skip-git-repo-check")
-        .arg("-C")
-        .arg(dir_a.path())
-        .arg("resume")
-        .arg("--last")
-        .arg(&prompt_a2)
-        .assert()
-        .success();
+    let mut file = std::fs::OpenOptions::new().append(true).open(&path_b)?;
+    let turn_context = RolloutLine {
+        timestamp: "2024-01-01T00:00:01Z".to_string(),
+        item: RolloutItem::TurnContext(TurnContextItem {
+            turn_id: None,
+            trace_id: None,
+            cwd: dir_a.path().to_path_buf(),
+            current_date: None,
+            timezone: None,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            network: None,
+            model: "test-model".to_string(),
+            personality: None,
+            collaboration_mode: None,
+            realtime_active: None,
+            effort: None,
+            summary: ReasoningSummary::Auto,
+            user_instructions: None,
+            developer_instructions: None,
+            final_output_json_schema: None,
+            truncation_policy: None,
+        }),
+    };
+    writeln!(file, "{}", serde_json::to_string(&turn_context)?)?;
 
-    let resumed_path_cwd = find_session_file_containing_marker(&sessions_dir, &marker_a2)
-        .expect("no resumed session file containing marker_a2");
-    // The `--all` resume above appends a new turn to `path_b` while running from `dir_a`, so the
-    // session's latest cwd now matches `dir_a`. A subsequent `resume --last` should therefore pick
-    // the newest matching session (`path_b`).
+    let latest_for_cwd = RolloutRecorder::find_latest_thread_path(
+        &config,
+        /*page_size*/ 1,
+        /*cursor*/ None,
+        ThreadSortKey::UpdatedAt,
+        &[],
+        Some(provider_filter.as_slice()),
+        &model_provider,
+        Some(dir_a.path()),
+    )
+    .await?
+    .expect("resume --last should find a cwd-matching session");
     assert_eq!(
-        resumed_path_cwd, path_b,
+        latest_for_cwd, path_b,
         "resume --last should prefer sessions whose latest turn context matches the current cwd"
     );
 
