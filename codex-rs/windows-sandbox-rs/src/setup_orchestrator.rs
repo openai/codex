@@ -51,6 +51,12 @@ const USERPROFILE_READ_ROOT_EXCLUSIONS: &[&str] = &[
     ".pki",
     ".terraform.d",
 ];
+const WINDOWS_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
+    r"C:\Windows",
+    r"C:\Program Files",
+    r"C:\Program Files (x86)",
+    r"C:\ProgramData",
+];
 
 pub fn sandbox_dir(codex_home: &Path) -> PathBuf {
     codex_home.join(".sandbox")
@@ -307,12 +313,8 @@ fn profile_read_roots(user_profile: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-pub(crate) fn gather_read_roots(
-    command_cwd: &Path,
-    policy: &SandboxPolicy,
-    codex_home: &Path,
-) -> Vec<PathBuf> {
-    let mut roots: Vec<PathBuf> = Vec::new();
+fn gather_helper_read_roots(codex_home: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             roots.push(dir.to_path_buf());
@@ -321,14 +323,20 @@ pub(crate) fn gather_read_roots(
     let helper_dir = helper_bin_dir(codex_home);
     let _ = std::fs::create_dir_all(&helper_dir);
     roots.push(helper_dir);
-    for p in [
-        PathBuf::from(r"C:\Windows"),
-        PathBuf::from(r"C:\Program Files"),
-        PathBuf::from(r"C:\Program Files (x86)"),
-        PathBuf::from(r"C:\ProgramData"),
-    ] {
-        roots.push(p);
-    }
+    roots
+}
+
+fn gather_legacy_full_read_roots(
+    command_cwd: &Path,
+    policy: &SandboxPolicy,
+    codex_home: &Path,
+) -> Vec<PathBuf> {
+    let mut roots = gather_helper_read_roots(codex_home);
+    roots.extend(
+        WINDOWS_PLATFORM_DEFAULT_READ_ROOTS
+            .iter()
+            .map(PathBuf::from),
+    );
     if let Ok(up) = std::env::var("USERPROFILE") {
         roots.extend(profile_read_roots(Path::new(&up)));
     }
@@ -339,6 +347,40 @@ pub(crate) fn gather_read_roots(
         }
     }
     canonical_existing(&roots)
+}
+
+fn gather_restricted_read_roots(
+    command_cwd: &Path,
+    policy: &SandboxPolicy,
+    codex_home: &Path,
+) -> Vec<PathBuf> {
+    let mut roots = gather_helper_read_roots(codex_home);
+    if policy.include_platform_defaults() {
+        roots.extend(
+            WINDOWS_PLATFORM_DEFAULT_READ_ROOTS
+                .iter()
+                .map(PathBuf::from),
+        );
+    }
+    roots.extend(
+        policy
+            .get_readable_roots_with_cwd(command_cwd)
+            .into_iter()
+            .map(|path| path.to_path_buf()),
+    );
+    canonical_existing(&roots)
+}
+
+pub(crate) fn gather_read_roots(
+    command_cwd: &Path,
+    policy: &SandboxPolicy,
+    codex_home: &Path,
+) -> Vec<PathBuf> {
+    if policy.has_full_disk_read_access() {
+        gather_legacy_full_read_roots(command_cwd, policy, codex_home)
+    } else {
+        gather_restricted_read_roots(command_cwd, policy, codex_home)
+    }
 }
 
 pub(crate) fn gather_write_roots(
@@ -680,15 +722,26 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 
 #[cfg(test)]
 mod tests {
+    use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
     use super::profile_read_roots;
+    use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
     use crate::helper_materialization::helper_bin_dir;
     use crate::policy::SandboxPolicy;
+    use codex_protocol::protocol::ReadOnlyAccess;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::collections::HashSet;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    fn canonical_windows_platform_default_roots() -> Vec<PathBuf> {
+        WINDOWS_PLATFORM_DEFAULT_READ_ROOTS
+            .iter()
+            .map(|path| dunce::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path)))
+            .collect()
+    }
 
     #[test]
     fn profile_read_roots_excludes_configured_top_level_entries() {
@@ -734,5 +787,100 @@ mod tests {
             dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
 
         assert!(roots.contains(&expected));
+    }
+
+    #[test]
+    fn restricted_read_roots_skip_platform_defaults_when_disabled() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let command_cwd = tmp.path().join("workspace");
+        let readable_root = tmp.path().join("docs");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        fs::create_dir_all(&readable_root).expect("create readable root");
+        let policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: vec![AbsolutePathBuf::from_absolute_path(&readable_root)
+                    .expect("absolute readable root")],
+            },
+            network_access: false,
+        };
+
+        let roots = gather_read_roots(&command_cwd, &policy, &codex_home);
+        let expected_helper =
+            dunce::canonicalize(helper_bin_dir(&codex_home)).expect("canonical helper dir");
+        let expected_cwd = dunce::canonicalize(&command_cwd).expect("canonical workspace");
+        let expected_readable =
+            dunce::canonicalize(&readable_root).expect("canonical readable root");
+
+        assert!(roots.contains(&expected_helper));
+        assert!(roots.contains(&expected_cwd));
+        assert!(roots.contains(&expected_readable));
+        assert!(canonical_windows_platform_default_roots()
+            .into_iter()
+            .all(|path| !roots.contains(&path)));
+    }
+
+    #[test]
+    fn restricted_read_roots_include_platform_defaults_when_enabled() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let command_cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        let policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: true,
+                readable_roots: Vec::new(),
+            },
+            network_access: false,
+        };
+
+        let roots = gather_read_roots(&command_cwd, &policy, &codex_home);
+
+        assert!(canonical_windows_platform_default_roots()
+            .into_iter()
+            .all(|path| roots.contains(&path)));
+    }
+
+    #[test]
+    fn restricted_workspace_write_roots_remain_readable() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let command_cwd = tmp.path().join("workspace");
+        let writable_root = tmp.path().join("extra-write-root");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        fs::create_dir_all(&writable_root).expect("create writable root");
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![AbsolutePathBuf::from_absolute_path(&writable_root)
+                .expect("absolute writable root")],
+            read_only_access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: Vec::new(),
+            },
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let roots = gather_read_roots(&command_cwd, &policy, &codex_home);
+        let expected_writable =
+            dunce::canonicalize(&writable_root).expect("canonical writable root");
+
+        assert!(roots.contains(&expected_writable));
+    }
+
+    #[test]
+    fn full_read_roots_preserve_legacy_platform_defaults() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let command_cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&command_cwd).expect("create workspace");
+        let policy = SandboxPolicy::new_read_only_policy();
+
+        let roots = gather_legacy_full_read_roots(&command_cwd, &policy, &codex_home);
+
+        assert!(canonical_windows_platform_default_roots()
+            .into_iter()
+            .all(|path| roots.contains(&path)));
     }
 }

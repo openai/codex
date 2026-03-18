@@ -253,7 +253,7 @@ impl MessageProcessor {
             analytics_events_client,
         );
         let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
-        let fs_api = FsApi;
+        let fs_api = FsApi::default();
 
         Self {
             outgoing,

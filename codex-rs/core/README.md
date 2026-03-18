@@ -14,15 +14,8 @@ When using the workspace-write sandbox policy, the Seatbelt profile allows
 writes under the configured writable roots while keeping `.git` (directory or
 pointer file), the resolved `gitdir:` target, and `.codex` read-only.
 
-<<<<<<< HEAD
-Network access and filesystem read/write roots are controlled by the split
-`FileSystemSandboxPolicy` and `NetworkSandboxPolicy` views. On macOS, Seatbelt
-enforces overlapping path rules with the most specific entry winning, so a
-broader writable root can still contain nested read-only or denied carveouts.
-=======
 Network access and filesystem read/write roots are controlled by
 `SandboxPolicy`. Seatbelt consumes the resolved policy and enforces it.
->>>>>>> 28e7c4637 (fix: fail closed split windows sandboxing during transform)
 
 Seatbelt also supports macOS permission-profile extensions layered on top of
 `SandboxPolicy`:
@@ -73,22 +66,39 @@ path instead of printing directly from the sandbox helper.
 
 ### Windows
 
-The unelevated restricted-token sandbox supports:
+Legacy `SandboxPolicy` / `sandbox_mode` configs are still supported on
+Windows.
 
-- legacy `ReadOnly` and `WorkspaceWrite` behavior
-- full-read split filesystem policies whose writable roots still match the
-  legacy `WorkspaceWrite` root set, but need extra read-only carveouts under
-  those writable roots
+The elevated setup/runner backend supports legacy `ReadOnlyAccess::Restricted`
+for `read-only` and `workspace-write` policies. Restricted read access honors
+explicit readable roots plus the command `cwd`, and keeps writable roots
+readable when `workspace-write` is used.
 
-The elevated Windows sandbox supports:
+<<<<<<< HEAD
+When `include_platform_defaults = true`, the elevated Windows backend adds
+backend-managed system read roots required for basic execution, such as
+`C:\Windows`, `C:\Program Files`, `C:\Program Files (x86)`, and
+`C:\ProgramData`. When it is `false`, those extra system roots are omitted.
+
+The elevated Windows sandbox also supports:
 
 - legacy `ReadOnly` and `WorkspaceWrite` behavior
 - split filesystem policies that need exact readable roots, exact writable
   roots, or extra read-only carveouts under writable roots
 
-Windows still rejects split-only filesystem policies that would require direct
-explicit unreadable carveouts (`none`) or reopened writable descendants under
-read-only carveouts, instead of running with a weaker sandbox.
+The unelevated restricted-token backend still supports the legacy full-read
+Windows model for legacy `ReadOnly` and `WorkspaceWrite` behavior. It also
+supports a narrow split-filesystem subset: full-read split policies whose
+writable roots still match the legacy `WorkspaceWrite` root set, but add extra
+read-only carveouts under those writable roots.
+
+New `[permissions]` / split filesystem policies remain supported on Windows
+only when they round-trip through the legacy `SandboxPolicy` model without
+changing semantics. Policies that would require direct read restriction,
+explicit unreadable carveouts, reopened writable descendants under read-only
+carveouts, different writable root sets, or split carveout support in the
+elevated setup/runner backend still fail closed instead of running with weaker
+enforcement.
 
 ### All Platforms
 

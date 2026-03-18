@@ -20,6 +20,7 @@ use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
+use codex_environment::Environment;
 use codex_hooks::Hooks;
 use codex_otel::SessionTelemetry;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -61,4 +62,5 @@ pub(crate) struct SessionServices {
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
     pub(crate) code_mode_service: CodeModeService,
+    pub(crate) environment: Arc<Environment>,
 }

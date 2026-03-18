@@ -1427,6 +1427,7 @@ dependencies = [
  "codex-chatgpt",
  "codex-cloud-requirements",
  "codex-core",
+ "codex-environment",
  "codex-feedback",
  "codex-file-search",
  "codex-login",
@@ -1462,7 +1463,6 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
- "walkdir",
  "wiremock",
 ]
 
@@ -1841,6 +1841,7 @@ dependencies = [
  "codex-client",
  "codex-config",
  "codex-connectors",
+ "codex-environment",
  "codex-execpolicy",
  "codex-file-search",
  "codex-git",
@@ -1942,6 +1943,17 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "codex-environment"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "codex-utils-absolute-path",
+ "pretty_assertions",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -2744,7 +2756,6 @@ dependencies = [
  "base64 0.22.1",
  "codex-utils-cache",
  "image",
- "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]
