@@ -1051,7 +1051,7 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
     );
     assert_eq!(
         realtime_connections[0][1].body_json()["output_text"].as_str(),
-        Some("assistant says hi")
+        Some("\"Agent Final Message\":\n\nassistant says hi")
     );
 
     realtime_server.shutdown().await;
@@ -1156,7 +1156,7 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
     );
     assert_eq!(
         first_append.body_json()["output_text"].as_str(),
-        Some("assistant message 1")
+        Some("\"Agent Final Message\":\n\nassistant message 1")
     );
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
@@ -1180,7 +1180,7 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
     );
     assert_eq!(
         second_append.body_json()["output_text"].as_str(),
-        Some("assistant message 2")
+        Some("\"Agent Final Message\":\n\nassistant message 2")
     );
 
     let completion = completions
@@ -1703,7 +1703,7 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
     );
     assert_eq!(
         mirrored_request_body["output_text"].as_str(),
-        Some("assistant says hi")
+        Some("\"Agent Final Message\":\n\nassistant says hi")
     );
 
     let audio_out = wait_for_event_match(&test.codex, |msg| match msg {
