@@ -54,8 +54,10 @@ use crate::status::format_tokens_compact;
 use crate::status::rate_limit_snapshot_display_for_limit;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
+use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -125,7 +127,7 @@ use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 #[cfg(test)]
 use codex_protocol::protocol::BackgroundEventEvent;
 #[cfg(test)]
-use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 #[cfg(test)]
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
 use codex_protocol::protocol::CreditsSnapshot;
@@ -538,7 +540,6 @@ enum ConnectorsCacheState {
     Failed(String),
 }
 
-#[cfg(test)]
 #[derive(Debug)]
 enum RateLimitErrorKind {
     ServerOverloaded,
@@ -547,11 +548,22 @@ enum RateLimitErrorKind {
 }
 
 #[cfg(test)]
-fn rate_limit_error_kind(info: &CodexErrorInfo) -> Option<RateLimitErrorKind> {
+fn core_rate_limit_error_kind(info: &CoreCodexErrorInfo) -> Option<RateLimitErrorKind> {
     match info {
-        CodexErrorInfo::ServerOverloaded => Some(RateLimitErrorKind::ServerOverloaded),
-        CodexErrorInfo::UsageLimitExceeded => Some(RateLimitErrorKind::UsageLimit),
-        CodexErrorInfo::ResponseTooManyFailedAttempts {
+        CoreCodexErrorInfo::ServerOverloaded => Some(RateLimitErrorKind::ServerOverloaded),
+        CoreCodexErrorInfo::UsageLimitExceeded => Some(RateLimitErrorKind::UsageLimit),
+        CoreCodexErrorInfo::ResponseTooManyFailedAttempts {
+            http_status_code: Some(429),
+        } => Some(RateLimitErrorKind::Generic),
+        _ => None,
+    }
+}
+
+fn app_server_rate_limit_error_kind(info: &AppServerCodexErrorInfo) -> Option<RateLimitErrorKind> {
+    match info {
+        AppServerCodexErrorInfo::ServerOverloaded => Some(RateLimitErrorKind::ServerOverloaded),
+        AppServerCodexErrorInfo::UsageLimitExceeded => Some(RateLimitErrorKind::UsageLimit),
+        AppServerCodexErrorInfo::ResponseTooManyFailedAttempts {
             http_status_code: Some(429),
         } => Some(RateLimitErrorKind::Generic),
         _ => None,
@@ -1652,7 +1664,6 @@ impl ChatWidget {
         self.collect_runtime_metrics_delta();
     }
 
-    #[cfg(test)]
     fn restore_retry_status_header_if_present(&mut self) {
         if let Some(header) = self.retry_status_header.take() {
             self.set_status_header(header);
@@ -2385,7 +2396,6 @@ impl ChatWidget {
         self.maybe_show_pending_rate_limit_prompt();
     }
 
-    #[cfg(test)]
     fn on_server_overloaded_error(&mut self, message: String) {
         self.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
@@ -2409,6 +2419,26 @@ impl ChatWidget {
 
         // After an error ends the turn, try sending the next queued input.
         self.maybe_send_next_queued_input();
+    }
+
+    fn handle_non_retry_error(
+        &mut self,
+        message: String,
+        codex_error_info: Option<AppServerCodexErrorInfo>,
+    ) {
+        if let Some(info) = codex_error_info
+            .as_ref()
+            .and_then(app_server_rate_limit_error_kind)
+        {
+            match info {
+                RateLimitErrorKind::ServerOverloaded => self.on_server_overloaded_error(message),
+                RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
+                    self.on_error(message)
+                }
+            }
+        } else {
+            self.on_error(message);
+        }
     }
 
     fn on_warning(&mut self, message: impl Into<String>) {
@@ -5493,6 +5523,18 @@ impl ChatWidget {
         replay_kind: Option<ReplayKind>,
     ) {
         let from_replay = replay_kind.is_some();
+        let is_resume_initial_replay =
+            matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages));
+        let is_retry_error = matches!(
+            &notification,
+            ServerNotification::Error(ErrorNotification {
+                will_retry: true,
+                ..
+            })
+        );
+        if !is_resume_initial_replay && !is_retry_error {
+            self.restore_retry_status_header_if_present();
+        }
         match notification {
             ServerNotification::ThreadTokenUsageUpdated(notification) => {
                 self.set_token_info(Some(token_usage_info_from_app_server(
@@ -5602,7 +5644,10 @@ impl ChatWidget {
                             notification.error.message.clone(),
                         ));
                     }
-                    self.on_error(notification.error.message);
+                    self.handle_non_retry_error(
+                        notification.error.message,
+                        notification.error.codex_error_info,
+                    );
                 }
             }
             ServerNotification::SkillsChanged(_) => {
@@ -5783,7 +5828,7 @@ impl ChatWidget {
                     {
                         self.last_non_retry_error = None;
                     } else {
-                        self.on_error(error.message);
+                        self.handle_non_retry_error(error.message, error.codex_error_info);
                     }
                 } else {
                     self.last_non_retry_error = None;
@@ -6029,7 +6074,7 @@ impl ChatWidget {
                 codex_error_info,
             }) => {
                 if let Some(info) = codex_error_info
-                    && let Some(kind) = rate_limit_error_kind(&info)
+                    && let Some(kind) = core_rate_limit_error_kind(&info)
                 {
                     match kind {
                         RateLimitErrorKind::ServerOverloaded => {
