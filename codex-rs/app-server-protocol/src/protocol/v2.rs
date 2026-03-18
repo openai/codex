@@ -3091,6 +3091,8 @@ pub struct PluginListParams {
 pub struct PluginListResponse {
     pub marketplaces: Vec<PluginMarketplaceEntry>,
     pub remote_sync_error: Option<String>,
+    #[serde(default)]
+    pub featured_plugin_ids: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

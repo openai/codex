@@ -239,6 +239,13 @@
     }
   },
   "properties": {
+    "featuredPluginIds": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "marketplaces": {
       "items": {
         "$ref": "#/definitions/PluginMarketplaceEntry"

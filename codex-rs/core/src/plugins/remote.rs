@@ -80,7 +80,7 @@ pub enum RemotePluginMutationError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum RemotePluginFetchError {
+pub enum RemotePluginFetchError {
     #[error("chatgpt authentication required to sync remote plugins")]
     AuthRequired,
 
@@ -137,6 +137,44 @@ pub(crate) async fn fetch_remote_plugin_status(
         .bearer_auth(token);
     if let Some(account_id) = auth.get_account_id() {
         request = request.header("chatgpt-account-id", account_id);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|source| RemotePluginFetchError::Request {
+            url: url.clone(),
+            source,
+        })?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(RemotePluginFetchError::UnexpectedStatus { url, status, body });
+    }
+
+    serde_json::from_str(&body).map_err(|source| RemotePluginFetchError::Decode {
+        url: url.clone(),
+        source,
+    })
+}
+
+pub async fn fetch_remote_featured_plugin_ids(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+) -> Result<Vec<String>, RemotePluginFetchError> {
+    let base_url = config.chatgpt_base_url.trim_end_matches('/');
+    let url = format!("{base_url}/plugins/featured");
+    let client = build_reqwest_client();
+    let mut request = client.get(&url).timeout(REMOTE_PLUGIN_FETCH_TIMEOUT);
+
+    if let Some(auth) = auth.filter(|auth| auth.is_chatgpt_auth()) {
+        let token = auth
+            .get_token()
+            .map_err(RemotePluginFetchError::AuthToken)?;
+        request = request.bearer_auth(token);
+        if let Some(account_id) = auth.get_account_id() {
+            request = request.header("chatgpt-account-id", account_id);
+        }
     }
 
     let response = request

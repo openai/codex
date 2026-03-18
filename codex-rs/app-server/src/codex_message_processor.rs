@@ -221,10 +221,12 @@ use codex_core::models_manager::collaboration_mode_presets::CollaborationModesCo
 use codex_core::parse_cursor;
 use codex_core::plugins::MarketplaceError;
 use codex_core::plugins::MarketplacePluginSource;
+use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core::plugins::PluginInstallError as CorePluginInstallError;
 use codex_core::plugins::PluginInstallRequest;
 use codex_core::plugins::PluginReadRequest;
 use codex_core::plugins::PluginUninstallError as CorePluginUninstallError;
+use codex_core::plugins::fetch_remote_featured_plugin_ids;
 use codex_core::plugins::load_plugin_apps;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
@@ -5409,6 +5411,7 @@ impl CodexMessageProcessor {
             };
         }
 
+        let config_for_featured = config.clone();
         let data = match tokio::task::spawn_blocking(move || {
             let marketplaces = plugins_manager.list_marketplaces_for_config(&config, &roots)?;
             Ok::<Vec<PluginMarketplaceEntry>, MarketplaceError>(
@@ -5456,12 +5459,32 @@ impl CodexMessageProcessor {
             }
         };
 
+        let featured_plugin_ids = if data
+            .iter()
+            .any(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
+        {
+            let auth = self.auth_manager.auth().await;
+            match fetch_remote_featured_plugin_ids(&config_for_featured, auth.as_ref()).await {
+                Ok(featured_plugin_ids) => featured_plugin_ids,
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        "plugin/list featured plugin fetch failed; returning empty featured ids"
+                    );
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+
         self.outgoing
             .send_response(
                 request_id,
                 PluginListResponse {
                     marketplaces: data,
                     remote_sync_error,
+                    featured_plugin_ids,
                 },
             )
             .await;

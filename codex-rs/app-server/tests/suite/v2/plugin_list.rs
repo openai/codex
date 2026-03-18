@@ -652,6 +652,16 @@ async fn plugin_list_force_remote_sync_reconciles_curated_plugin_state() -> Resu
         ))
         .mount(&server)
         .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/plugins/featured"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"["linear@openai-curated","calendar@openai-curated"]"#),
+        )
+        .mount(&server)
+        .await;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -670,6 +680,13 @@ async fn plugin_list_force_remote_sync_reconciles_curated_plugin_state() -> Resu
     .await??;
     let response: PluginListResponse = to_response(response)?;
     assert_eq!(response.remote_sync_error, None);
+    assert_eq!(
+        response.featured_plugin_ids,
+        vec![
+            "linear@openai-curated".to_string(),
+            "calendar@openai-curated".to_string(),
+        ]
+    );
 
     let curated_marketplace = response
         .marketplaces
@@ -712,6 +729,44 @@ async fn plugin_list_force_remote_sync_reconciles_curated_plugin_state() -> Resu
             .join("plugins/cache/openai-curated/calendar")
             .exists()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_list_fetches_featured_plugin_ids_without_chatgpt_auth() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_plugin_sync_config(codex_home.path(), &format!("{}/backend-api/", server.uri()))?;
+    write_openai_curated_marketplace(codex_home.path(), &["linear", "gmail"])?;
+
+    Mock::given(method("GET"))
+        .and(path("/backend-api/plugins/featured"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"["linear@openai-curated"]"#))
+        .mount(&server)
+        .await;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: None,
+            force_remote_sync: false,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginListResponse = to_response(response)?;
+
+    assert_eq!(
+        response.featured_plugin_ids,
+        vec!["linear@openai-curated".to_string()]
+    );
+    assert_eq!(response.remote_sync_error, None);
     Ok(())
 }
 

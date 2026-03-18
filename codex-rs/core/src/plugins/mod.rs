@@ -46,6 +46,8 @@ pub use marketplace::MarketplacePluginAuthPolicy;
 pub use marketplace::MarketplacePluginInstallPolicy;
 pub use marketplace::MarketplacePluginPolicy;
 pub use marketplace::MarketplacePluginSource;
+pub use remote::RemotePluginFetchError;
+pub use remote::fetch_remote_featured_plugin_ids;
 pub(crate) use render::render_explicit_plugin_instructions;
 pub(crate) use render::render_plugins_section;
 pub use store::PluginId;
