@@ -213,7 +213,7 @@ async fn websocket_transport_verifies_signed_short_lived_bearer_tokens() -> Resu
     )?;
     assert_websocket_connect_rejected(bind_addr, Some(expired_token.as_str())).await?;
 
-    let malformed_token = "codexv1.not-base64.not-base64";
+    let malformed_token = "not-a-jwt";
     assert_websocket_connect_rejected(bind_addr, Some(malformed_token)).await?;
 
     let not_yet_valid_token = signed_bearer_token(
@@ -768,8 +768,9 @@ fn connectable_bind_addr(bind_addr: SocketAddr) -> SocketAddr {
 }
 
 fn signed_bearer_token(shared_secret: &[u8], claims: serde_json::Value) -> Result<String> {
+    let header_segment = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256","typ":"JWT"}"#);
     let claims_segment = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims)?);
-    let payload = format!("codexv1.{claims_segment}");
+    let payload = format!("{header_segment}.{claims_segment}");
     let mut mac = HmacSha256::new_from_slice(shared_secret).context("failed to create hmac")?;
     mac.update(payload.as_bytes());
     let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());

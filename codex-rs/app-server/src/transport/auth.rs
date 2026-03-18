@@ -2,15 +2,16 @@ use anyhow::Context;
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
-use axum::http::header::ORIGIN;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use biscuit::Empty;
+use biscuit::JWT;
+use biscuit::jwa::SignatureAlgorithm;
+use biscuit::jws::Secret;
 use clap::Args;
 use clap::ValueEnum;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use constant_time_eq::constant_time_eq_32;
-use hmac::Hmac;
-use hmac::Mac;
 use serde::Deserialize;
 use sha2::Digest;
 use sha2::Sha256;
@@ -21,16 +22,10 @@ use std::path::Path;
 use std::path::PathBuf;
 use time::OffsetDateTime;
 
-type HmacSha256 = Hmac<Sha256>;
-
 const DEFAULT_MAX_CLOCK_SKEW_SECONDS: u64 = 30;
 const MIN_SIGNED_BEARER_SECRET_BYTES: usize = 32;
-const SIGNED_TOKEN_PREFIX: &str = "codexv1";
 const INVALID_AUTHORIZATION_HEADER_MESSAGE: &str = "invalid authorization header";
-const INVALID_WEBSOCKET_AUTH_CONFIGURATION_MESSAGE: &str = "invalid websocket auth configuration";
-const MALFORMED_SIGNED_WEBSOCKET_BEARER_TOKEN_MESSAGE: &str =
-    "malformed signed websocket bearer token";
-const BROWSER_ORIGIN_REQUIRES_AUTH_MESSAGE: &str = "browser-origin websocket requests require auth";
+const MALFORMED_WEBSOCKET_JWT_MESSAGE: &str = "malformed websocket jwt";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Args)]
 pub struct AppServerWebsocketAuthArgs {
@@ -42,19 +37,19 @@ pub struct AppServerWebsocketAuthArgs {
     #[arg(long = "ws-token-file", value_name = "PATH")]
     pub ws_token_file: Option<PathBuf>,
 
-    /// Absolute path to the shared secret file for signed bearer tokens.
+    /// Absolute path to the shared secret file for signed JWT bearer tokens.
     #[arg(long = "ws-shared-secret-file", value_name = "PATH")]
     pub ws_shared_secret_file: Option<PathBuf>,
 
-    /// Expected issuer for signed bearer tokens.
+    /// Expected issuer for signed JWT bearer tokens.
     #[arg(long = "ws-issuer", value_name = "ISSUER")]
     pub ws_issuer: Option<String>,
 
-    /// Expected audience for signed bearer tokens.
+    /// Expected audience for signed JWT bearer tokens.
     #[arg(long = "ws-audience", value_name = "AUDIENCE")]
     pub ws_audience: Option<String>,
 
-    /// Maximum clock skew when validating signed bearer tokens.
+    /// Maximum clock skew when validating signed JWT bearer tokens.
     #[arg(long = "ws-max-clock-skew-seconds", value_name = "SECONDS")]
     pub ws_max_clock_skew_seconds: Option<u64>,
 
@@ -114,11 +109,18 @@ pub(crate) struct WebsocketAuthError {
 }
 
 #[derive(Deserialize)]
-struct SignedBearerClaims {
+struct JwtClaims {
     exp: i64,
     nbf: Option<i64>,
     iss: Option<String>,
-    aud: Option<String>,
+    aud: Option<JwtAudienceClaim>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum JwtAudienceClaim {
+    Single(String),
+    Multiple(Vec<String>),
 }
 
 impl WebsocketAuthError {
@@ -255,9 +257,6 @@ pub(crate) fn authorize_upgrade(
     policy: &WebsocketAuthPolicy,
 ) -> Result<(), WebsocketAuthError> {
     let Some(mode) = policy.mode.as_ref() else {
-        if headers.contains_key(ORIGIN) {
-            return Err(forbidden(BROWSER_ORIGIN_REQUIRES_AUTH_MESSAGE));
-        }
         return Ok(());
     };
 
@@ -293,71 +292,79 @@ fn verify_signed_bearer_token(
     audience: Option<&str>,
     max_clock_skew_seconds: i64,
 ) -> Result<(), WebsocketAuthError> {
+    verify_jwt_signature(token, shared_secret)?;
+    let claims = parse_jwt_claims(token)?;
+    validate_jwt_claims(&claims, issuer, audience, max_clock_skew_seconds)
+}
+
+fn verify_jwt_signature(token: &str, shared_secret: &[u8]) -> Result<(), WebsocketAuthError> {
+    JWT::<Empty, Empty>::new_encoded(token)
+        .into_decoded(
+            &Secret::Bytes(shared_secret.to_vec()),
+            SignatureAlgorithm::HS256,
+        )
+        .map_err(|_| unauthorized("invalid websocket jwt"))?;
+    Ok(())
+}
+
+fn parse_jwt_claims(token: &str) -> Result<JwtClaims, WebsocketAuthError> {
     let mut parts = token.split('.');
-    let Some(prefix) = parts.next() else {
-        return Err(unauthorized(
-            MALFORMED_SIGNED_WEBSOCKET_BEARER_TOKEN_MESSAGE,
-        ));
+    let Some(_header_segment) = parts.next() else {
+        return Err(unauthorized(MALFORMED_WEBSOCKET_JWT_MESSAGE));
     };
     let Some(claims_segment) = parts.next() else {
-        return Err(unauthorized(
-            MALFORMED_SIGNED_WEBSOCKET_BEARER_TOKEN_MESSAGE,
-        ));
+        return Err(unauthorized(MALFORMED_WEBSOCKET_JWT_MESSAGE));
     };
-    let Some(signature_segment) = parts.next() else {
-        return Err(unauthorized(
-            MALFORMED_SIGNED_WEBSOCKET_BEARER_TOKEN_MESSAGE,
-        ));
+    let Some(_signature_segment) = parts.next() else {
+        return Err(unauthorized(MALFORMED_WEBSOCKET_JWT_MESSAGE));
     };
-    if parts.next().is_some() || prefix != SIGNED_TOKEN_PREFIX {
-        return Err(unauthorized(
-            MALFORMED_SIGNED_WEBSOCKET_BEARER_TOKEN_MESSAGE,
-        ));
+    if parts.next().is_some() {
+        return Err(unauthorized(MALFORMED_WEBSOCKET_JWT_MESSAGE));
     }
-
-    let signed_payload = format!("{prefix}.{claims_segment}");
-    let signature = URL_SAFE_NO_PAD
-        .decode(signature_segment)
-        .map_err(|_| unauthorized(MALFORMED_SIGNED_WEBSOCKET_BEARER_TOKEN_MESSAGE))?;
-    let mut mac = HmacSha256::new_from_slice(shared_secret)
-        .map_err(|_| unauthorized(INVALID_WEBSOCKET_AUTH_CONFIGURATION_MESSAGE))?;
-    mac.update(signed_payload.as_bytes());
-    mac.verify_slice(&signature)
-        .map_err(|_| unauthorized("invalid signed websocket bearer token"))?;
 
     let claims_bytes = URL_SAFE_NO_PAD
         .decode(claims_segment)
-        .map_err(|_| unauthorized(MALFORMED_SIGNED_WEBSOCKET_BEARER_TOKEN_MESSAGE))?;
-    let claims: SignedBearerClaims = serde_json::from_slice(&claims_bytes)
-        .map_err(|_| unauthorized(MALFORMED_SIGNED_WEBSOCKET_BEARER_TOKEN_MESSAGE))?;
+        .map_err(|_| unauthorized(MALFORMED_WEBSOCKET_JWT_MESSAGE))?;
+    serde_json::from_slice(&claims_bytes).map_err(|_| unauthorized(MALFORMED_WEBSOCKET_JWT_MESSAGE))
+}
 
+fn validate_jwt_claims(
+    claims: &JwtClaims,
+    issuer: Option<&str>,
+    audience: Option<&str>,
+    max_clock_skew_seconds: i64,
+) -> Result<(), WebsocketAuthError> {
     let now = OffsetDateTime::now_utc().unix_timestamp();
     if now > claims.exp.saturating_add(max_clock_skew_seconds) {
-        return Err(unauthorized("expired signed websocket bearer token"));
+        return Err(unauthorized("expired websocket jwt"));
     }
     if let Some(nbf) = claims.nbf
         && now < nbf.saturating_sub(max_clock_skew_seconds)
     {
-        return Err(unauthorized(
-            "signed websocket bearer token is not valid yet",
-        ));
+        return Err(unauthorized("websocket jwt is not valid yet"));
     }
     if let Some(expected_issuer) = issuer
         && claims.iss.as_deref() != Some(expected_issuer)
     {
-        return Err(unauthorized(
-            "signed websocket bearer token issuer mismatch",
-        ));
+        return Err(unauthorized("websocket jwt issuer mismatch"));
     }
     if let Some(expected_audience) = audience
-        && claims.aud.as_deref() != Some(expected_audience)
+        && !audience_matches(claims.aud.as_ref(), expected_audience)
     {
-        return Err(unauthorized(
-            "signed websocket bearer token audience mismatch",
-        ));
+        return Err(unauthorized("websocket jwt audience mismatch"));
     }
 
     Ok(())
+}
+
+fn audience_matches(audience: Option<&JwtAudienceClaim>, expected_audience: &str) -> bool {
+    match audience {
+        Some(JwtAudienceClaim::Single(actual)) => actual == expected_audience,
+        Some(JwtAudienceClaim::Multiple(actual)) => {
+            actual.iter().any(|audience| audience == expected_audience)
+        }
+        None => false,
+    }
 }
 
 fn bearer_token_from_headers(headers: &HeaderMap) -> Result<&str, WebsocketAuthError> {
@@ -427,22 +434,20 @@ fn unauthorized(message: &'static str) -> WebsocketAuthError {
     }
 }
 
-fn forbidden(message: &'static str) -> WebsocketAuthError {
-    WebsocketAuthError {
-        status_code: StatusCode::FORBIDDEN,
-        message,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use base64::Engine;
+    use hmac::Hmac;
+    use hmac::Mac;
     use serde_json::json;
 
+    type HmacSha256 = Hmac<Sha256>;
+
     fn signed_token(shared_secret: &[u8], claims: serde_json::Value) -> String {
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256","typ":"JWT"}"#);
         let claims_segment = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap());
-        let payload = format!("{SIGNED_TOKEN_PREFIX}.{claims_segment}");
+        let payload = format!("{header}.{claims_segment}");
         let mut mac = HmacSha256::new_from_slice(shared_secret).unwrap();
         mac.update(payload.as_bytes());
         let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
@@ -542,9 +547,9 @@ mod tests {
                 "exp": OffsetDateTime::now_utc().unix_timestamp() + 60,
             }),
         );
-        let tampered = token.replace("codexv1", "codexv2");
+        let tampered = token.replace(".eyJleHAi", ".eyJleHBi");
         let err = verify_signed_bearer_token(&tampered, shared_secret, None, None, 30)
-            .expect_err("tampered prefix should fail");
+            .expect_err("tampered jwt should fail");
         assert_eq!(err.status_code(), StatusCode::UNAUTHORIZED);
     }
 
@@ -561,6 +566,50 @@ mod tests {
         );
         verify_signed_bearer_token(&token, shared_secret, Some("issuer"), Some("audience"), 30)
             .expect("valid signed token should verify");
+    }
+
+    #[test]
+    fn signed_bearer_token_verification_accepts_multiple_audiences() {
+        let shared_secret = b"0123456789abcdef0123456789abcdef";
+        let token = signed_token(
+            shared_secret,
+            json!({
+                "exp": OffsetDateTime::now_utc().unix_timestamp() + 60,
+                "aud": ["other-audience", "audience"],
+            }),
+        );
+        verify_signed_bearer_token(&token, shared_secret, None, Some("audience"), 30)
+            .expect("jwt audience arrays should verify");
+    }
+
+    #[test]
+    fn signed_bearer_token_verification_rejects_alg_none_tokens() {
+        let claims_segment = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&json!({
+                "exp": OffsetDateTime::now_utc().unix_timestamp() + 60,
+            }))
+            .unwrap(),
+        );
+        let header_segment = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#);
+        let token = format!("{header_segment}.{claims_segment}.");
+        let err =
+            verify_signed_bearer_token(&token, b"0123456789abcdef0123456789abcdef", None, None, 30)
+                .expect_err("alg=none jwt should be rejected");
+        assert_eq!(err.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn signed_bearer_token_verification_rejects_missing_exp() {
+        let shared_secret = b"0123456789abcdef0123456789abcdef";
+        let token = signed_token(
+            shared_secret,
+            json!({
+                "iss": "issuer",
+            }),
+        );
+        let err = verify_signed_bearer_token(&token, shared_secret, None, None, 30)
+            .expect_err("jwt without exp should be rejected");
+        assert_eq!(err.status_code(), StatusCode::UNAUTHORIZED);
     }
 
     #[test]

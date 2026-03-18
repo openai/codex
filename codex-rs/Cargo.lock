@@ -960,6 +960,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "biscuit"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e28fc7c56c61743a01d0d1b73e4fed68b8a4f032ea3a2d4bb8c6520a33fc05a"
+dependencies = [
+ "chrono",
+ "data-encoding",
+ "num-bigint",
+ "num-traits",
+ "once_cell",
+ "ring",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1432,6 +1448,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "biscuit",
  "chrono",
  "clap",
  "codex-app-server-protocol",
