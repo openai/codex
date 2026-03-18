@@ -347,6 +347,31 @@ def test_thread_run_uses_last_completed_assistant_message_as_final_response() ->
     ]
 
 
+def test_thread_run_preserves_empty_last_assistant_message() -> None:
+    client = AppServerClient()
+    first_item_notification = _item_completed_notification(text="First message")
+    second_item_notification = _item_completed_notification(text="")
+    notifications: deque[Notification] = deque(
+        [
+            first_item_notification,
+            second_item_notification,
+            _completed_notification(),
+        ]
+    )
+    client.next_notification = notifications.popleft  # type: ignore[method-assign]
+    client.turn_start = lambda thread_id, wire_input, *, params=None: SimpleNamespace(  # noqa: ARG005,E731
+        turn=SimpleNamespace(id="turn-1")
+    )
+
+    result = Thread(client, "thread-1").run("hello")
+
+    assert result.final_response == ""
+    assert result.items == [
+        first_item_notification.payload.item,
+        second_item_notification.payload.item,
+    ]
+
+
 def test_thread_run_raises_on_failed_turn() -> None:
     client = AppServerClient()
     notifications: deque[Notification] = deque(
