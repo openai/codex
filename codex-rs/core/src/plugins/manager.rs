@@ -617,6 +617,10 @@ impl PluginsManager {
         config: &Config,
         auth: Option<&CodexAuth>,
     ) -> Result<RemotePluginSyncResult, PluginRemoteSyncError> {
+        if !config.features.enabled(Feature::Plugins) {
+            return Ok(RemotePluginSyncResult::default());
+        }
+
         info!("starting remote plugin sync");
         let remote_plugins = fetch_remote_plugin_status(config, auth)
             .await
@@ -800,6 +804,10 @@ impl PluginsManager {
         config: &Config,
         additional_roots: &[AbsolutePathBuf],
     ) -> Result<Vec<ConfiguredMarketplace>, MarketplaceError> {
+        if !config.features.enabled(Feature::Plugins) {
+            return Ok(Vec::new());
+        }
+
         let (installed_plugins, configured_plugins) = self.configured_plugin_states(config);
         let marketplaces = list_marketplaces(&self.marketplace_roots(additional_roots))?;
         let mut seen_plugin_keys = HashSet::new();
@@ -850,6 +858,10 @@ impl PluginsManager {
         config: &Config,
         request: &PluginReadRequest,
     ) -> Result<PluginReadOutcome, MarketplaceError> {
+        if !config.features.enabled(Feature::Plugins) {
+            return Err(MarketplaceError::PluginsDisabled);
+        }
+
         let marketplace = load_marketplace(&request.marketplace_path)?;
         let marketplace_name = marketplace.name.clone();
         let plugin = marketplace

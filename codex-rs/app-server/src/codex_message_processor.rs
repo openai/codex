@@ -4842,6 +4842,7 @@ impl CodexMessageProcessor {
             MarketplaceError::InvalidMarketplaceFile { .. }
             | MarketplaceError::PluginNotFound { .. }
             | MarketplaceError::PluginNotAvailable { .. }
+            | MarketplaceError::PluginsDisabled
             | MarketplaceError::InvalidPlugin(_) => {
                 self.send_invalid_request_error(request_id, err.to_string())
                     .await;

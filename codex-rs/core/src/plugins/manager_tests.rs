@@ -1004,6 +1004,113 @@ enabled = false
 }
 
 #[tokio::test]
+async fn list_marketplaces_returns_empty_when_feature_disabled() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "enabled-plugin",
+      "source": {
+        "source": "local",
+        "path": "./enabled-plugin"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = false
+
+[plugins."enabled-plugin@debug"]
+enabled = true
+"#,
+    );
+
+    let config = load_config(tmp.path(), &repo_root).await;
+    let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
+        .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
+        .unwrap();
+
+    assert_eq!(marketplaces, Vec::new());
+}
+
+#[tokio::test]
+async fn read_plugin_for_config_returns_plugins_disabled_when_feature_disabled() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap();
+    fs::write(
+        marketplace_path.as_path(),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "enabled-plugin",
+      "source": {
+        "source": "local",
+        "path": "./enabled-plugin"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = false
+
+[plugins."enabled-plugin@debug"]
+enabled = true
+"#,
+    );
+
+    let config = load_config(tmp.path(), &repo_root).await;
+    let err = PluginsManager::new(tmp.path().to_path_buf())
+        .read_plugin_for_config(
+            &config,
+            &PluginReadRequest {
+                plugin_name: "enabled-plugin".to_string(),
+                marketplace_path,
+            },
+        )
+        .unwrap_err();
+
+    assert!(matches!(err, MarketplaceError::PluginsDisabled));
+}
+
+#[tokio::test]
+async fn sync_plugins_from_remote_returns_default_when_feature_disabled() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = false
+"#,
+    );
+
+    let config = load_config(tmp.path(), tmp.path()).await;
+    let outcome = PluginsManager::new(tmp.path().to_path_buf())
+        .sync_plugins_from_remote(&config, None)
+        .await
+        .unwrap();
+
+    assert_eq!(outcome, RemotePluginSyncResult::default());
+}
+
+#[tokio::test]
 async fn list_marketplaces_includes_curated_repo_marketplace() {
     let tmp = tempfile::tempdir().unwrap();
     let curated_root = curated_plugins_repo_path(tmp.path());
