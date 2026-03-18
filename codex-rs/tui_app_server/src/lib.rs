@@ -940,6 +940,7 @@ pub async fn run_main(
         cloud_requirements,
         feedback,
         remote_url,
+        remote_auth_token,
     )
     .await
     .map_err(|err| std::io::Error::other(err.to_string()))
@@ -957,8 +958,9 @@ async fn run_ratatui_app(
     mut cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     remote_url: Option<String>,
+    remote_auth_token: Option<String>,
 ) -> color_eyre::Result<AppExitInfo> {
-    let remote_mode = matches!(&app_server_target, AppServerTarget::Remote(_));
+    let remote_mode = matches!(&app_server_target, AppServerTarget::Remote { .. });
     color_eyre::install()?;
 
     tooltips::announcement::prewarm();
@@ -1362,6 +1364,7 @@ async fn run_ratatui_app(
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
         should_prompt_windows_sandbox_nux_at_startup,
         remote_url,
+        remote_auth_token,
     )
     .await;
 
