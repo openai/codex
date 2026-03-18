@@ -716,8 +716,6 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     use tokio_util::sync::CancellationToken;
 
-    use codex_core::sandboxing::ExecRequestArgs;
-
     use super::*;
     #[cfg(not(target_os = "windows"))]
     use crate::outgoing_message::OutgoingEnvelope;
@@ -729,22 +727,22 @@ mod tests {
             access: ReadOnlyAccess::FullAccess,
             network_access: false,
         };
-        ExecRequest::new(ExecRequestArgs {
-            command: vec!["cmd".to_string()],
-            cwd: PathBuf::from("."),
-            env: HashMap::new(),
-            network: None,
-            expiration: ExecExpiration::DefaultTimeout,
-            sandbox: SandboxType::WindowsRestrictedToken,
-            windows_sandbox_level: WindowsSandboxLevel::Disabled,
-            windows_sandbox_private_desktop: false,
-            sandbox_permissions: codex_core::sandboxing::SandboxPermissions::UseDefault,
-            sandbox_policy: sandbox_policy.clone(),
-            file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
-            network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
-            justification: None,
-            arg0: None,
-        })
+        ExecRequest::new(
+            vec!["cmd".to_string()],
+            PathBuf::from("."),
+            HashMap::new(),
+            None,
+            ExecExpiration::DefaultTimeout,
+            SandboxType::WindowsRestrictedToken,
+            WindowsSandboxLevel::Disabled,
+            false,
+            codex_core::sandboxing::SandboxPermissions::UseDefault,
+            sandbox_policy.clone(),
+            FileSystemSandboxPolicy::from(&sandbox_policy),
+            NetworkSandboxPolicy::from(&sandbox_policy),
+            None,
+            None,
+        )
     }
 
     #[tokio::test]
@@ -841,22 +839,22 @@ mod tests {
                 outgoing: Arc::new(OutgoingMessageSender::new(tx)),
                 request_id: request_id.clone(),
                 process_id: Some("proc-100".to_string()),
-                exec_request: ExecRequest::new(ExecRequestArgs {
-                    command: vec!["sh".to_string(), "-lc".to_string(), "sleep 30".to_string()],
-                    cwd: PathBuf::from("."),
-                    env: HashMap::new(),
-                    network: None,
-                    expiration: ExecExpiration::Cancellation(CancellationToken::new()),
-                    sandbox: SandboxType::None,
-                    windows_sandbox_level: WindowsSandboxLevel::Disabled,
-                    windows_sandbox_private_desktop: false,
-                    sandbox_permissions: codex_core::sandboxing::SandboxPermissions::UseDefault,
-                    sandbox_policy: sandbox_policy.clone(),
-                    file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
-                    network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
-                    justification: None,
-                    arg0: None,
-                }),
+                exec_request: ExecRequest::new(
+                    vec!["sh".to_string(), "-lc".to_string(), "sleep 30".to_string()],
+                    PathBuf::from("."),
+                    HashMap::new(),
+                    None,
+                    ExecExpiration::Cancellation(CancellationToken::new()),
+                    SandboxType::None,
+                    WindowsSandboxLevel::Disabled,
+                    false,
+                    codex_core::sandboxing::SandboxPermissions::UseDefault,
+                    sandbox_policy.clone(),
+                    FileSystemSandboxPolicy::from(&sandbox_policy),
+                    NetworkSandboxPolicy::from(&sandbox_policy),
+                    None,
+                    None,
+                ),
                 started_network_proxy: None,
                 tty: false,
                 stream_stdin: false,

@@ -82,42 +82,24 @@ pub struct ExecRequest {
     pub arg0: Option<String>,
 }
 
-pub struct ExecRequestArgs {
-    pub command: Vec<String>,
-    pub cwd: PathBuf,
-    pub env: HashMap<String, String>,
-    pub network: Option<NetworkProxy>,
-    pub expiration: ExecExpiration,
-    pub sandbox: SandboxType,
-    pub windows_sandbox_level: WindowsSandboxLevel,
-    pub windows_sandbox_private_desktop: bool,
-    pub sandbox_permissions: SandboxPermissions,
-    pub sandbox_policy: SandboxPolicy,
-    pub file_system_sandbox_policy: FileSystemSandboxPolicy,
-    pub network_sandbox_policy: NetworkSandboxPolicy,
-    pub justification: Option<String>,
-    pub arg0: Option<String>,
-}
-
 impl ExecRequest {
-    pub fn new(args: ExecRequestArgs) -> Self {
-        let ExecRequestArgs {
-            command,
-            cwd,
-            env,
-            network,
-            expiration,
-            sandbox,
-            windows_sandbox_level,
-            windows_sandbox_private_desktop,
-            sandbox_permissions,
-            sandbox_policy,
-            file_system_sandbox_policy,
-            network_sandbox_policy,
-            justification,
-            arg0,
-        } = args;
-
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        command: Vec<String>,
+        cwd: PathBuf,
+        env: HashMap<String, String>,
+        network: Option<NetworkProxy>,
+        expiration: ExecExpiration,
+        sandbox: SandboxType,
+        windows_sandbox_level: WindowsSandboxLevel,
+        windows_sandbox_private_desktop: bool,
+        sandbox_permissions: SandboxPermissions,
+        sandbox_policy: SandboxPolicy,
+        file_system_sandbox_policy: FileSystemSandboxPolicy,
+        network_sandbox_policy: NetworkSandboxPolicy,
+        justification: Option<String>,
+        arg0: Option<String>,
+    ) -> Self {
         Self {
             command,
             cwd,
