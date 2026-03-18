@@ -46,17 +46,23 @@ impl CodeModeProcess {
                 let tool_runtime = tool_runtime.clone();
                 let stdin = stdin.clone();
                 tokio::spawn(async move {
+                    let result = call_nested_tool(
+                        exec,
+                        tool_runtime,
+                        tool_call.name,
+                        tool_call.input,
+                        CancellationToken::new(),
+                    )
+                    .await;
+                    let (code_mode_result, error_text) = match result {
+                        Ok(code_mode_result) => (code_mode_result, None),
+                        Err(error) => (serde_json::Value::Null, Some(error.to_string())),
+                    };
                     let response = HostToNodeMessage::Response {
                         request_id: tool_call.request_id,
                         id: tool_call.id,
-                        code_mode_result: call_nested_tool(
-                            exec,
-                            tool_runtime,
-                            tool_call.name,
-                            tool_call.input,
-                            CancellationToken::new(),
-                        )
-                        .await,
+                        code_mode_result,
+                        error_text,
                     };
                     if let Err(err) = write_message(&stdin, &response).await {
                         warn!("failed to write {PUBLIC_TOOL_NAME} tool response: {err}");

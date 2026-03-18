@@ -539,6 +539,46 @@ Error:\ boom\n
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_surfaces_handler_errors_as_exceptions() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "surface nested tool handler failures as script exceptions",
+        r#"
+try {
+  await tools.exec_command({});
+  text("no-exception");
+} catch (error) {
+  text(`caught:${error?.message ?? String(error)}`);
+}
+"#,
+        false,
+    )
+    .await?;
+
+    let request = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&request, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "script should catch the nested tool error: {output}"
+    );
+    assert!(
+        output.contains("caught:"),
+        "expected caught exception text in output: {output}"
+    );
+    assert!(
+        !output.contains("no-exception"),
+        "nested tool error should not allow success path: {output}"
+    );
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_yield_and_resume_with_wait() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

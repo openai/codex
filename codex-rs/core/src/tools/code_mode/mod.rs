@@ -14,6 +14,7 @@ use serde_json::Value as JsonValue;
 use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::function_tool::FunctionCallError;
 use crate::tools::ToolRouter;
 use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
 use crate::tools::code_mode_description::code_mode_tool_reference;
@@ -300,9 +301,11 @@ async fn call_nested_tool(
     tool_name: String,
     input: Option<JsonValue>,
     cancellation_token: tokio_util::sync::CancellationToken,
-) -> JsonValue {
+) -> Result<JsonValue, FunctionCallError> {
     if tool_name == PUBLIC_TOOL_NAME {
-        return JsonValue::String(format!("{PUBLIC_TOOL_NAME} cannot invoke itself"));
+        return Err(FunctionCallError::RespondToModel(format!(
+            "{PUBLIC_TOOL_NAME} cannot invoke itself"
+        )));
     }
 
     let payload =
@@ -313,12 +316,12 @@ async fn call_nested_tool(
                     tool,
                     raw_arguments,
                 },
-                Err(error) => return JsonValue::String(error),
+                Err(error) => return Err(FunctionCallError::RespondToModel(error)),
             }
         } else {
             match build_nested_tool_payload(tool_runtime.find_spec(&tool_name), &tool_name, input) {
                 Ok(payload) => payload,
-                Err(error) => return JsonValue::String(error),
+                Err(error) => return Err(FunctionCallError::RespondToModel(error)),
             }
         };
 
@@ -330,12 +333,8 @@ async fn call_nested_tool(
     };
     let result = tool_runtime
         .handle_tool_call_with_source(call, ToolCallSource::CodeMode, cancellation_token)
-        .await;
-
-    match result {
-        Ok(result) => result.code_mode_result(),
-        Err(error) => JsonValue::String(error.to_string()),
-    }
+        .await?;
+    Ok(result.code_mode_result())
 }
 
 fn tool_kind_for_spec(spec: &ToolSpec) -> protocol::CodeModeToolKind {

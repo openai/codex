@@ -575,6 +575,10 @@ function createProtocol() {
         return;
       }
       pending.delete(message.request_id + ':' + message.id);
+      if (typeof message.error_text === 'string') {
+        entry.reject(new Error(message.error_text));
+        return;
+      }
       entry.resolve(message.code_mode_result ?? '');
       return;
     }
