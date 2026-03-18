@@ -332,28 +332,6 @@ async fn websocket_transport_allows_unauthenticated_non_loopback_startup_by_defa
     Ok(())
 }
 
-#[tokio::test]
-async fn websocket_transport_allows_explicit_insecure_non_loopback_startup() -> Result<()> {
-    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri(), "never")?;
-    let args = vec!["--allow-unauthenticated-non-loopback-ws".to_string()];
-
-    let (mut process, bind_addr) =
-        spawn_websocket_server_with_args(codex_home.path(), "ws://0.0.0.0:0", &args).await?;
-
-    let mut ws = connect_websocket(bind_addr).await?;
-    send_initialize_request(&mut ws, 1, "ws_insecure_override_client").await?;
-    let init = read_response_for_id(&mut ws, 1).await?;
-    assert_eq!(init.id, RequestId::Integer(1));
-
-    process
-        .kill()
-        .await
-        .context("failed to stop websocket app-server process")?;
-    Ok(())
-}
-
 pub(super) async fn spawn_websocket_server(codex_home: &Path) -> Result<(Child, SocketAddr)> {
     spawn_websocket_server_with_args(codex_home, "ws://127.0.0.1:0", &[]).await
 }

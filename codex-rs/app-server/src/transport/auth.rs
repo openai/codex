@@ -52,10 +52,6 @@ pub struct AppServerWebsocketAuthArgs {
     /// Maximum clock skew when validating signed JWT bearer tokens.
     #[arg(long = "ws-max-clock-skew-seconds", value_name = "SECONDS")]
     pub ws_max_clock_skew_seconds: Option<u64>,
-
-    /// Allow non-loopback websocket listeners without auth.
-    #[arg(long = "allow-unauthenticated-non-loopback-ws")]
-    pub allow_unauthenticated_non_loopback_ws: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -66,7 +62,6 @@ pub enum WebsocketAuthCliMode {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppServerWebsocketAuthSettings {
-    pub allow_unauthenticated_non_loopback_ws: bool,
     pub config: Option<AppServerWebsocketAuthConfig>,
 }
 
@@ -85,7 +80,6 @@ pub enum AppServerWebsocketAuthConfig {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct WebsocketAuthPolicy {
-    pub(crate) allow_unauthenticated_non_loopback_ws: bool,
     pub(crate) mode: Option<WebsocketAuthMode>,
 }
 
@@ -196,10 +190,7 @@ impl AppServerWebsocketAuthArgs {
             }
         };
 
-        Ok(AppServerWebsocketAuthSettings {
-            allow_unauthenticated_non_loopback_ws: self.allow_unauthenticated_non_loopback_ws,
-            config,
-        })
+        Ok(AppServerWebsocketAuthSettings { config })
     }
 }
 
@@ -237,19 +228,14 @@ pub(crate) fn policy_from_settings(
         None => None,
     };
 
-    Ok(WebsocketAuthPolicy {
-        allow_unauthenticated_non_loopback_ws: settings.allow_unauthenticated_non_loopback_ws,
-        mode,
-    })
+    Ok(WebsocketAuthPolicy { mode })
 }
 
 pub(crate) fn should_warn_about_unauthenticated_non_loopback_listener(
     bind_address: SocketAddr,
     policy: &WebsocketAuthPolicy,
 ) -> bool {
-    !bind_address.ip().is_loopback()
-        && policy.mode.is_none()
-        && !policy.allow_unauthenticated_non_loopback_ws
+    !bind_address.ip().is_loopback() && policy.mode.is_none()
 }
 
 pub(crate) fn authorize_upgrade(
@@ -468,14 +454,6 @@ mod tests {
         assert!(!should_warn_about_unauthenticated_non_loopback_listener(
             "0.0.0.0:8765".parse().unwrap(),
             &WebsocketAuthPolicy {
-                allow_unauthenticated_non_loopback_ws: true,
-                mode: None,
-            },
-        ));
-        assert!(!should_warn_about_unauthenticated_non_loopback_listener(
-            "0.0.0.0:8765".parse().unwrap(),
-            &WebsocketAuthPolicy {
-                allow_unauthenticated_non_loopback_ws: false,
                 mode: Some(WebsocketAuthMode::CapabilityToken {
                     token_sha256: [0u8; 32],
                 }),
@@ -526,7 +504,6 @@ mod tests {
         assert_eq!(
             settings,
             AppServerWebsocketAuthSettings {
-                allow_unauthenticated_non_loopback_ws: false,
                 config: Some(AppServerWebsocketAuthConfig::SignedBearerToken {
                     shared_secret_file: AbsolutePathBuf::from_absolute_path("/tmp/secret")
                         .expect("absolute path"),
