@@ -458,6 +458,7 @@ enum ThreadBufferedEvent {
     Notification(ServerNotification),
     Request(ServerRequest),
     LegacyWarning(String),
+    LegacyRollback { num_turns: u32 },
 }
 
 #[derive(Debug)]
@@ -556,6 +557,19 @@ impl ThreadEventStore {
         self.active_turn_id = None;
     }
 
+    fn apply_legacy_thread_rollback(&mut self, num_turns: u32) {
+        let num_turns = usize::try_from(num_turns).unwrap_or(usize::MAX);
+        if num_turns >= self.turns.len() {
+            self.turns.clear();
+        } else {
+            self.turns
+                .truncate(self.turns.len().saturating_sub(num_turns));
+        }
+        self.buffer.clear();
+        self.pending_interactive_replay = PendingInteractiveReplayState::default();
+        self.active_turn_id = None;
+    }
+
     fn snapshot(&self) -> ThreadEventSnapshot {
         ThreadEventSnapshot {
             session: self.session.clone(),
@@ -570,7 +584,8 @@ impl ThreadEventStore {
                         .pending_interactive_replay
                         .should_replay_snapshot_request(request),
                     ThreadBufferedEvent::Notification(_)
-                    | ThreadBufferedEvent::LegacyWarning(_) => true,
+                    | ThreadBufferedEvent::LegacyWarning(_)
+                    | ThreadBufferedEvent::LegacyRollback { .. } => true,
                 })
                 .cloned()
                 .collect(),
@@ -2175,12 +2190,57 @@ impl App {
         Ok(())
     }
 
+    async fn enqueue_thread_legacy_rollback(
+        &mut self,
+        thread_id: ThreadId,
+        num_turns: u32,
+    ) -> Result<()> {
+        let (sender, store) = {
+            let channel = self.ensure_thread_channel(thread_id);
+            (channel.sender.clone(), Arc::clone(&channel.store))
+        };
+
+        let should_send = {
+            let mut guard = store.lock().await;
+            guard.apply_legacy_thread_rollback(num_turns);
+            guard.active
+        };
+
+        if should_send {
+            match sender.try_send(ThreadBufferedEvent::LegacyRollback { num_turns }) {
+                Ok(()) => {}
+                Err(TrySendError::Full(event)) => {
+                    tokio::spawn(async move {
+                        if let Err(err) = sender.send(event).await {
+                            tracing::warn!("thread {thread_id} event channel closed: {err}");
+                        }
+                    });
+                }
+                Err(TrySendError::Closed(_)) => {
+                    tracing::warn!("thread {thread_id} event channel closed");
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn enqueue_primary_thread_legacy_warning(&mut self, message: String) -> Result<()> {
         if let Some(thread_id) = self.primary_thread_id {
             return self.enqueue_thread_legacy_warning(thread_id, message).await;
         }
         self.pending_primary_events
             .push_back(ThreadBufferedEvent::LegacyWarning(message));
+        Ok(())
+    }
+
+    async fn enqueue_primary_thread_legacy_rollback(&mut self, num_turns: u32) -> Result<()> {
+        if let Some(thread_id) = self.primary_thread_id {
+            return self
+                .enqueue_thread_legacy_rollback(thread_id, num_turns)
+                .await;
+        }
+        self.pending_primary_events
+            .push_back(ThreadBufferedEvent::LegacyRollback { num_turns });
         Ok(())
     }
 
@@ -2219,6 +2279,10 @@ impl App {
                 }
                 ThreadBufferedEvent::LegacyWarning(message) => {
                     self.enqueue_thread_legacy_warning(thread_id, message)
+                        .await?;
+                }
+                ThreadBufferedEvent::LegacyRollback { num_turns } => {
+                    self.enqueue_thread_legacy_rollback(thread_id, num_turns)
                         .await?;
                 }
             }
@@ -4538,6 +4602,10 @@ impl App {
             ThreadBufferedEvent::LegacyWarning(message) => {
                 self.chat_widget.add_warning_message(message);
             }
+            ThreadBufferedEvent::LegacyRollback { num_turns } => {
+                self.handle_backtrack_rollback_succeeded(num_turns);
+                self.chat_widget.handle_thread_rolled_back();
+            }
         }
         if needs_refresh {
             self.refresh_status_line();
@@ -4554,6 +4622,10 @@ impl App {
                 .handle_server_request(request, Some(ReplayKind::ThreadSnapshot)),
             ThreadBufferedEvent::LegacyWarning(message) => {
                 self.chat_widget.add_warning_message(message);
+            }
+            ThreadBufferedEvent::LegacyRollback { num_turns } => {
+                self.handle_backtrack_rollback_succeeded(num_turns);
+                self.chat_widget.handle_thread_rolled_back();
             }
         }
     }
@@ -6962,6 +7034,49 @@ guardian_approval = true
             snapshot.events.first(),
             Some(ThreadBufferedEvent::LegacyWarning(message)) if message == "legacy warning"
         ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn legacy_thread_rollback_trims_inactive_thread_snapshot_state() -> Result<()> {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
+        let turns = vec![
+            test_turn("turn-1", TurnStatus::Completed, Vec::new()),
+            test_turn("turn-2", TurnStatus::Completed, Vec::new()),
+        ];
+        let channel = ThreadEventChannel::new_with_session(4, session, turns);
+        {
+            let mut store = channel.store.lock().await;
+            store.push_request(exec_approval_request(
+                thread_id,
+                "turn-approval",
+                "call-approval",
+                None,
+            ));
+            assert_eq!(store.has_pending_thread_approvals(), true);
+        }
+        app.thread_event_channels.insert(thread_id, channel);
+
+        app.enqueue_thread_legacy_rollback(thread_id, 1).await?;
+
+        let store = app
+            .thread_event_channels
+            .get(&thread_id)
+            .expect("thread store should exist")
+            .store
+            .lock()
+            .await;
+        assert_eq!(
+            store.turns,
+            vec![test_turn("turn-1", TurnStatus::Completed, Vec::new())]
+        );
+        assert_eq!(store.has_pending_thread_approvals(), false);
+        let snapshot = store.snapshot();
+        assert_eq!(snapshot.turns, store.turns);
+        assert!(snapshot.events.is_empty());
 
         Ok(())
     }
