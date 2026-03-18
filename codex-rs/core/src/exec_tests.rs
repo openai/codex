@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -188,13 +189,19 @@ fn windows_restricted_token_skips_external_sandbox_policies() {
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![]);
 
     assert_eq!(
-        should_use_windows_restricted_token_sandbox(
+        windows_restricted_token_sandbox_support(
             SandboxType::WindowsRestrictedToken,
-            codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            WindowsSandboxLevel::Disabled,
             &policy,
             &file_system_policy,
+            NetworkSandboxPolicy::Restricted,
         ),
-        false
+        WindowsRestrictedTokenSandboxSupport {
+            should_use: false,
+            unsupported_reason: Some(
+                "windows sandbox backend cannot enforce file_system=Restricted, network=Restricted, legacy_policy=ExternalSandbox { network_access: Restricted }; refusing to run unsandboxed".to_string()
+            ),
+        }
     );
 }
 
@@ -204,13 +211,17 @@ fn windows_restricted_token_runs_for_legacy_restricted_policies() {
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![]);
 
     assert_eq!(
-        should_use_windows_restricted_token_sandbox(
+        windows_restricted_token_sandbox_support(
             SandboxType::WindowsRestrictedToken,
-            codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            WindowsSandboxLevel::Disabled,
             &policy,
             &file_system_policy,
+            NetworkSandboxPolicy::Restricted,
         ),
-        true
+        WindowsRestrictedTokenSandboxSupport {
+            should_use: true,
+            unsupported_reason: None,
+        }
     );
 }
 
@@ -222,17 +233,20 @@ fn windows_restricted_token_rejects_network_only_restrictions() {
     let file_system_policy = FileSystemSandboxPolicy::unrestricted();
 
     assert_eq!(
-            unsupported_windows_restricted_token_sandbox_reason(
-                SandboxType::WindowsRestrictedToken,
-                codex_protocol::config_types::WindowsSandboxLevel::Disabled,
-                &policy,
-                &file_system_policy,
-                NetworkSandboxPolicy::Restricted,
-            ),
-            Some(
+        windows_restricted_token_sandbox_support(
+            SandboxType::WindowsRestrictedToken,
+            WindowsSandboxLevel::Disabled,
+            &policy,
+            &file_system_policy,
+            NetworkSandboxPolicy::Restricted,
+        ),
+        WindowsRestrictedTokenSandboxSupport {
+            should_use: false,
+            unsupported_reason: Some(
                 "windows sandbox backend cannot enforce file_system=Unrestricted, network=Restricted, legacy_policy=ExternalSandbox { network_access: Restricted }; refusing to run unsandboxed".to_string()
-            )
-        );
+            ),
+        }
+    );
 }
 
 #[test]
@@ -241,14 +255,17 @@ fn windows_restricted_token_allows_legacy_restricted_policies() {
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![]);
 
     assert_eq!(
-        unsupported_windows_restricted_token_sandbox_reason(
+        windows_restricted_token_sandbox_support(
             SandboxType::WindowsRestrictedToken,
-            codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            WindowsSandboxLevel::Disabled,
             &policy,
             &file_system_policy,
             NetworkSandboxPolicy::Restricted,
         ),
-        None
+        WindowsRestrictedTokenSandboxSupport {
+            should_use: true,
+            unsupported_reason: None,
+        }
     );
 }
 
@@ -264,25 +281,20 @@ fn windows_restricted_token_rejects_restricted_read_only_policies() {
     let file_system_policy = FileSystemSandboxPolicy::from(&policy);
 
     assert_eq!(
-        should_use_windows_restricted_token_sandbox(
+        windows_restricted_token_sandbox_support(
             SandboxType::WindowsRestrictedToken,
-            codex_protocol::config_types::WindowsSandboxLevel::Disabled,
-            &policy,
-            &file_system_policy,
-        ),
-        false
-    );
-    assert_eq!(
-        unsupported_windows_restricted_token_sandbox_reason(
-            SandboxType::WindowsRestrictedToken,
-            codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            WindowsSandboxLevel::Disabled,
             &policy,
             &file_system_policy,
             NetworkSandboxPolicy::Restricted,
         ),
-        Some(
-            "windows sandbox backend cannot enforce file_system=Restricted, network=Restricted, legacy_policy=ReadOnly { access: Restricted { include_platform_defaults: true, readable_roots: [] }, network_access: false }; refusing to run unsandboxed".to_string()
-        )
+        WindowsRestrictedTokenSandboxSupport {
+            should_use: false,
+            unsupported_reason: Some(
+                "windows sandbox backend cannot enforce file_system=Restricted, network=Restricted, legacy_policy=ReadOnly { access: Restricted { include_platform_defaults: true, readable_roots: [] }, network_access: false }; refusing to run unsandboxed".to_string()
+            ),
+        },
+        "restricted-token should fail closed for restricted read-only policies"
     );
 }
 
@@ -298,14 +310,17 @@ fn windows_restricted_token_allows_legacy_workspace_write_policies() {
     let file_system_policy = FileSystemSandboxPolicy::from(&policy);
 
     assert_eq!(
-        unsupported_windows_restricted_token_sandbox_reason(
+        windows_restricted_token_sandbox_support(
             SandboxType::WindowsRestrictedToken,
-            codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            WindowsSandboxLevel::Disabled,
             &policy,
             &file_system_policy,
             NetworkSandboxPolicy::Restricted,
         ),
-        None
+        WindowsRestrictedTokenSandboxSupport {
+            should_use: true,
+            unsupported_reason: None,
+        }
     );
 }
 
@@ -321,23 +336,18 @@ fn windows_elevated_sandbox_allows_restricted_read_only_policies() {
     let file_system_policy = FileSystemSandboxPolicy::from(&policy);
 
     assert_eq!(
-        should_use_windows_restricted_token_sandbox(
+        windows_restricted_token_sandbox_support(
             SandboxType::WindowsRestrictedToken,
-            codex_protocol::config_types::WindowsSandboxLevel::Elevated,
-            &policy,
-            &file_system_policy,
-        ),
-        true
-    );
-    assert_eq!(
-        unsupported_windows_restricted_token_sandbox_reason(
-            SandboxType::WindowsRestrictedToken,
-            codex_protocol::config_types::WindowsSandboxLevel::Elevated,
+            WindowsSandboxLevel::Elevated,
             &policy,
             &file_system_policy,
             NetworkSandboxPolicy::Restricted,
         ),
-        None
+        WindowsRestrictedTokenSandboxSupport {
+            should_use: true,
+            unsupported_reason: None,
+        },
+        "elevated Windows sandbox should keep restricted read-only support enabled"
     );
 }
 
@@ -349,7 +359,7 @@ fn process_exec_tool_call_uses_platform_sandbox_for_network_only_restrictions() 
         select_process_exec_tool_sandbox_type(
             &FileSystemSandboxPolicy::unrestricted(),
             NetworkSandboxPolicy::Restricted,
-            codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+            WindowsSandboxLevel::Disabled,
             false,
         ),
         expected
@@ -389,7 +399,7 @@ async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()>
         env,
         network: None,
         sandbox_permissions: SandboxPermissions::UseDefault,
-        windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
         justification: None,
         arg0: None,
@@ -446,7 +456,7 @@ async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
         env,
         network: None,
         sandbox_permissions: SandboxPermissions::UseDefault,
-        windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
         justification: None,
         arg0: None,
