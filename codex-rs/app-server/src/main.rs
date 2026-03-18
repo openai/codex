@@ -1,5 +1,6 @@
 use clap::Parser;
 use codex_app_server::AppServerTransport;
+use codex_app_server::AppServerWebsocketAuthArgs;
 use codex_app_server::run_main_with_transport;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
@@ -21,6 +22,9 @@ struct AppServerArgs {
         default_value = AppServerTransport::DEFAULT_LISTEN_URL
     )]
     listen: AppServerTransport,
+
+    #[command(flatten)]
+    auth: AppServerWebsocketAuthArgs,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -32,6 +36,7 @@ fn main() -> anyhow::Result<()> {
             ..Default::default()
         };
         let transport = args.listen;
+        let auth = args.auth.try_into_settings()?;
 
         run_main_with_transport(
             arg0_paths,
@@ -39,6 +44,7 @@ fn main() -> anyhow::Result<()> {
             loader_overrides,
             /*default_analytics_enabled*/ false,
             transport,
+            auth,
         )
         .await?;
         Ok(())

@@ -1,3 +1,8 @@
+pub(crate) mod auth;
+
+use self::auth::WebsocketAuthPolicy;
+use self::auth::authorize_upgrade;
+use self::auth::should_warn_about_unauthenticated_non_loopback_listener;
 use crate::error_code::OVERLOADED_ERROR_CODE;
 use crate::message_processor::ConnectionSessionState;
 use crate::outgoing_message::ConnectionId;
@@ -11,6 +16,7 @@ use axum::extract::State;
 use axum::extract::ws::Message as WebSocketMessage;
 use axum::extract::ws::WebSocket;
 use axum::extract::ws::WebSocketUpgrade;
+use axum::http::HeaderMap;
 use axum::http::Request;
 use axum::http::StatusCode;
 use axum::http::header::ORIGIN;
@@ -82,7 +88,7 @@ fn print_websocket_startup_banner(addr: SocketAddr) {
         );
     } else {
         eprintln!(
-            "  {note_label} this is a raw WS server; consider running behind TLS/auth for real remote use"
+            "  {note_label} websocket auth is opt-in in this build; configure `--ws-auth ...` before real remote use"
         );
     }
 }
@@ -91,6 +97,7 @@ fn print_websocket_startup_banner(addr: SocketAddr) {
 struct WebSocketListenerState {
     transport_event_tx: mpsc::Sender<TransportEvent>,
     connection_counter: Arc<AtomicU64>,
+    auth_policy: Arc<WebsocketAuthPolicy>,
 }
 
 async fn health_check_handler() -> StatusCode {
@@ -117,12 +124,23 @@ async fn websocket_upgrade_handler(
     websocket: WebSocketUpgrade,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     State(state): State<WebSocketListenerState>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
+    if let Err(err) = authorize_upgrade(&headers, state.auth_policy.as_ref()) {
+        warn!(
+            %peer_addr,
+            message = err.message(),
+            "rejecting websocket client during upgrade"
+        );
+        return (err.status_code(), err.message()).into_response();
+    }
     let connection_id = ConnectionId(state.connection_counter.fetch_add(1, Ordering::Relaxed));
     info!(%peer_addr, "websocket client connected");
-    websocket.on_upgrade(move |stream| async move {
-        run_websocket_connection(connection_id, stream, state.transport_event_tx).await;
-    })
+    websocket
+        .on_upgrade(move |stream| async move {
+            run_websocket_connection(connection_id, stream, state.transport_event_tx).await;
+        })
+        .into_response()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -334,7 +352,14 @@ pub(crate) async fn start_websocket_acceptor(
     bind_address: SocketAddr,
     transport_event_tx: mpsc::Sender<TransportEvent>,
     shutdown_token: CancellationToken,
+    auth_policy: WebsocketAuthPolicy,
 ) -> IoResult<JoinHandle<()>> {
+    if should_warn_about_unauthenticated_non_loopback_listener(bind_address, &auth_policy) {
+        warn!(
+            %bind_address,
+            "starting non-loopback websocket listener without auth; websocket auth is opt-in for now and will become the default in a future release"
+        );
+    }
     let listener = TcpListener::bind(bind_address).await?;
     let local_addr = listener.local_addr()?;
     print_websocket_startup_banner(local_addr);
@@ -348,6 +373,7 @@ pub(crate) async fn start_websocket_acceptor(
         .with_state(WebSocketListenerState {
             transport_event_tx,
             connection_counter: Arc::new(AtomicU64::new(1)),
+            auth_policy: Arc::new(auth_policy),
         });
     let server = axum::serve(
         listener,

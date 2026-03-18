@@ -34,6 +34,15 @@ When running with `--listen ws://IP:PORT`, the same listener also serves basic H
 
 Websocket transport is currently experimental and unsupported. Do not rely on it for production workloads.
 
+Security note:
+
+- Loopback websocket listeners (`ws://127.0.0.1:PORT`) remain appropriate for localhost and SSH port-forwarding workflows.
+- Non-loopback websocket listeners currently allow unauthenticated connections by default during rollout. If you expose one remotely, configure websocket auth explicitly now.
+- Supported auth modes are app-server flags:
+  - `--ws-auth capability-token --ws-token-file /absolute/path`
+  - `--ws-auth signed-bearer-token --ws-shared-secret-file /absolute/path` for HMAC-signed JWT/JWS bearer tokens, with optional `--ws-issuer`, `--ws-audience`, `--ws-max-clock-skew-seconds`
+- Clients present the credential as `Authorization: Bearer <token>` during the websocket handshake. Auth is enforced before JSON-RPC `initialize`.
+
 Tracing/log output:
 
 - `RUST_LOG` controls log filtering/verbosity.
