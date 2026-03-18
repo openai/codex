@@ -77,6 +77,7 @@ pub(crate) async fn run(
 
     let input_json = match serde_json::to_string(&UserPromptSubmitCommandInput::new(
         request.session_id.to_string(),
+        request.turn_id.clone(),
         request.transcript_path.clone(),
         request.cwd.display().to_string(),
         request.model.clone(),

@@ -38,6 +38,10 @@
     },
     "transcript_path": {
       "$ref": "#/definitions/NullableString"
+    },
+    "turn_id": {
+      "description": "Codex extension: expose the active turn id to internal turn-scoped hooks.",
+      "type": "string"
     }
   },
   "required": [
@@ -47,7 +51,8 @@
     "permission_mode",
     "prompt",
     "session_id",
-    "transcript_path"
+    "transcript_path",
+    "turn_id"
   ],
   "title": "user-prompt-submit.command.input",
   "type": "object"

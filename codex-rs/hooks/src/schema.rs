@@ -178,6 +178,8 @@ impl SessionStartCommandInput {
 #[schemars(rename = "user-prompt-submit.command.input")]
 pub(crate) struct UserPromptSubmitCommandInput {
     pub session_id: String,
+    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
+    pub turn_id: String,
     pub transcript_path: NullableString,
     pub cwd: String,
     #[schemars(schema_with = "user_prompt_submit_hook_event_name_schema")]
@@ -191,6 +193,7 @@ pub(crate) struct UserPromptSubmitCommandInput {
 impl UserPromptSubmitCommandInput {
     pub(crate) fn new(
         session_id: impl Into<String>,
+        turn_id: impl Into<String>,
         transcript_path: Option<PathBuf>,
         cwd: impl Into<String>,
         model: impl Into<String>,
@@ -199,6 +202,7 @@ impl UserPromptSubmitCommandInput {
     ) -> Self {
         Self {
             session_id: session_id.into(),
+            turn_id: turn_id.into(),
             transcript_path: NullableString::from_path(transcript_path),
             cwd: cwd.into(),
             hook_event_name: "UserPromptSubmit".to_string(),
@@ -214,6 +218,8 @@ impl UserPromptSubmitCommandInput {
 #[schemars(rename = "stop.command.input")]
 pub(crate) struct StopCommandInput {
     pub session_id: String,
+    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
+    pub turn_id: String,
     pub transcript_path: NullableString,
     pub cwd: String,
     #[schemars(schema_with = "stop_hook_event_name_schema")]
@@ -228,6 +234,7 @@ pub(crate) struct StopCommandInput {
 impl StopCommandInput {
     pub(crate) fn new(
         session_id: impl Into<String>,
+        turn_id: impl Into<String>,
         transcript_path: Option<PathBuf>,
         cwd: impl Into<String>,
         model: impl Into<String>,
@@ -237,6 +244,7 @@ impl StopCommandInput {
     ) -> Self {
         Self {
             session_id: session_id.into(),
+            turn_id: turn_id.into(),
             transcript_path: NullableString::from_path(transcript_path),
             cwd: cwd.into(),
             hook_event_name: "Stop".to_string(),
@@ -390,10 +398,14 @@ mod tests {
     use super::SESSION_START_OUTPUT_FIXTURE;
     use super::STOP_INPUT_FIXTURE;
     use super::STOP_OUTPUT_FIXTURE;
+    use super::StopCommandInput;
     use super::USER_PROMPT_SUBMIT_INPUT_FIXTURE;
     use super::USER_PROMPT_SUBMIT_OUTPUT_FIXTURE;
+    use super::UserPromptSubmitCommandInput;
+    use super::schema_json;
     use super::write_schema_fixtures;
     use pretty_assertions::assert_eq;
+    use serde_json::Value;
     use tempfile::TempDir;
 
     fn expected_fixture(name: &str) -> &'static str {
@@ -443,6 +455,31 @@ mod tests {
                 .unwrap_or_else(|err| panic!("read generated schema {fixture}: {err}"));
             let actual = normalize_newlines(&actual);
             assert_eq!(expected, actual, "fixture should match generated schema");
+        }
+    }
+
+    #[test]
+    fn turn_scoped_hook_inputs_include_codex_turn_id_extension() {
+        // Codex intentionally diverges from Claude's public hook docs here so
+        // internal hook consumers can key off the active turn.
+        let user_prompt_submit: Value = serde_json::from_slice(
+            &schema_json::<UserPromptSubmitCommandInput>()
+                .expect("serialize user prompt submit input schema"),
+        )
+        .expect("parse user prompt submit input schema");
+        let stop: Value = serde_json::from_slice(
+            &schema_json::<StopCommandInput>().expect("serialize stop input schema"),
+        )
+        .expect("parse stop input schema");
+
+        for schema in [&user_prompt_submit, &stop] {
+            assert_eq!(schema["properties"]["turn_id"]["type"], "string");
+            assert!(
+                schema["required"]
+                    .as_array()
+                    .expect("schema required fields")
+                    .contains(&Value::String("turn_id".to_string()))
+            );
         }
     }
 }
