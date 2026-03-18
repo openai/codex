@@ -33,12 +33,9 @@ pub(crate) struct SkillsWatcher {
 }
 
 impl SkillsWatcher {
-    pub(crate) fn new(file_watcher: Arc<FileWatcher>) -> Self {
+    pub(crate) fn new(file_watcher: &Arc<FileWatcher>) -> Self {
+        let (subscriber, rx) = file_watcher.add_subscriber();
         let (tx, _) = broadcast::channel(128);
-        let mut subscriber = file_watcher.add_subscriber();
-        let Some(rx) = subscriber.take_receiver() else {
-            unreachable!("file watcher receiver is only taken once");
-        };
         let skills_watcher = Self {
             subscriber,
             tx: tx.clone(),
@@ -48,7 +45,7 @@ impl SkillsWatcher {
     }
 
     pub(crate) fn noop() -> Self {
-        Self::new(Arc::new(FileWatcher::noop()))
+        Self::new(&Arc::new(FileWatcher::noop()))
     }
 
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<SkillsWatcherEvent> {
@@ -95,7 +92,7 @@ mod tests {
     #[tokio::test]
     async fn forwards_file_watcher_events() {
         let file_watcher = Arc::new(FileWatcher::noop());
-        let skills_watcher = SkillsWatcher::new(Arc::clone(&file_watcher));
+        let skills_watcher = SkillsWatcher::new(&file_watcher);
         let mut rx = skills_watcher.subscribe();
         let _registration = skills_watcher
             .subscriber

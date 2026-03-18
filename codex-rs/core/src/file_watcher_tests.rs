@@ -114,7 +114,7 @@ fn is_mutating_event_filters_non_mutating_event_kinds() {
 #[test]
 fn register_dedupes_by_path_and_scope() {
     let watcher = Arc::new(FileWatcher::noop());
-    let subscriber = watcher.add_subscriber();
+    let (subscriber, _rx) = watcher.add_subscriber();
     let _first = subscriber.register_path(path("/tmp/skills"), false);
     let _second = subscriber.register_path(path("/tmp/skills"), false);
     let _third = subscriber.register_path(path("/tmp/skills"), true);
@@ -133,7 +133,7 @@ fn register_dedupes_by_path_and_scope() {
 #[test]
 fn watch_registration_drop_unregisters_paths() {
     let watcher = Arc::new(FileWatcher::noop());
-    let subscriber = watcher.add_subscriber();
+    let (subscriber, _rx) = watcher.add_subscriber();
     let registration = subscriber.register_path(path("/tmp/skills"), true);
 
     drop(registration);
@@ -145,7 +145,7 @@ fn watch_registration_drop_unregisters_paths() {
 fn subscriber_drop_unregisters_paths() {
     let watcher = Arc::new(FileWatcher::noop());
     let registration = {
-        let subscriber = watcher.add_subscriber();
+        let (subscriber, _rx) = watcher.add_subscriber();
         subscriber.register_path(path("/tmp/skills"), true)
     };
 
@@ -153,13 +153,17 @@ fn subscriber_drop_unregisters_paths() {
     drop(registration);
 }
 
-#[test]
-fn receiver_can_only_be_taken_once() {
+#[tokio::test]
+async fn receiver_closes_when_subscriber_drops() {
     let watcher = Arc::new(FileWatcher::noop());
-    let mut subscriber = watcher.add_subscriber();
+    let (subscriber, mut rx) = watcher.add_subscriber();
 
-    assert_eq!(subscriber.take_receiver().is_some(), true);
-    assert_eq!(subscriber.take_receiver().is_none(), true);
+    drop(subscriber);
+
+    let closed = timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .expect("closed recv timeout");
+    assert_eq!(closed, None);
 }
 
 #[test]
@@ -169,7 +173,7 @@ fn recursive_registration_downgrades_to_non_recursive_after_drop() {
     std::fs::create_dir(&root).expect("create root");
 
     let watcher = Arc::new(FileWatcher::new().expect("watcher"));
-    let subscriber = watcher.add_subscriber();
+    let (subscriber, _rx) = watcher.add_subscriber();
     let non_recursive = subscriber.register_path(root.clone(), false);
     let recursive = subscriber.register_path(root.clone(), true);
 
@@ -203,8 +207,8 @@ fn unregister_holds_state_lock_until_unwatch_finishes() {
     std::fs::create_dir(&root).expect("create root");
 
     let watcher = Arc::new(FileWatcher::new().expect("watcher"));
-    let unregister_subscriber = watcher.add_subscriber();
-    let register_subscriber = watcher.add_subscriber();
+    let (unregister_subscriber, _unregister_rx) = watcher.add_subscriber();
+    let (register_subscriber, _register_rx) = watcher.add_subscriber();
     let registration = unregister_subscriber.register_path(root.clone(), true);
 
     let inner = watcher.inner.as_ref().expect("watcher inner");
@@ -251,20 +255,12 @@ fn unregister_holds_state_lock_until_unwatch_finishes() {
 #[tokio::test]
 async fn matching_subscribers_are_notified() {
     let watcher = Arc::new(FileWatcher::noop());
-    let mut skills_subscriber = watcher.add_subscriber();
-    let mut plugins_subscriber = watcher.add_subscriber();
+    let (skills_subscriber, skills_rx) = watcher.add_subscriber();
+    let (plugins_subscriber, plugins_rx) = watcher.add_subscriber();
     let _skills = skills_subscriber.register_path(path("/tmp/skills"), true);
     let _plugins = plugins_subscriber.register_path(path("/tmp/plugins"), true);
-    let mut skills_rx = ThrottledWatchReceiver::new(
-        skills_subscriber.take_receiver().expect("skills receiver"),
-        TEST_THROTTLE_INTERVAL,
-    );
-    let mut plugins_rx = ThrottledWatchReceiver::new(
-        plugins_subscriber
-            .take_receiver()
-            .expect("plugins receiver"),
-        TEST_THROTTLE_INTERVAL,
-    );
+    let mut skills_rx = ThrottledWatchReceiver::new(skills_rx, TEST_THROTTLE_INTERVAL);
+    let mut plugins_rx = ThrottledWatchReceiver::new(plugins_rx, TEST_THROTTLE_INTERVAL);
 
     watcher
         .send_paths_for_test(vec![path("/tmp/skills/rust/SKILL.md")])
@@ -288,12 +284,9 @@ async fn matching_subscribers_are_notified() {
 #[tokio::test]
 async fn non_recursive_watch_ignores_grandchildren() {
     let watcher = Arc::new(FileWatcher::noop());
-    let mut subscriber = watcher.add_subscriber();
+    let (subscriber, rx) = watcher.add_subscriber();
     let _registration = subscriber.register_path(path("/tmp/skills"), false);
-    let mut rx = ThrottledWatchReceiver::new(
-        subscriber.take_receiver().expect("subscriber receiver"),
-        TEST_THROTTLE_INTERVAL,
-    );
+    let mut rx = ThrottledWatchReceiver::new(rx, TEST_THROTTLE_INTERVAL);
 
     watcher
         .send_paths_for_test(vec![path("/tmp/skills/nested/SKILL.md")])
@@ -306,12 +299,9 @@ async fn non_recursive_watch_ignores_grandchildren() {
 #[tokio::test]
 async fn ancestor_events_notify_child_watches() {
     let watcher = Arc::new(FileWatcher::noop());
-    let mut subscriber = watcher.add_subscriber();
+    let (subscriber, rx) = watcher.add_subscriber();
     let _registration = subscriber.register_path(path("/tmp/skills/rust/SKILL.md"), false);
-    let mut rx = ThrottledWatchReceiver::new(
-        subscriber.take_receiver().expect("subscriber receiver"),
-        TEST_THROTTLE_INTERVAL,
-    );
+    let mut rx = ThrottledWatchReceiver::new(rx, TEST_THROTTLE_INTERVAL);
 
     watcher.send_paths_for_test(vec![path("/tmp/skills")]).await;
 
@@ -330,12 +320,9 @@ async fn ancestor_events_notify_child_watches() {
 #[tokio::test]
 async fn spawn_event_loop_filters_non_mutating_events() {
     let watcher = Arc::new(FileWatcher::noop());
-    let mut subscriber = watcher.add_subscriber();
+    let (subscriber, rx) = watcher.add_subscriber();
     let _registration = subscriber.register_path(path("/tmp/skills"), true);
-    let mut rx = ThrottledWatchReceiver::new(
-        subscriber.take_receiver().expect("subscriber receiver"),
-        TEST_THROTTLE_INTERVAL,
-    );
+    let mut rx = ThrottledWatchReceiver::new(rx, TEST_THROTTLE_INTERVAL);
     let (raw_tx, raw_rx) = mpsc::unbounded_channel();
     watcher.spawn_event_loop_for_test(raw_rx);
 

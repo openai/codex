@@ -95,7 +95,7 @@ fn build_skills_watcher(skills_manager: Arc<SkillsManager>) -> Arc<SkillsWatcher
             Arc::new(FileWatcher::noop())
         }
     };
-    let skills_watcher = Arc::new(SkillsWatcher::new(file_watcher));
+    let skills_watcher = Arc::new(SkillsWatcher::new(&file_watcher));
 
     let mut rx = skills_watcher.subscribe();
     let skills_manager = Arc::clone(&skills_manager);

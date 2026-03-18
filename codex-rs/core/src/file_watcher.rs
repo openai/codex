@@ -26,13 +26,18 @@ use tokio::time::sleep_until;
 use tracing::warn;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Coalesced file change notification for a subscriber.
 pub struct FileWatcherEvent {
+    /// Changed paths delivered in sorted order with duplicates removed.
     pub paths: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
+/// Path subscription registered by a [`FileWatcherSubscriber`].
 pub struct WatchPath {
+    /// Root path to watch.
     pub path: PathBuf,
+    /// Whether events below `path` should match recursively.
     pub recursive: bool,
 }
 
@@ -50,6 +55,7 @@ struct SubscriberState {
     tx: WatchSender,
 }
 
+/// Receives coalesced change notifications for a single subscriber.
 pub struct Receiver {
     inner: Arc<ReceiverInner>,
 }
@@ -65,6 +71,8 @@ struct ReceiverInner {
 }
 
 impl Receiver {
+    /// Waits for the next batch of changed paths, or returns `None` once the
+    /// corresponding subscriber has been removed and no more events can arrive.
     pub async fn recv(&mut self) -> Option<FileWatcherEvent> {
         loop {
             let notified = self.inner.notify.notified();
@@ -181,6 +189,7 @@ pub struct ThrottledWatchReceiver {
 }
 
 impl ThrottledWatchReceiver {
+    /// Creates a throttling wrapper around a raw watcher [`Receiver`].
     pub fn new(rx: Receiver, interval: Duration) -> Self {
         Self {
             rx,
@@ -189,6 +198,8 @@ impl ThrottledWatchReceiver {
         }
     }
 
+    /// Receives the next event, enforcing the configured minimum delay after
+    /// the previous emission.
     pub async fn recv(&mut self) -> Option<FileWatcherEvent> {
         if let Some(next_allowed) = self.next_allowed {
             sleep_until(next_allowed).await;
@@ -202,25 +213,21 @@ impl ThrottledWatchReceiver {
     }
 }
 
+/// Handle used to register watched paths for one logical consumer.
 pub struct FileWatcherSubscriber {
     id: SubscriberId,
-    file_watcher: std::sync::Weak<FileWatcher>,
-    rx: Option<Receiver>,
+    file_watcher: Arc<FileWatcher>,
 }
 
 impl FileWatcherSubscriber {
-    pub fn take_receiver(&mut self) -> Option<Receiver> {
-        self.rx.take()
-    }
-
+    /// Registers the provided paths for this subscriber and returns an RAII
+    /// guard that unregisters them on drop.
     pub fn register_paths(&self, watched_paths: Vec<WatchPath>) -> WatchRegistration {
         let watched_paths = dedupe_watched_paths(watched_paths);
-        if let Some(file_watcher) = self.file_watcher.upgrade() {
-            file_watcher.register_paths(self.id, &watched_paths);
-        }
+        self.file_watcher.register_paths(self.id, &watched_paths);
 
         WatchRegistration {
-            file_watcher: self.file_watcher.clone(),
+            file_watcher: Arc::downgrade(&self.file_watcher),
             subscriber_id: self.id,
             watched_paths,
         }
@@ -234,12 +241,11 @@ impl FileWatcherSubscriber {
 
 impl Drop for FileWatcherSubscriber {
     fn drop(&mut self) {
-        if let Some(file_watcher) = self.file_watcher.upgrade() {
-            file_watcher.remove_subscriber(self.id);
-        }
+        self.file_watcher.remove_subscriber(self.id);
     }
 }
 
+/// RAII guard for a set of active path registrations.
 pub struct WatchRegistration {
     file_watcher: std::sync::Weak<FileWatcher>,
     subscriber_id: SubscriberId,
@@ -254,12 +260,15 @@ impl Drop for WatchRegistration {
     }
 }
 
+/// Multi-subscriber file watcher built on top of `notify`.
 pub struct FileWatcher {
     inner: Option<Mutex<FileWatcherInner>>,
     state: Arc<RwLock<WatchState>>,
 }
 
 impl FileWatcher {
+    /// Creates a live filesystem watcher and starts its background event loop
+    /// on the current Tokio runtime.
     pub fn new() -> notify::Result<Self> {
         let (raw_tx, raw_rx) = mpsc::unbounded_channel();
         let raw_tx_clone = raw_tx;
@@ -279,6 +288,8 @@ impl FileWatcher {
         Ok(file_watcher)
     }
 
+    /// Creates an inert watcher that only supports test-driven synthetic
+    /// notifications.
     pub fn noop() -> Self {
         Self {
             inner: None,
@@ -286,7 +297,9 @@ impl FileWatcher {
         }
     }
 
-    pub fn add_subscriber(self: &Arc<Self>) -> FileWatcherSubscriber {
+    /// Adds a new subscriber and returns both its registration handle and its
+    /// dedicated event receiver.
+    pub fn add_subscriber(self: &Arc<Self>) -> (FileWatcherSubscriber, Receiver) {
         let (tx, rx) = watch_channel();
         let mut state = self
             .state
@@ -302,11 +315,11 @@ impl FileWatcher {
             },
         );
 
-        FileWatcherSubscriber {
+        let subscriber = FileWatcherSubscriber {
             id: subscriber_id,
-            file_watcher: Arc::downgrade(self),
-            rx: Some(rx),
-        }
+            file_watcher: self.clone(),
+        };
+        (subscriber, rx)
     }
 
     fn register_paths(&self, subscriber_id: SubscriberId, watched_paths: &[WatchPath]) {
