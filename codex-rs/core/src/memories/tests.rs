@@ -421,7 +421,6 @@ mod phase2 {
     use crate::codex::make_session_and_context;
     use crate::config::Config;
     use crate::config::test_config;
-    use crate::features::Feature;
     use crate::memories::memory_root;
     use crate::memories::phase2;
     use crate::memories::raw_memories_file;
