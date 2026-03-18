@@ -82,6 +82,62 @@ pub struct ExecRequest {
     pub arg0: Option<String>,
 }
 
+pub struct ExecRequestArgs {
+    pub command: Vec<String>,
+    pub cwd: PathBuf,
+    pub env: HashMap<String, String>,
+    pub network: Option<NetworkProxy>,
+    pub expiration: ExecExpiration,
+    pub sandbox: SandboxType,
+    pub windows_sandbox_level: WindowsSandboxLevel,
+    pub windows_sandbox_private_desktop: bool,
+    pub sandbox_permissions: SandboxPermissions,
+    pub sandbox_policy: SandboxPolicy,
+    pub file_system_sandbox_policy: FileSystemSandboxPolicy,
+    pub network_sandbox_policy: NetworkSandboxPolicy,
+    pub justification: Option<String>,
+    pub arg0: Option<String>,
+}
+
+impl ExecRequest {
+    pub fn new(args: ExecRequestArgs) -> Self {
+        let ExecRequestArgs {
+            command,
+            cwd,
+            env,
+            network,
+            expiration,
+            sandbox,
+            windows_sandbox_level,
+            windows_sandbox_private_desktop,
+            sandbox_permissions,
+            sandbox_policy,
+            file_system_sandbox_policy,
+            network_sandbox_policy,
+            justification,
+            arg0,
+        } = args;
+
+        Self {
+            command,
+            cwd,
+            env,
+            network,
+            expiration,
+            sandbox,
+            windows_sandbox_level,
+            windows_sandbox_private_desktop,
+            sandbox_permissions,
+            sandbox_policy,
+            file_system_sandbox_policy,
+            network_sandbox_policy,
+            windows_restricted_token_filesystem_overlay: None,
+            justification,
+            arg0,
+        }
+    }
+}
+
 /// Bundled arguments for sandbox transformation.
 ///
 /// This keeps call sites self-documenting when several fields are optional.

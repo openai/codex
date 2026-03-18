@@ -716,6 +716,8 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     use tokio_util::sync::CancellationToken;
 
+    use codex_core::sandboxing::ExecRequestArgs;
+
     use super::*;
     #[cfg(not(target_os = "windows"))]
     use crate::outgoing_message::OutgoingEnvelope;
@@ -727,7 +729,7 @@ mod tests {
             access: ReadOnlyAccess::FullAccess,
             network_access: false,
         };
-        ExecRequest {
+        ExecRequest::new(ExecRequestArgs {
             command: vec!["cmd".to_string()],
             cwd: PathBuf::from("."),
             env: HashMap::new(),
@@ -742,7 +744,7 @@ mod tests {
             network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
             justification: None,
             arg0: None,
-        }
+        })
     }
 
     #[tokio::test]
@@ -839,7 +841,7 @@ mod tests {
                 outgoing: Arc::new(OutgoingMessageSender::new(tx)),
                 request_id: request_id.clone(),
                 process_id: Some("proc-100".to_string()),
-                exec_request: ExecRequest {
+                exec_request: ExecRequest::new(ExecRequestArgs {
                     command: vec!["sh".to_string(), "-lc".to_string(), "sleep 30".to_string()],
                     cwd: PathBuf::from("."),
                     env: HashMap::new(),
@@ -854,7 +856,7 @@ mod tests {
                     network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
                     justification: None,
                     arg0: None,
-                },
+                }),
                 started_network_proxy: None,
                 tty: false,
                 stream_stdin: false,

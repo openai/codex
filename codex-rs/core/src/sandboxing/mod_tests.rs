@@ -195,14 +195,14 @@ fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() 
 fn transform_rejects_unsupported_windows_split_only_filesystem_policies() {
     let manager = SandboxManager::new();
     let temp_dir = TempDir::new().expect("create temp dir");
-    let docs = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("docs"))
-        .expect("absolute docs path");
+    let cwd = canonicalize(temp_dir.path()).expect("canonicalize temp dir");
+    let docs = AbsolutePathBuf::from_absolute_path(cwd.join("docs")).expect("absolute docs path");
     let err = manager
         .transform(super::SandboxTransformRequest {
             spec: super::CommandSpec {
                 program: "true".to_string(),
                 args: Vec::new(),
-                cwd: temp_dir.path().to_path_buf(),
+                cwd: cwd.clone(),
                 env: HashMap::new(),
                 expiration: crate::exec::ExecExpiration::DefaultTimeout,
                 sandbox_permissions: super::SandboxPermissions::UseDefault,
@@ -232,12 +232,13 @@ fn transform_rejects_unsupported_windows_split_only_filesystem_policies() {
             sandbox: SandboxType::WindowsRestrictedToken,
             enforce_managed_network: false,
             network: None,
-            sandbox_policy_cwd: temp_dir.path(),
+            sandbox_policy_cwd: &cwd,
             #[cfg(target_os = "macos")]
             macos_seatbelt_profile_extensions: None,
             codex_linux_sandbox_exe: None,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+            windows_sandbox_private_desktop: false,
         })
         .expect_err("unsupported split-only windows policy should fail closed");
 
@@ -251,15 +252,15 @@ fn transform_rejects_unsupported_windows_split_only_filesystem_policies() {
 fn transform_allows_supported_windows_split_write_read_carveouts() {
     let manager = SandboxManager::new();
     let temp_dir = TempDir::new().expect("create temp dir");
-    let docs = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("docs"))
-        .expect("absolute docs path");
+    let cwd = canonicalize(temp_dir.path()).expect("canonicalize temp dir");
+    let docs = AbsolutePathBuf::from_absolute_path(cwd.join("docs")).expect("absolute docs path");
     std::fs::create_dir_all(docs.as_path()).expect("create docs");
     let exec_request = manager
         .transform(super::SandboxTransformRequest {
             spec: super::CommandSpec {
                 program: "true".to_string(),
                 args: Vec::new(),
-                cwd: temp_dir.path().to_path_buf(),
+                cwd: cwd.clone(),
                 env: HashMap::new(),
                 expiration: crate::exec::ExecExpiration::DefaultTimeout,
                 sandbox_permissions: super::SandboxPermissions::UseDefault,
@@ -295,12 +296,13 @@ fn transform_allows_supported_windows_split_write_read_carveouts() {
             sandbox: SandboxType::WindowsRestrictedToken,
             enforce_managed_network: false,
             network: None,
-            sandbox_policy_cwd: temp_dir.path(),
+            sandbox_policy_cwd: &cwd,
             #[cfg(target_os = "macos")]
             macos_seatbelt_profile_extensions: None,
             codex_linux_sandbox_exe: None,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+            windows_sandbox_private_desktop: false,
         })
         .expect("supported split write/read carveout should transform");
 
@@ -318,15 +320,15 @@ fn transform_allows_supported_windows_split_write_read_carveouts() {
 fn transform_rejects_windows_elevated_split_write_read_carveouts() {
     let manager = SandboxManager::new();
     let temp_dir = TempDir::new().expect("create temp dir");
-    let docs = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("docs"))
-        .expect("absolute docs path");
+    let cwd = canonicalize(temp_dir.path()).expect("canonicalize temp dir");
+    let docs = AbsolutePathBuf::from_absolute_path(cwd.join("docs")).expect("absolute docs path");
     std::fs::create_dir_all(docs.as_path()).expect("create docs");
     let err = manager
         .transform(super::SandboxTransformRequest {
             spec: super::CommandSpec {
                 program: "true".to_string(),
                 args: Vec::new(),
-                cwd: temp_dir.path().to_path_buf(),
+                cwd: cwd.clone(),
                 env: HashMap::new(),
                 expiration: crate::exec::ExecExpiration::DefaultTimeout,
                 sandbox_permissions: super::SandboxPermissions::UseDefault,
@@ -362,12 +364,13 @@ fn transform_rejects_windows_elevated_split_write_read_carveouts() {
             sandbox: SandboxType::WindowsRestrictedToken,
             enforce_managed_network: false,
             network: None,
-            sandbox_policy_cwd: temp_dir.path(),
+            sandbox_policy_cwd: &cwd,
             #[cfg(target_os = "macos")]
             macos_seatbelt_profile_extensions: None,
             codex_linux_sandbox_exe: None,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Elevated,
+            windows_sandbox_private_desktop: false,
         })
         .expect_err("elevated split write/read carveout should fail closed");
 

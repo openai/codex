@@ -370,7 +370,8 @@ fn windows_restricted_token_rejects_root_write_read_only_carveouts() {
 #[test]
 fn windows_restricted_token_supports_full_read_split_write_read_carveouts() {
     let temp_dir = tempfile::TempDir::new().expect("tempdir");
-    let docs = temp_dir.path().join("docs");
+    let cwd = dunce::canonicalize(temp_dir.path()).expect("canonicalize temp dir");
+    let docs = cwd.join("docs");
     std::fs::create_dir_all(&docs).expect("create docs");
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
@@ -407,7 +408,7 @@ fn windows_restricted_token_supports_full_read_split_write_read_carveouts() {
             &policy,
             &file_system_policy,
             NetworkSandboxPolicy::Restricted,
-            temp_dir.path(),
+            &cwd,
             WindowsSandboxLevel::RestrictedToken,
         ),
         Ok(Some(WindowsRestrictedTokenFilesystemOverlay {
