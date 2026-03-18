@@ -133,17 +133,6 @@ fn custom_tool_calls_can_derive_text_from_content_items() {
 }
 
 #[test]
-fn apply_patch_code_mode_result_is_empty_object() {
-    let result = ApplyPatchToolOutput::from_text("ok".to_string()).code_mode_result(
-        &ToolPayload::Function {
-            arguments: "{}".to_string(),
-        },
-    );
-
-    assert_eq!(result, json!({}));
-}
-
-#[test]
 fn tool_search_payloads_roundtrip_as_tool_search_outputs() {
     let payload = ToolPayload::ToolSearch {
         arguments: SearchToolCallParams {

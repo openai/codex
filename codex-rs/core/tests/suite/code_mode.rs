@@ -1753,6 +1753,7 @@ async fn code_mode_can_apply_patch_via_nested_tool() -> Result<()> {
         ),
         text_item(&items, 0),
     );
+    assert_eq!(text_item(&items, 1), "{}");
 
     let file_path = test.cwd_path().join(file_name);
     assert_eq!(fs::read_to_string(&file_path)?, "hello from code_mode\n");
