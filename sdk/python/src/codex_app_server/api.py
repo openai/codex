@@ -11,6 +11,7 @@ from .generated.v2_all import (
     ApprovalsReviewer,
     AskForApproval,
     ItemCompletedNotification,
+    MessagePhase,
     ModelListResponse,
     Personality,
     ReasoningEffort,
@@ -107,20 +108,28 @@ def _normalize_run_input(input: RunInput) -> Input:
     return input
 
 
-def _assistant_text_from_item(item: ThreadItem) -> tuple[bool, str]:
+def _agent_message_item_from_thread_item(
+    item: ThreadItem,
+) -> AgentMessageThreadItem | None:
     thread_item = item.root if hasattr(item, "root") else item
     if isinstance(thread_item, AgentMessageThreadItem):
-        return True, thread_item.text
-    return False, ""
+        return thread_item
+    return None
 
 
 def _final_assistant_response_from_items(items: list[ThreadItem]) -> str:
-    final_response = ""
-    for item in items:
-        found_assistant_text, item_text = _assistant_text_from_item(item)
-        if found_assistant_text:
-            final_response = item_text
-    return final_response
+    last_unknown_phase_response: str | None = None
+
+    for item in reversed(items):
+        agent_message = _agent_message_item_from_thread_item(item)
+        if agent_message is None:
+            continue
+        if agent_message.phase == MessagePhase.final_answer:
+            return agent_message.text
+        if agent_message.phase is None and last_unknown_phase_response is None:
+            last_unknown_phase_response = agent_message.text
+
+    return last_unknown_phase_response or ""
 
 
 def _raise_for_failed_turn(turn: AppServerTurn) -> None:

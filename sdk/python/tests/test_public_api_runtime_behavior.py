@@ -12,6 +12,7 @@ from codex_app_server.client import AppServerClient
 from codex_app_server.generated.v2_all import (
     AgentMessageDeltaNotification,
     ItemCompletedNotification,
+    MessagePhase,
     ThreadTokenUsageUpdatedNotification,
     TurnCompletedNotification,
     TurnStatus,
@@ -79,16 +80,20 @@ def _item_completed_notification(
     thread_id: str = "thread-1",
     turn_id: str = "turn-1",
     text: str = "final text",
+    phase: MessagePhase | None = None,
 ) -> Notification:
+    item: dict[str, object] = {
+        "id": "item-1",
+        "text": text,
+        "type": "agentMessage",
+    }
+    if phase is not None:
+        item["phase"] = phase.value
     return Notification(
         method="item/completed",
         payload=ItemCompletedNotification.model_validate(
             {
-                "item": {
-                    "id": "item-1",
-                    "text": text,
-                    "type": "agentMessage",
-                },
+                "item": item,
                 "threadId": thread_id,
                 "turnId": turn_id,
             }
@@ -370,6 +375,60 @@ def test_thread_run_preserves_empty_last_assistant_message() -> None:
         first_item_notification.payload.item,
         second_item_notification.payload.item,
     ]
+
+
+def test_thread_run_prefers_explicit_final_answer_over_later_commentary() -> None:
+    client = AppServerClient()
+    final_answer_notification = _item_completed_notification(
+        text="Final answer",
+        phase=MessagePhase.final_answer,
+    )
+    commentary_notification = _item_completed_notification(
+        text="Commentary",
+        phase=MessagePhase.commentary,
+    )
+    notifications: deque[Notification] = deque(
+        [
+            final_answer_notification,
+            commentary_notification,
+            _completed_notification(),
+        ]
+    )
+    client.next_notification = notifications.popleft  # type: ignore[method-assign]
+    client.turn_start = lambda thread_id, wire_input, *, params=None: SimpleNamespace(  # noqa: ARG005,E731
+        turn=SimpleNamespace(id="turn-1")
+    )
+
+    result = Thread(client, "thread-1").run("hello")
+
+    assert result.final_response == "Final answer"
+    assert result.items == [
+        final_answer_notification.payload.item,
+        commentary_notification.payload.item,
+    ]
+
+
+def test_thread_run_returns_empty_when_only_commentary_messages_complete() -> None:
+    client = AppServerClient()
+    commentary_notification = _item_completed_notification(
+        text="Commentary",
+        phase=MessagePhase.commentary,
+    )
+    notifications: deque[Notification] = deque(
+        [
+            commentary_notification,
+            _completed_notification(),
+        ]
+    )
+    client.next_notification = notifications.popleft  # type: ignore[method-assign]
+    client.turn_start = lambda thread_id, wire_input, *, params=None: SimpleNamespace(  # noqa: ARG005,E731
+        turn=SimpleNamespace(id="turn-1")
+    )
+
+    result = Thread(client, "thread-1").run("hello")
+
+    assert result.final_response == ""
+    assert result.items == [commentary_notification.payload.item]
 
 
 def test_thread_run_raises_on_failed_turn() -> None:
