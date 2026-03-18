@@ -7,7 +7,9 @@ from typing import AsyncIterator, Iterator
 from .async_client import AsyncAppServerClient
 from .client import AppServerClient, AppServerConfig
 from .generated.v2_all import (
+    ApprovalsReviewer,
     AskForApproval,
+    ItemCompletedNotification,
     ModelListResponse,
     Personality,
     ReasoningEffort,
@@ -27,10 +29,13 @@ from .generated.v2_all import (
     ThreadSortKey,
     ThreadSourceKind,
     ThreadStartParams,
+    ThreadTokenUsage,
+    ThreadTokenUsageUpdatedNotification,
     Turn as AppServerTurn,
     TurnCompletedNotification,
     TurnInterruptResponse,
     TurnStartParams,
+    TurnStatus,
     TurnSteerResponse,
 )
 from .models import InitializeResponse, JsonObject, Notification, ServerInfo
@@ -65,6 +70,14 @@ class MentionInput:
 
 InputItem = TextInput | ImageInput | LocalImageInput | SkillInput | MentionInput
 Input = list[InputItem] | InputItem
+RunInput = Input | str
+
+
+@dataclass(slots=True)
+class RunResult:
+    final_response: str
+    items: list[ThreadItem]
+    usage: ThreadTokenUsage | None
 
 
 def _to_wire_item(item: InputItem) -> JsonObject:
@@ -85,6 +98,103 @@ def _to_wire_input(input: Input) -> list[JsonObject]:
     if isinstance(input, list):
         return [_to_wire_item(i) for i in input]
     return [_to_wire_item(input)]
+
+
+def _normalize_run_input(input: RunInput) -> Input:
+    if isinstance(input, str):
+        return TextInput(input)
+    return input
+
+
+def _assistant_text_from_items(items: list[ThreadItem]) -> str:
+    chunks: list[str] = []
+    for item in items:
+        raw_item = item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+        if not isinstance(raw_item, dict):
+            continue
+
+        item_type = raw_item.get("type")
+        if item_type == "agentMessage":
+            text = raw_item.get("text")
+            if isinstance(text, str) and text:
+                chunks.append(text)
+            continue
+
+        if item_type != "message" or raw_item.get("role") != "assistant":
+            continue
+
+        for content in raw_item.get("content") or []:
+            if not isinstance(content, dict) or content.get("type") != "output_text":
+                continue
+            text = content.get("text")
+            if isinstance(text, str) and text:
+                chunks.append(text)
+
+    return "".join(chunks)
+
+
+def _raise_for_failed_turn(turn: AppServerTurn) -> None:
+    if turn.status != TurnStatus.failed:
+        return
+    if turn.error is not None and turn.error.message:
+        raise RuntimeError(turn.error.message)
+    raise RuntimeError(f"turn failed with status {turn.status.value}")
+
+
+def _collect_run_result(stream: Iterator[Notification], *, turn_id: str) -> RunResult:
+    completed: TurnCompletedNotification | None = None
+    items: list[ThreadItem] = []
+    usage: ThreadTokenUsage | None = None
+
+    for event in stream:
+        payload = event.payload
+        if isinstance(payload, ItemCompletedNotification) and payload.turn_id == turn_id:
+            items.append(payload.item)
+            continue
+        if isinstance(payload, ThreadTokenUsageUpdatedNotification) and payload.turn_id == turn_id:
+            usage = payload.token_usage
+            continue
+        if isinstance(payload, TurnCompletedNotification) and payload.turn.id == turn_id:
+            completed = payload
+
+    if completed is None:
+        raise RuntimeError("turn completed event not received")
+
+    _raise_for_failed_turn(completed.turn)
+    return RunResult(
+        final_response=_assistant_text_from_items(items),
+        items=items,
+        usage=usage,
+    )
+
+
+async def _collect_async_run_result(
+    stream: AsyncIterator[Notification], *, turn_id: str
+) -> RunResult:
+    completed: TurnCompletedNotification | None = None
+    items: list[ThreadItem] = []
+    usage: ThreadTokenUsage | None = None
+
+    async for event in stream:
+        payload = event.payload
+        if isinstance(payload, ItemCompletedNotification) and payload.turn_id == turn_id:
+            items.append(payload.item)
+            continue
+        if isinstance(payload, ThreadTokenUsageUpdatedNotification) and payload.turn_id == turn_id:
+            usage = payload.token_usage
+            continue
+        if isinstance(payload, TurnCompletedNotification) and payload.turn.id == turn_id:
+            completed = payload
+
+    if completed is None:
+        raise RuntimeError("turn completed event not received")
+
+    _raise_for_failed_turn(completed.turn)
+    return RunResult(
+        final_response=_assistant_text_from_items(items),
+        items=items,
+        usage=usage,
+    )
 
 
 def _split_user_agent(user_agent: str) -> tuple[str | None, str | None]:
@@ -503,6 +613,40 @@ class Thread:
     _client: AppServerClient
     id: str
 
+    def run(
+        self,
+        input: RunInput,
+        *,
+        approval_policy: AskForApproval | None = None,
+        approvals_reviewer: ApprovalsReviewer | None = None,
+        cwd: str | None = None,
+        effort: ReasoningEffort | None = None,
+        model: str | None = None,
+        output_schema: JsonObject | None = None,
+        personality: Personality | None = None,
+        sandbox_policy: SandboxPolicy | None = None,
+        service_tier: ServiceTier | None = None,
+        summary: ReasoningSummary | None = None,
+    ) -> RunResult:
+        turn = self.turn(
+            _normalize_run_input(input),
+            approval_policy=approval_policy,
+            approvals_reviewer=approvals_reviewer,
+            cwd=cwd,
+            effort=effort,
+            model=model,
+            output_schema=output_schema,
+            personality=personality,
+            sandbox_policy=sandbox_policy,
+            service_tier=service_tier,
+            summary=summary,
+        )
+        stream = turn.stream()
+        try:
+            return _collect_run_result(stream, turn_id=turn.id)
+        finally:
+            stream.close()
+
     # BEGIN GENERATED: Thread.flat_methods
     def turn(
         self,
@@ -552,6 +696,40 @@ class Thread:
 class AsyncThread:
     _codex: AsyncCodex
     id: str
+
+    async def run(
+        self,
+        input: RunInput,
+        *,
+        approval_policy: AskForApproval | None = None,
+        approvals_reviewer: ApprovalsReviewer | None = None,
+        cwd: str | None = None,
+        effort: ReasoningEffort | None = None,
+        model: str | None = None,
+        output_schema: JsonObject | None = None,
+        personality: Personality | None = None,
+        sandbox_policy: SandboxPolicy | None = None,
+        service_tier: ServiceTier | None = None,
+        summary: ReasoningSummary | None = None,
+    ) -> RunResult:
+        turn = await self.turn(
+            _normalize_run_input(input),
+            approval_policy=approval_policy,
+            approvals_reviewer=approvals_reviewer,
+            cwd=cwd,
+            effort=effort,
+            model=model,
+            output_schema=output_schema,
+            personality=personality,
+            sandbox_policy=sandbox_policy,
+            service_tier=service_tier,
+            summary=summary,
+        )
+        stream = turn.stream()
+        try:
+            return await _collect_async_run_result(stream, turn_id=turn.id)
+        finally:
+            await stream.aclose()
 
     # BEGIN GENERATED: AsyncThread.flat_methods
     async def turn(
