@@ -378,7 +378,7 @@ mod agent {
             // Fire and forget close of the agent.
             if !matches!(final_status, AgentStatus::Shutdown | AgentStatus::NotFound) {
                 tokio::spawn(async move {
-                    if let Err(err) = agent_control.shutdown_agent(thread_id).await {
+                    if let Err(err) = agent_control.shutdown_live_agent(thread_id).await {
                         warn!(
                             "failed to auto-close global memory consolidation agent {thread_id}: {err}"
                         );

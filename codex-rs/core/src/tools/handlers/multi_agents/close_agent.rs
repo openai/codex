@@ -72,7 +72,7 @@ impl ToolHandler for Handler {
             session
                 .services
                 .agent_control
-                .shutdown_agent(agent_id)
+                .close_agent(agent_id)
                 .await
                 .map_err(|err| collab_agent_error(agent_id, err))
                 .map(|_| ())
