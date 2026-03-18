@@ -5596,9 +5596,6 @@ class PluginListResponse(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    featured_plugin_ids: Annotated[
-        list[str] | None, Field(alias="featuredPluginIds")
-    ] = []
     marketplaces: list[PluginMarketplaceEntry]
     remote_sync_error: Annotated[str | None, Field(alias="remoteSyncError")] = None
 
