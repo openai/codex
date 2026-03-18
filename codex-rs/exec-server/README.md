@@ -18,8 +18,8 @@ unified-exec in this PR; it is only the standalone transport layer.
 
 ## Transport
 
-The server speaks the shared `codex-app-server-protocol` JSON-RPC message
-envelope without a `"jsonrpc":"2.0"` field.
+The server speaks the shared `codex-app-server-protocol` message envelope on
+the wire.
 
 The standalone binary supports:
 

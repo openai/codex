@@ -56,6 +56,16 @@ impl RpcClient {
                             break;
                         }
                     }
+                    JsonRpcConnectionEvent::MalformedMessage { reason } => {
+                        warn!("JSON-RPC client closing after malformed server message: {reason}");
+                        let _ = event_tx
+                            .send(RpcClientEvent::Disconnected {
+                                reason: Some(reason),
+                            })
+                            .await;
+                        drain_pending(&pending_for_reader).await;
+                        return;
+                    }
                     JsonRpcConnectionEvent::Disconnected { reason } => {
                         let _ = event_tx.send(RpcClientEvent::Disconnected { reason }).await;
                         drain_pending(&pending_for_reader).await;

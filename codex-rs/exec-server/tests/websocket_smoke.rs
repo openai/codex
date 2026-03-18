@@ -70,6 +70,68 @@ async fn exec_server_accepts_initialize_over_websocket() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_reports_malformed_websocket_json_and_keeps_running() -> anyhow::Result<()> {
+    let binary = cargo_bin("codex-exec-server")?;
+    let websocket_url = reserve_websocket_url()?;
+    let mut child = Command::new(binary);
+    child.args(["--listen", &websocket_url]);
+    child.stdin(Stdio::null());
+    child.stdout(Stdio::null());
+    child.stderr(Stdio::inherit());
+    let mut child = child.spawn()?;
+
+    let (mut websocket, _) = connect_websocket_when_ready(&websocket_url).await?;
+    futures::SinkExt::send(&mut websocket, Message::Text("not-json".to_string().into())).await?;
+
+    let Some(Ok(Message::Text(response_text))) = futures::StreamExt::next(&mut websocket).await
+    else {
+        panic!("expected malformed-message error response");
+    };
+    let response: JSONRPCMessage = serde_json::from_str(response_text.as_ref())?;
+    let JSONRPCMessage::Error(JSONRPCError { id, error }) = response else {
+        panic!("expected malformed-message error response");
+    };
+    assert_eq!(id, RequestId::Integer(-1));
+    assert_eq!(error.code, -32600);
+    assert!(
+        error
+            .message
+            .starts_with("failed to parse websocket JSON-RPC message from exec-server websocket"),
+        "unexpected malformed-message error: {}",
+        error.message
+    );
+
+    let initialize = JSONRPCMessage::Request(JSONRPCRequest {
+        id: RequestId::Integer(1),
+        method: "initialize".to_string(),
+        params: Some(serde_json::to_value(InitializeParams {
+            client_name: "exec-server-test".to_string(),
+        })?),
+        trace: None,
+    });
+    futures::SinkExt::send(
+        &mut websocket,
+        Message::Text(serde_json::to_string(&initialize)?.into()),
+    )
+    .await?;
+
+    let Some(Ok(Message::Text(response_text))) = futures::StreamExt::next(&mut websocket).await
+    else {
+        panic!("expected initialize response after malformed input");
+    };
+    let response: JSONRPCMessage = serde_json::from_str(response_text.as_ref())?;
+    let JSONRPCMessage::Response(JSONRPCResponse { id, result }) = response else {
+        panic!("expected initialize response after malformed input");
+    };
+    assert_eq!(id, RequestId::Integer(1));
+    let initialize_response: InitializeResponse = serde_json::from_value(result)?;
+    assert_eq!(initialize_response, InitializeResponse {});
+
+    child.start_kill()?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_server_stubs_process_start_over_websocket() -> anyhow::Result<()> {
     let binary = cargo_bin("codex-exec-server")?;
     let websocket_url = reserve_websocket_url()?;

@@ -44,3 +44,10 @@ pub(crate) fn response_message(
         }),
     }
 }
+
+pub(crate) fn invalid_request_message(reason: String) -> JSONRPCMessage {
+    JSONRPCMessage::Error(JSONRPCError {
+        id: RequestId::Integer(-1),
+        error: invalid_request(reason),
+    })
+}

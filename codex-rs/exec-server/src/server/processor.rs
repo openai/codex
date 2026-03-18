@@ -10,8 +10,10 @@ use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
 use crate::server::ExecServerHandler;
 use crate::server::jsonrpc::invalid_params;
+use crate::server::jsonrpc::invalid_request_message;
 use crate::server::jsonrpc::method_not_found;
 use crate::server::jsonrpc::response_message;
+use tracing::warn;
 
 pub(crate) async fn run_connection(connection: JsonRpcConnection) {
     let (json_outgoing_tx, mut incoming_rx, _connection_tasks) = connection.into_parts();
@@ -33,6 +35,16 @@ pub(crate) async fn run_connection(connection: JsonRpcConnection) {
                     continue;
                 };
                 if json_outgoing_tx.send(response).await.is_err() {
+                    break;
+                }
+            }
+            JsonRpcConnectionEvent::MalformedMessage { reason } => {
+                warn!("ignoring malformed exec-server message: {reason}");
+                if json_outgoing_tx
+                    .send(invalid_request_message(reason))
+                    .await
+                    .is_err()
+                {
                     break;
                 }
             }
