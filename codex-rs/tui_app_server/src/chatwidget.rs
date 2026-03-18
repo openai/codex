@@ -47,6 +47,7 @@ use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
 use crate::model_catalog::ModelCatalog;
+use crate::multi_agents;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::StatusAccountDisplay;
 use crate::status::format_directory_display;
@@ -55,6 +56,10 @@ use crate::status::rate_limit_snapshot_display_for_limit;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
+use codex_app_server_protocol::CollabAgentState as AppServerCollabAgentState;
+use codex_app_server_protocol::CollabAgentStatus as AppServerCollabAgentStatus;
+use codex_app_server_protocol::CollabAgentTool;
+use codex_app_server_protocol::CollabAgentToolCallStatus;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ErrorNotification;
@@ -123,6 +128,7 @@ use codex_protocol::protocol::AgentReasoningEvent;
 use codex_protocol::protocol::AgentReasoningRawContentDeltaEvent;
 #[cfg(test)]
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 #[cfg(test)]
 use codex_protocol::protocol::BackgroundEventEvent;
@@ -130,6 +136,7 @@ use codex_protocol::protocol::BackgroundEventEvent;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 #[cfg(test)]
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
+use codex_protocol::protocol::CollabAgentStatusEntry;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::DeprecationNoticeEvent;
 #[cfg(test)]
@@ -298,8 +305,6 @@ use crate::key_hint;
 use crate::key_hint::KeyBinding;
 #[cfg(test)]
 use crate::markdown::append_markdown;
-#[cfg(test)]
-use crate::multi_agents;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::FlexRenderable;
@@ -720,7 +725,6 @@ pub(crate) struct ChatWidget {
     // Latest completed user-visible Codex output that `/copy` should place on the clipboard.
     last_copyable_output: Option<String>,
     running_commands: HashMap<String, RunningCommand>,
-    #[cfg(test)]
     pending_collab_spawn_requests: HashMap<String, multi_agents::SpawnRequestSummary>,
     suppressed_exec_calls: HashSet<String>,
     skills_all: Vec<ProtocolSkillMetadata>,
@@ -1306,6 +1310,60 @@ fn app_server_patch_changes_to_core(
             (path, file_change)
         })
         .collect()
+}
+
+fn app_server_collab_thread_id_to_core(thread_id: &str) -> Option<ThreadId> {
+    match ThreadId::from_string(thread_id) {
+        Ok(thread_id) => Some(thread_id),
+        Err(err) => {
+            warn!("ignoring collab tool-call item with invalid thread id {thread_id}: {err}");
+            None
+        }
+    }
+}
+
+fn app_server_collab_state_to_core(state: &AppServerCollabAgentState) -> AgentStatus {
+    match state.status {
+        AppServerCollabAgentStatus::PendingInit => AgentStatus::PendingInit,
+        AppServerCollabAgentStatus::Running => AgentStatus::Running,
+        AppServerCollabAgentStatus::Interrupted => AgentStatus::Interrupted,
+        AppServerCollabAgentStatus::Completed => AgentStatus::Completed(state.message.clone()),
+        AppServerCollabAgentStatus::Errored => AgentStatus::Errored(
+            state
+                .message
+                .clone()
+                .unwrap_or_else(|| "Agent errored".into()),
+        ),
+        AppServerCollabAgentStatus::Shutdown => AgentStatus::Shutdown,
+        AppServerCollabAgentStatus::NotFound => AgentStatus::NotFound,
+    }
+}
+
+fn app_server_collab_agent_statuses_to_core(
+    receiver_thread_ids: &[String],
+    agents_states: &HashMap<String, AppServerCollabAgentState>,
+) -> (Vec<CollabAgentStatusEntry>, HashMap<ThreadId, AgentStatus>) {
+    let mut agent_statuses = Vec::new();
+    let mut statuses = HashMap::new();
+
+    for receiver_thread_id in receiver_thread_ids {
+        let Some(thread_id) = app_server_collab_thread_id_to_core(receiver_thread_id) else {
+            continue;
+        };
+        let Some(agent_state) = agents_states.get(receiver_thread_id) else {
+            continue;
+        };
+        let status = app_server_collab_state_to_core(agent_state);
+        agent_statuses.push(CollabAgentStatusEntry {
+            thread_id,
+            agent_nickname: None,
+            agent_role: None,
+            status: status.clone(),
+        });
+        statuses.insert(thread_id, status);
+    }
+
+    (agent_statuses, statuses)
 }
 
 fn request_permissions_from_params(
@@ -3232,11 +3290,188 @@ impl ChatWidget {
         self.had_work_activity = true;
     }
 
-    #[cfg(test)]
     fn on_collab_event(&mut self, cell: PlainHistoryCell) {
         self.flush_answer_stream_with_separator();
         self.add_to_history(cell);
         self.request_redraw();
+    }
+
+    fn on_collab_agent_tool_call(&mut self, item: ThreadItem) {
+        let ThreadItem::CollabAgentToolCall {
+            id,
+            tool,
+            status,
+            sender_thread_id,
+            receiver_thread_ids,
+            prompt,
+            model,
+            reasoning_effort,
+            agents_states,
+        } = item
+        else {
+            return;
+        };
+        let sender_thread_id = app_server_collab_thread_id_to_core(&sender_thread_id)
+            .or(self.thread_id)
+            .unwrap_or_default();
+        let first_receiver = receiver_thread_ids
+            .first()
+            .and_then(|thread_id| app_server_collab_thread_id_to_core(thread_id));
+
+        match tool {
+            CollabAgentTool::SpawnAgent => {
+                if let (Some(model), Some(reasoning_effort)) = (model.clone(), reasoning_effort) {
+                    self.pending_collab_spawn_requests.insert(
+                        id.clone(),
+                        multi_agents::SpawnRequestSummary {
+                            model,
+                            reasoning_effort,
+                        },
+                    );
+                }
+
+                if !matches!(status, CollabAgentToolCallStatus::InProgress) {
+                    let spawn_request =
+                        self.pending_collab_spawn_requests.remove(&id).or_else(|| {
+                            model
+                                .zip(reasoning_effort)
+                                .map(|(model, reasoning_effort)| {
+                                    multi_agents::SpawnRequestSummary {
+                                        model,
+                                        reasoning_effort,
+                                    }
+                                })
+                        });
+                    self.on_collab_event(multi_agents::spawn_end(
+                        codex_protocol::protocol::CollabAgentSpawnEndEvent {
+                            call_id: id,
+                            sender_thread_id,
+                            new_thread_id: first_receiver,
+                            new_agent_nickname: None,
+                            new_agent_role: None,
+                            prompt: prompt.unwrap_or_default(),
+                            model: String::new(),
+                            reasoning_effort: ReasoningEffortConfig::Medium,
+                            status: first_receiver
+                                .as_ref()
+                                .and_then(|thread_id| agents_states.get(&thread_id.to_string()))
+                                .map(app_server_collab_state_to_core)
+                                .unwrap_or_else(|| {
+                                    AgentStatus::Errored("Agent spawn failed".into())
+                                }),
+                        },
+                        spawn_request.as_ref(),
+                    ));
+                }
+            }
+            CollabAgentTool::SendInput => {
+                if let Some(receiver_thread_id) = first_receiver
+                    && !matches!(status, CollabAgentToolCallStatus::InProgress)
+                {
+                    self.on_collab_event(multi_agents::interaction_end(
+                        codex_protocol::protocol::CollabAgentInteractionEndEvent {
+                            call_id: id,
+                            sender_thread_id,
+                            receiver_thread_id,
+                            receiver_agent_nickname: None,
+                            receiver_agent_role: None,
+                            prompt: prompt.unwrap_or_default(),
+                            status: receiver_thread_ids
+                                .iter()
+                                .find_map(|thread_id| agents_states.get(thread_id))
+                                .map(app_server_collab_state_to_core)
+                                .unwrap_or_else(|| {
+                                    AgentStatus::Errored("Agent interaction failed".into())
+                                }),
+                        },
+                    ));
+                }
+            }
+            CollabAgentTool::ResumeAgent => {
+                if let Some(receiver_thread_id) = first_receiver {
+                    if matches!(status, CollabAgentToolCallStatus::InProgress) {
+                        self.on_collab_event(multi_agents::resume_begin(
+                            codex_protocol::protocol::CollabResumeBeginEvent {
+                                call_id: id,
+                                sender_thread_id,
+                                receiver_thread_id,
+                                receiver_agent_nickname: None,
+                                receiver_agent_role: None,
+                            },
+                        ));
+                    } else {
+                        self.on_collab_event(multi_agents::resume_end(
+                            codex_protocol::protocol::CollabResumeEndEvent {
+                                call_id: id,
+                                sender_thread_id,
+                                receiver_thread_id,
+                                receiver_agent_nickname: None,
+                                receiver_agent_role: None,
+                                status: receiver_thread_ids
+                                    .iter()
+                                    .find_map(|thread_id| agents_states.get(thread_id))
+                                    .map(app_server_collab_state_to_core)
+                                    .unwrap_or_else(|| {
+                                        AgentStatus::Errored("Agent resume failed".into())
+                                    }),
+                            },
+                        ));
+                    }
+                }
+            }
+            CollabAgentTool::Wait => {
+                if matches!(status, CollabAgentToolCallStatus::InProgress) {
+                    self.on_collab_event(multi_agents::waiting_begin(
+                        codex_protocol::protocol::CollabWaitingBeginEvent {
+                            sender_thread_id,
+                            receiver_thread_ids: receiver_thread_ids
+                                .iter()
+                                .filter_map(|thread_id| {
+                                    app_server_collab_thread_id_to_core(thread_id)
+                                })
+                                .collect(),
+                            receiver_agents: Vec::new(),
+                            call_id: id,
+                        },
+                    ));
+                } else {
+                    let (agent_statuses, statuses) = app_server_collab_agent_statuses_to_core(
+                        &receiver_thread_ids,
+                        &agents_states,
+                    );
+                    self.on_collab_event(multi_agents::waiting_end(
+                        codex_protocol::protocol::CollabWaitingEndEvent {
+                            sender_thread_id,
+                            call_id: id,
+                            agent_statuses,
+                            statuses,
+                        },
+                    ));
+                }
+            }
+            CollabAgentTool::CloseAgent => {
+                if let Some(receiver_thread_id) = first_receiver
+                    && !matches!(status, CollabAgentToolCallStatus::InProgress)
+                {
+                    self.on_collab_event(multi_agents::close_end(
+                        codex_protocol::protocol::CollabCloseEndEvent {
+                            call_id: id,
+                            sender_thread_id,
+                            receiver_thread_id,
+                            receiver_agent_nickname: None,
+                            receiver_agent_role: None,
+                            status: receiver_thread_ids
+                                .iter()
+                                .find_map(|thread_id| agents_states.get(thread_id))
+                                .map(app_server_collab_state_to_core)
+                                .unwrap_or_else(|| {
+                                    AgentStatus::Errored("Agent close failed".into())
+                                }),
+                        },
+                    ));
+                }
+            }
+        }
     }
 
     #[cfg(test)]
@@ -3960,7 +4195,6 @@ impl ChatWidget {
             plan_stream_controller: None,
             last_copyable_output: None,
             running_commands: HashMap::new(),
-            #[cfg(test)]
             pending_collab_spawn_requests: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
@@ -5470,7 +5704,28 @@ impl ChatWidget {
             ThreadItem::ContextCompaction { .. } => {
                 self.on_agent_message("Context compacted".to_owned());
             }
-            ThreadItem::DynamicToolCall { .. } | ThreadItem::CollabAgentToolCall { .. } => {}
+            ThreadItem::CollabAgentToolCall {
+                id,
+                tool,
+                status,
+                sender_thread_id,
+                receiver_thread_ids,
+                prompt,
+                model,
+                reasoning_effort,
+                agents_states,
+            } => self.on_collab_agent_tool_call(ThreadItem::CollabAgentToolCall {
+                id,
+                tool,
+                status,
+                sender_thread_id,
+                receiver_thread_ids,
+                prompt,
+                model,
+                reasoning_effort,
+                agents_states,
+            }),
+            ThreadItem::DynamicToolCall { .. } => {}
         }
 
         if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot)) && turn_id.is_empty() {
@@ -5905,6 +6160,27 @@ impl ChatWidget {
             ThreadItem::ImageGeneration { id, .. } => {
                 self.on_image_generation_begin(ImageGenerationBeginEvent { call_id: id });
             }
+            ThreadItem::CollabAgentToolCall {
+                id,
+                tool,
+                status,
+                sender_thread_id,
+                receiver_thread_ids,
+                prompt,
+                model,
+                reasoning_effort,
+                agents_states,
+            } => self.on_collab_agent_tool_call(ThreadItem::CollabAgentToolCall {
+                id,
+                tool,
+                status,
+                sender_thread_id,
+                receiver_thread_ids,
+                prompt,
+                model,
+                reasoning_effort,
+                agents_states,
+            }),
             ThreadItem::EnteredReviewMode { review, .. } => {
                 self.add_to_history(history_cell::new_review_status_line(format!(
                     ">> Code review started: {review} <<"
