@@ -231,7 +231,7 @@ impl MessageProcessor {
         // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
         thread_manager
             .plugins_manager()
-            .maybe_start_curated_repo_sync_for_config(&config, &thread_manager.session_source());
+            .maybe_start_curated_repo_sync_for_config(&config);
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager: auth_manager.clone(),

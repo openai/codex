@@ -276,7 +276,7 @@ impl SessionTelemetry {
                 account_email,
                 originator: sanitize_metric_tag_value(originator.as_str()),
                 service_name: None,
-                session_source: sanitize_metric_tag_value(session_source.to_string().as_str()),
+                session_source: session_source.to_string(),
                 model: model.to_owned(),
                 slug: slug.to_owned(),
                 log_user_prompts,

@@ -20,6 +20,4 @@ pub use model::SkillError;
 pub use model::SkillLoadOutcome;
 pub use model::SkillMetadata;
 pub use model::SkillPolicy;
-pub use model::filter_skill_load_outcome_for_session_source;
-pub use model::filter_skills_for_session_source;
 pub use render::render_skills_section;

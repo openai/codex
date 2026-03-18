@@ -423,10 +423,7 @@ impl CodexMessageProcessor {
             Ok(config) => self
                 .thread_manager
                 .plugins_manager()
-                .maybe_start_curated_repo_sync_for_config(
-                    &config,
-                    &self.thread_manager.session_source(),
-                ),
+                .maybe_start_curated_repo_sync_for_config(&config),
             Err(err) => warn!("failed to load latest config for curated plugin sync: {err:?}"),
         }
     }
@@ -5305,7 +5302,6 @@ impl CodexMessageProcessor {
             force_reload,
             per_cwd_extra_user_roots,
         } = params;
-        let session_source = self.thread_manager.session_source();
         let cwds = if cwds.is_empty() {
             vec![self.config.cwd.clone()]
         } else {
@@ -5350,12 +5346,9 @@ impl CodexMessageProcessor {
             let extra_roots = extra_roots_by_cwd
                 .get(&cwd)
                 .map_or(&[][..], std::vec::Vec::as_slice);
-            let outcome = codex_core::skills::filter_skill_load_outcome_for_session_source(
-                skills_manager
-                    .skills_for_cwd_with_extra_user_roots(&cwd, force_reload, extra_roots)
-                    .await,
-                &session_source,
-            );
+            let outcome = skills_manager
+                .skills_for_cwd_with_extra_user_roots(&cwd, force_reload, extra_roots)
+                .await;
             let errors = errors_to_info(&outcome.errors);
             let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
             data.push(codex_app_server_protocol::SkillsListEntry {
@@ -5371,7 +5364,6 @@ impl CodexMessageProcessor {
 
     async fn plugin_list(&self, request_id: ConnectionRequestId, params: PluginListParams) {
         let plugins_manager = self.thread_manager.plugins_manager();
-        let session_source = self.thread_manager.session_source();
         let PluginListParams {
             cwds,
             force_remote_sync,
@@ -5425,13 +5417,15 @@ impl CodexMessageProcessor {
             Ok::<Vec<PluginMarketplaceEntry>, MarketplaceError>(
                 marketplaces
                     .into_iter()
-                    .filter_map(|marketplace| {
-                        let plugins = marketplace
+                    .map(|marketplace| PluginMarketplaceEntry {
+                        name: marketplace.name,
+                        path: marketplace.path,
+                        interface: marketplace.interface.map(|interface| MarketplaceInterface {
+                            display_name: interface.display_name,
+                        }),
+                        plugins: marketplace
                             .plugins
                             .into_iter()
-                            .filter(|plugin| {
-                                session_source.matches_product_restriction(&plugin.policy.products)
-                            })
                             .map(|plugin| PluginSummary {
                                 id: plugin.id,
                                 installed: plugin.installed,
@@ -5442,18 +5436,7 @@ impl CodexMessageProcessor {
                                 auth_policy: plugin.policy.authentication.into(),
                                 interface: plugin.interface.map(plugin_interface_to_info),
                             })
-                            .collect::<Vec<_>>();
-
-                        (!plugins.is_empty()).then_some(PluginMarketplaceEntry {
-                            name: marketplace.name,
-                            path: marketplace.path,
-                            interface: marketplace.interface.map(|interface| {
-                                MarketplaceInterface {
-                                    display_name: interface.display_name,
-                                }
-                            }),
-                            plugins,
-                        })
+                            .collect(),
                     })
                     .collect(),
             )
@@ -5528,11 +5511,6 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        let session_source = self.thread_manager.session_source();
-        let plugin_skills = codex_core::skills::filter_skills_for_session_source(
-            outcome.plugin.skills,
-            &session_source,
-        );
         let app_summaries =
             plugin_app_helpers::load_plugin_app_summaries(&config, &outcome.plugin.apps).await;
         let plugin = PluginDetail {
@@ -5549,7 +5527,7 @@ impl CodexMessageProcessor {
                 interface: outcome.plugin.interface.map(plugin_interface_to_info),
             },
             description: outcome.plugin.description,
-            skills: plugin_skills_to_info(&plugin_skills),
+            skills: plugin_skills_to_info(&outcome.plugin.skills),
             apps: app_summaries,
             mcp_servers: outcome.plugin.mcp_server_names,
         };

@@ -44,7 +44,6 @@ use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::MergeStrategy;
-use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
@@ -939,11 +938,7 @@ impl PluginsManager {
         })
     }
 
-    pub fn maybe_start_curated_repo_sync_for_config(
-        self: &Arc<Self>,
-        config: &Config,
-        session_source: &SessionSource,
-    ) {
+    pub fn maybe_start_curated_repo_sync_for_config(self: &Arc<Self>, config: &Config) {
         if plugins_feature_enabled_from_stack(&config.config_layer_stack) {
             let mut configured_curated_plugin_ids =
                 configured_plugins_from_stack(&config.config_layer_stack)
@@ -966,15 +961,11 @@ impl PluginsManager {
                     })
                     .collect::<Vec<_>>();
             configured_curated_plugin_ids.sort_unstable_by_key(super::store::PluginId::as_key);
-            self.start_curated_repo_sync(configured_curated_plugin_ids, session_source.clone());
+            self.start_curated_repo_sync(configured_curated_plugin_ids);
         }
     }
 
-    fn start_curated_repo_sync(
-        self: &Arc<Self>,
-        configured_curated_plugin_ids: Vec<PluginId>,
-        session_source: SessionSource,
-    ) {
+    fn start_curated_repo_sync(self: &Arc<Self>, configured_curated_plugin_ids: Vec<PluginId>) {
         if CURATED_REPO_SYNC_STARTED.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -989,7 +980,6 @@ impl PluginsManager {
                             codex_home.as_path(),
                             &curated_plugin_version,
                             &configured_curated_plugin_ids,
-                            &session_source,
                         ) {
                             Ok(cache_refreshed) => {
                                 if cache_refreshed {
@@ -1215,7 +1205,6 @@ fn refresh_curated_plugin_cache(
     codex_home: &Path,
     plugin_version: &str,
     configured_curated_plugin_ids: &[PluginId],
-    session_source: &SessionSource,
 ) -> Result<bool, String> {
     let store = PluginStore::new(codex_home.to_path_buf());
     let curated_marketplace_path = AbsolutePathBuf::try_from(
@@ -1226,12 +1215,9 @@ fn refresh_curated_plugin_cache(
         .map_err(|err| format!("failed to load curated marketplace for cache refresh: {err}"))?;
 
     let mut plugin_sources = HashMap::<String, AbsolutePathBuf>::new();
-    let mut product_restricted_plugin_names = HashSet::<String>::new();
     for plugin in curated_marketplace.plugins {
         let plugin_name = plugin.name;
-        if plugin_sources.contains_key(&plugin_name)
-            || product_restricted_plugin_names.contains(&plugin_name)
-        {
+        if plugin_sources.contains_key(&plugin_name) {
             warn!(
                 plugin = plugin_name,
                 marketplace = OPENAI_CURATED_MARKETPLACE_NAME,
@@ -1242,32 +1228,16 @@ fn refresh_curated_plugin_cache(
         let source_path = match plugin.source {
             MarketplacePluginSource::Local { path } => path,
         };
-        if session_source.matches_product_restriction(&plugin.policy.products) {
-            plugin_sources.insert(plugin_name, source_path);
-        } else {
-            product_restricted_plugin_names.insert(plugin_name);
-        }
+        plugin_sources.insert(plugin_name, source_path);
     }
 
     let mut cache_refreshed = false;
     for plugin_id in configured_curated_plugin_ids {
-        // Curated plugin cache entries are intentionally sticky across session source changes.
-        // Product restrictions gate refresh for this source, but do not retroactively evict an
-        // already-active cache entry from a shared CODEX_HOME.
         if store.active_plugin_version(plugin_id).as_deref() == Some(plugin_version) {
             continue;
         }
 
         let Some(source_path) = plugin_sources.get(&plugin_id.plugin_name).cloned() else {
-            if product_restricted_plugin_names.contains(&plugin_id.plugin_name) {
-                info!(
-                    plugin = plugin_id.plugin_name,
-                    marketplace = OPENAI_CURATED_MARKETPLACE_NAME,
-                    session_source = %session_source,
-                    "skipping curated plugin cache refresh for product-restricted plugin"
-                );
-                continue;
-            }
             warn!(
                 plugin = plugin_id.plugin_name,
                 marketplace = OPENAI_CURATED_MARKETPLACE_NAME,
