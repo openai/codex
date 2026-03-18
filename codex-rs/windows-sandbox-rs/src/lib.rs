@@ -281,6 +281,7 @@ mod windows_impl {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn run_windows_sandbox_capture_with_extra_deny_write_paths(
         policy_json_or_preset: &str,
         sandbox_policy_cwd: &Path,
