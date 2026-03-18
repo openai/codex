@@ -427,6 +427,7 @@ impl CodexMessageProcessor {
                 .maybe_start_curated_repo_sync_for_config(
                     &config,
                     &self.thread_manager.session_source(),
+                    &self.thread_manager.auth_manager(),
                 ),
             Err(err) => warn!("failed to load latest config for curated plugin sync: {err:?}"),
         }
@@ -522,27 +523,6 @@ impl CodexMessageProcessor {
             .read()
             .map(|guard| guard.clone())
             .unwrap_or_default()
-    }
-
-    pub(crate) fn spawn_featured_plugin_ids_cache_warmup(&self, config: Arc<Config>) {
-        let auth_manager = self.auth_manager.clone();
-        let plugins_manager = self.thread_manager.plugins_manager();
-        self.background_tasks.spawn(async move {
-            if !config.features.enabled(Feature::Plugins) {
-                return;
-            }
-
-            let auth = auth_manager.auth().await;
-            if let Err(err) = plugins_manager
-                .featured_plugin_ids_for_config(config.as_ref(), auth.as_ref())
-                .await
-            {
-                warn!(
-                    error = %err,
-                    "failed to warm featured plugin ids cache"
-                );
-            }
-        });
     }
 
     /// If a client sends `developer_instructions: null` during a mode switch,

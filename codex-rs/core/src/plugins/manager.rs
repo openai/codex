@@ -25,6 +25,7 @@ use super::store::PluginInstallResult as StorePluginInstallResult;
 use super::store::PluginStore;
 use super::store::PluginStoreError;
 use super::sync_openai_plugins_repo;
+use crate::AuthManager;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::auth::CodexAuth;
 use crate::config::Config;
@@ -1057,6 +1058,7 @@ impl PluginsManager {
         self: &Arc<Self>,
         config: &Config,
         session_source: &SessionSource,
+        auth_manager: &Arc<AuthManager>,
     ) {
         if plugins_feature_enabled_from_stack(&config.config_layer_stack) {
             let mut configured_curated_plugin_ids =
@@ -1081,6 +1083,22 @@ impl PluginsManager {
                     .collect::<Vec<_>>();
             configured_curated_plugin_ids.sort_unstable_by_key(super::store::PluginId::as_key);
             self.start_curated_repo_sync(configured_curated_plugin_ids, session_source.clone());
+
+            let config = config.clone();
+            let auth_manager = auth_manager.clone();
+            let manager = Arc::clone(self);
+            tokio::spawn(async move {
+                let auth = auth_manager.auth().await;
+                if let Err(err) = manager
+                    .featured_plugin_ids_for_config(&config, auth.as_ref())
+                    .await
+                {
+                    warn!(
+                        error = %err,
+                        "failed to warm featured plugin ids cache"
+                    );
+                }
+            });
         }
     }
 
