@@ -630,6 +630,21 @@ mod tests {
                 "estimated_bytes".to_string(),
             ]
         );
+        let indexes = sqlx::query_scalar::<_, String>(
+            "SELECT name FROM pragma_index_list('logs') ORDER BY name",
+        )
+        .fetch_all(&migrated_pool)
+        .await
+        .expect("load migrated indexes");
+        assert_eq!(
+            indexes,
+            vec![
+                "idx_logs_process_uuid_threadless_ts".to_string(),
+                "idx_logs_thread_id".to_string(),
+                "idx_logs_thread_id_ts".to_string(),
+                "idx_logs_ts".to_string(),
+            ]
+        );
         migrated_pool.close().await;
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
