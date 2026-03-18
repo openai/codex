@@ -5903,12 +5903,10 @@ impl ChatWidget {
                         );
                     }
                 } else {
-                    if !from_replay {
-                        self.last_non_retry_error = Some((
-                            notification.turn_id.clone(),
-                            notification.error.message.clone(),
-                        ));
-                    }
+                    self.last_non_retry_error = Some((
+                        notification.turn_id.clone(),
+                        notification.error.message.clone(),
+                    ));
                     self.handle_non_retry_error(
                         notification.error.message,
                         notification.error.codex_error_info,
