@@ -462,7 +462,6 @@ impl From<RemotePluginFetchError> for PluginRemoteSyncError {
 
 pub struct PluginsManager {
     codex_home: PathBuf,
-    session_source: SessionSource,
     store: PluginStore,
     cache_by_cwd: RwLock<HashMap<PathBuf, PluginLoadOutcome>>,
     featured_plugin_ids_cache: RwLock<Option<CachedFeaturedPluginIds>>,
@@ -471,13 +470,8 @@ pub struct PluginsManager {
 
 impl PluginsManager {
     pub fn new(codex_home: PathBuf) -> Self {
-        Self::new_with_session_source(codex_home, SessionSource::default())
-    }
-
-    pub fn new_with_session_source(codex_home: PathBuf, session_source: SessionSource) -> Self {
         Self {
             codex_home: codex_home.clone(),
-            session_source,
             store: PluginStore::new(codex_home),
             cache_by_cwd: RwLock::new(HashMap::new()),
             featured_plugin_ids_cache: RwLock::new(None),
@@ -1058,7 +1052,11 @@ impl PluginsManager {
         })
     }
 
-    pub fn maybe_start_curated_repo_sync_for_config(self: &Arc<Self>, config: &Config) {
+    pub fn maybe_start_curated_repo_sync_for_config(
+        self: &Arc<Self>,
+        config: &Config,
+        session_source: &SessionSource,
+    ) {
         if plugins_feature_enabled_from_stack(&config.config_layer_stack) {
             let mut configured_curated_plugin_ids =
                 configured_plugins_from_stack(&config.config_layer_stack)
@@ -1081,10 +1079,7 @@ impl PluginsManager {
                     })
                     .collect::<Vec<_>>();
             configured_curated_plugin_ids.sort_unstable_by_key(super::store::PluginId::as_key);
-            self.start_curated_repo_sync(
-                configured_curated_plugin_ids,
-                self.session_source.clone(),
-            );
+            self.start_curated_repo_sync(configured_curated_plugin_ids, session_source.clone());
         }
     }
 

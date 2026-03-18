@@ -1988,9 +1988,10 @@ impl App {
                     .enabled(Feature::DefaultModeRequestUserInput),
             },
         ));
+        // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
         thread_manager
             .plugins_manager()
-            .maybe_start_curated_repo_sync_for_config(&config);
+            .maybe_start_curated_repo_sync_for_config(&config, &SessionSource::Cli);
         let mut model = thread_manager
             .get_models_manager()
             .get_default_model(&config.model, RefreshStrategy::Offline)

@@ -242,9 +242,10 @@ impl MessageProcessor {
             log_db,
         });
         // Keep plugin startup warmups aligned at app-server startup.
+        // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
         thread_manager
             .plugins_manager()
-            .maybe_start_curated_repo_sync_for_config(&config);
+            .maybe_start_curated_repo_sync_for_config(&config, &thread_manager.session_source());
         codex_message_processor.spawn_featured_plugin_ids_cache_warmup(Arc::clone(&config));
         let config_api = ConfigApi::new(
             config.codex_home.clone(),
