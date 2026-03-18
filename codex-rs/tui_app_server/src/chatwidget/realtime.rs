@@ -45,7 +45,7 @@ impl RealtimeConversationUiState {
         )
     }
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     pub(super) fn is_active(&self) -> bool {
         matches!(self.phase, RealtimeConversationPhase::Active)
     }
@@ -397,7 +397,7 @@ impl ChatWidget {
     #[cfg(target_os = "linux")]
     fn start_realtime_local_audio(&mut self) {}
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn restart_realtime_audio_device(&mut self, kind: RealtimeAudioDeviceKind) {
         if !self.realtime_conversation.is_active() {
             return;
@@ -425,7 +425,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    #[cfg(any(target_os = "linux", not(feature = "voice-input")))]
+    #[cfg(target_os = "linux")]
     pub(crate) fn restart_realtime_audio_device(&mut self, kind: RealtimeAudioDeviceKind) {
         let _ = kind;
     }

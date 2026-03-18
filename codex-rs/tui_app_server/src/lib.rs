@@ -78,6 +78,19 @@ mod app_server_session;
 mod ascii_animation;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 mod audio_device;
+#[cfg(all(not(target_os = "linux"), not(feature = "voice-input")))]
+mod audio_device {
+    use crate::app_event::RealtimeAudioDeviceKind;
+
+    pub(crate) fn list_realtime_audio_device_names(
+        kind: RealtimeAudioDeviceKind,
+    ) -> Result<Vec<String>, String> {
+        Err(format!(
+            "Failed to load realtime {} devices: voice input is unavailable in this build",
+            kind.noun()
+        ))
+    }
+}
 mod bottom_pane;
 mod chatwidget;
 mod cli;
