@@ -914,12 +914,12 @@ impl BottomPane {
     }
 
     pub(crate) fn remove_resolved_exec_approvals(&mut self, approval_ids: &[String]) {
-        if let Some(view) = self.view_stack.last_mut()
-            && view.remove_resolved_exec_approvals(approval_ids)
-        {
-            if view.is_complete() {
-                self.view_stack.pop();
-            }
+        let mut changed = false;
+        self.view_stack.retain_mut(|view| {
+            changed |= view.remove_resolved_exec_approvals(approval_ids);
+            !view.is_complete()
+        });
+        if changed {
             self.request_redraw();
         }
     }
@@ -1464,6 +1464,52 @@ mod tests {
         assert!(
             pane.view_stack.is_empty(),
             "resolved exec approvals should be removed from the live modal queue"
+        );
+    }
+
+    #[test]
+    fn resolved_exec_approval_is_removed_from_hidden_overlay_queue() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let features = Features::with_defaults();
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.push_approval_request(exec_request(), &features);
+        pane.push_user_input_request(codex_protocol::request_user_input::RequestUserInputEvent {
+            call_id: "input-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            questions: vec![
+                codex_protocol::request_user_input::RequestUserInputQuestion {
+                    id: "question-1".to_string(),
+                    header: "Header".to_string(),
+                    question: "Question?".to_string(),
+                    is_other: false,
+                    is_secret: false,
+                    options: None,
+                },
+            ],
+        });
+
+        pane.remove_resolved_exec_approvals(&["1".to_string()]);
+        assert_eq!(
+            pane.view_stack.len(),
+            1,
+            "resolved approval should be removed from hidden overlays without touching the top modal"
+        );
+
+        pane.view_stack.pop();
+        assert!(
+            pane.view_stack.is_empty(),
+            "the hidden approval overlay should no longer resurface after the top modal closes"
         );
     }
 
