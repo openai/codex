@@ -15,6 +15,7 @@ use super::read_curated_plugins_sha;
 use super::remote::RemotePluginFetchError;
 use super::remote::RemotePluginMutationError;
 use super::remote::enable_remote_plugin;
+use super::remote::fetch_remote_featured_plugin_ids;
 use super::remote::fetch_remote_plugin_status;
 use super::remote::uninstall_remote_plugin;
 use super::store::DEFAULT_PLUGIN_VERSION;
@@ -60,6 +61,8 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
+use std::time::Instant;
 use toml_edit::value;
 use tracing::info;
 use tracing::warn;
@@ -70,6 +73,44 @@ const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
 const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 1024;
+const FEATURED_PLUGIN_IDS_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+
+#[derive(Clone, PartialEq, Eq)]
+struct FeaturedPluginIdsCacheKey {
+    chatgpt_base_url: String,
+    account_id: Option<String>,
+    chatgpt_user_id: Option<String>,
+    is_workspace_account: bool,
+}
+
+#[derive(Clone)]
+struct CachedFeaturedPluginIds {
+    key: FeaturedPluginIdsCacheKey,
+    expires_at: Instant,
+    featured_plugin_ids: Vec<String>,
+}
+
+fn featured_plugin_ids_cache_key(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+) -> FeaturedPluginIdsCacheKey {
+    let token_data = auth.and_then(|auth| auth.get_token_data().ok());
+    let account_id = token_data
+        .as_ref()
+        .and_then(|token_data| token_data.account_id.clone());
+    let chatgpt_user_id = token_data
+        .as_ref()
+        .and_then(|token_data| token_data.id_token.chatgpt_user_id.clone());
+    let is_workspace_account = token_data
+        .as_ref()
+        .is_some_and(|token_data| token_data.id_token.is_workspace_account());
+    FeaturedPluginIdsCacheKey {
+        chatgpt_base_url: config.chatgpt_base_url.clone(),
+        account_id,
+        chatgpt_user_id,
+        is_workspace_account,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AppConnectorId(pub String);
@@ -423,6 +464,7 @@ pub struct PluginsManager {
     codex_home: PathBuf,
     store: PluginStore,
     cache_by_cwd: RwLock<HashMap<PathBuf, PluginLoadOutcome>>,
+    featured_plugin_ids_cache: RwLock<Option<CachedFeaturedPluginIds>>,
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
 }
 
@@ -432,6 +474,7 @@ impl PluginsManager {
             codex_home: codex_home.clone(),
             store: PluginStore::new(codex_home),
             cache_by_cwd: RwLock::new(HashMap::new()),
+            featured_plugin_ids_cache: RwLock::new(None),
             analytics_events_client: RwLock::new(None),
         }
     }
@@ -482,6 +525,11 @@ impl PluginsManager {
             Err(err) => err.into_inner(),
         };
         cache_by_cwd.clear();
+        let mut featured_plugin_ids_cache = match self.featured_plugin_ids_cache.write() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
+        };
+        *featured_plugin_ids_cache = None;
     }
 
     fn cached_outcome_for_cwd(&self, cwd: &Path) -> Option<PluginLoadOutcome> {
@@ -489,6 +537,71 @@ impl PluginsManager {
             Ok(cache) => cache.get(cwd).cloned(),
             Err(err) => err.into_inner().get(cwd).cloned(),
         }
+    }
+
+    fn cached_featured_plugin_ids(
+        &self,
+        cache_key: &FeaturedPluginIdsCacheKey,
+    ) -> Option<Vec<String>> {
+        {
+            let cache = match self.featured_plugin_ids_cache.read() {
+                Ok(cache) => cache,
+                Err(err) => err.into_inner(),
+            };
+            let now = Instant::now();
+            if let Some(cached) = cache.as_ref()
+                && now < cached.expires_at
+                && cached.key == *cache_key
+            {
+                return Some(cached.featured_plugin_ids.clone());
+            }
+        }
+
+        let mut cache = match self.featured_plugin_ids_cache.write() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
+        };
+        let now = Instant::now();
+        if cache
+            .as_ref()
+            .is_some_and(|cached| now >= cached.expires_at || cached.key != *cache_key)
+        {
+            *cache = None;
+        }
+        None
+    }
+
+    fn write_featured_plugin_ids_cache(
+        &self,
+        cache_key: FeaturedPluginIdsCacheKey,
+        featured_plugin_ids: &[String],
+    ) {
+        let mut cache = match self.featured_plugin_ids_cache.write() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
+        };
+        *cache = Some(CachedFeaturedPluginIds {
+            key: cache_key,
+            expires_at: Instant::now() + FEATURED_PLUGIN_IDS_CACHE_TTL,
+            featured_plugin_ids: featured_plugin_ids.to_vec(),
+        });
+    }
+
+    pub async fn featured_plugin_ids_for_config(
+        &self,
+        config: &Config,
+        auth: Option<&CodexAuth>,
+    ) -> Result<Vec<String>, RemotePluginFetchError> {
+        if !plugins_feature_enabled_from_stack(&config.config_layer_stack) {
+            return Ok(Vec::new());
+        }
+        let cache_key = featured_plugin_ids_cache_key(config, auth);
+        if let Some(featured_plugin_ids) = self.cached_featured_plugin_ids(&cache_key) {
+            return Ok(featured_plugin_ids);
+        }
+        let featured_plugin_ids = fetch_remote_featured_plugin_ids(config, auth).await?;
+        self.write_featured_plugin_ids_cache(cache_key, &featured_plugin_ids);
+        Ok(featured_plugin_ids)
     }
 
     pub async fn install_plugin(

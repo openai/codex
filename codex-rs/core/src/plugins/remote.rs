@@ -7,6 +7,7 @@ use url::Url;
 
 const DEFAULT_REMOTE_MARKETPLACE_NAME: &str = "openai-curated";
 const REMOTE_PLUGIN_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+const REMOTE_FEATURED_PLUGIN_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 const REMOTE_PLUGIN_MUTATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -165,7 +166,9 @@ pub async fn fetch_remote_featured_plugin_ids(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/plugins/featured");
     let client = build_reqwest_client();
-    let mut request = client.get(&url).timeout(REMOTE_PLUGIN_FETCH_TIMEOUT);
+    let mut request = client
+        .get(&url)
+        .timeout(REMOTE_FEATURED_PLUGIN_FETCH_TIMEOUT);
 
     if let Some(auth) = auth.filter(|auth| auth.is_chatgpt_auth()) {
         let token = auth

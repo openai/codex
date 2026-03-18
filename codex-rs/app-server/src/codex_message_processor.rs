@@ -226,7 +226,6 @@ use codex_core::plugins::PluginInstallError as CorePluginInstallError;
 use codex_core::plugins::PluginInstallRequest;
 use codex_core::plugins::PluginReadRequest;
 use codex_core::plugins::PluginUninstallError as CorePluginUninstallError;
-use codex_core::plugins::fetch_remote_featured_plugin_ids;
 use codex_core::plugins::load_plugin_apps;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
@@ -523,6 +522,27 @@ impl CodexMessageProcessor {
             .read()
             .map(|guard| guard.clone())
             .unwrap_or_default()
+    }
+
+    pub(crate) fn spawn_featured_plugin_ids_cache_warmup(&self, config: Arc<Config>) {
+        let auth_manager = self.auth_manager.clone();
+        let plugins_manager = self.thread_manager.plugins_manager();
+        self.background_tasks.spawn(async move {
+            if !config.features.enabled(Feature::Plugins) {
+                return;
+            }
+
+            let auth = auth_manager.auth().await;
+            if let Err(err) = plugins_manager
+                .featured_plugin_ids_for_config(config.as_ref(), auth.as_ref())
+                .await
+            {
+                warn!(
+                    error = %err,
+                    "failed to warm featured plugin ids cache"
+                );
+            }
+        });
     }
 
     /// If a client sends `developer_instructions: null` during a mode switch,
@@ -5388,9 +5408,9 @@ impl CodexMessageProcessor {
             }
         };
         let mut remote_sync_error = None;
+        let auth = self.auth_manager.auth().await;
 
         if force_remote_sync {
-            let auth = self.auth_manager.auth().await;
             match plugins_manager
                 .sync_plugins_from_remote(&config, auth.as_ref())
                 .await
@@ -5422,9 +5442,11 @@ impl CodexMessageProcessor {
             };
         }
 
-        let config_for_featured = config.clone();
+        let config_for_marketplace_listing = config.clone();
+        let plugins_manager_for_marketplace_listing = plugins_manager.clone();
         let data = match tokio::task::spawn_blocking(move || {
-            let marketplaces = plugins_manager.list_marketplaces_for_config(&config, &roots)?;
+            let marketplaces = plugins_manager_for_marketplace_listing
+                .list_marketplaces_for_config(&config_for_marketplace_listing, &roots)?;
             Ok::<Vec<PluginMarketplaceEntry>, MarketplaceError>(
                 marketplaces
                     .into_iter()
@@ -5483,8 +5505,10 @@ impl CodexMessageProcessor {
             .iter()
             .any(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
         {
-            let auth = self.auth_manager.auth().await;
-            match fetch_remote_featured_plugin_ids(&config_for_featured, auth.as_ref()).await {
+            match plugins_manager
+                .featured_plugin_ids_for_config(&config, auth.as_ref())
+                .await
+            {
                 Ok(featured_plugin_ids) => featured_plugin_ids,
                 Err(err) => {
                     warn!(
