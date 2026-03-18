@@ -404,6 +404,62 @@ fn list_marketplaces_reads_marketplace_display_name() {
 }
 
 #[test]
+fn list_marketplaces_skips_marketplaces_that_fail_to_load() {
+    let tmp = tempdir().unwrap();
+    let valid_repo_root = tmp.path().join("valid-repo");
+    let invalid_repo_root = tmp.path().join("invalid-repo");
+
+    fs::create_dir_all(valid_repo_root.join(".git")).unwrap();
+    fs::create_dir_all(valid_repo_root.join(".agents/plugins")).unwrap();
+    fs::create_dir_all(invalid_repo_root.join(".git")).unwrap();
+    fs::create_dir_all(invalid_repo_root.join(".agents/plugins")).unwrap();
+    fs::write(
+        valid_repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "valid-marketplace",
+  "plugins": [
+    {
+      "name": "valid-plugin",
+      "source": {
+        "source": "local",
+        "path": "./plugin"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    fs::write(
+        invalid_repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "invalid-marketplace",
+  "plugins": [
+    {
+      "name": "broken-plugin",
+      "source": {
+        "source": "local",
+        "path": "plugin-without-dot-slash"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let marketplaces = list_marketplaces_with_home(
+        &[
+            AbsolutePathBuf::try_from(valid_repo_root).unwrap(),
+            AbsolutePathBuf::try_from(invalid_repo_root).unwrap(),
+        ],
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(marketplaces.len(), 1);
+    assert_eq!(marketplaces[0].name, "valid-marketplace");
+}
+
+#[test]
 fn list_marketplaces_resolves_plugin_interface_paths_to_absolute() {
     let tmp = tempdir().unwrap();
     let repo_root = tmp.path().join("repo");
