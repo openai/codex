@@ -229,9 +229,6 @@ pub enum ResponseInputItem {
         role: String,
         content: Vec<ContentItem>,
     },
-    Notification {
-        content: FunctionCallOutputPayload,
-    },
     FunctionCallOutput {
         call_id: String,
         output: FunctionCallOutputPayload,
@@ -305,12 +302,6 @@ pub enum ResponseItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         phase: Option<MessagePhase>,
-    },
-    Notification {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        id: Option<String>,
-        content: FunctionCallOutputPayload,
     },
     Reasoning {
         #[serde(default, skip_serializing)]
@@ -1000,7 +991,6 @@ impl From<ResponseInputItem> for ResponseItem {
                 end_turn: None,
                 phase: None,
             },
-            ResponseInputItem::Notification { content } => Self::Notification { id: None, content },
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 Self::FunctionCallOutput { call_id, output }
             }
@@ -2730,67 +2720,6 @@ mod tests {
                     }
                 }]
             })
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn notification_input_roundtrips() -> Result<()> {
-        let input = ResponseInputItem::Notification {
-            content: FunctionCallOutputPayload::from_text("heads up".to_string()),
-        };
-
-        assert_eq!(
-            ResponseItem::from(input.clone()),
-            ResponseItem::Notification {
-                id: None,
-                content: FunctionCallOutputPayload::from_text("heads up".to_string()),
-            }
-        );
-
-        assert_eq!(
-            serde_json::to_value(input)?,
-            serde_json::json!({
-                "type": "notification",
-                "content": "heads up",
-            })
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn notification_response_item_deserializes_content_items() -> Result<()> {
-        let parsed: ResponseItem = serde_json::from_value(serde_json::json!({
-            "type": "notification",
-            "id": "msg_123",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": "one",
-                },
-                {
-                    "type": "input_image",
-                    "image_url": "https://example.com/a.png",
-                }
-            ],
-        }))?;
-
-        assert_eq!(
-            parsed,
-            ResponseItem::Notification {
-                id: Some("msg_123".to_string()),
-                content: FunctionCallOutputPayload::from_content_items(vec![
-                    FunctionCallOutputContentItem::InputText {
-                        text: "one".to_string(),
-                    },
-                    FunctionCallOutputContentItem::InputImage {
-                        image_url: "https://example.com/a.png".to_string(),
-                        detail: None,
-                    },
-                ]),
-            }
         );
 
         Ok(())

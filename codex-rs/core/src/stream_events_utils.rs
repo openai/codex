@@ -359,10 +359,6 @@ pub(crate) fn last_assistant_message_from_item(
 
 pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Option<ResponseItem> {
     match input {
-        ResponseInputItem::Notification { content } => Some(ResponseItem::Notification {
-            id: None,
-            content: content.clone(),
-        }),
         ResponseInputItem::FunctionCallOutput { call_id, output } => {
             Some(ResponseItem::FunctionCallOutput {
                 call_id: call_id.clone(),

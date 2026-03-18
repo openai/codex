@@ -39,6 +39,7 @@ pub(super) struct CodeModeToolCall {
 #[derive(Clone, Debug, Deserialize)]
 pub(super) struct CodeModeNotify {
     pub(super) cell_id: String,
+    pub(super) call_id: String,
     pub(super) text: String,
 }
 
@@ -48,6 +49,7 @@ pub(super) enum HostToNodeMessage {
     Start {
         request_id: String,
         cell_id: String,
+        tool_call_id: String,
         default_yield_time_ms: u64,
         enabled_tools: Vec<EnabledTool>,
         stored_values: HashMap<String, JsonValue>,
@@ -142,6 +144,7 @@ mod tests {
         let message = NodeToHostMessage::Notify {
             notify: CodeModeNotify {
                 cell_id: "1".to_string(),
+                call_id: "call-1".to_string(),
                 text: "hello".to_string(),
             },
         };

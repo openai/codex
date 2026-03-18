@@ -81,8 +81,9 @@ impl CodeModeProcess {
                         }
                         if exec
                             .session
-                            .inject_response_items(vec![ResponseInputItem::Notification {
-                                content: FunctionCallOutputPayload::from_text(notify.text),
+                            .inject_response_items(vec![ResponseInputItem::CustomToolCallOutput {
+                                call_id: notify.call_id.clone(),
+                                output: FunctionCallOutputPayload::from_text(notify.text),
                             }])
                             .await
                             .is_err()

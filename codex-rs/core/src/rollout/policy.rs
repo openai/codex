@@ -28,7 +28,6 @@ pub(crate) fn is_persisted_response_item(item: &RolloutItem, mode: EventPersiste
 pub(crate) fn should_persist_response_item(item: &ResponseItem) -> bool {
     match item {
         ResponseItem::Message { .. }
-        | ResponseItem::Notification { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
@@ -50,7 +49,6 @@ pub(crate) fn should_persist_response_item(item: &ResponseItem) -> bool {
 pub(crate) fn should_persist_response_item_for_memories(item: &ResponseItem) -> bool {
     match item {
         ResponseItem::Message { role, .. } => role != "developer",
-        ResponseItem::Notification { .. } => false,
         ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::ToolSearchCall { .. }

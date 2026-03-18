@@ -233,7 +233,7 @@ function codeModeWorkerMain() {
     throw new TypeError('image expects an http(s) or data URL');
   }
 
-  function createCodeModeHelpers(context, state) {
+  function createCodeModeHelpers(context, state, toolCallId) {
     const load = (key) => {
       if (typeof key !== 'string') {
         throw new TypeError('load key must be a string');
@@ -273,8 +273,12 @@ function codeModeWorkerMain() {
       if (text.trim().length === 0) {
         throw new TypeError('notify expects non-empty text');
       }
+      if (typeof toolCallId !== 'string' || toolCallId.length === 0) {
+        throw new TypeError('notify requires a valid tool call id');
+      }
       parentPort.postMessage({
         type: 'notify',
+        call_id: toolCallId,
         text,
       });
       return text;
@@ -463,6 +467,7 @@ function codeModeWorkerMain() {
 
   async function main() {
     const start = workerData ?? {};
+    const toolCallId = start.tool_call_id;
     const state = {
       storedValues: cloneJsonValue(start.stored_values ?? {}),
     };
@@ -472,7 +477,7 @@ function codeModeWorkerMain() {
     const context = vm.createContext({
       __codexContentItems: contentItems,
     });
-    const helpers = createCodeModeHelpers(context, state);
+    const helpers = createCodeModeHelpers(context, state, toolCallId);
     Object.defineProperty(context, '__codexRuntime', {
       value: createBridgeRuntime(callTool, enabledTools, helpers),
       configurable: true,
@@ -645,6 +650,9 @@ function sessionWorkerSource() {
 }
 
 function startSession(protocol, sessions, start) {
+  if (typeof start.tool_call_id !== 'string' || start.tool_call_id.length === 0) {
+    throw new TypeError('start requires a valid tool_call_id');
+  }
   const maxOutputTokensPerExecCall =
     start.max_output_tokens == null
       ? DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL
@@ -718,9 +726,13 @@ async function handleWorkerMessage(protocol, sessions, session, message) {
     if (typeof message.text !== 'string' || message.text.trim().length === 0) {
       throw new TypeError('notify requires non-empty text');
     }
+    if (typeof message.call_id !== 'string' || message.call_id.length === 0) {
+      throw new TypeError('notify requires a valid call id');
+    }
     await protocol.send({
       type: 'notify',
       cell_id: session.id,
+      call_id: message.call_id,
       text: message.text,
     });
     return;
