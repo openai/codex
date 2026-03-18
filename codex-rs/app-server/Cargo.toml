@@ -23,6 +23,7 @@ workspace = true
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
+biscuit = { workspace = true }
 axum = { workspace = true, default-features = false, features = [
     "http1",
     "json",
