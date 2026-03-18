@@ -64,9 +64,7 @@ impl CodeModeProcess {
                             .await;
                             let (code_mode_result, error_text) = match result {
                                 Ok(code_mode_result) => (code_mode_result, None),
-                                Err(error) => {
-                                    (serde_json::Value::Null, Some(error.to_string()))
-                                }
+                                Err(error) => (serde_json::Value::Null, Some(error.to_string())),
                             };
                             let response = HostToNodeMessage::Response {
                                 request_id: tool_call.request_id,
