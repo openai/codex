@@ -2325,7 +2325,6 @@ dependencies = [
  "icu_decimal",
  "icu_locale_core",
  "icu_provider",
- "mime_guess",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",
