@@ -42,6 +42,21 @@ impl SkillMetadata {
             .and_then(|policy| policy.allow_implicit_invocation)
             .unwrap_or(true)
     }
+
+    pub fn matches_product_restriction_for_product(
+        &self,
+        restriction_product: Option<Product>,
+    ) -> bool {
+        match &self.policy {
+            Some(policy) => {
+                policy.products.is_empty()
+                    || restriction_product.is_some_and(|product| {
+                        product.matches_product_restriction(&policy.products)
+                    })
+            }
+            None => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -114,4 +129,30 @@ impl SkillLoadOutcome {
             .iter()
             .map(|skill| (skill, self.is_skill_enabled(skill)))
     }
+}
+
+pub fn filter_skill_load_outcome_for_product(
+    mut outcome: SkillLoadOutcome,
+    restriction_product: Option<Product>,
+) -> SkillLoadOutcome {
+    outcome
+        .skills
+        .retain(|skill| skill.matches_product_restriction_for_product(restriction_product));
+    outcome.implicit_skills_by_scripts_dir = Arc::new(
+        outcome
+            .implicit_skills_by_scripts_dir
+            .iter()
+            .filter(|(_, skill)| skill.matches_product_restriction_for_product(restriction_product))
+            .map(|(path, skill)| (path.clone(), skill.clone()))
+            .collect(),
+    );
+    outcome.implicit_skills_by_doc_path = Arc::new(
+        outcome
+            .implicit_skills_by_doc_path
+            .iter()
+            .filter(|(_, skill)| skill.matches_product_restriction_for_product(restriction_product))
+            .map(|(path, skill)| (path.clone(), skill.clone()))
+            .collect(),
+    );
+    outcome
 }

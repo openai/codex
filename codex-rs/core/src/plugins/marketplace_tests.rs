@@ -30,6 +30,7 @@ fn resolve_marketplace_plugin_finds_repo_marketplace_plugin() {
     let resolved = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
         "local-plugin",
+        Some(Product::Codex),
     )
     .unwrap();
 
@@ -59,6 +60,7 @@ fn resolve_marketplace_plugin_reports_missing_plugin() {
     let err = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
         "missing",
+        Some(Product::Codex),
     )
     .unwrap_err();
 
@@ -297,6 +299,7 @@ fn list_marketplaces_keeps_distinct_entries_for_same_name() {
     let resolved = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_marketplace).unwrap(),
         "local-plugin",
+        Some(Product::Codex),
     )
     .unwrap();
 
@@ -687,6 +690,7 @@ fn resolve_marketplace_plugin_rejects_non_relative_local_paths() {
     let err = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
         "local-plugin",
+        Some(Product::Codex),
     )
     .unwrap_err();
 
@@ -732,11 +736,51 @@ fn resolve_marketplace_plugin_uses_first_duplicate_entry() {
     let resolved = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
         "local-plugin",
+        Some(Product::Codex),
     )
     .unwrap();
 
     assert_eq!(
         resolved.source_path,
         AbsolutePathBuf::try_from(repo_root.join("first")).unwrap()
+    );
+}
+
+#[test]
+fn resolve_marketplace_plugin_rejects_disallowed_product() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "chatgpt-plugin",
+      "source": {
+        "source": "local",
+        "path": "./plugin"
+      },
+      "policy": {
+        "products": ["CHATGPT"]
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let err = resolve_marketplace_plugin(
+        &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
+        "chatgpt-plugin",
+        Some(Product::Atlas),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "plugin `chatgpt-plugin` is not available for install in marketplace `codex-curated`"
     );
 }

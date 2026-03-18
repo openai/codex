@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use toml::Value as TomlValue;
@@ -30,6 +31,7 @@ use crate::skills::system::uninstall_system_skills;
 pub struct SkillsManager {
     codex_home: PathBuf,
     plugins_manager: Arc<PluginsManager>,
+    restriction_product: Option<Product>,
     cache_by_cwd: RwLock<HashMap<PathBuf, SkillLoadOutcome>>,
     cache_by_config: RwLock<HashMap<ConfigSkillsCacheKey, SkillLoadOutcome>>,
 }
@@ -40,9 +42,24 @@ impl SkillsManager {
         plugins_manager: Arc<PluginsManager>,
         bundled_skills_enabled: bool,
     ) -> Self {
+        Self::new_with_restriction_product(
+            codex_home,
+            plugins_manager,
+            bundled_skills_enabled,
+            Some(Product::Codex),
+        )
+    }
+
+    pub fn new_with_restriction_product(
+        codex_home: PathBuf,
+        plugins_manager: Arc<PluginsManager>,
+        bundled_skills_enabled: bool,
+        restriction_product: Option<Product>,
+    ) -> Self {
         let manager = Self {
             codex_home,
             plugins_manager,
+            restriction_product,
             cache_by_cwd: RwLock::new(HashMap::new()),
             cache_by_config: RwLock::new(HashMap::new()),
         };
@@ -69,8 +86,10 @@ impl SkillsManager {
             return outcome;
         }
 
-        let outcome =
-            finalize_skill_outcome(load_skills_from_roots(roots), &config.config_layer_stack);
+        let outcome = crate::skills::filter_skill_load_outcome_for_product(
+            finalize_skill_outcome(load_skills_from_roots(roots), &config.config_layer_stack),
+            self.restriction_product,
+        );
         let mut cache = self
             .cache_by_config
             .write()
@@ -173,8 +192,10 @@ impl SkillsManager {
                     scope: SkillScope::User,
                 }),
         );
-        let outcome = load_skills_from_roots(roots);
-        let outcome = finalize_skill_outcome(outcome, &config_layer_stack);
+        let outcome = crate::skills::filter_skill_load_outcome_for_product(
+            finalize_skill_outcome(load_skills_from_roots(roots), &config_layer_stack),
+            self.restriction_product,
+        );
         let mut cache = self
             .cache_by_cwd
             .write()

@@ -2332,6 +2332,24 @@ impl SessionSource {
             _ => None,
         }
     }
+    pub fn restriction_product(&self) -> Option<Product> {
+        match self {
+            SessionSource::Custom(source) => Product::from_session_source_name(source),
+            SessionSource::Cli
+            | SessionSource::VSCode
+            | SessionSource::Exec
+            | SessionSource::Mcp
+            | SessionSource::Unknown => Some(Product::Codex),
+            SessionSource::SubAgent(_) => None,
+        }
+    }
+
+    pub fn matches_product_restriction(&self, products: &[Product]) -> bool {
+        products.is_empty()
+            || self
+                .restriction_product()
+                .is_some_and(|product| product.matches_product_restriction(products))
+    }
 }
 
 impl fmt::Display for SubAgentSource {
@@ -2923,6 +2941,21 @@ pub enum Product {
     #[serde(alias = "ATLAS")]
     Atlas,
 }
+impl Product {
+    pub fn from_session_source_name(value: &str) -> Option<Self> {
+        let normalized = value.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "chatgpt" => Some(Self::Chatgpt),
+            "codex" => Some(Self::Codex),
+            "atlas" => Some(Self::Atlas),
+            _ => None,
+        }
+    }
+
+    pub fn matches_product_restriction(&self, products: &[Product]) -> bool {
+        products.is_empty() || products.contains(self)
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -3421,6 +3454,96 @@ mod tests {
             .get_writable_roots_with_cwd(cwd)
             .iter()
             .any(|root| root.is_path_writable(path))
+    }
+
+    #[test]
+    fn session_source_from_startup_arg_maps_known_values() {
+        assert_eq!(
+            SessionSource::from_startup_arg("vscode").unwrap(),
+            SessionSource::VSCode
+        );
+        assert_eq!(
+            SessionSource::from_startup_arg("app-server").unwrap(),
+            SessionSource::Mcp
+        );
+    }
+
+    #[test]
+    fn session_source_from_startup_arg_preserves_custom_values() {
+        assert_eq!(
+            SessionSource::from_startup_arg("atlas").unwrap(),
+            SessionSource::Custom("atlas".to_string())
+        );
+    }
+
+    #[test]
+    fn session_source_restriction_product_defaults_non_subagent_sources_to_codex() {
+        assert_eq!(
+            SessionSource::Cli.restriction_product(),
+            Some(Product::Codex)
+        );
+        assert_eq!(
+            SessionSource::VSCode.restriction_product(),
+            Some(Product::Codex)
+        );
+        assert_eq!(
+            SessionSource::Exec.restriction_product(),
+            Some(Product::Codex)
+        );
+        assert_eq!(
+            SessionSource::Mcp.restriction_product(),
+            Some(Product::Codex)
+        );
+        assert_eq!(
+            SessionSource::Unknown.restriction_product(),
+            Some(Product::Codex)
+        );
+    }
+
+    #[test]
+    fn session_source_restriction_product_does_not_guess_subagent_products() {
+        assert_eq!(
+            SessionSource::SubAgent(SubAgentSource::Review).restriction_product(),
+            None
+        );
+    }
+
+    #[test]
+    fn session_source_restriction_product_maps_custom_sources_to_products() {
+        assert_eq!(
+            SessionSource::Custom("chatgpt".to_string()).restriction_product(),
+            Some(Product::Chatgpt)
+        );
+        assert_eq!(
+            SessionSource::Custom("ATLAS".to_string()).restriction_product(),
+            Some(Product::Atlas)
+        );
+        assert_eq!(
+            SessionSource::Custom("codex".to_string()).restriction_product(),
+            Some(Product::Codex)
+        );
+        assert_eq!(
+            SessionSource::Custom("atlas-dev".to_string()).restriction_product(),
+            None
+        );
+    }
+
+    #[test]
+    fn session_source_matches_product_restriction() {
+        assert!(
+            SessionSource::Custom("chatgpt".to_string())
+                .matches_product_restriction(&[Product::Chatgpt])
+        );
+        assert!(
+            !SessionSource::Custom("chatgpt".to_string())
+                .matches_product_restriction(&[Product::Codex])
+        );
+        assert!(SessionSource::VSCode.matches_product_restriction(&[Product::Codex]));
+        assert!(
+            !SessionSource::Custom("atlas-dev".to_string())
+                .matches_product_restriction(&[Product::Atlas])
+        );
+        assert!(SessionSource::Custom("atlas-dev".to_string()).matches_product_restriction(&[]));
     }
 
     fn sandbox_policy_probe_paths(policy: &SandboxPolicy, cwd: &Path) -> Vec<PathBuf> {

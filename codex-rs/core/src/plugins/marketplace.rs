@@ -146,6 +146,7 @@ impl MarketplaceError {
 pub fn resolve_marketplace_plugin(
     marketplace_path: &AbsolutePathBuf,
     plugin_name: &str,
+    restriction_product: Option<Product>,
 ) -> Result<ResolvedMarketplacePlugin, MarketplaceError> {
     let marketplace = load_raw_marketplace_manifest(marketplace_path)?;
     let marketplace_name = marketplace.name;
@@ -168,7 +169,10 @@ pub fn resolve_marketplace_plugin(
         ..
     } = plugin;
     let install_policy = policy.installation;
-    if install_policy == MarketplacePluginInstallPolicy::NotAvailable {
+    let product_allowed = policy.products.is_empty()
+        || restriction_product
+            .is_some_and(|product| product.matches_product_restriction(&policy.products));
+    if install_policy == MarketplacePluginInstallPolicy::NotAvailable || !product_allowed {
         return Err(MarketplaceError::PluginNotAvailable {
             plugin_name: name,
             marketplace_name,
