@@ -76,7 +76,25 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
                 &mut display_order,
                 source_path.as_path(),
                 codex_protocol::protocol::HookEventName::SessionStart,
-                group.matcher.as_deref(),
+                effective_matcher(
+                    codex_protocol::protocol::HookEventName::SessionStart,
+                    group.matcher.as_deref(),
+                ),
+                group.hooks,
+            );
+        }
+
+        for group in parsed.hooks.user_prompt_submit {
+            append_group_handlers(
+                &mut handlers,
+                &mut warnings,
+                &mut display_order,
+                source_path.as_path(),
+                codex_protocol::protocol::HookEventName::UserPromptSubmit,
+                effective_matcher(
+                    codex_protocol::protocol::HookEventName::UserPromptSubmit,
+                    group.matcher.as_deref(),
+                ),
                 group.hooks,
             );
         }
@@ -88,13 +106,27 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
                 &mut display_order,
                 source_path.as_path(),
                 codex_protocol::protocol::HookEventName::Stop,
-                /*matcher*/ None,
+                effective_matcher(
+                    codex_protocol::protocol::HookEventName::Stop,
+                    group.matcher.as_deref(),
+                ),
                 group.hooks,
             );
         }
     }
 
     DiscoveryResult { handlers, warnings }
+}
+
+fn effective_matcher(
+    event_name: codex_protocol::protocol::HookEventName,
+    matcher: Option<&str>,
+) -> Option<&str> {
+    match event_name {
+        codex_protocol::protocol::HookEventName::SessionStart => matcher,
+        codex_protocol::protocol::HookEventName::UserPromptSubmit
+        | codex_protocol::protocol::HookEventName::Stop => None,
+    }
 }
 
 fn append_group_handlers(
@@ -159,5 +191,55 @@ fn append_group_handlers(
                 source_path.display()
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::path::PathBuf;
+
+    use codex_protocol::protocol::HookEventName;
+    use pretty_assertions::assert_eq;
+
+    use super::ConfiguredHandler;
+    use super::HookHandlerConfig;
+    use super::append_group_handlers;
+    use super::effective_matcher;
+
+    #[test]
+    fn user_prompt_submit_ignores_invalid_matcher_during_discovery() {
+        let mut handlers = Vec::new();
+        let mut warnings = Vec::new();
+        let mut display_order = 0;
+
+        append_group_handlers(
+            &mut handlers,
+            &mut warnings,
+            &mut display_order,
+            Path::new("/tmp/hooks.json"),
+            HookEventName::UserPromptSubmit,
+            effective_matcher(HookEventName::UserPromptSubmit, Some("[")),
+            vec![HookHandlerConfig::Command {
+                command: "echo hello".to_string(),
+                timeout_sec: None,
+                r#async: false,
+                status_message: None,
+            }],
+        );
+
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(
+            handlers,
+            vec![ConfiguredHandler {
+                event_name: HookEventName::UserPromptSubmit,
+                matcher: None,
+                command: "echo hello".to_string(),
+                timeout_sec: 600,
+                status_message: None,
+                source_path: PathBuf::from("/tmp/hooks.json"),
+                display_order: 0,
+            }]
+        );
     }
 }

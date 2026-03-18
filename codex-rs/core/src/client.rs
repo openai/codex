@@ -2,7 +2,7 @@
 //!
 //! `ModelClient` is intended to live for the lifetime of a Codex session and holds the stable
 //! configuration and state needed to talk to a provider (auth, provider selection, conversation id,
-//! and feature-gated request behavior).
+//! and transport fallback state).
 //!
 //! Per-turn settings (model selection, reasoning controls, telemetry context, and turn metadata)
 //! are passed explicitly to streaming and unary methods so that the turn lifetime is visible at the
@@ -94,7 +94,6 @@ use crate::auth::RefreshTokenError;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
-use crate::config::Config;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
@@ -122,14 +121,6 @@ const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(crate::model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
-pub fn ws_version_from_features(config: &Config) -> bool {
-    config
-        .features
-        .enabled(crate::features::Feature::ResponsesWebsockets)
-        || config
-            .features
-            .enabled(crate::features::Feature::ResponsesWebsocketsV2)
-}
 
 /// Session-scoped state shared by all [`ModelClient`] clones.
 ///
@@ -143,7 +134,6 @@ struct ModelClientState {
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
     model_verbosity: Option<VerbosityConfig>,
-    responses_websockets_enabled_by_feature: bool,
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
@@ -175,8 +165,7 @@ impl RequestRouteTelemetry {
 /// A session-scoped client for model-provider API calls.
 ///
 /// This holds configuration and state that should be shared across turns within a Codex session
-/// (auth, provider selection, conversation id, feature-gated request behavior, and transport
-/// fallback state).
+/// (auth, provider selection, conversation id, and transport fallback state).
 ///
 /// WebSocket fallback is session-scoped: once a turn activates the HTTP fallback, subsequent turns
 /// will also use HTTP for the remainder of the session.
@@ -265,7 +254,6 @@ impl ModelClient {
         provider: ModelProviderInfo,
         session_source: SessionSource,
         model_verbosity: Option<VerbosityConfig>,
-        responses_websockets_enabled_by_feature: bool,
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
@@ -282,7 +270,6 @@ impl ModelClient {
                 auth_env_telemetry,
                 session_source,
                 model_verbosity,
-                responses_websockets_enabled_by_feature,
                 enable_request_compression,
                 include_timing_metrics,
                 beta_features_header,
@@ -324,9 +311,9 @@ impl ModelClient {
     pub(crate) fn force_http_fallback(
         &self,
         session_telemetry: &SessionTelemetry,
-        model_info: &ModelInfo,
+        _model_info: &ModelInfo,
     ) -> bool {
-        let websocket_enabled = self.responses_websocket_enabled(model_info);
+        let websocket_enabled = self.responses_websocket_enabled();
         let activated =
             websocket_enabled && !self.state.disable_websockets.swap(true, Ordering::Relaxed);
         if activated {
@@ -517,19 +504,16 @@ impl ModelClient {
 
     /// Returns whether the Responses-over-WebSocket transport is active for this session.
     ///
-    /// This combines provider capability and feature gating; both must be true for websocket paths
-    /// to be eligible.
-    ///
-    /// If websockets are only enabled via model preference (no explicit feature flag), prefer the
-    /// current v2 behavior.
-    pub fn responses_websocket_enabled(&self, model_info: &ModelInfo) -> bool {
+    /// WebSocket use is controlled by provider capability and session-scoped fallback state.
+    pub fn responses_websocket_enabled(&self) -> bool {
         if !self.state.provider.supports_websockets
             || self.state.disable_websockets.load(Ordering::Relaxed)
+            || (*CODEX_RS_SSE_FIXTURE).is_some()
         {
             return false;
         }
 
-        self.state.responses_websockets_enabled_by_feature || model_info.prefer_websockets
+        true
     }
 
     /// Returns auth + provider configuration resolved from the current session auth state.
@@ -868,9 +852,9 @@ impl ModelClientSession {
     pub async fn preconnect_websocket(
         &mut self,
         session_telemetry: &SessionTelemetry,
-        model_info: &ModelInfo,
+        _model_info: &ModelInfo,
     ) -> std::result::Result<(), ApiError> {
-        if !self.client.responses_websocket_enabled(model_info) {
+        if !self.client.responses_websocket_enabled() {
             return Ok(());
         }
         if self.websocket_session.connection.is_some() {
@@ -1248,7 +1232,7 @@ impl ModelClientSession {
         service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
     ) -> Result<()> {
-        if !self.client.responses_websocket_enabled(model_info) {
+        if !self.client.responses_websocket_enabled() {
             return Ok(());
         }
         if self.websocket_session.last_request.is_some() {
@@ -1292,8 +1276,8 @@ impl ModelClientSession {
     ///
     /// The caller is responsible for passing per-turn settings explicitly (model selection,
     /// reasoning settings, telemetry context, and turn metadata). This method will prefer the
-    /// Responses WebSocket transport when enabled and healthy, and will fall back to the HTTP
-    /// Responses API transport otherwise.
+    /// Responses WebSocket transport when the provider supports it and it remains healthy, and will
+    /// fall back to the HTTP Responses API transport otherwise.
     pub async fn stream(
         &mut self,
         prompt: &Prompt,
@@ -1307,7 +1291,7 @@ impl ModelClientSession {
         let wire_api = self.client.state.provider.wire_api;
         match wire_api {
             WireApi::Responses => {
-                if self.client.responses_websocket_enabled(model_info) {
+                if self.client.responses_websocket_enabled() {
                     match self
                         .stream_responses_websocket(
                             prompt,

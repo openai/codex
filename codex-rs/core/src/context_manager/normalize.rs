@@ -79,6 +79,7 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                         idx,
                         ResponseItem::CustomToolCallOutput {
                             call_id: call_id.clone(),
+                            name: None,
                             output: FunctionCallOutputPayload::from_text("aborted".to_string()),
                         },
                     ));

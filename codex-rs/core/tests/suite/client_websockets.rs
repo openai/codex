@@ -8,7 +8,6 @@ use codex_core::ResponseEvent;
 use codex_core::WireApi;
 use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 use codex_core::features::Feature;
-use codex_core::ws_version_from_features;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_otel::metrics::MetricsClient;
@@ -99,6 +98,28 @@ async fn responses_websocket_streams_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_streams_without_feature_flag_when_provider_supports_websockets() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness_with_options(&server, false).await;
+    let mut client_session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    stream_until_complete(&mut client_session, &harness, &prompt).await;
+
+    assert_eq!(server.handshakes().len(), 1);
+    assert_eq!(server.single_connection().len(), 1);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_preconnect_reuses_connection() {
     skip_if_no_network!();
 
@@ -133,7 +154,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, false, true, true).await;
+    let harness = websocket_harness_with_options(&server, true).await;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
     client_session
@@ -252,7 +273,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, false, true, true).await;
+    let harness = websocket_harness_with_options(&server, true).await;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
     client_session
@@ -308,7 +329,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_prewarm_uses_v2_when_model_prefers_websockets_and_feature_disabled() {
+async fn responses_websocket_prewarm_uses_v2_when_provider_supports_websockets() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![vec![
@@ -317,7 +338,7 @@ async fn responses_websocket_prewarm_uses_v2_when_model_prefers_websockets_and_f
     ]]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, false, false, true).await;
+    let harness = websocket_harness_with_options(&server, false).await;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
     client_session
@@ -374,7 +395,7 @@ async fn responses_websocket_preconnect_runs_when_only_v2_feature_enabled() {
     ]]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, false, true, false).await;
+    let harness = websocket_harness_with_options(&server, true).await;
     let mut client_session = harness.client.new_session();
     client_session
         .preconnect_websocket(&harness.session_telemetry, &harness.model_info)
@@ -404,7 +425,7 @@ async fn responses_websocket_preconnect_runs_when_only_v2_feature_enabled() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_v2_requests_use_v2_when_model_prefers_websockets() {
+async fn responses_websocket_v2_requests_use_v2_when_provider_supports_websockets() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
@@ -417,7 +438,7 @@ async fn responses_websocket_v2_requests_use_v2_when_model_prefers_websockets() 
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, false, true, true).await;
+    let harness = websocket_harness_with_options(&server, true).await;
     let mut client_session = harness.client.new_session();
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![
@@ -466,7 +487,7 @@ async fn responses_websocket_v2_incremental_requests_are_reused_across_turns() {
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, false, true, true).await;
+    let harness = websocket_harness_with_options(&server, false).await;
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![
         message_item("hello"),
@@ -510,7 +531,7 @@ async fn responses_websocket_v2_wins_when_both_features_enabled() {
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, true, true, false).await;
+    let harness = websocket_harness_with_options(&server, false).await;
     let mut client_session = harness.client.new_session();
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![
@@ -1534,69 +1555,39 @@ async fn websocket_harness_with_runtime_metrics(
     server: &WebSocketTestServer,
     runtime_metrics_enabled: bool,
 ) -> WebsocketTestHarness {
-    websocket_harness_with_options(server, runtime_metrics_enabled, true, false, false).await
+    websocket_harness_with_options(server, runtime_metrics_enabled).await
 }
 
 async fn websocket_harness_with_v2(
     server: &WebSocketTestServer,
-    websocket_v2_enabled: bool,
+    runtime_metrics_enabled: bool,
 ) -> WebsocketTestHarness {
-    websocket_harness_with_options(server, false, true, websocket_v2_enabled, false).await
+    websocket_harness_with_options(server, runtime_metrics_enabled).await
 }
 
 async fn websocket_harness_with_options(
     server: &WebSocketTestServer,
     runtime_metrics_enabled: bool,
-    websocket_enabled: bool,
-    websocket_v2_enabled: bool,
-    prefer_websockets: bool,
 ) -> WebsocketTestHarness {
-    websocket_harness_with_provider_options(
-        websocket_provider(server),
-        runtime_metrics_enabled,
-        websocket_enabled,
-        websocket_v2_enabled,
-        prefer_websockets,
-    )
-    .await
+    websocket_harness_with_provider_options(websocket_provider(server), runtime_metrics_enabled)
+        .await
 }
 
 async fn websocket_harness_with_provider_options(
     provider: ModelProviderInfo,
     runtime_metrics_enabled: bool,
-    websocket_enabled: bool,
-    websocket_v2_enabled: bool,
-    prefer_websockets: bool,
 ) -> WebsocketTestHarness {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model = Some(MODEL.to_string());
-    if websocket_enabled {
-        config
-            .features
-            .enable(Feature::ResponsesWebsockets)
-            .expect("test config should allow feature update");
-    } else {
-        config
-            .features
-            .disable(Feature::ResponsesWebsockets)
-            .expect("test config should allow feature update");
-    }
     if runtime_metrics_enabled {
         config
             .features
             .enable(Feature::RuntimeMetrics)
             .expect("test config should allow feature update");
     }
-    if websocket_v2_enabled {
-        config
-            .features
-            .enable(Feature::ResponsesWebsocketsV2)
-            .expect("test config should allow feature update");
-    }
     let config = Arc::new(config);
-    let mut model_info = codex_core::test_support::construct_model_info_offline(MODEL, &config);
-    model_info.prefer_websockets = prefer_websockets;
+    let model_info = codex_core::test_support::construct_model_info_offline(MODEL, &config);
     let conversation_id = ThreadId::new();
     let auth_manager =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"));
@@ -1627,7 +1618,6 @@ async fn websocket_harness_with_provider_options(
         provider.clone(),
         SessionSource::Exec,
         config.model_verbosity,
-        ws_version_from_features(&config),
         false,
         runtime_metrics_enabled,
         None,

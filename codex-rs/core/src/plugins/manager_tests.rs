@@ -7,11 +7,14 @@ use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
+use crate::plugins::MarketplacePluginInstallPolicy;
 use crate::plugins::test_support::TEST_CURATED_PLUGIN_SHA;
+use crate::plugins::test_support::write_curated_plugin;
 use crate::plugins::test_support::write_curated_plugin_sha_with as write_curated_plugin_sha;
 use crate::plugins::test_support::write_file;
 use crate::plugins::test_support::write_openai_curated_marketplace;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_protocol::protocol::SessionSource;
 use pretty_assertions::assert_eq;
 use std::fs;
 use tempfile::TempDir;
@@ -811,7 +814,9 @@ async fn install_plugin_updates_config_with_relative_path_and_plugin_key() {
         "source": "local",
         "path": "./sample-plugin"
       },
-      "authPolicy": "ON_USE"
+      "policy": {
+        "authentication": "ON_USE"
+      }
     }
   ]
 }"#,
@@ -952,7 +957,7 @@ enabled = false
 
     assert_eq!(
         marketplace,
-        ConfiguredMarketplaceSummary {
+        ConfiguredMarketplace {
             name: "debug".to_string(),
             path: AbsolutePathBuf::try_from(
                 tmp.path().join("repo/.agents/plugins/marketplace.json"),
@@ -960,28 +965,34 @@ enabled = false
             .unwrap(),
             interface: None,
             plugins: vec![
-                ConfiguredMarketplacePluginSummary {
+                ConfiguredMarketplacePlugin {
                     id: "enabled-plugin@debug".to_string(),
                     name: "enabled-plugin".to_string(),
-                    source: MarketplacePluginSourceSummary::Local {
+                    source: MarketplacePluginSource::Local {
                         path: AbsolutePathBuf::try_from(tmp.path().join("repo/enabled-plugin"))
                             .unwrap(),
                     },
-                    install_policy: MarketplacePluginInstallPolicy::Available,
-                    auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+                    policy: MarketplacePluginPolicy {
+                        installation: MarketplacePluginInstallPolicy::Available,
+                        authentication: MarketplacePluginAuthPolicy::OnInstall,
+                        products: vec![],
+                    },
                     interface: None,
                     installed: true,
                     enabled: true,
                 },
-                ConfiguredMarketplacePluginSummary {
+                ConfiguredMarketplacePlugin {
                     id: "disabled-plugin@debug".to_string(),
                     name: "disabled-plugin".to_string(),
-                    source: MarketplacePluginSourceSummary::Local {
+                    source: MarketplacePluginSource::Local {
                         path: AbsolutePathBuf::try_from(tmp.path().join("repo/disabled-plugin"),)
                             .unwrap(),
                     },
-                    install_policy: MarketplacePluginInstallPolicy::Available,
-                    auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+                    policy: MarketplacePluginPolicy {
+                        installation: MarketplacePluginInstallPolicy::Available,
+                        authentication: MarketplacePluginAuthPolicy::OnInstall,
+                        products: vec![],
+                    },
                     interface: None,
                     installed: true,
                     enabled: false,
@@ -1023,6 +1034,12 @@ async fn list_marketplaces_includes_curated_repo_marketplace() {
         r#"{"name":"linear"}"#,
     )
     .unwrap();
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
 
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
@@ -1036,21 +1053,24 @@ async fn list_marketplaces_includes_curated_repo_marketplace() {
 
     assert_eq!(
         curated_marketplace,
-        ConfiguredMarketplaceSummary {
+        ConfiguredMarketplace {
             name: "openai-curated".to_string(),
             path: AbsolutePathBuf::try_from(curated_root.join(".agents/plugins/marketplace.json"))
                 .unwrap(),
-            interface: Some(MarketplaceInterfaceSummary {
+            interface: Some(MarketplaceInterface {
                 display_name: Some("ChatGPT Official".to_string()),
             }),
-            plugins: vec![ConfiguredMarketplacePluginSummary {
+            plugins: vec![ConfiguredMarketplacePlugin {
                 id: "linear@openai-curated".to_string(),
                 name: "linear".to_string(),
-                source: MarketplacePluginSourceSummary::Local {
+                source: MarketplacePluginSource::Local {
                     path: AbsolutePathBuf::try_from(curated_root.join("plugins/linear")).unwrap(),
                 },
-                install_policy: MarketplacePluginInstallPolicy::Available,
-                auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+                policy: MarketplacePluginPolicy {
+                    installation: MarketplacePluginInstallPolicy::Available,
+                    authentication: MarketplacePluginAuthPolicy::OnInstall,
+                    products: vec![],
+                },
                 interface: None,
                 installed: false,
                 enabled: false,
@@ -1143,14 +1163,17 @@ enabled = false
         .expect("repo-a marketplace should be listed");
     assert_eq!(
         repo_a_marketplace.plugins,
-        vec![ConfiguredMarketplacePluginSummary {
+        vec![ConfiguredMarketplacePlugin {
             id: "dup-plugin@debug".to_string(),
             name: "dup-plugin".to_string(),
-            source: MarketplacePluginSourceSummary::Local {
+            source: MarketplacePluginSource::Local {
                 path: AbsolutePathBuf::try_from(tmp.path().join("repo-a/from-a")).unwrap(),
             },
-            install_policy: MarketplacePluginInstallPolicy::Available,
-            auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+            policy: MarketplacePluginPolicy {
+                installation: MarketplacePluginInstallPolicy::Available,
+                authentication: MarketplacePluginAuthPolicy::OnInstall,
+                products: vec![],
+            },
             interface: None,
             installed: false,
             enabled: true,
@@ -1169,14 +1192,17 @@ enabled = false
         .expect("repo-b marketplace should be listed");
     assert_eq!(
         repo_b_marketplace.plugins,
-        vec![ConfiguredMarketplacePluginSummary {
+        vec![ConfiguredMarketplacePlugin {
             id: "b-only-plugin@debug".to_string(),
             name: "b-only-plugin".to_string(),
-            source: MarketplacePluginSourceSummary::Local {
+            source: MarketplacePluginSource::Local {
                 path: AbsolutePathBuf::try_from(tmp.path().join("repo-b/from-b-only")).unwrap(),
             },
-            install_policy: MarketplacePluginInstallPolicy::Available,
-            auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+            policy: MarketplacePluginPolicy {
+                installation: MarketplacePluginInstallPolicy::Available,
+                authentication: MarketplacePluginAuthPolicy::OnInstall,
+                products: vec![],
+            },
             interface: None,
             installed: false,
             enabled: false,
@@ -1241,21 +1267,24 @@ enabled = true
 
     assert_eq!(
         marketplace,
-        ConfiguredMarketplaceSummary {
+        ConfiguredMarketplace {
             name: "debug".to_string(),
             path: AbsolutePathBuf::try_from(
                 tmp.path().join("repo/.agents/plugins/marketplace.json"),
             )
             .unwrap(),
             interface: None,
-            plugins: vec![ConfiguredMarketplacePluginSummary {
+            plugins: vec![ConfiguredMarketplacePlugin {
                 id: "sample-plugin@debug".to_string(),
                 name: "sample-plugin".to_string(),
-                source: MarketplacePluginSourceSummary::Local {
+                source: MarketplacePluginSource::Local {
                     path: AbsolutePathBuf::try_from(tmp.path().join("repo/sample-plugin")).unwrap(),
                 },
-                install_policy: MarketplacePluginInstallPolicy::Available,
-                auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+                policy: MarketplacePluginPolicy {
+                    installation: MarketplacePluginInstallPolicy::Available,
+                    authentication: MarketplacePluginAuthPolicy::OnInstall,
+                    products: vec![],
+                },
                 interface: None,
                 installed: false,
                 enabled: true,
@@ -1606,8 +1635,13 @@ fn refresh_curated_plugin_cache_replaces_existing_local_version_with_sha() {
     );
 
     assert!(
-        refresh_curated_plugin_cache(tmp.path(), TEST_CURATED_PLUGIN_SHA, &[plugin_id])
-            .expect("cache refresh should succeed")
+        refresh_curated_plugin_cache(
+            tmp.path(),
+            TEST_CURATED_PLUGIN_SHA,
+            &[plugin_id],
+            &SessionSource::Cli,
+        )
+        .expect("cache refresh should succeed")
     );
 
     assert!(
@@ -1637,8 +1671,13 @@ fn refresh_curated_plugin_cache_reinstalls_missing_configured_plugin_with_curren
     .unwrap();
 
     assert!(
-        refresh_curated_plugin_cache(tmp.path(), TEST_CURATED_PLUGIN_SHA, &[plugin_id])
-            .expect("cache refresh should recreate missing configured plugin")
+        refresh_curated_plugin_cache(
+            tmp.path(),
+            TEST_CURATED_PLUGIN_SHA,
+            &[plugin_id],
+            &SessionSource::Cli,
+        )
+        .expect("cache refresh should recreate missing configured plugin")
     );
 
     assert!(
@@ -1667,8 +1706,64 @@ fn refresh_curated_plugin_cache_returns_false_when_configured_plugins_are_curren
     );
 
     assert!(
-        !refresh_curated_plugin_cache(tmp.path(), TEST_CURATED_PLUGIN_SHA, &[plugin_id])
-            .expect("cache refresh should be a no-op when configured plugins are current")
+        !refresh_curated_plugin_cache(
+            tmp.path(),
+            TEST_CURATED_PLUGIN_SHA,
+            &[plugin_id],
+            &SessionSource::Cli,
+        )
+        .expect("cache refresh should be a no-op when configured plugins are current")
+    );
+}
+
+#[test]
+fn refresh_curated_plugin_cache_skips_product_restricted_plugins_for_session_source() {
+    let tmp = tempfile::tempdir().unwrap();
+    let curated_root = curated_plugins_repo_path(tmp.path());
+    write_file(
+        &curated_root.join(".agents/plugins/marketplace.json"),
+        &format!(
+            r#"{{
+  "name": "{OPENAI_CURATED_MARKETPLACE_NAME}",
+  "plugins": [
+    {{
+      "name": "chatgpt-plugin",
+      "source": {{
+        "source": "local",
+        "path": "./plugins/chatgpt-plugin"
+      }},
+      "policy": {{
+        "products": ["CHATGPT"]
+      }}
+    }}
+  ]
+}}"#
+        ),
+    );
+    write_curated_plugin(&curated_root, "chatgpt-plugin");
+    write_curated_plugin_sha(tmp.path(), TEST_CURATED_PLUGIN_SHA);
+    let plugin_id = PluginId::new(
+        "chatgpt-plugin".to_string(),
+        OPENAI_CURATED_MARKETPLACE_NAME.to_string(),
+    )
+    .unwrap();
+
+    assert!(
+        !refresh_curated_plugin_cache(
+            tmp.path(),
+            TEST_CURATED_PLUGIN_SHA,
+            &[plugin_id],
+            &SessionSource::Cli,
+        )
+        .expect("cache refresh should skip disallowed product plugin")
+    );
+
+    assert!(
+        !tmp.path()
+            .join(format!(
+                "plugins/cache/openai-curated/chatgpt-plugin/{TEST_CURATED_PLUGIN_SHA}"
+            ))
+            .exists()
     );
 }
 

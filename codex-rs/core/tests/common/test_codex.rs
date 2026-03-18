@@ -153,11 +153,8 @@ impl TestCodexBuilder {
         let base_url_clone = base_url.clone();
         self.config_mutators.push(Box::new(move |config| {
             config.model_provider.base_url = Some(base_url_clone);
+            config.model_provider.supports_websockets = true;
             config.experimental_realtime_ws_model = Some("realtime-test-model".to_string());
-            config
-                .features
-                .enable(Feature::ResponsesWebsockets)
-                .expect("test config should allow feature update");
         }));
         Box::pin(self.build_with_home_and_base_url(base_url, home, /*resume_from*/ None)).await
     }
@@ -271,6 +268,9 @@ impl TestCodexBuilder {
     ) -> anyhow::Result<(Config, Arc<TempDir>)> {
         let model_provider = ModelProviderInfo {
             base_url: Some(base_url),
+            // Most core tests use SSE-only mock servers, so keep websocket transport off unless
+            // a test explicitly opts into websocket coverage.
+            supports_websockets: false,
             ..built_in_model_providers(/*openai_base_url*/ None)["openai"].clone()
         };
         let cwd = Arc::new(TempDir::new()?);

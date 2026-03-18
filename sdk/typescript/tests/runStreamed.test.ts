@@ -1,8 +1,5 @@
-import path from "node:path";
-
 import { describe, expect, it } from "@jest/globals";
 
-import { Codex } from "../src/codex";
 import { ThreadEvent } from "../src/index";
 
 import {
@@ -12,8 +9,7 @@ import {
   sse,
   startResponsesTestProxy,
 } from "./responsesProxy";
-
-const codexExecPath = path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "codex");
+import { createMockClient } from "./testCodex";
 
 describe("Codex", () => {
   it("returns thread events", async () => {
@@ -21,10 +17,9 @@ describe("Codex", () => {
       statusCode: 200,
       responseBodies: [sse(responseStarted(), assistantMessage("Hi!"), responseCompleted())],
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
-
       const thread = client.startThread();
       const result = await thread.runStreamed("Hello, world!");
 
@@ -60,6 +55,7 @@ describe("Codex", () => {
       ]);
       expect(thread.id).toEqual(expect.any(String));
     } finally {
+      cleanup();
       await close();
     }
   });
@@ -80,10 +76,9 @@ describe("Codex", () => {
         ),
       ],
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
-
       const thread = client.startThread();
       const first = await thread.runStreamed("first input");
       await drainEvents(first.events);
@@ -106,6 +101,7 @@ describe("Codex", () => {
       )?.text;
       expect(assistantText).toBe("First response");
     } finally {
+      cleanup();
       await close();
     }
   });
@@ -126,10 +122,9 @@ describe("Codex", () => {
         ),
       ],
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
-
       const originalThread = client.startThread();
       const first = await originalThread.runStreamed("first input");
       await drainEvents(first.events);
@@ -154,6 +149,7 @@ describe("Codex", () => {
       )?.text;
       expect(assistantText).toBe("First response");
     } finally {
+      cleanup();
       await close();
     }
   });
@@ -169,6 +165,7 @@ describe("Codex", () => {
         ),
       ],
     });
+    const { client, cleanup } = createMockClient(url);
 
     const schema = {
       type: "object",
@@ -180,8 +177,6 @@ describe("Codex", () => {
     } as const;
 
     try {
-      const client = new Codex({ codexPathOverride: codexExecPath, baseUrl: url, apiKey: "test" });
-
       const thread = client.startThread();
       const streamed = await thread.runStreamed("structured", { outputSchema: schema });
       await drainEvents(streamed.events);
@@ -198,6 +193,7 @@ describe("Codex", () => {
         schema,
       });
     } finally {
+      cleanup();
       await close();
     }
   });

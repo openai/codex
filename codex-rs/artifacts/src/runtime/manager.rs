@@ -2,6 +2,7 @@ use super::ArtifactRuntimeError;
 use super::ArtifactRuntimePlatform;
 use super::InstalledArtifactRuntime;
 use super::ReleaseManifest;
+use super::detect_runtime_root;
 use codex_package_manager::ManagedPackage;
 use codex_package_manager::PackageManager;
 use codex_package_manager::PackageManagerConfig;
@@ -79,12 +80,9 @@ impl ArtifactRuntimeReleaseLocator {
     /// Returns the default GitHub-release locator for a runtime version.
     pub fn default(runtime_version: impl Into<String>) -> Self {
         Self::new(
-            match Url::parse(DEFAULT_RELEASE_BASE_URL) {
-                Ok(url) => url,
-                Err(error) => {
-                    panic!("hard-coded artifact runtime release base URL must be valid: {error}")
-                }
-            },
+            Url::parse(DEFAULT_RELEASE_BASE_URL).unwrap_or_else(|error| {
+                panic!("hard-coded artifact runtime release base URL must be valid: {error}")
+            }),
             runtime_version,
         )
     }
@@ -249,5 +247,9 @@ impl ManagedPackage for ArtifactRuntimePackage {
         platform: ArtifactRuntimePlatform,
     ) -> Result<Self::Installed, Self::Error> {
         InstalledArtifactRuntime::load(root_dir, platform)
+    }
+
+    fn detect_extracted_root(&self, extraction_root: &Path) -> Result<PathBuf, Self::Error> {
+        detect_runtime_root(extraction_root)
     }
 }

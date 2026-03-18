@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {
-    "StopDecisionWire": {
+    "BlockDecisionWire": {
       "enum": [
         "block"
       ],
@@ -17,7 +17,7 @@
     "decision": {
       "allOf": [
         {
-          "$ref": "#/definitions/StopDecisionWire"
+          "$ref": "#/definitions/BlockDecisionWire"
         }
       ],
       "default": null

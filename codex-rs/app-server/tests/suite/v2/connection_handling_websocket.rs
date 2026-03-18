@@ -29,7 +29,11 @@ use tokio::time::timeout;
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::Error as WebSocketError;
 use tokio_tungstenite::tungstenite::Message as WebSocketMessage;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_tungstenite::tungstenite::http::header::ORIGIN;
 
 pub(super) const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -99,6 +103,55 @@ async fn websocket_transport_serves_health_endpoints_on_same_listener() -> Resul
     send_initialize_request(&mut ws, 1, "ws_health_client").await?;
     let init = read_response_for_id(&mut ws, 1).await?;
     assert_eq!(init.id, RequestId::Integer(1));
+
+    process
+        .kill()
+        .await
+        .context("failed to stop websocket app-server process")?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn websocket_transport_rejects_requests_with_origin_header() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+
+    let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
+    let client = reqwest::Client::new();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let healthz = loop {
+        match client
+            .get(format!("http://{bind_addr}/healthz"))
+            .header(ORIGIN.as_str(), "https://example.com")
+            .send()
+            .await
+            .with_context(|| format!("failed to GET http://{bind_addr}/healthz with Origin header"))
+        {
+            Ok(response) => break response,
+            Err(err) => {
+                if Instant::now() >= deadline {
+                    bail!("failed to GET http://{bind_addr}/healthz with Origin header: {err}");
+                }
+                sleep(Duration::from_millis(50)).await;
+            }
+        }
+    };
+    assert_eq!(healthz.status(), StatusCode::FORBIDDEN);
+
+    let url = format!("ws://{bind_addr}");
+    let mut request = url.into_client_request()?;
+    request
+        .headers_mut()
+        .insert(ORIGIN, HeaderValue::from_static("https://example.com"));
+    match connect_async(request).await {
+        Err(WebSocketError::Http(response)) => {
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+        Ok(_) => bail!("expected websocket handshake with Origin header to be rejected"),
+        Err(err) => bail!("expected HTTP rejection for Origin header, got {err}"),
+    }
 
     process
         .kill()

@@ -43,6 +43,7 @@ impl CodeModeExecuteHandler {
         &self,
         session: std::sync::Arc<Session>,
         turn: std::sync::Arc<TurnContext>,
+        call_id: String,
         code: String,
     ) -> Result<FunctionToolOutput, FunctionCallError> {
         let args = parse_freeform_args(&code)?;
@@ -62,6 +63,7 @@ impl CodeModeExecuteHandler {
         let message = HostToNodeMessage::Start {
             request_id: request_id.clone(),
             cell_id: cell_id.clone(),
+            tool_call_id: call_id,
             default_yield_time_ms: super::DEFAULT_EXEC_YIELD_TIME_MS,
             enabled_tools,
             stored_values,
@@ -198,6 +200,7 @@ impl ToolHandler for CodeModeExecuteHandler {
         let ToolInvocation {
             session,
             turn,
+            call_id,
             tool_name,
             payload,
             ..
@@ -205,7 +208,7 @@ impl ToolHandler for CodeModeExecuteHandler {
 
         match payload {
             ToolPayload::Custom { input } if tool_name == PUBLIC_TOOL_NAME => {
-                self.execute(session, turn, input).await
+                self.execute(session, turn, call_id, input).await
             }
             _ => Err(FunctionCallError::RespondToModel(format!(
                 "{PUBLIC_TOOL_NAME} expects raw JavaScript source text"

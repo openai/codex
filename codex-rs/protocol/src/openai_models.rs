@@ -284,9 +284,6 @@ pub struct ModelInfo {
     /// Input modalities accepted by the backend for this model.
     #[serde(default = "default_input_modalities")]
     pub input_modalities: Vec<InputModality>,
-    /// When true, this model should use websocket transport even when websocket features are off.
-    #[serde(default)]
-    pub prefer_websockets: bool,
     /// Internal-only marker set by core when a model slug resolved to fallback metadata.
     #[serde(default, skip_serializing, skip_deserializing)]
     #[schemars(skip)]
@@ -548,7 +545,6 @@ mod tests {
             effective_context_window_percent: 95,
             experimental_supported_tools: vec![],
             input_modalities: default_input_modalities(),
-            prefer_websockets: false,
             used_fallback_model_metadata: false,
             supports_search_tool: false,
         }
@@ -751,8 +747,7 @@ mod tests {
             "auto_compact_token_limit": null,
             "effective_context_window_percent": 95,
             "experimental_supported_tools": [],
-            "input_modalities": ["text", "image"],
-            "prefer_websockets": false
+            "input_modalities": ["text", "image"]
         }))
         .expect("deserialize model info");
 

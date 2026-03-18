@@ -372,6 +372,28 @@ pub struct FeedbackConfigToml {
     pub enabled: Option<bool>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolSuggestDiscoverableType {
+    Connector,
+    Plugin,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ToolSuggestDiscoverable {
+    #[serde(rename = "type")]
+    pub kind: ToolSuggestDiscoverableType,
+    pub id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ToolSuggestConfig {
+    #[serde(default)]
+    pub discoverables: Vec<ToolSuggestDiscoverable>,
+}
+
 /// Memories settings loaded from config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]

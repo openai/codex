@@ -4,10 +4,9 @@ use std::path::PathBuf;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::MentionBinding;
-use crate::history_cell;
 use crate::mention_codec::decode_history_mentions;
+use codex_protocol::protocol::Op;
 use codex_protocol::user_input::TextElement;
-use tracing::warn;
 
 /// A composer history entry that can rehydrate draft state.
 #[derive(Debug, Clone, PartialEq)]
@@ -279,16 +278,10 @@ impl ChatComposerHistory {
             self.last_history_text = Some(entry.text.clone());
             return Some(entry);
         } else if let Some(log_id) = self.history_log_id {
-            warn!(
+            app_event_tx.send(AppEvent::CodexOp(Op::GetHistoryEntryRequest {
+                offset: global_idx,
                 log_id,
-                offset = global_idx,
-                "composer history fetch is unavailable in app-server TUI"
-            );
-            app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                history_cell::new_error_event(
-                    "Composer history fetch: Not available in app-server TUI yet.".to_string(),
-                ),
-            )));
+            }));
         }
         None
     }
@@ -343,17 +336,18 @@ mod tests {
         assert!(history.should_handle_navigation("", 0));
         assert!(history.navigate_up(&tx).is_none()); // don't replace the text yet
 
-        // Verify that the app-server TUI emits an explicit user-facing stub error instead.
+        // Verify that a history lookup request was sent.
         let event = rx.try_recv().expect("expected AppEvent to be sent");
-        let AppEvent::InsertHistoryCell(cell) = event else {
+        let AppEvent::CodexOp(op) = event else {
             panic!("unexpected event variant");
         };
-        let rendered = cell
-            .display_lines(80)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<String>();
-        assert!(rendered.contains("Composer history fetch: Not available in app-server TUI yet."));
+        assert_eq!(
+            Op::GetHistoryEntryRequest {
+                log_id: 1,
+                offset: 2,
+            },
+            op
+        );
 
         // Inject the async response.
         assert_eq!(
@@ -364,17 +358,18 @@ mod tests {
         // Next Up should move to offset 1.
         assert!(history.navigate_up(&tx).is_none()); // don't replace the text yet
 
-        // Verify second stub error for offset 1.
+        // Verify second lookup request for offset 1.
         let event2 = rx.try_recv().expect("expected second event");
-        let AppEvent::InsertHistoryCell(cell) = event2 else {
+        let AppEvent::CodexOp(op) = event2 else {
             panic!("unexpected event variant");
         };
-        let rendered = cell
-            .display_lines(80)
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<String>();
-        assert!(rendered.contains("Composer history fetch: Not available in app-server TUI yet."));
+        assert_eq!(
+            Op::GetHistoryEntryRequest {
+                log_id: 1,
+                offset: 1,
+            },
+            op
+        );
 
         assert_eq!(
             Some(HistoryEntry::new("older".to_string())),

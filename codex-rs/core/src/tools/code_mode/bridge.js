@@ -30,6 +30,7 @@ Object.defineProperty(globalThis, '__codexContentItems', {
   defineGlobal('exit', __codexRuntime.exit);
   defineGlobal('image', __codexRuntime.image);
   defineGlobal('load', __codexRuntime.load);
+  defineGlobal('notify', __codexRuntime.notify);
   defineGlobal('store', __codexRuntime.store);
   defineGlobal('text', __codexRuntime.text);
   defineGlobal('tools', __codexRuntime.tools);
