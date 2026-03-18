@@ -11,6 +11,16 @@ filegroup(
 )
 
 filegroup(
+    name = "src_binding_release_aarch64_apple_darwin",
+    srcs = ["gen/src_binding_release_aarch64-apple-darwin.rs"],
+)
+
+filegroup(
+    name = "src_binding_release_x86_64_apple_darwin",
+    srcs = ["gen/src_binding_release_x86_64-apple-darwin.rs"],
+)
+
+filegroup(
     name = "src_binding_release_aarch64_unknown_linux_gnu",
     srcs = ["gen/src_binding_release_aarch64-unknown-linux-gnu.rs"],
 )
@@ -18,4 +28,14 @@ filegroup(
 filegroup(
     name = "src_binding_release_x86_64_unknown_linux_gnu",
     srcs = ["gen/src_binding_release_x86_64-unknown-linux-gnu.rs"],
+)
+
+filegroup(
+    name = "src_binding_release_x86_64_pc_windows_msvc",
+    srcs = ["gen/src_binding_release_x86_64-pc-windows-msvc.rs"],
+)
+
+filegroup(
+    name = "src_binding_release_aarch64_pc_windows_msvc",
+    srcs = ["gen/src_binding_release_aarch64-pc-windows-msvc.rs"],
 )

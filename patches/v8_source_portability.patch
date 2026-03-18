@@ -3,10 +3,10 @@
 # weak glibc symbol handling, and warning annotations; no dependency
 # include-path rewrites or intentional V8 feature changes.
 
-diff --git a/orig/v8-14.2.231.17/src/base/debug/stack_trace_posix.cc b/mod/v8-14.2.231.17/src/base/debug/stack_trace_posix.cc
+diff --git a/orig/v8-14.6.202.11/src/base/debug/stack_trace_posix.cc b/mod/v8-14.6.202.11/src/base/debug/stack_trace_posix.cc
 index 6176ed4..a02043d 100644
---- a/orig/v8-14.2.231.17/src/base/debug/stack_trace_posix.cc
-+++ b/mod/v8-14.2.231.17/src/base/debug/stack_trace_posix.cc
+--- a/orig/v8-14.6.202.11/src/base/debug/stack_trace_posix.cc
++++ b/mod/v8-14.6.202.11/src/base/debug/stack_trace_posix.cc
 @@ -64,6 +64,7 @@ namespace {
  volatile sig_atomic_t in_signal_handler = 0;
  bool dump_stack_in_signal_handler = true;
@@ -24,10 +24,10 @@ index 6176ed4..a02043d 100644
  //
  // "out/Debug/base_unittests(_ZN10StackTraceC1Ev+0x20) [0x817778c]"
 
-diff --git a/orig/v8-14.2.231.17/src/base/platform/platform-posix.cc b/mod/v8-14.2.231.17/src/base/platform/platform-posix.cc
+diff --git a/orig/v8-14.6.202.11/src/base/platform/platform-posix.cc b/mod/v8-14.6.202.11/src/base/platform/platform-posix.cc
 index 4c7d878..0e45eb3 100644
---- a/orig/v8-14.2.231.17/src/base/platform/platform-posix.cc
-+++ b/mod/v8-14.2.231.17/src/base/platform/platform-posix.cc
+--- a/orig/v8-14.6.202.11/src/base/platform/platform-posix.cc
++++ b/mod/v8-14.6.202.11/src/base/platform/platform-posix.cc
 @@ -95,7 +95,7 @@
  #endif
 
@@ -63,10 +63,10 @@ index 4c7d878..0e45eb3 100644
      return __libc_stack_end;
    }
 
-diff --git a/orig/v8-14.2.231.17/src/libplatform/default-thread-isolated-allocator.cc b/mod/v8-14.2.231.17/src/libplatform/default-thread-isolated-allocator.cc
+diff --git a/orig/v8-14.6.202.11/src/libplatform/default-thread-isolated-allocator.cc b/mod/v8-14.6.202.11/src/libplatform/default-thread-isolated-allocator.cc
 index bda0e43..b44f1d9 100644
---- a/orig/v8-14.2.231.17/src/libplatform/default-thread-isolated-allocator.cc
-+++ b/mod/v8-14.2.231.17/src/libplatform/default-thread-isolated-allocator.cc
+--- a/orig/v8-14.6.202.11/src/libplatform/default-thread-isolated-allocator.cc
++++ b/mod/v8-14.6.202.11/src/libplatform/default-thread-isolated-allocator.cc
 @@ -23,7 +23,7 @@ extern int pkey_free(int pkey) V8_WEAK;
  
  namespace {
