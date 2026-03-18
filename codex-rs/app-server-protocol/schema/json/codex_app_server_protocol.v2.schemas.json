@@ -2757,16 +2757,7 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "delta": {
-          "description": "Best-effort UTF-8 view of the output chunk for backwards compatibility.",
           "type": "string"
-        },
-        "deltaBase64": {
-          "default": null,
-          "description": "Exact raw bytes for the chunk, base64-encoded.",
-          "type": [
-            "string",
-            "null"
-          ]
         },
         "itemId": {
           "type": "string"
@@ -10911,7 +10902,7 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "command": {
-          "description": "Shell command string evaluated by the thread's configured shell. Unlike `command/exec`, this intentionally preserves shell syntax such as pipes, redirects, and quoting for legacy `!` parity.",
+          "description": "Shell command string evaluated by the thread's configured shell. Unlike `command/exec`, this intentionally preserves shell syntax such as pipes, redirects, and quoting.",
           "type": "string"
         },
         "threadId": {

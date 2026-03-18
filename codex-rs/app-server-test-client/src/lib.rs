@@ -1698,8 +1698,8 @@ impl CodexClient {
                     std::io::stdout().flush().ok();
                 }
                 ServerNotification::CommandExecutionOutputDelta(delta) => {
-                    self.note_helper_output(&String::from_utf8_lossy(&delta.delta));
-                    std::io::stdout().write_all(&delta.delta).ok();
+                    self.note_helper_output(&delta.delta);
+                    print!("{}", delta.delta);
                     std::io::stdout().flush().ok();
                 }
                 ServerNotification::TerminalInteraction(delta) => {

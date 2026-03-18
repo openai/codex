@@ -2,16 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "properties": {
     "delta": {
-      "description": "Best-effort UTF-8 view of the output chunk for backwards compatibility.",
       "type": "string"
-    },
-    "deltaBase64": {
-      "default": null,
-      "description": "Exact raw bytes for the chunk, base64-encoded.",
-      "type": [
-        "string",
-        "null"
-      ]
     },
     "itemId": {
       "type": "string"

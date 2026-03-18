@@ -2883,7 +2883,7 @@ pub struct ThreadShellCommandParams {
     pub thread_id: String,
     /// Shell command string evaluated by the thread's configured shell.
     /// Unlike `command/exec`, this intentionally preserves shell syntax
-    /// such as pipes, redirects, and quoting for legacy `!` parity.
+    /// such as pipes, redirects, and quoting.
     pub command: String,
 }
 
@@ -4904,12 +4904,7 @@ pub struct CommandExecutionOutputDeltaNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
-    /// Best-effort UTF-8 view of the output chunk for backwards compatibility.
     pub delta: String,
-    /// Exact raw bytes for the chunk, base64-encoded.
-    #[serde(default)]
-    #[ts(type = "string | null")]
-    pub delta_base64: Option<String>,
 }
 
 /// Base64-encoded output chunk emitted for a streaming `command/exec` request.
@@ -6687,7 +6682,6 @@ mod tests {
             turn_id: "turn-1".to_string(),
             item_id: "item-1".to_string(),
             delta: "\u{fffd}a\n".to_string(),
-            delta_base64: Some("/2EK".to_string()),
         };
 
         let value = serde_json::to_value(&notification)
@@ -6699,7 +6693,6 @@ mod tests {
                 "turnId": "turn-1",
                 "itemId": "item-1",
                 "delta": "\u{fffd}a\n",
-                "deltaBase64": "/2EK",
             })
         );
 

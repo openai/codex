@@ -6,6 +6,6 @@ export type ThreadShellCommandParams = { threadId: string,
 /**
  * Shell command string evaluated by the thread's configured shell.
  * Unlike `command/exec`, this intentionally preserves shell syntax
- * such as pipes, redirects, and quoting for legacy `!` parity.
+ * such as pipes, redirects, and quoting.
  */
 command: string, };

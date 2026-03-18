@@ -17,10 +17,6 @@ use crate::app_server_session::AppServerSession;
 use crate::app_server_session::app_server_rate_limit_snapshot_to_core;
 use crate::app_server_session::status_account_display_from_auth_mode;
 use crate::local_chatgpt_auth::load_local_chatgpt_auth;
-#[cfg(test)]
-use base64::Engine;
-#[cfg(test)]
-use base64::engine::general_purpose::STANDARD;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
@@ -713,11 +709,7 @@ fn server_notification_thread_events(
                 msg: EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
                     call_id: notification.item_id,
                     stream: ExecOutputStream::Stdout,
-                    chunk: notification
-                        .delta_base64
-                        .as_deref()
-                        .and_then(|value| STANDARD.decode(value).ok())
-                        .unwrap_or_else(|| notification.delta.into_bytes()),
+                    chunk: notification.delta.into_bytes(),
                 }),
             }],
         )),
@@ -1508,7 +1500,6 @@ mod tests {
                     turn_id: turn_id.clone(),
                     item_id: "cmd-1".to_string(),
                     delta: "hello world\n".to_string(),
-                    delta_base64: Some("aGVsbG8gd29ybGQK".to_string()),
                 },
             ))
             .expect("command execution delta should bridge");

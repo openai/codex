@@ -12,8 +12,6 @@ use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
 use crate::thread_status::ThreadWatchActiveGuard;
 use crate::thread_status::ThreadWatchManager;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AdditionalPermissionProfile as V2AdditionalPermissionProfile;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
@@ -1615,7 +1613,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                     item_id,
                     delta: String::from_utf8_lossy(&exec_command_output_delta_event.chunk)
                         .to_string(),
-                    delta_base64: Some(STANDARD.encode(&exec_command_output_delta_event.chunk)),
                 };
                 outgoing
                     .send_server_notification(ServerNotification::CommandExecutionOutputDelta(
