@@ -2087,14 +2087,17 @@ impl App {
         session.thread_name = notification.thread.name.clone();
         session.model_provider_id = notification.thread.model_provider.clone();
         session.cwd = notification.thread.cwd.clone();
+        let rollout_path = notification.thread.path.clone();
         if let Some(model) =
-            read_session_model(&self.config, thread_id, notification.thread.path.as_deref()).await
+            read_session_model(&self.config, thread_id, rollout_path.as_deref()).await
         {
             session.model = model;
+        } else if rollout_path.is_some() {
+            session.model.clear();
         }
         session.history_log_id = 0;
         session.history_entry_count = 0;
-        session.rollout_path = notification.thread.path.clone();
+        session.rollout_path = rollout_path;
         self.upsert_agent_picker_thread(
             thread_id,
             notification.thread.agent_nickname.clone(),
@@ -7209,7 +7212,7 @@ guardian_approval = true
     }
 
     #[tokio::test]
-    async fn inactive_thread_started_notification_preserves_primary_model_when_inference_missing()
+    async fn inactive_thread_started_notification_preserves_primary_model_when_path_missing()
     -> Result<()> {
         let mut app = make_test_app().await;
         let main_thread_id =
