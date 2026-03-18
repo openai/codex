@@ -2,16 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import AsyncIterator, Iterator
 
 from .async_client import AsyncAppServerClient
 from .client import AppServerClient, AppServerConfig
 from .generated.v2_all import (
-    AgentMessageThreadItem,
     ApprovalsReviewer,
     AskForApproval,
-    ItemCompletedNotification,
-    MessagePhase,
     ModelListResponse,
     Personality,
     ReasoningEffort,
@@ -22,7 +18,6 @@ from .generated.v2_all import (
     ThreadArchiveResponse,
     ThreadCompactStartResponse,
     ThreadForkParams,
-    ThreadItem,
     ThreadListParams,
     ThreadListResponse,
     ThreadReadResponse,
@@ -31,169 +26,27 @@ from .generated.v2_all import (
     ThreadSortKey,
     ThreadSourceKind,
     ThreadStartParams,
-    ThreadTokenUsage,
-    ThreadTokenUsageUpdatedNotification,
-    Turn as AppServerTurn,
-    TurnCompletedNotification,
-    TurnInterruptResponse,
     TurnStartParams,
-    TurnStatus,
-    TurnSteerResponse,
 )
-from .models import InitializeResponse, JsonObject, Notification, ServerInfo
-
-
-@dataclass(slots=True)
-class TextInput:
-    text: str
-
-
-@dataclass(slots=True)
-class ImageInput:
-    url: str
-
-
-@dataclass(slots=True)
-class LocalImageInput:
-    path: str
-
-
-@dataclass(slots=True)
-class SkillInput:
-    name: str
-    path: str
-
-
-@dataclass(slots=True)
-class MentionInput:
-    name: str
-    path: str
-
-
-InputItem = TextInput | ImageInput | LocalImageInput | SkillInput | MentionInput
-Input = list[InputItem] | InputItem
-RunInput = Input | str
-
-
-@dataclass(slots=True)
-class RunResult:
-    final_response: str
-    items: list[ThreadItem]
-    usage: ThreadTokenUsage | None
-
-
-def _to_wire_item(item: InputItem) -> JsonObject:
-    if isinstance(item, TextInput):
-        return {"type": "text", "text": item.text}
-    if isinstance(item, ImageInput):
-        return {"type": "image", "url": item.url}
-    if isinstance(item, LocalImageInput):
-        return {"type": "localImage", "path": item.path}
-    if isinstance(item, SkillInput):
-        return {"type": "skill", "name": item.name, "path": item.path}
-    if isinstance(item, MentionInput):
-        return {"type": "mention", "name": item.name, "path": item.path}
-    raise TypeError(f"unsupported input item: {type(item)!r}")
-
-
-def _to_wire_input(input: Input) -> list[JsonObject]:
-    if isinstance(input, list):
-        return [_to_wire_item(i) for i in input]
-    return [_to_wire_item(input)]
-
-
-def _normalize_run_input(input: RunInput) -> Input:
-    if isinstance(input, str):
-        return TextInput(input)
-    return input
-
-
-def _agent_message_item_from_thread_item(
-    item: ThreadItem,
-) -> AgentMessageThreadItem | None:
-    thread_item = item.root if hasattr(item, "root") else item
-    if isinstance(thread_item, AgentMessageThreadItem):
-        return thread_item
-    return None
-
-
-def _final_assistant_response_from_items(items: list[ThreadItem]) -> str:
-    last_unknown_phase_response: str | None = None
-
-    for item in reversed(items):
-        agent_message = _agent_message_item_from_thread_item(item)
-        if agent_message is None:
-            continue
-        if agent_message.phase == MessagePhase.final_answer:
-            return agent_message.text
-        if agent_message.phase is None and last_unknown_phase_response is None:
-            last_unknown_phase_response = agent_message.text
-
-    return last_unknown_phase_response or ""
-
-
-def _raise_for_failed_turn(turn: AppServerTurn) -> None:
-    if turn.status != TurnStatus.failed:
-        return
-    if turn.error is not None and turn.error.message:
-        raise RuntimeError(turn.error.message)
-    raise RuntimeError(f"turn failed with status {turn.status.value}")
-
-
-def _collect_run_result(stream: Iterator[Notification], *, turn_id: str) -> RunResult:
-    completed: TurnCompletedNotification | None = None
-    items: list[ThreadItem] = []
-    usage: ThreadTokenUsage | None = None
-
-    for event in stream:
-        payload = event.payload
-        if isinstance(payload, ItemCompletedNotification) and payload.turn_id == turn_id:
-            items.append(payload.item)
-            continue
-        if isinstance(payload, ThreadTokenUsageUpdatedNotification) and payload.turn_id == turn_id:
-            usage = payload.token_usage
-            continue
-        if isinstance(payload, TurnCompletedNotification) and payload.turn.id == turn_id:
-            completed = payload
-
-    if completed is None:
-        raise RuntimeError("turn completed event not received")
-
-    _raise_for_failed_turn(completed.turn)
-    return RunResult(
-        final_response=_final_assistant_response_from_items(items),
-        items=items,
-        usage=usage,
-    )
-
-
-async def _collect_async_run_result(
-    stream: AsyncIterator[Notification], *, turn_id: str
-) -> RunResult:
-    completed: TurnCompletedNotification | None = None
-    items: list[ThreadItem] = []
-    usage: ThreadTokenUsage | None = None
-
-    async for event in stream:
-        payload = event.payload
-        if isinstance(payload, ItemCompletedNotification) and payload.turn_id == turn_id:
-            items.append(payload.item)
-            continue
-        if isinstance(payload, ThreadTokenUsageUpdatedNotification) and payload.turn_id == turn_id:
-            usage = payload.token_usage
-            continue
-        if isinstance(payload, TurnCompletedNotification) and payload.turn.id == turn_id:
-            completed = payload
-
-    if completed is None:
-        raise RuntimeError("turn completed event not received")
-
-    _raise_for_failed_turn(completed.turn)
-    return RunResult(
-        final_response=_final_assistant_response_from_items(items),
-        items=items,
-        usage=usage,
-    )
+from .models import InitializeResponse, JsonObject, ServerInfo
+from ._inputs import (
+    ImageInput,
+    Input,
+    InputItem,
+    LocalImageInput,
+    MentionInput,
+    RunInput,
+    SkillInput,
+    TextInput,
+    _normalize_run_input,
+    _to_wire_input,
+)
+from ._run import (
+    RunResult,
+    _collect_async_run_result,
+    _collect_run_result,
+)
+from ._turn_handles import AsyncTurnHandle, TurnHandle
 
 
 def _split_user_agent(user_agent: str) -> tuple[str | None, str | None]:
@@ -781,98 +634,3 @@ class AsyncThread:
     async def compact(self) -> ThreadCompactStartResponse:
         await self._codex._ensure_initialized()
         return await self._codex._client.thread_compact(self.id)
-
-
-@dataclass(slots=True)
-class TurnHandle:
-    _client: AppServerClient
-    thread_id: str
-    id: str
-
-    def steer(self, input: Input) -> TurnSteerResponse:
-        return self._client.turn_steer(self.thread_id, self.id, _to_wire_input(input))
-
-    def interrupt(self) -> TurnInterruptResponse:
-        return self._client.turn_interrupt(self.thread_id, self.id)
-
-    def stream(self) -> Iterator[Notification]:
-        # TODO: replace this client-wide experimental guard with per-turn event demux.
-        self._client.acquire_turn_consumer(self.id)
-        try:
-            while True:
-                event = self._client.next_notification()
-                yield event
-                if (
-                    event.method == "turn/completed"
-                    and isinstance(event.payload, TurnCompletedNotification)
-                    and event.payload.turn.id == self.id
-                ):
-                    break
-        finally:
-            self._client.release_turn_consumer(self.id)
-
-    def run(self) -> AppServerTurn:
-        completed: TurnCompletedNotification | None = None
-        stream = self.stream()
-        try:
-            for event in stream:
-                payload = event.payload
-                if isinstance(payload, TurnCompletedNotification) and payload.turn.id == self.id:
-                    completed = payload
-        finally:
-            stream.close()
-
-        if completed is None:
-            raise RuntimeError("turn completed event not received")
-        return completed.turn
-
-
-@dataclass(slots=True)
-class AsyncTurnHandle:
-    _codex: AsyncCodex
-    thread_id: str
-    id: str
-
-    async def steer(self, input: Input) -> TurnSteerResponse:
-        await self._codex._ensure_initialized()
-        return await self._codex._client.turn_steer(
-            self.thread_id,
-            self.id,
-            _to_wire_input(input),
-        )
-
-    async def interrupt(self) -> TurnInterruptResponse:
-        await self._codex._ensure_initialized()
-        return await self._codex._client.turn_interrupt(self.thread_id, self.id)
-
-    async def stream(self) -> AsyncIterator[Notification]:
-        await self._codex._ensure_initialized()
-        # TODO: replace this client-wide experimental guard with per-turn event demux.
-        self._codex._client.acquire_turn_consumer(self.id)
-        try:
-            while True:
-                event = await self._codex._client.next_notification()
-                yield event
-                if (
-                    event.method == "turn/completed"
-                    and isinstance(event.payload, TurnCompletedNotification)
-                    and event.payload.turn.id == self.id
-                ):
-                    break
-        finally:
-            self._codex._client.release_turn_consumer(self.id)
-
-    async def run(self) -> AppServerTurn:
-        completed: TurnCompletedNotification | None = None
-        stream = self.stream()
-        try:
-            async for event in stream:
-                payload = event.payload
-                if isinstance(payload, TurnCompletedNotification) and payload.turn.id == self.id:
-                    completed = payload
-        finally:
-            await stream.aclose()
-
-        if completed is None:
-            raise RuntimeError("turn completed event not received")
-        return completed.turn
