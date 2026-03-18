@@ -10932,6 +10932,19 @@
           {
             "additionalProperties": false,
             "properties": {
+              "custom": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "custom"
+            ],
+            "title": "CustomSessionSource",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
               "subAgent": {
                 "$ref": "#/definitions/v2/SubAgentSource"
               }
@@ -13031,6 +13044,7 @@
           "vscode",
           "exec",
           "appServer",
+          "custom",
           "subAgent",
           "subAgentReview",
           "subAgentCompact",
