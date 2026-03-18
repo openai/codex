@@ -238,11 +238,6 @@ mod windows_impl {
         ) {
             anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
         }
-        if !policy.has_full_disk_read_access() {
-            anyhow::bail!(
-                "Restricted read-only access is not yet supported by the Windows sandbox backend"
-            );
-        }
         let caps = load_or_create_cap_sids(codex_home)?;
         let (psid_to_use, cap_sids) = match &policy {
             SandboxPolicy::ReadOnly { .. } => (

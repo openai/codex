@@ -1,18 +1,16 @@
 use super::PluginManifestPaths;
 use super::curated_plugins_repo_path;
 use super::load_plugin_manifest;
-use super::manifest::PluginManifestInterfaceSummary;
+use super::manifest::PluginManifestInterface;
 use super::marketplace::MarketplaceError;
-use super::marketplace::MarketplaceInterfaceSummary;
+use super::marketplace::MarketplaceInterface;
 use super::marketplace::MarketplacePluginAuthPolicy;
-use super::marketplace::MarketplacePluginInstallPolicy;
-use super::marketplace::MarketplacePluginSourceSummary;
+use super::marketplace::MarketplacePluginPolicy;
+use super::marketplace::MarketplacePluginSource;
 use super::marketplace::ResolvedMarketplacePlugin;
 use super::marketplace::list_marketplaces;
-use super::marketplace::load_marketplace_summary;
+use super::marketplace::load_marketplace;
 use super::marketplace::resolve_marketplace_plugin;
-use super::plugin_manifest_name;
-use super::plugin_manifest_paths;
 use super::read_curated_plugins_sha;
 use super::remote::RemotePluginFetchError;
 use super::remote::RemotePluginMutationError;
@@ -99,18 +97,17 @@ pub struct PluginInstallOutcome {
 pub struct PluginReadOutcome {
     pub marketplace_name: String,
     pub marketplace_path: AbsolutePathBuf,
-    pub plugin: PluginDetailSummary,
+    pub plugin: PluginDetail,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct PluginDetailSummary {
+pub struct PluginDetail {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
-    pub source: MarketplacePluginSourceSummary,
-    pub install_policy: MarketplacePluginInstallPolicy,
-    pub auth_policy: MarketplacePluginAuthPolicy,
-    pub interface: Option<PluginManifestInterfaceSummary>,
+    pub source: MarketplacePluginSource,
+    pub policy: MarketplacePluginPolicy,
+    pub interface: Option<PluginManifestInterface>,
     pub installed: bool,
     pub enabled: bool,
     pub skills: Vec<SkillMetadata>,
@@ -119,21 +116,20 @@ pub struct PluginDetailSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfiguredMarketplaceSummary {
+pub struct ConfiguredMarketplace {
     pub name: String,
     pub path: AbsolutePathBuf,
-    pub interface: Option<MarketplaceInterfaceSummary>,
-    pub plugins: Vec<ConfiguredMarketplacePluginSummary>,
+    pub interface: Option<MarketplaceInterface>,
+    pub plugins: Vec<ConfiguredMarketplacePlugin>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfiguredMarketplacePluginSummary {
+pub struct ConfiguredMarketplacePlugin {
     pub id: String,
     pub name: String,
-    pub source: MarketplacePluginSourceSummary,
-    pub install_policy: MarketplacePluginInstallPolicy,
-    pub auth_policy: MarketplacePluginAuthPolicy,
-    pub interface: Option<PluginManifestInterfaceSummary>,
+    pub source: MarketplacePluginSource,
+    pub policy: MarketplacePluginPolicy,
+    pub interface: Option<PluginManifestInterface>,
     pub installed: bool,
     pub enabled: bool,
 }
@@ -219,8 +215,8 @@ impl PluginCapabilitySummary {
     }
 }
 
-impl From<PluginDetailSummary> for PluginCapabilitySummary {
-    fn from(value: PluginDetailSummary) -> Self {
+impl From<PluginDetail> for PluginCapabilitySummary {
+    fn from(value: PluginDetail) -> Self {
         Self {
             config_name: value.id,
             display_name: value.name,
@@ -648,7 +644,7 @@ impl PluginsManager {
             curated_marketplace_root.join(".agents/plugins/marketplace.json"),
         )
         .map_err(|_| PluginRemoteSyncError::LocalMarketplaceNotFound)?;
-        let curated_marketplace = match load_marketplace_summary(&curated_marketplace_path) {
+        let curated_marketplace = match load_marketplace(&curated_marketplace_path) {
             Ok(marketplace) => marketplace,
             Err(MarketplaceError::MarketplaceNotFound { .. }) => {
                 return Err(PluginRemoteSyncError::LocalMarketplaceNotFound);
@@ -685,7 +681,7 @@ impl PluginsManager {
             let plugin_id = PluginId::new(plugin_name.clone(), marketplace_name.clone())?;
             let plugin_key = plugin_id.as_key();
             let source_path = match plugin.source {
-                MarketplacePluginSourceSummary::Local { path } => path,
+                MarketplacePluginSource::Local { path } => path,
             };
             let current_enabled = configured_plugins
                 .get(&plugin_key)
@@ -820,7 +816,7 @@ impl PluginsManager {
         &self,
         config: &Config,
         additional_roots: &[AbsolutePathBuf],
-    ) -> Result<Vec<ConfiguredMarketplaceSummary>, MarketplaceError> {
+    ) -> Result<Vec<ConfiguredMarketplace>, MarketplaceError> {
         let (installed_plugins, configured_plugins) = self.configured_plugin_states(config);
         let marketplaces = list_marketplaces(&self.marketplace_roots(additional_roots))?;
         let mut seen_plugin_keys = HashSet::new();
@@ -838,7 +834,7 @@ impl PluginsManager {
                             return None;
                         }
 
-                        Some(ConfiguredMarketplacePluginSummary {
+                        Some(ConfiguredMarketplacePlugin {
                             // Enabled state is keyed by `<plugin>@<marketplace>`, so duplicate
                             // plugin entries from duplicate marketplace files intentionally
                             // resolve to the first discovered source.
@@ -850,14 +846,13 @@ impl PluginsManager {
                                 .unwrap_or(false),
                             name: plugin.name,
                             source: plugin.source,
-                            install_policy: plugin.install_policy,
-                            auth_policy: plugin.auth_policy,
+                            policy: plugin.policy,
                             interface: plugin.interface,
                         })
                     })
                     .collect::<Vec<_>>();
 
-                (!plugins.is_empty()).then_some(ConfiguredMarketplaceSummary {
+                (!plugins.is_empty()).then_some(ConfiguredMarketplace {
                     name: marketplace.name,
                     path: marketplace.path,
                     interface: marketplace.interface,
@@ -872,7 +867,7 @@ impl PluginsManager {
         config: &Config,
         request: &PluginReadRequest,
     ) -> Result<PluginReadOutcome, MarketplaceError> {
-        let marketplace = load_marketplace_summary(&request.marketplace_path)?;
+        let marketplace = load_marketplace(&request.marketplace_path)?;
         let marketplace_name = marketplace.name.clone();
         let plugin = marketplace
             .plugins
@@ -893,7 +888,7 @@ impl PluginsManager {
         let plugin_key = plugin_id.as_key();
         let (installed_plugins, configured_plugins) = self.configured_plugin_states(config);
         let source_path = match &plugin.source {
-            MarketplacePluginSourceSummary::Local { path } => path.clone(),
+            MarketplacePluginSource::Local { path } => path.clone(),
         };
         let manifest = load_plugin_manifest(source_path.as_path()).ok_or_else(|| {
             MarketplaceError::InvalidPlugin(
@@ -901,15 +896,15 @@ impl PluginsManager {
             )
         })?;
         let description = manifest.description.clone();
-        let manifest_paths = plugin_manifest_paths(&manifest, source_path.as_path());
-        let skill_roots = plugin_skill_roots(source_path.as_path(), &manifest_paths);
+        let manifest_paths = &manifest.paths;
+        let skill_roots = plugin_skill_roots(source_path.as_path(), manifest_paths);
         let skills = load_skills_from_roots(skill_roots.into_iter().map(|path| SkillRoot {
             path,
             scope: SkillScope::User,
         }))
         .skills;
         let apps = load_plugin_apps(source_path.as_path());
-        let mcp_config_paths = plugin_mcp_config_paths(source_path.as_path(), &manifest_paths);
+        let mcp_config_paths = plugin_mcp_config_paths(source_path.as_path(), manifest_paths);
         let mut mcp_server_names = Vec::new();
         for mcp_config_path in mcp_config_paths {
             mcp_server_names.extend(
@@ -924,13 +919,12 @@ impl PluginsManager {
         Ok(PluginReadOutcome {
             marketplace_name: marketplace.name,
             marketplace_path: marketplace.path,
-            plugin: PluginDetailSummary {
+            plugin: PluginDetail {
                 id: plugin_key.clone(),
                 name: plugin.name,
                 description,
                 source: plugin.source,
-                install_policy: plugin.install_policy,
-                auth_policy: plugin.auth_policy,
+                policy: plugin.policy,
                 interface: plugin.interface,
                 installed: installed_plugins.contains(&plugin_key),
                 enabled: configured_plugins
@@ -1200,7 +1194,7 @@ pub(crate) fn load_plugins_from_layer_stack(
 pub(crate) fn plugin_namespace_for_skill_path(path: &Path) -> Option<String> {
     for ancestor in path.ancestors() {
         if let Some(manifest) = load_plugin_manifest(ancestor) {
-            return Some(plugin_manifest_name(&manifest, ancestor));
+            return Some(manifest.name);
         }
     }
 
@@ -1217,7 +1211,7 @@ fn refresh_curated_plugin_cache(
         curated_plugins_repo_path(codex_home).join(".agents/plugins/marketplace.json"),
     )
     .map_err(|_| "local curated marketplace is not available".to_string())?;
-    let curated_marketplace = load_marketplace_summary(&curated_marketplace_path)
+    let curated_marketplace = load_marketplace(&curated_marketplace_path)
         .map_err(|err| format!("failed to load curated marketplace for cache refresh: {err}"))?;
 
     let mut plugin_sources = HashMap::<String, AbsolutePathBuf>::new();
@@ -1232,7 +1226,7 @@ fn refresh_curated_plugin_cache(
             continue;
         }
         let source_path = match plugin.source {
-            MarketplacePluginSourceSummary::Local { path } => path,
+            MarketplacePluginSource::Local { path } => path,
         };
         plugin_sources.insert(plugin_name, source_path);
     }
@@ -1329,12 +1323,12 @@ fn load_plugin(config_name: String, plugin: &PluginConfig, store: &PluginStore) 
         return loaded_plugin;
     };
 
-    let manifest_paths = plugin_manifest_paths(&manifest, plugin_root.as_path());
-    loaded_plugin.manifest_name = Some(plugin_manifest_name(&manifest, plugin_root.as_path()));
-    loaded_plugin.manifest_description = manifest.description;
-    loaded_plugin.skill_roots = plugin_skill_roots(plugin_root.as_path(), &manifest_paths);
+    let manifest_paths = &manifest.paths;
+    loaded_plugin.manifest_name = Some(manifest.name.clone());
+    loaded_plugin.manifest_description = manifest.description.clone();
+    loaded_plugin.skill_roots = plugin_skill_roots(plugin_root.as_path(), manifest_paths);
     let mut mcp_servers = HashMap::new();
-    for mcp_config_path in plugin_mcp_config_paths(plugin_root.as_path(), &manifest_paths) {
+    for mcp_config_path in plugin_mcp_config_paths(plugin_root.as_path(), manifest_paths) {
         let plugin_mcp = load_mcp_servers_from_file(plugin_root.as_path(), &mcp_config_path);
         for (name, config) in plugin_mcp.mcp_servers {
             if mcp_servers.insert(name.clone(), config).is_some() {
@@ -1396,10 +1390,9 @@ fn default_mcp_config_paths(plugin_root: &Path) -> Vec<AbsolutePathBuf> {
 
 pub fn load_plugin_apps(plugin_root: &Path) -> Vec<AppConnectorId> {
     if let Some(manifest) = load_plugin_manifest(plugin_root) {
-        let manifest_paths = plugin_manifest_paths(&manifest, plugin_root);
         return load_apps_from_paths(
             plugin_root,
-            plugin_app_config_paths(plugin_root, &manifest_paths),
+            plugin_app_config_paths(plugin_root, &manifest.paths),
         );
     }
     load_apps_from_paths(plugin_root, default_app_config_paths(plugin_root))
@@ -1475,10 +1468,10 @@ pub fn plugin_telemetry_metadata_from_root(
         return PluginTelemetryMetadata::from_plugin_id(plugin_id);
     };
 
-    let manifest_paths = plugin_manifest_paths(&manifest, plugin_root);
-    let has_skills = !plugin_skill_roots(plugin_root, &manifest_paths).is_empty();
+    let manifest_paths = &manifest.paths;
+    let has_skills = !plugin_skill_roots(plugin_root, manifest_paths).is_empty();
     let mut mcp_server_names = Vec::new();
-    for path in plugin_mcp_config_paths(plugin_root, &manifest_paths) {
+    for path in plugin_mcp_config_paths(plugin_root, manifest_paths) {
         mcp_server_names.extend(
             load_mcp_servers_from_file(plugin_root, &path)
                 .mcp_servers

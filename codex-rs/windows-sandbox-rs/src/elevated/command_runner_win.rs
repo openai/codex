@@ -199,11 +199,6 @@ fn spawn_ipc_process(
     );
 
     let policy = parse_policy(&req.policy_json_or_preset).context("parse policy_json_or_preset")?;
-    if !policy.has_full_disk_read_access() {
-        anyhow::bail!(
-            "Restricted read-only access is not yet supported by the Windows sandbox backend"
-        );
-    }
     let mut cap_psids: Vec<*mut c_void> = Vec::new();
     for sid in &req.cap_sids {
         let Some(psid) = (unsafe { convert_string_sid_to_sid(sid) }) else {

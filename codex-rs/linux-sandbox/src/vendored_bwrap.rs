@@ -76,4 +76,3 @@ Notes:
 }
 
 pub(crate) use imp::exec_vendored_bwrap;
-pub(crate) use imp::run_vendored_bwrap_main;

@@ -7,6 +7,7 @@ use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
+use crate::plugins::MarketplacePluginInstallPolicy;
 use crate::plugins::test_support::TEST_CURATED_PLUGIN_SHA;
 use crate::plugins::test_support::write_curated_plugin_sha_with as write_curated_plugin_sha;
 use crate::plugins::test_support::write_file;
@@ -811,7 +812,9 @@ async fn install_plugin_updates_config_with_relative_path_and_plugin_key() {
         "source": "local",
         "path": "./sample-plugin"
       },
-      "authPolicy": "ON_USE"
+      "policy": {
+        "authentication": "ON_USE"
+      }
     }
   ]
 }"#,
@@ -952,7 +955,7 @@ enabled = false
 
     assert_eq!(
         marketplace,
-        ConfiguredMarketplaceSummary {
+        ConfiguredMarketplace {
             name: "debug".to_string(),
             path: AbsolutePathBuf::try_from(
                 tmp.path().join("repo/.agents/plugins/marketplace.json"),
@@ -960,28 +963,34 @@ enabled = false
             .unwrap(),
             interface: None,
             plugins: vec![
-                ConfiguredMarketplacePluginSummary {
+                ConfiguredMarketplacePlugin {
                     id: "enabled-plugin@debug".to_string(),
                     name: "enabled-plugin".to_string(),
-                    source: MarketplacePluginSourceSummary::Local {
+                    source: MarketplacePluginSource::Local {
                         path: AbsolutePathBuf::try_from(tmp.path().join("repo/enabled-plugin"))
                             .unwrap(),
                     },
-                    install_policy: MarketplacePluginInstallPolicy::Available,
-                    auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+                    policy: MarketplacePluginPolicy {
+                        installation: MarketplacePluginInstallPolicy::Available,
+                        authentication: MarketplacePluginAuthPolicy::OnInstall,
+                        products: vec![],
+                    },
                     interface: None,
                     installed: true,
                     enabled: true,
                 },
-                ConfiguredMarketplacePluginSummary {
+                ConfiguredMarketplacePlugin {
                     id: "disabled-plugin@debug".to_string(),
                     name: "disabled-plugin".to_string(),
-                    source: MarketplacePluginSourceSummary::Local {
+                    source: MarketplacePluginSource::Local {
                         path: AbsolutePathBuf::try_from(tmp.path().join("repo/disabled-plugin"),)
                             .unwrap(),
                     },
-                    install_policy: MarketplacePluginInstallPolicy::Available,
-                    auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+                    policy: MarketplacePluginPolicy {
+                        installation: MarketplacePluginInstallPolicy::Available,
+                        authentication: MarketplacePluginAuthPolicy::OnInstall,
+                        products: vec![],
+                    },
                     interface: None,
                     installed: true,
                     enabled: false,
@@ -1036,21 +1045,24 @@ async fn list_marketplaces_includes_curated_repo_marketplace() {
 
     assert_eq!(
         curated_marketplace,
-        ConfiguredMarketplaceSummary {
+        ConfiguredMarketplace {
             name: "openai-curated".to_string(),
             path: AbsolutePathBuf::try_from(curated_root.join(".agents/plugins/marketplace.json"))
                 .unwrap(),
-            interface: Some(MarketplaceInterfaceSummary {
+            interface: Some(MarketplaceInterface {
                 display_name: Some("ChatGPT Official".to_string()),
             }),
-            plugins: vec![ConfiguredMarketplacePluginSummary {
+            plugins: vec![ConfiguredMarketplacePlugin {
                 id: "linear@openai-curated".to_string(),
                 name: "linear".to_string(),
-                source: MarketplacePluginSourceSummary::Local {
+                source: MarketplacePluginSource::Local {
                     path: AbsolutePathBuf::try_from(curated_root.join("plugins/linear")).unwrap(),
                 },
-                install_policy: MarketplacePluginInstallPolicy::Available,
-                auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+                policy: MarketplacePluginPolicy {
+                    installation: MarketplacePluginInstallPolicy::Available,
+                    authentication: MarketplacePluginAuthPolicy::OnInstall,
+                    products: vec![],
+                },
                 interface: None,
                 installed: false,
                 enabled: false,
@@ -1143,14 +1155,17 @@ enabled = false
         .expect("repo-a marketplace should be listed");
     assert_eq!(
         repo_a_marketplace.plugins,
-        vec![ConfiguredMarketplacePluginSummary {
+        vec![ConfiguredMarketplacePlugin {
             id: "dup-plugin@debug".to_string(),
             name: "dup-plugin".to_string(),
-            source: MarketplacePluginSourceSummary::Local {
+            source: MarketplacePluginSource::Local {
                 path: AbsolutePathBuf::try_from(tmp.path().join("repo-a/from-a")).unwrap(),
             },
-            install_policy: MarketplacePluginInstallPolicy::Available,
-            auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+            policy: MarketplacePluginPolicy {
+                installation: MarketplacePluginInstallPolicy::Available,
+                authentication: MarketplacePluginAuthPolicy::OnInstall,
+                products: vec![],
+            },
             interface: None,
             installed: false,
             enabled: true,
@@ -1169,14 +1184,17 @@ enabled = false
         .expect("repo-b marketplace should be listed");
     assert_eq!(
         repo_b_marketplace.plugins,
-        vec![ConfiguredMarketplacePluginSummary {
+        vec![ConfiguredMarketplacePlugin {
             id: "b-only-plugin@debug".to_string(),
             name: "b-only-plugin".to_string(),
-            source: MarketplacePluginSourceSummary::Local {
+            source: MarketplacePluginSource::Local {
                 path: AbsolutePathBuf::try_from(tmp.path().join("repo-b/from-b-only")).unwrap(),
             },
-            install_policy: MarketplacePluginInstallPolicy::Available,
-            auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+            policy: MarketplacePluginPolicy {
+                installation: MarketplacePluginInstallPolicy::Available,
+                authentication: MarketplacePluginAuthPolicy::OnInstall,
+                products: vec![],
+            },
             interface: None,
             installed: false,
             enabled: false,
@@ -1241,21 +1259,24 @@ enabled = true
 
     assert_eq!(
         marketplace,
-        ConfiguredMarketplaceSummary {
+        ConfiguredMarketplace {
             name: "debug".to_string(),
             path: AbsolutePathBuf::try_from(
                 tmp.path().join("repo/.agents/plugins/marketplace.json"),
             )
             .unwrap(),
             interface: None,
-            plugins: vec![ConfiguredMarketplacePluginSummary {
+            plugins: vec![ConfiguredMarketplacePlugin {
                 id: "sample-plugin@debug".to_string(),
                 name: "sample-plugin".to_string(),
-                source: MarketplacePluginSourceSummary::Local {
+                source: MarketplacePluginSource::Local {
                     path: AbsolutePathBuf::try_from(tmp.path().join("repo/sample-plugin")).unwrap(),
                 },
-                install_policy: MarketplacePluginInstallPolicy::Available,
-                auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+                policy: MarketplacePluginPolicy {
+                    installation: MarketplacePluginInstallPolicy::Available,
+                    authentication: MarketplacePluginAuthPolicy::OnInstall,
+                    products: vec![],
+                },
                 interface: None,
                 installed: false,
                 enabled: true,

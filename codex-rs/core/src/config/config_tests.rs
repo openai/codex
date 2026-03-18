@@ -30,6 +30,7 @@ use pretty_assertions::assert_eq;
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -5496,6 +5497,18 @@ shell_tool = true
     );
 
     Ok(())
+}
+
+#[test]
+fn missing_system_bwrap_warning_matches_system_bwrap_presence() {
+    #[cfg(target_os = "linux")]
+    assert_eq!(
+        missing_system_bwrap_warning().is_some(),
+        !Path::new("/usr/bin/bwrap").is_file()
+    );
+
+    #[cfg(not(target_os = "linux"))]
+    assert!(missing_system_bwrap_warning().is_none());
 }
 
 #[tokio::test]
