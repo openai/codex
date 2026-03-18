@@ -29,6 +29,11 @@ pub(super) struct UnsupportedAppServerRequest {
     pub(super) message: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct ResolvedAppServerRequest {
+    pub(super) exec_approval_ids: Vec<String>,
+}
+
 #[derive(Debug, Default)]
 pub(super) struct PendingAppServerRequests {
     exec_approvals: HashMap<String, PendingExecApproval>,
@@ -46,6 +51,7 @@ enum ExecApprovalResponseKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingExecApproval {
+    approval_id: String,
     request_id: AppServerRequestId,
     response_kind: ExecApprovalResponseKind,
 }
@@ -70,8 +76,9 @@ impl PendingAppServerRequests {
                     .clone()
                     .unwrap_or_else(|| params.item_id.clone());
                 self.exec_approvals.insert(
-                    approval_id,
+                    approval_id.clone(),
                     PendingExecApproval {
+                        approval_id,
                         request_id: request_id.clone(),
                         response_kind: ExecApprovalResponseKind::V2,
                     },
@@ -125,8 +132,9 @@ impl PendingAppServerRequests {
                     .clone()
                     .unwrap_or_else(|| params.call_id.clone());
                 self.exec_approvals.insert(
-                    approval_id,
+                    approval_id.clone(),
                     PendingExecApproval {
+                        approval_id,
                         request_id: request_id.clone(),
                         response_kind: ExecApprovalResponseKind::LegacyV1,
                     },
@@ -281,7 +289,16 @@ impl PendingAppServerRequests {
         Ok(resolution)
     }
 
-    pub(super) fn resolve_notification(&mut self, request_id: &AppServerRequestId) {
+    pub(super) fn resolve_notification(
+        &mut self,
+        request_id: &AppServerRequestId,
+    ) -> ResolvedAppServerRequest {
+        let exec_approval_ids = self
+            .exec_approvals
+            .values()
+            .filter(|pending| &pending.request_id == request_id)
+            .map(|pending| pending.approval_id.clone())
+            .collect();
         self.exec_approvals
             .retain(|_, value| &value.request_id != request_id);
         self.file_change_approvals
@@ -290,6 +307,7 @@ impl PendingAppServerRequests {
             .retain(|_, value| value != request_id);
         self.user_inputs.retain(|_, value| value != request_id);
         self.mcp_requests.retain(|_, value| value != request_id);
+        ResolvedAppServerRequest { exec_approval_ids }
     }
 }
 

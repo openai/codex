@@ -134,6 +134,7 @@ mod pending_interactive_replay;
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
+use self::app_server_requests::ResolvedAppServerRequest;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
@@ -633,6 +634,11 @@ impl ThreadEventStore {
         T: Into<AppCommand>,
     {
         self.pending_interactive_replay.note_outbound_op(op);
+    }
+
+    fn note_exec_approval_resolved(&mut self, approval_id: &str) {
+        self.pending_interactive_replay
+            .note_exec_approval_resolved(approval_id);
     }
 
     fn op_can_change_pending_replay_state<T>(op: T) -> bool
@@ -1575,6 +1581,21 @@ impl App {
             return;
         };
         self.note_thread_outbound_op(thread_id, op).await;
+    }
+
+    async fn note_app_server_request_resolved(&mut self, resolved: ResolvedAppServerRequest) {
+        if resolved.exec_approval_ids.is_empty() {
+            return;
+        }
+
+        for channel in self.thread_event_channels.values() {
+            let mut store = channel.store.lock().await;
+            for approval_id in &resolved.exec_approval_ids {
+                store.note_exec_approval_resolved(approval_id);
+            }
+        }
+
+        self.refresh_pending_thread_approvals().await;
     }
 
     async fn active_turn_id_for_thread(&self, thread_id: ThreadId) -> Option<String> {
