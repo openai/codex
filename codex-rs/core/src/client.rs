@@ -508,6 +508,7 @@ impl ModelClient {
     pub fn responses_websocket_enabled(&self) -> bool {
         if !self.state.provider.supports_websockets
             || self.state.disable_websockets.load(Ordering::Relaxed)
+            || (*CODEX_RS_SSE_FIXTURE).is_some()
         {
             return false;
         }
