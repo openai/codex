@@ -241,6 +241,9 @@ pub enum ResponseInputItem {
     },
     CustomToolCallOutput {
         call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        name: Option<String>,
         #[ts(as = "FunctionCallOutputBody")]
         #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
@@ -382,6 +385,9 @@ pub enum ResponseItem {
     // text or structured content items.
     CustomToolCallOutput {
         call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        name: Option<String>,
         #[ts(as = "FunctionCallOutputBody")]
         #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
@@ -1008,9 +1014,15 @@ impl From<ResponseInputItem> for ResponseItem {
                 let output = output.into_function_call_output_payload();
                 Self::FunctionCallOutput { call_id, output }
             }
-            ResponseInputItem::CustomToolCallOutput { call_id, output } => {
-                Self::CustomToolCallOutput { call_id, output }
-            }
+            ResponseInputItem::CustomToolCallOutput {
+                call_id,
+                name,
+                output,
+            } => Self::CustomToolCallOutput {
+                call_id,
+                name,
+                output,
+            },
             ResponseInputItem::ToolSearchOutput {
                 call_id,
                 status,
@@ -2392,6 +2404,7 @@ mod tests {
     fn serializes_custom_tool_image_outputs_as_array() -> Result<()> {
         let item = ResponseInputItem::CustomToolCallOutput {
             call_id: "call1".into(),
+            name: None,
             output: FunctionCallOutputPayload::from_content_items(vec![
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "data:image/png;base64,BASE64".into(),

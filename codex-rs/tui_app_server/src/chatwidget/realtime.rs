@@ -117,6 +117,7 @@ impl ChatWidget {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn pending_steer_compare_key_from_item(
         item: &codex_protocol::items::UserMessageItem,
     ) -> PendingSteerCompareKey {
@@ -163,6 +164,7 @@ impl ChatWidget {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn should_render_realtime_user_message_event(
         &self,
         event: &UserMessageEvent,

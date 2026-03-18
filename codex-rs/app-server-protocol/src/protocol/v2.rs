@@ -30,6 +30,8 @@ use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::Resource as McpResource;
 use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
 use codex_protocol::mcp::Tool as McpTool;
+use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
+use codex_protocol::memory_citation::MemoryCitationEntry as CoreMemoryCitationEntry;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
 use codex_protocol::models::MacOsAutomationPermission as CoreMacOsAutomationPermission;
 use codex_protocol::models::MacOsContactsPermission as CoreMacOsContactsPermission;
@@ -343,7 +345,7 @@ v2_enum_from_core!(
 
 v2_enum_from_core!(
     pub enum HookEventName from CoreHookEventName {
-        SessionStart, Stop
+        SessionStart, UserPromptSubmit, Stop
     }
 );
 
@@ -1465,6 +1467,7 @@ pub enum SessionSource {
     VsCode,
     Exec,
     AppServer,
+    Custom(String),
     SubAgent(CoreSubAgentSource),
     #[serde(other)]
     Unknown,
@@ -1477,6 +1480,7 @@ impl From<CoreSessionSource> for SessionSource {
             CoreSessionSource::VSCode => SessionSource::VsCode,
             CoreSessionSource::Exec => SessionSource::Exec,
             CoreSessionSource::Mcp => SessionSource::AppServer,
+            CoreSessionSource::Custom(source) => SessionSource::Custom(source),
             CoreSessionSource::SubAgent(sub) => SessionSource::SubAgent(sub),
             CoreSessionSource::Unknown => SessionSource::Unknown,
         }
@@ -1490,6 +1494,7 @@ impl From<SessionSource> for CoreSessionSource {
             SessionSource::VsCode => CoreSessionSource::VSCode,
             SessionSource::Exec => CoreSessionSource::Exec,
             SessionSource::AppServer => CoreSessionSource::Mcp,
+            SessionSource::Custom(source) => CoreSessionSource::Custom(source),
             SessionSource::SubAgent(sub) => CoreSessionSource::SubAgent(sub),
             SessionSource::Unknown => CoreSessionSource::Unknown,
         }
@@ -2949,6 +2954,7 @@ pub enum ThreadSourceKind {
     VsCode,
     Exec,
     AppServer,
+    Custom,
     SubAgent,
     SubAgentReview,
     SubAgentCompact,
@@ -3568,6 +3574,44 @@ pub struct Turn {
     pub error: Option<TurnError>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MemoryCitation {
+    pub entries: Vec<MemoryCitationEntry>,
+    pub thread_ids: Vec<String>,
+}
+
+impl From<CoreMemoryCitation> for MemoryCitation {
+    fn from(value: CoreMemoryCitation) -> Self {
+        Self {
+            entries: value.entries.into_iter().map(Into::into).collect(),
+            thread_ids: value.rollout_ids,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MemoryCitationEntry {
+    pub path: String,
+    pub line_start: u32,
+    pub line_end: u32,
+    pub note: String,
+}
+
+impl From<CoreMemoryCitationEntry> for MemoryCitationEntry {
+    fn from(value: CoreMemoryCitationEntry) -> Self {
+        Self {
+            path: value.path,
+            line_start: value.line_start,
+            line_end: value.line_end,
+            note: value.note,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Error)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -4068,6 +4112,8 @@ pub enum ThreadItem {
         text: String,
         #[serde(default)]
         phase: Option<MessagePhase>,
+        #[serde(default)]
+        memory_citation: Option<MemoryCitation>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4317,6 +4363,7 @@ impl From<CoreTurnItem> for ThreadItem {
                     id: agent.id,
                     text,
                     phase: agent.phase,
+                    memory_citation: agent.memory_citation.map(Into::into),
                 }
             }
             CoreTurnItem::Plan(plan) => ThreadItem::Plan {
@@ -7393,6 +7440,7 @@ mod tests {
                 },
             ],
             phase: None,
+            memory_citation: None,
         });
 
         assert_eq!(
@@ -7401,6 +7449,7 @@ mod tests {
                 id: "agent-1".to_string(),
                 text: "Hello world".to_string(),
                 phase: None,
+                memory_citation: None,
             }
         );
 
@@ -7410,6 +7459,15 @@ mod tests {
                 text: "final".to_string(),
             }],
             phase: Some(MessagePhase::FinalAnswer),
+            memory_citation: Some(CoreMemoryCitation {
+                entries: vec![CoreMemoryCitationEntry {
+                    path: "MEMORY.md".to_string(),
+                    line_start: 1,
+                    line_end: 2,
+                    note: "summary".to_string(),
+                }],
+                rollout_ids: vec!["rollout-1".to_string()],
+            }),
         });
 
         assert_eq!(
@@ -7418,6 +7476,15 @@ mod tests {
                 id: "agent-2".to_string(),
                 text: "final".to_string(),
                 phase: Some(MessagePhase::FinalAnswer),
+                memory_citation: Some(MemoryCitation {
+                    entries: vec![MemoryCitationEntry {
+                        path: "MEMORY.md".to_string(),
+                        line_start: 1,
+                        line_end: 2,
+                        note: "summary".to_string(),
+                    }],
+                    thread_ids: vec!["rollout-1".to_string()],
+                }),
             }
         );
 

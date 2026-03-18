@@ -1592,6 +1592,44 @@ text({ json: true });
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_notify_injects_additional_exec_tool_output_into_active_context() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use exec notify helper",
+        r#"
+notify("code_mode_notify_marker");
+await tools.test_sync_tool({});
+text("done");
+"#,
+        false,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let has_notify_output = req
+        .inputs_of_type("custom_tool_call_output")
+        .iter()
+        .any(|item| {
+            item.get("call_id").and_then(serde_json::Value::as_str) == Some("call-1")
+                && item
+                    .get("output")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|text| text.contains("code_mode_notify_marker"))
+                && item.get("name").and_then(serde_json::Value::as_str) == Some("exec")
+        });
+    assert!(
+        has_notify_output,
+        "expected notify marker in custom_tool_call_output item: {:?}",
+        req.input()
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_exit_stops_script_immediately() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1997,6 +2035,7 @@ text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
         "isFinite",
         "isNaN",
         "load",
+        "notify",
         "parseFloat",
         "parseInt",
         "store",

@@ -1570,11 +1570,13 @@ name = "codex-artifacts"
 version = "0.0.0"
 dependencies = [
  "codex-package-manager",
+ "flate2",
  "pretty_assertions",
  "reqwest",
  "serde",
  "serde_json",
  "sha2",
+ "tar",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

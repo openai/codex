@@ -233,7 +233,7 @@ function codeModeWorkerMain() {
     throw new TypeError('image expects an http(s) or data URL');
   }
 
-  function createCodeModeHelpers(context, state) {
+  function createCodeModeHelpers(context, state, toolCallId) {
     const load = (key) => {
       if (typeof key !== 'string') {
         throw new TypeError('load key must be a string');
@@ -268,6 +268,21 @@ function codeModeWorkerMain() {
     const yieldControl = () => {
       parentPort.postMessage({ type: 'yield' });
     };
+    const notify = (value) => {
+      const text = serializeOutputText(value);
+      if (text.trim().length === 0) {
+        throw new TypeError('notify expects non-empty text');
+      }
+      if (typeof toolCallId !== 'string' || toolCallId.length === 0) {
+        throw new TypeError('notify requires a valid tool call id');
+      }
+      parentPort.postMessage({
+        type: 'notify',
+        call_id: toolCallId,
+        text,
+      });
+      return text;
+    };
     const exit = () => {
       throw new CodeModeExitSignal();
     };
@@ -276,6 +291,7 @@ function codeModeWorkerMain() {
       exit,
       image,
       load,
+      notify,
       output_image: image,
       output_text: text,
       store,
@@ -290,6 +306,7 @@ function codeModeWorkerMain() {
         'exit',
         'image',
         'load',
+        'notify',
         'output_text',
         'output_image',
         'store',
@@ -300,6 +317,7 @@ function codeModeWorkerMain() {
         this.setExport('exit', helpers.exit);
         this.setExport('image', helpers.image);
         this.setExport('load', helpers.load);
+        this.setExport('notify', helpers.notify);
         this.setExport('output_text', helpers.output_text);
         this.setExport('output_image', helpers.output_image);
         this.setExport('store', helpers.store);
@@ -316,6 +334,7 @@ function codeModeWorkerMain() {
       exit: helpers.exit,
       image: helpers.image,
       load: helpers.load,
+      notify: helpers.notify,
       store: helpers.store,
       text: helpers.text,
       tools: createGlobalToolsNamespace(callTool, enabledTools),
@@ -448,6 +467,7 @@ function codeModeWorkerMain() {
 
   async function main() {
     const start = workerData ?? {};
+    const toolCallId = start.tool_call_id;
     const state = {
       storedValues: cloneJsonValue(start.stored_values ?? {}),
     };
@@ -457,7 +477,7 @@ function codeModeWorkerMain() {
     const context = vm.createContext({
       __codexContentItems: contentItems,
     });
-    const helpers = createCodeModeHelpers(context, state);
+    const helpers = createCodeModeHelpers(context, state, toolCallId);
     Object.defineProperty(context, '__codexRuntime', {
       value: createBridgeRuntime(callTool, enabledTools, helpers),
       configurable: true,
@@ -635,6 +655,9 @@ function sessionWorkerSource() {
 }
 
 function startSession(protocol, sessions, start) {
+  if (typeof start.tool_call_id !== 'string' || start.tool_call_id.length === 0) {
+    throw new TypeError('start requires a valid tool_call_id');
+  }
   const maxOutputTokensPerExecCall =
     start.max_output_tokens == null
       ? DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL
@@ -705,6 +728,22 @@ async function handleWorkerMessage(protocol, sessions, session, message) {
 
   if (message.type === 'yield') {
     void sendYielded(protocol, session);
+    return;
+  }
+
+  if (message.type === 'notify') {
+    if (typeof message.text !== 'string' || message.text.trim().length === 0) {
+      throw new TypeError('notify requires non-empty text');
+    }
+    if (typeof message.call_id !== 'string' || message.call_id.length === 0) {
+      throw new TypeError('notify requires a valid call id');
+    }
+    await protocol.send({
+      type: 'notify',
+      cell_id: session.id,
+      call_id: message.call_id,
+      text: message.text,
+    });
     return;
   }
 
