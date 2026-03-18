@@ -246,43 +246,28 @@ fn format_feedback_log_body<S>(
 where
     S: tracing::Subscriber + for<'a> LookupSpan<'a>,
 {
-    let mut feedback_log_body = format_span_prefix(event, ctx);
+    let mut feedback_log_body = String::new();
+    if let Some(scope) = ctx.event_scope(event) {
+        for span in scope.from_root() {
+            let extensions = span.extensions();
+            if let Some(log_context) = extensions.get::<SpanLogContext>() {
+                feedback_log_body.push_str(&log_context.name);
+                if !log_context.formatted_fields.is_empty() {
+                    feedback_log_body.push('{');
+                    feedback_log_body.push_str(&log_context.formatted_fields);
+                    feedback_log_body.push('}');
+                }
+            } else {
+                feedback_log_body.push_str(span.metadata().name());
+            }
+            feedback_log_body.push(':');
+        }
+        if !feedback_log_body.is_empty() {
+            feedback_log_body.push(' ');
+        }
+    }
     feedback_log_body.push_str(&format_fields(event));
     feedback_log_body
-}
-
-fn format_span_prefix<S>(
-    event: &Event<'_>,
-    ctx: &tracing_subscriber::layer::Context<'_, S>,
-) -> String
-where
-    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
-{
-    let Some(scope) = ctx.event_scope(event) else {
-        return String::new();
-    };
-
-    let mut prefix = String::new();
-    for span in scope.from_root() {
-        let extensions = span.extensions();
-        if let Some(log_context) = extensions.get::<SpanLogContext>() {
-            prefix.push_str(&log_context.name);
-            if !log_context.formatted_fields.is_empty() {
-                prefix.push('{');
-                prefix.push_str(&log_context.formatted_fields);
-                prefix.push('}');
-            }
-        } else {
-            prefix.push_str(span.metadata().name());
-        }
-        prefix.push(':');
-    }
-
-    if !prefix.is_empty() {
-        prefix.push(' ');
-    }
-
-    prefix
 }
 
 fn format_fields<R>(fields: R) -> String
