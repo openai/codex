@@ -1914,6 +1914,8 @@ async fn make_chatwidget_manual(
         connectors_partial_snapshot: None,
         connectors_prefetch_in_flight: false,
         connectors_force_refetch_pending: false,
+        plugins_cache: PluginsCacheState::default(),
+        plugins_fetch_state: PluginListFetchState::default(),
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
