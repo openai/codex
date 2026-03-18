@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use crate::codex::make_session_and_context;
+use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolPayload;
 use crate::turn_diff_tracker::TurnDiffTracker;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 
 use super::ToolCall;
@@ -50,20 +50,21 @@ async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
         },
     };
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let response = router
-        .dispatch_tool_call(session, turn, tracker, call, ToolCallSource::Direct)
-        .await?;
-
-    match response {
-        ResponseInputItem::FunctionCallOutput { output, .. } => {
-            let content = output.text_content().unwrap_or_default();
-            assert!(
-                content.contains("direct tool calls are disabled"),
-                "unexpected tool call message: {content}",
-            );
-        }
-        other => panic!("expected function call output, got {other:?}"),
-    }
+    let err = router
+        .dispatch_tool_call_with_code_mode_result(
+            session,
+            turn,
+            tracker,
+            call,
+            ToolCallSource::Direct,
+        )
+        .await
+        .err()
+        .expect("direct tool calls should be blocked");
+    let FunctionCallError::RespondToModel(message) = err else {
+        panic!("expected RespondToModel, got {err:?}");
+    };
+    assert!(message.contains("direct tool calls are disabled"));
 
     Ok(())
 }
@@ -107,20 +108,22 @@ async fn js_repl_tools_only_allows_js_repl_source_calls() -> anyhow::Result<()> 
         },
     };
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let response = router
-        .dispatch_tool_call(session, turn, tracker, call, ToolCallSource::JsRepl)
-        .await?;
-
-    match response {
-        ResponseInputItem::FunctionCallOutput { output, .. } => {
-            let content = output.text_content().unwrap_or_default();
-            assert!(
-                !content.contains("direct tool calls are disabled"),
-                "js_repl source should bypass direct-call policy gate"
-            );
-        }
-        other => panic!("expected function call output, got {other:?}"),
-    }
+    let err = router
+        .dispatch_tool_call_with_code_mode_result(
+            session,
+            turn,
+            tracker,
+            call,
+            ToolCallSource::JsRepl,
+        )
+        .await
+        .err()
+        .expect("shell call with empty args should fail");
+    let message = err.to_string();
+    assert!(
+        !message.contains("direct tool calls are disabled"),
+        "js_repl source should bypass direct-call policy gate"
+    );
 
     Ok(())
 }
