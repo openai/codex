@@ -1057,7 +1057,7 @@ impl PluginsManager {
     pub fn maybe_start_curated_repo_sync_for_config(
         self: &Arc<Self>,
         config: &Config,
-        auth_manager: &Arc<AuthManager>,
+        auth_manager: Arc<AuthManager>,
     ) {
         if config.features.enabled(Feature::Plugins) {
             let mut configured_curated_plugin_ids =
@@ -1084,7 +1084,6 @@ impl PluginsManager {
             self.start_curated_repo_sync(configured_curated_plugin_ids);
 
             let config = config.clone();
-            let auth_manager = auth_manager.clone();
             let manager = Arc::clone(self);
             tokio::spawn(async move {
                 let auth = auth_manager.auth().await;

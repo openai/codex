@@ -427,7 +427,7 @@ impl CodexMessageProcessor {
                 .plugins_manager()
                 .maybe_start_curated_repo_sync_for_config(
                     &config,
-                    &self.thread_manager.auth_manager(),
+                    self.thread_manager.auth_manager(),
                 ),
             Err(err) => warn!("failed to load latest config for curated plugin sync: {err:?}"),
         }

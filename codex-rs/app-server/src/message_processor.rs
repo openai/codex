@@ -245,7 +245,7 @@ impl MessageProcessor {
         // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
         thread_manager
             .plugins_manager()
-            .maybe_start_curated_repo_sync_for_config(&config, &auth_manager);
+            .maybe_start_curated_repo_sync_for_config(&config, auth_manager.clone());
         let config_api = ConfigApi::new(
             config.codex_home.clone(),
             cli_overrides,
