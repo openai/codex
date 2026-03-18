@@ -3,7 +3,6 @@
 use std::process::Stdio;
 use std::time::Duration;
 
-use anyhow::Context;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -14,26 +13,22 @@ use codex_exec_server::InitializeParams;
 use codex_exec_server::InitializeResponse;
 use codex_utils_cargo_bin::cargo_bin;
 use pretty_assertions::assert_eq;
-use tokio::io::AsyncBufReadExt;
-use tokio::io::BufReader;
 use tokio::process::Command;
-use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_server_accepts_initialize_over_websocket() -> anyhow::Result<()> {
     let binary = cargo_bin("codex-exec-server")?;
+    let websocket_url = reserve_websocket_url()?;
     let mut child = Command::new(binary);
+    child.args(["--listen", &websocket_url]);
     child.stdin(Stdio::null());
     child.stdout(Stdio::null());
-    child.stderr(Stdio::piped());
+    child.stderr(Stdio::inherit());
     let mut child = child.spawn()?;
-    let stderr = child.stderr.take().expect("stderr");
-    let mut stderr_lines = BufReader::new(stderr).lines();
-    let websocket_url = read_websocket_url(&mut stderr_lines).await?;
 
-    let (mut websocket, _) = connect_async(&websocket_url).await?;
+    let (mut websocket, _) = connect_websocket_when_ready(&websocket_url).await?;
     let initialize = JSONRPCMessage::Request(JSONRPCRequest {
         id: RequestId::Integer(1),
         method: "initialize".to_string(),
@@ -77,16 +72,15 @@ async fn exec_server_accepts_initialize_over_websocket() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_server_stubs_process_start_over_websocket() -> anyhow::Result<()> {
     let binary = cargo_bin("codex-exec-server")?;
+    let websocket_url = reserve_websocket_url()?;
     let mut child = Command::new(binary);
+    child.args(["--listen", &websocket_url]);
     child.stdin(Stdio::null());
     child.stdout(Stdio::null());
-    child.stderr(Stdio::piped());
+    child.stderr(Stdio::inherit());
     let mut child = child.spawn()?;
-    let stderr = child.stderr.take().expect("stderr");
-    let mut stderr_lines = BufReader::new(stderr).lines();
-    let websocket_url = read_websocket_url(&mut stderr_lines).await?;
 
-    let (mut websocket, _) = connect_async(&websocket_url).await?;
+    let (mut websocket, _) = connect_websocket_when_ready(&websocket_url).await?;
     let initialize = JSONRPCMessage::Request(JSONRPCRequest {
         id: RequestId::Integer(1),
         method: "initialize".to_string(),
@@ -140,15 +134,34 @@ async fn exec_server_stubs_process_start_over_websocket() -> anyhow::Result<()> 
     Ok(())
 }
 
-async fn read_websocket_url<R>(lines: &mut tokio::io::Lines<BufReader<R>>) -> anyhow::Result<String>
-where
-    R: tokio::io::AsyncRead + Unpin,
-{
-    let line = timeout(Duration::from_secs(5), lines.next_line()).await??;
-    let line = line.context("missing websocket startup banner")?;
-    let websocket_url = line
-        .split_whitespace()
-        .find(|part| part.starts_with("ws://"))
-        .context("missing websocket URL in startup banner")?;
-    Ok(websocket_url.to_string())
+fn reserve_websocket_url() -> anyhow::Result<String> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let addr = listener.local_addr()?;
+    drop(listener);
+    Ok(format!("ws://{addr}"))
+}
+
+async fn connect_websocket_when_ready(
+    websocket_url: &str,
+) -> anyhow::Result<(
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    tokio_tungstenite::tungstenite::handshake::client::Response,
+)> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match connect_async(websocket_url).await {
+            Ok(websocket) => return Ok(websocket),
+            Err(err)
+                if tokio::time::Instant::now() < deadline
+                    && matches!(
+                        err,
+                        tokio_tungstenite::tungstenite::Error::Io(ref io_err)
+                            if io_err.kind() == std::io::ErrorKind::ConnectionRefused
+                    ) =>
+            {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
 }

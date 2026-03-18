@@ -14,10 +14,7 @@ struct ExecServerArgs {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = ExecServerArgs::parse();
-    if let Err(err) = codex_exec_server::run_main_with_transport(args.listen).await {
-        eprintln!("{err}");
-        std::process::exit(1);
-    }
+    codex_exec_server::run_main_with_transport(args.listen).await
 }

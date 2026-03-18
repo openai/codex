@@ -90,7 +90,7 @@ async fn run_websocket_listener(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(bind_address).await?;
     let local_addr = listener.local_addr()?;
-    print_websocket_startup_banner(local_addr);
+    tracing::info!("codex-exec-server listening on ws://{local_addr}");
 
     loop {
         let (stream, peer_addr) = listener.accept().await?;
@@ -113,66 +113,6 @@ async fn run_websocket_listener(
     }
 }
 
-#[allow(clippy::print_stderr)]
-fn print_websocket_startup_banner(addr: SocketAddr) {
-    eprintln!("codex-exec-server listening on ws://{addr}");
-}
-
 #[cfg(test)]
-mod tests {
-    use pretty_assertions::assert_eq;
-
-    use super::ExecServerTransport;
-
-    #[test]
-    fn exec_server_transport_parses_default_websocket_listen_url() {
-        let transport =
-            ExecServerTransport::from_listen_url(ExecServerTransport::DEFAULT_LISTEN_URL)
-                .expect("default listen URL should parse");
-        assert_eq!(
-            transport,
-            ExecServerTransport::WebSocket {
-                bind_address: "127.0.0.1:0".parse().expect("valid socket address"),
-            }
-        );
-    }
-
-    #[test]
-    fn exec_server_transport_parses_stdio_listen_url() {
-        let transport = ExecServerTransport::from_listen_url("stdio://")
-            .expect("stdio listen URL should parse");
-        assert_eq!(transport, ExecServerTransport::Stdio);
-    }
-
-    #[test]
-    fn exec_server_transport_parses_websocket_listen_url() {
-        let transport = ExecServerTransport::from_listen_url("ws://127.0.0.1:1234")
-            .expect("websocket listen URL should parse");
-        assert_eq!(
-            transport,
-            ExecServerTransport::WebSocket {
-                bind_address: "127.0.0.1:1234".parse().expect("valid socket address"),
-            }
-        );
-    }
-
-    #[test]
-    fn exec_server_transport_rejects_invalid_websocket_listen_url() {
-        let err = ExecServerTransport::from_listen_url("ws://localhost:1234")
-            .expect_err("hostname bind address should be rejected");
-        assert_eq!(
-            err.to_string(),
-            "invalid websocket --listen URL `ws://localhost:1234`; expected `ws://IP:PORT`"
-        );
-    }
-
-    #[test]
-    fn exec_server_transport_rejects_unsupported_listen_url() {
-        let err = ExecServerTransport::from_listen_url("http://127.0.0.1:1234")
-            .expect_err("unsupported scheme should fail");
-        assert_eq!(
-            err.to_string(),
-            "unsupported --listen URL `http://127.0.0.1:1234`; expected `stdio://` or `ws://IP:PORT`"
-        );
-    }
-}
+#[path = "transport_tests.rs"]
+mod transport_tests;
