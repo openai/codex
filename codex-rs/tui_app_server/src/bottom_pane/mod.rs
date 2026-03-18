@@ -913,6 +913,17 @@ impl BottomPane {
         self.push_view(Box::new(modal));
     }
 
+    pub(crate) fn remove_resolved_exec_approvals(&mut self, approval_ids: &[String]) {
+        if let Some(view) = self.view_stack.last_mut()
+            && view.remove_resolved_exec_approvals(approval_ids)
+        {
+            if view.is_complete() {
+                self.view_stack.pop();
+            }
+            self.request_redraw();
+        }
+    }
+
     /// Called when the agent requests user input.
     pub fn push_user_input_request(&mut self, request: RequestUserInputEvent) {
         let request = if let Some(view) = self.view_stack.last_mut() {
@@ -1406,6 +1417,53 @@ mod tests {
         assert!(
             found_composer,
             "expected composer visible under status line"
+        );
+    }
+
+    #[test]
+    fn resolved_exec_approval_is_removed_from_live_modal_and_queue() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let features = Features::with_defaults();
+        let mut pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        });
+
+        pane.push_approval_request(exec_request(), &features);
+        pane.push_approval_request(
+            ApprovalRequest::Exec {
+                thread_id: codex_protocol::ThreadId::new(),
+                thread_label: None,
+                id: "2".to_string(),
+                command: vec!["echo".into(), "ok".into()],
+                reason: None,
+                available_decisions: vec![
+                    codex_protocol::protocol::ReviewDecision::Approved,
+                    codex_protocol::protocol::ReviewDecision::Abort,
+                ],
+                network_approval_context: None,
+                additional_permissions: None,
+            },
+            &features,
+        );
+
+        pane.remove_resolved_exec_approvals(&["1".to_string()]);
+        assert!(
+            !pane.view_stack.is_empty(),
+            "next queued approval should become active"
+        );
+
+        pane.remove_resolved_exec_approvals(&["2".to_string()]);
+        assert!(
+            pane.view_stack.is_empty(),
+            "resolved exec approvals should be removed from the live modal queue"
         );
     }
 

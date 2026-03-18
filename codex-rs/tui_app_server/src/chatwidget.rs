@@ -3950,6 +3950,12 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn remove_resolved_exec_approvals(&mut self, approval_ids: &[String]) {
+        self.bottom_pane
+            .remove_resolved_exec_approvals(approval_ids);
+        self.request_redraw();
+    }
+
     pub(crate) fn push_mcp_server_elicitation_request(
         &mut self,
         request: McpServerElicitationFormRequest,

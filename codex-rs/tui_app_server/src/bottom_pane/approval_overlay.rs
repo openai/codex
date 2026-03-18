@@ -99,6 +99,10 @@ impl ApprovalRequest {
             | ApprovalRequest::McpElicitation { thread_label, .. } => thread_label.as_deref(),
         }
     }
+
+    fn is_resolved_exec_approval(&self, approval_ids: &[String]) -> bool {
+        matches!(self, ApprovalRequest::Exec { id, .. } if approval_ids.contains(id))
+    }
 }
 
 /// Modal overlay asking the user to approve or deny one or more requests.
@@ -131,6 +135,28 @@ impl ApprovalOverlay {
 
     pub fn enqueue_request(&mut self, req: ApprovalRequest) {
         self.queue.push(req);
+    }
+
+    fn remove_resolved_exec_approvals(&mut self, approval_ids: &[String]) -> bool {
+        let mut changed = false;
+
+        self.queue.retain(|request| {
+            let keep = !request.is_resolved_exec_approval(approval_ids);
+            changed |= !keep;
+            keep
+        });
+
+        if self
+            .current_request
+            .as_ref()
+            .is_some_and(|request| request.is_resolved_exec_approval(approval_ids))
+        {
+            changed = true;
+            self.current_request = None;
+            self.advance_queue();
+        }
+
+        changed
     }
 
     fn set_current(&mut self, request: ApprovalRequest) {
@@ -464,6 +490,10 @@ impl BottomPaneView for ApprovalOverlay {
     ) -> Option<ApprovalRequest> {
         self.enqueue_request(request);
         None
+    }
+
+    fn remove_resolved_exec_approvals(&mut self, approval_ids: &[String]) -> bool {
+        self.remove_resolved_exec_approvals(approval_ids)
     }
 }
 
