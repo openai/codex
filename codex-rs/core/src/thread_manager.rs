@@ -27,6 +27,7 @@ use crate::skills::SkillsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::protocol::ForkReferenceItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
@@ -36,6 +37,7 @@ use codex_protocol::protocol::W3cTraceContext;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -537,8 +539,39 @@ impl ThreadManager {
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
-        let history = RolloutRecorder::get_rollout_history(&path).await?;
-        let history = truncate_before_nth_user_message(history, nth_user_message);
+        // True forks must discard the source rollout's conversation id so the child gets a
+        // distinct thread id and preserves `forked_from_id` in its SessionMeta. Using the
+        // resume loader here silently turns a fork into an in-place resume.
+        let history = RolloutRecorder::get_fork_history(&path).await?;
+        let mut history = truncate_before_nth_user_message(
+            config.codex_home.as_path(),
+            history,
+            nth_user_message,
+        )
+        .await;
+        if let InitialHistory::Forked(items) = &mut history {
+            let source_session_meta = items.iter().find_map(|item| match item {
+                RolloutItem::SessionMeta(meta_line) => Some(meta_line.clone()),
+                RolloutItem::ForkReference(_)
+                | RolloutItem::ResponseItem(_)
+                | RolloutItem::Compacted(_)
+                | RolloutItem::TurnContext(_)
+                | RolloutItem::EventMsg(_) => None,
+            });
+            // Keep the source SessionMeta in-memory so startup can derive `forked_from_id`
+            // for SessionConfigured while still persisting only the compact ForkReference
+            // suffix to the child rollout on disk.
+            *items = source_session_meta
+                .into_iter()
+                .map(RolloutItem::SessionMeta)
+                .chain(std::iter::once(RolloutItem::ForkReference(
+                    ForkReferenceItem {
+                        rollout_path: path.clone(),
+                        nth_user_message,
+                    },
+                )))
+                .collect();
+        }
         Box::pin(self.state.spawn_thread(
             config,
             history,
@@ -813,8 +846,18 @@ impl ThreadManagerState {
 
 /// Return a prefix of `items` obtained by cutting strictly before the nth user message
 /// (0-based) and all items that follow it.
-fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> InitialHistory {
-    let items: Vec<RolloutItem> = history.get_rollout_items();
+async fn truncate_before_nth_user_message(
+    codex_home: &Path,
+    history: InitialHistory,
+    n: usize,
+) -> InitialHistory {
+    let mut items: Vec<RolloutItem> = history.get_rollout_items();
+    if items
+        .iter()
+        .any(|item| matches!(item, RolloutItem::ForkReference(_)))
+    {
+        items = truncation::materialize_rollout_items_for_replay(codex_home, &items).await;
+    }
     let rolled = truncation::truncate_rollout_before_nth_user_message_from_start(&items, n);
 
     if rolled.is_empty() {
@@ -827,3 +870,131 @@ fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> Initia
 #[cfg(test)]
 #[path = "thread_manager_tests.rs"]
 mod tests;
+#[cfg(test)]
+mod fork_reference_tests {
+    use super::*;
+    use crate::codex::make_session_and_context;
+    use assert_matches::assert_matches;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ReasoningItemReasoningSummary;
+    use codex_protocol::models::ResponseItem;
+    use pretty_assertions::assert_eq;
+
+    fn user_msg(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: text.to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }
+    }
+    fn assistant_msg(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: text.to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn drops_from_last_user_only() {
+        let items = [
+            user_msg("u1"),
+            assistant_msg("a1"),
+            assistant_msg("a2"),
+            user_msg("u2"),
+            assistant_msg("a3"),
+            ResponseItem::Reasoning {
+                id: "r1".to_string(),
+                summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                    text: "s".to_string(),
+                }],
+                content: None,
+                encrypted_content: None,
+            },
+            ResponseItem::FunctionCall {
+                id: None,
+                call_id: "c1".to_string(),
+                name: "tool".to_string(),
+                namespace: None,
+                arguments: "{}".to_string(),
+            },
+            assistant_msg("a4"),
+        ];
+
+        let initial: Vec<RolloutItem> = items
+            .iter()
+            .cloned()
+            .map(RolloutItem::ResponseItem)
+            .collect();
+        let truncated =
+            truncate_before_nth_user_message(Path::new("/tmp"), InitialHistory::Forked(initial), 1)
+                .await;
+        let got_items = truncated.get_rollout_items();
+        let expected_items = vec![
+            RolloutItem::ResponseItem(items[0].clone()),
+            RolloutItem::ResponseItem(items[1].clone()),
+            RolloutItem::ResponseItem(items[2].clone()),
+        ];
+        assert_eq!(
+            serde_json::to_value(&got_items).unwrap(),
+            serde_json::to_value(&expected_items).unwrap()
+        );
+
+        let initial2: Vec<RolloutItem> = items
+            .iter()
+            .cloned()
+            .map(RolloutItem::ResponseItem)
+            .collect();
+        let truncated2 = truncate_before_nth_user_message(
+            Path::new("/tmp"),
+            InitialHistory::Forked(initial2),
+            2,
+        )
+        .await;
+        assert_matches!(truncated2, InitialHistory::New);
+    }
+
+    #[tokio::test]
+    async fn ignores_session_prefix_messages_when_truncating() {
+        let (session, turn_context) = make_session_and_context().await;
+        let mut items = session.build_initial_context(&turn_context).await;
+        items.push(user_msg("feature request"));
+        items.push(assistant_msg("ack"));
+        items.push(user_msg("second question"));
+        items.push(assistant_msg("answer"));
+
+        let rollout_items: Vec<RolloutItem> = items
+            .iter()
+            .cloned()
+            .map(RolloutItem::ResponseItem)
+            .collect();
+
+        let truncated = truncate_before_nth_user_message(
+            Path::new("/tmp"),
+            InitialHistory::Forked(rollout_items),
+            1,
+        )
+        .await;
+        let got_items = truncated.get_rollout_items();
+
+        let expected: Vec<RolloutItem> = vec![
+            RolloutItem::ResponseItem(items[0].clone()),
+            RolloutItem::ResponseItem(items[1].clone()),
+            RolloutItem::ResponseItem(items[2].clone()),
+            RolloutItem::ResponseItem(items[3].clone()),
+        ];
+
+        assert_eq!(
+            serde_json::to_value(&got_items).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
+    }
+}

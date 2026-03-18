@@ -10,6 +10,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use core_test_support::responses::mount_models_once;
 use pretty_assertions::assert_eq;
+use std::path::Path;
 use std::time::Duration;
 use tempfile::tempdir;
 use wiremock::MockServer;
@@ -37,8 +38,8 @@ fn assistant_msg(text: &str) -> ResponseItem {
     }
 }
 
-#[test]
-fn drops_from_last_user_only() {
+#[tokio::test]
+async fn drops_from_last_user_only() {
     let items = [
         user_msg("u1"),
         assistant_msg("a1"),
@@ -68,7 +69,9 @@ fn drops_from_last_user_only() {
         .cloned()
         .map(RolloutItem::ResponseItem)
         .collect();
-    let truncated = truncate_before_nth_user_message(InitialHistory::Forked(initial), 1);
+    let truncated =
+        truncate_before_nth_user_message(Path::new("/tmp"), InitialHistory::Forked(initial), 1)
+            .await;
     let got_items = truncated.get_rollout_items();
     let expected_items = vec![
         RolloutItem::ResponseItem(items[0].clone()),
@@ -85,7 +88,9 @@ fn drops_from_last_user_only() {
         .cloned()
         .map(RolloutItem::ResponseItem)
         .collect();
-    let truncated2 = truncate_before_nth_user_message(InitialHistory::Forked(initial2), 2);
+    let truncated2 =
+        truncate_before_nth_user_message(Path::new("/tmp"), InitialHistory::Forked(initial2), 2)
+            .await;
     assert_matches!(truncated2, InitialHistory::New);
 }
 
@@ -104,7 +109,12 @@ async fn ignores_session_prefix_messages_when_truncating() {
         .map(RolloutItem::ResponseItem)
         .collect();
 
-    let truncated = truncate_before_nth_user_message(InitialHistory::Forked(rollout_items), 1);
+    let truncated = truncate_before_nth_user_message(
+        Path::new("/tmp"),
+        InitialHistory::Forked(rollout_items),
+        1,
+    )
+    .await;
     let got_items = truncated.get_rollout_items();
 
     let expected: Vec<RolloutItem> = vec![
