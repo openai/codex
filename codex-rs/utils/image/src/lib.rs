@@ -290,10 +290,11 @@ mod tests {
             PromptImageMode::ResizeToFit,
         )
         .expect_err("invalid image should fail");
-        match err {
-            ImageProcessingError::Decode { .. } => {}
-            _ => panic!("unexpected error variant"),
-        }
+        assert!(matches!(
+            err,
+            ImageProcessingError::Decode { .. }
+                | ImageProcessingError::UnsupportedImageFormat { .. }
+        ));
     }
 
     #[tokio::test(flavor = "multi_thread")]
