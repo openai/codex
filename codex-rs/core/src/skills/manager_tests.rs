@@ -69,7 +69,7 @@ async fn skills_for_config_reuses_cache_for_same_effective_config() {
 }
 
 #[tokio::test]
-async fn skills_for_cwd_reuses_cached_entry_even_when_entry_has_extra_roots() {
+async fn skills_for_cwd_reuses_cached_entry_even_when_seeded_with_extra_roots() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");
     let extra_root = tempfile::tempdir().expect("tempdir");
@@ -110,11 +110,52 @@ async fn skills_for_cwd_reuses_cached_entry_even_when_entry_has_extra_roots() {
             .any(|skill| skill.scope == SkillScope::System)
     );
 
-    // The cwd-only API returns the current cached entry for this cwd, even when that entry
-    // was produced with extra roots.
+    // A cwd-based lookup with extra roots warms the config-aware cache entry for the same
+    // effective skill configuration, so the cwd API reads back the same result.
     let outcome_without_extra = skills_manager.skills_for_cwd(cwd.path(), false).await;
     assert_eq!(outcome_without_extra.skills, outcome_with_extra.skills);
     assert_eq!(outcome_without_extra.errors, outcome_with_extra.errors);
+}
+
+#[tokio::test]
+async fn skills_for_config_reads_cache_seeded_via_cwd_with_extra_roots() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let extra_root = tempfile::tempdir().expect("tempdir");
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        })
+        .build()
+        .await
+        .expect("defaults for test should always succeed");
+
+    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
+    let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager, true);
+    let _ = skills_manager.skills_for_config(&config);
+
+    write_user_skill(&extra_root, "x", "extra-skill", "from extra root");
+    let extra_root_path = extra_root.path().to_path_buf();
+    let outcome_with_extra = skills_manager
+        .skills_for_cwd_with_extra_user_roots(
+            cwd.path(),
+            true,
+            std::slice::from_ref(&extra_root_path),
+        )
+        .await;
+    assert!(
+        outcome_with_extra
+            .skills
+            .iter()
+            .any(|skill| skill.name == "extra-skill")
+    );
+
+    let outcome_for_config = skills_manager.skills_for_config(&config);
+    assert_eq!(outcome_for_config.skills, outcome_with_extra.skills);
+    assert_eq!(outcome_for_config.errors, outcome_with_extra.errors);
 }
 
 #[tokio::test]
@@ -357,7 +398,7 @@ enabled = false
 
 #[cfg_attr(windows, ignore)]
 #[tokio::test]
-async fn skills_for_config_ignores_cwd_cache_when_session_flags_reenable_skill() {
+async fn skills_for_config_ignores_parent_cached_entry_when_session_flags_reenable_skill() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");
     let skill_dir = codex_home.path().join("skills").join("demo");

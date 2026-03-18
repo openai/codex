@@ -15,6 +15,7 @@ use tracing::warn;
 use crate::config::Config;
 use crate::config::types::SkillsConfig;
 use crate::config_loader::CloudRequirementsLoader;
+use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
@@ -30,7 +31,6 @@ use crate::skills::system::uninstall_system_skills;
 pub struct SkillsManager {
     codex_home: PathBuf,
     plugins_manager: Arc<PluginsManager>,
-    cache_by_cwd: RwLock<HashMap<PathBuf, SkillLoadOutcome>>,
     cache_by_config: RwLock<HashMap<ConfigSkillsCacheKey, SkillLoadOutcome>>,
 }
 
@@ -43,7 +43,6 @@ impl SkillsManager {
         let manager = Self {
             codex_home,
             plugins_manager,
-            cache_by_cwd: RwLock::new(HashMap::new()),
             cache_by_config: RwLock::new(HashMap::new()),
         };
         if !bundled_skills_enabled {
@@ -65,18 +64,12 @@ impl SkillsManager {
     pub fn skills_for_config(&self, config: &Config) -> SkillLoadOutcome {
         let roots = self.skill_roots_for_config(config);
         let cache_key = config_skills_cache_key(&roots, &config.config_layer_stack);
-        if let Some(outcome) = self.cached_outcome_for_config(&cache_key) {
-            return outcome;
-        }
-
-        let outcome =
-            finalize_skill_outcome(load_skills_from_roots(roots), &config.config_layer_stack);
-        let mut cache = self
-            .cache_by_config
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cache.insert(cache_key, outcome.clone());
-        outcome
+        self.load_outcome_for_cache_key(
+            cache_key,
+            roots,
+            &config.config_layer_stack,
+            /*force_reload*/ false,
+        )
     }
 
     pub(crate) fn skill_roots_for_config(&self, config: &Config) -> Vec<SkillRoot> {
@@ -93,10 +86,6 @@ impl SkillsManager {
     }
 
     pub async fn skills_for_cwd(&self, cwd: &Path, force_reload: bool) -> SkillLoadOutcome {
-        if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(cwd) {
-            return outcome;
-        }
-
         self.skills_for_cwd_with_extra_user_roots(cwd, force_reload, &[])
             .await
     }
@@ -107,26 +96,89 @@ impl SkillsManager {
         force_reload: bool,
         extra_user_roots: &[PathBuf],
     ) -> SkillLoadOutcome {
-        if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(cwd) {
+        let normalized_extra_user_roots = normalize_extra_user_roots(extra_user_roots);
+        let resolved = match self.resolve_skill_context_for_cwd(cwd, force_reload).await {
+            Ok(resolved) => resolved,
+            Err(outcome) => return outcome,
+        };
+        let cache_key = config_skills_cache_key(&resolved.roots, &resolved.config_layer_stack);
+        let mut load_roots = resolved.roots.clone();
+        load_roots.extend(
+            normalized_extra_user_roots
+                .iter()
+                .cloned()
+                .map(|path| SkillRoot {
+                    path,
+                    scope: SkillScope::User,
+                }),
+        );
+        self.load_outcome_for_cache_key(
+            cache_key,
+            load_roots,
+            &resolved.config_layer_stack,
+            force_reload,
+        )
+    }
+
+    pub fn clear_cache(&self) {
+        let cleared_config = {
+            let mut cache = self
+                .cache_by_config
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let cleared = cache.len();
+            cache.clear();
+            cleared
+        };
+        let cleared = cleared_config;
+        info!("skills cache cleared ({cleared} entries)");
+    }
+
+    fn cached_outcome_for_config(
+        &self,
+        cache_key: &ConfigSkillsCacheKey,
+    ) -> Option<SkillLoadOutcome> {
+        match self.cache_by_config.read() {
+            Ok(cache) => cache.get(cache_key).cloned(),
+            Err(err) => err.into_inner().get(cache_key).cloned(),
+        }
+    }
+
+    fn load_outcome_for_cache_key(
+        &self,
+        cache_key: ConfigSkillsCacheKey,
+        roots: Vec<SkillRoot>,
+        config_layer_stack: &ConfigLayerStack,
+        force_reload: bool,
+    ) -> SkillLoadOutcome {
+        if !force_reload && let Some(outcome) = self.cached_outcome_for_config(&cache_key) {
             return outcome;
         }
-        let normalized_extra_user_roots = normalize_extra_user_roots(extra_user_roots);
 
-        let cwd_abs = match AbsolutePathBuf::try_from(cwd) {
-            Ok(cwd_abs) => cwd_abs,
-            Err(err) => {
-                return SkillLoadOutcome {
-                    errors: vec![crate::skills::model::SkillError {
-                        path: cwd.to_path_buf(),
-                        message: err.to_string(),
-                    }],
-                    ..Default::default()
-                };
-            }
-        };
+        let outcome = finalize_skill_outcome(load_skills_from_roots(roots), config_layer_stack);
+        let mut cache = self
+            .cache_by_config
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.insert(cache_key, outcome.clone());
+        outcome
+    }
+
+    async fn resolve_skill_context_for_cwd(
+        &self,
+        cwd: &Path,
+        force_reload: bool,
+    ) -> Result<ResolvedSkillContext, SkillLoadOutcome> {
+        let cwd_abs = AbsolutePathBuf::try_from(cwd).map_err(|err| SkillLoadOutcome {
+            errors: vec![crate::skills::model::SkillError {
+                path: cwd.to_path_buf(),
+                message: err.to_string(),
+            }],
+            ..Default::default()
+        })?;
 
         let cli_overrides: Vec<(String, TomlValue)> = Vec::new();
-        let config_layer_stack = match load_config_layers_state(
+        let config_layer_stack = load_config_layers_state(
             &self.codex_home,
             Some(cwd_abs),
             &cli_overrides,
@@ -134,18 +186,13 @@ impl SkillsManager {
             CloudRequirementsLoader::default(),
         )
         .await
-        {
-            Ok(config_layer_stack) => config_layer_stack,
-            Err(err) => {
-                return SkillLoadOutcome {
-                    errors: vec![crate::skills::model::SkillError {
-                        path: cwd.to_path_buf(),
-                        message: err.to_string(),
-                    }],
-                    ..Default::default()
-                };
-            }
-        };
+        .map_err(|err| SkillLoadOutcome {
+            errors: vec![crate::skills::model::SkillError {
+                path: cwd.to_path_buf(),
+                message: err.to_string(),
+            }],
+            ..Default::default()
+        })?;
 
         let loaded_plugins =
             self.plugins_manager
@@ -158,64 +205,17 @@ impl SkillsManager {
         if !bundled_skills_enabled_from_stack(&config_layer_stack) {
             roots.retain(|root| root.scope != SkillScope::System);
         }
-        roots.extend(
-            normalized_extra_user_roots
-                .iter()
-                .cloned()
-                .map(|path| SkillRoot {
-                    path,
-                    scope: SkillScope::User,
-                }),
-        );
-        let outcome = load_skills_from_roots(roots);
-        let outcome = finalize_skill_outcome(outcome, &config_layer_stack);
-        let mut cache = self
-            .cache_by_cwd
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cache.insert(cwd.to_path_buf(), outcome.clone());
-        outcome
-    }
 
-    pub fn clear_cache(&self) {
-        let cleared_cwd = {
-            let mut cache = self
-                .cache_by_cwd
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let cleared = cache.len();
-            cache.clear();
-            cleared
-        };
-        let cleared_config = {
-            let mut cache = self
-                .cache_by_config
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let cleared = cache.len();
-            cache.clear();
-            cleared
-        };
-        let cleared = cleared_cwd + cleared_config;
-        info!("skills cache cleared ({cleared} entries)");
+        Ok(ResolvedSkillContext {
+            roots,
+            config_layer_stack,
+        })
     }
+}
 
-    fn cached_outcome_for_cwd(&self, cwd: &Path) -> Option<SkillLoadOutcome> {
-        match self.cache_by_cwd.read() {
-            Ok(cache) => cache.get(cwd).cloned(),
-            Err(err) => err.into_inner().get(cwd).cloned(),
-        }
-    }
-
-    fn cached_outcome_for_config(
-        &self,
-        cache_key: &ConfigSkillsCacheKey,
-    ) -> Option<SkillLoadOutcome> {
-        match self.cache_by_config.read() {
-            Ok(cache) => cache.get(cache_key).cloned(),
-            Err(err) => err.into_inner().get(cache_key).cloned(),
-        }
-    }
+struct ResolvedSkillContext {
+    roots: Vec<SkillRoot>,
+    config_layer_stack: ConfigLayerStack,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

@@ -176,6 +176,7 @@ impl fmt::Display for SkillParseError {
 
 impl Error for SkillParseError {}
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SkillRoot {
     pub(crate) path: PathBuf,
     pub(crate) scope: SkillScope,

@@ -147,7 +147,7 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
-    // Seed the cwd cache first without extra roots.
+    // Seed the config-aware cache first without extra roots.
     let first_request_id = mcp
         .send_skills_list_request(SkillsListParams {
             cwds: vec![cwd.path().to_path_buf()],
