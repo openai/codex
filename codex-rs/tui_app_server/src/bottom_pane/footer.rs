@@ -199,7 +199,14 @@ pub(crate) fn footer_height(props: &FooterProps) -> u16 {
         | FooterMode::ShortcutOverlay
         | FooterMode::EscHint => false,
     };
-    footer_from_props_lines(props, None, false, show_shortcuts_hint, show_queue_hint).len() as u16
+    footer_from_props_lines(
+        props,
+        /*collaboration_mode_indicator*/ None,
+        /*show_cycle_hint*/ false,
+        show_shortcuts_hint,
+        show_queue_hint,
+    )
+    .len() as u16
 }
 
 /// Render a single precomputed footer line.

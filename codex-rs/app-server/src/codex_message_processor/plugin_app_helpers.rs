@@ -15,15 +15,16 @@ pub(super) async fn load_plugin_app_summaries(
         return Vec::new();
     }
 
-    let connectors = match connectors::list_all_connectors_with_options(config, false).await {
-        Ok(connectors) => connectors,
-        Err(err) => {
-            warn!("failed to load app metadata for plugin/read: {err:#}");
-            connectors::list_cached_all_connectors(config)
-                .await
-                .unwrap_or_default()
-        }
-    };
+    let connectors =
+        match connectors::list_all_connectors_with_options(config, /*force_refetch*/ false).await {
+            Ok(connectors) => connectors,
+            Err(err) => {
+                warn!("failed to load app metadata for plugin/read: {err:#}");
+                connectors::list_cached_all_connectors(config)
+                    .await
+                    .unwrap_or_default()
+            }
+        };
 
     connectors::connectors_for_plugin_apps(connectors, plugin_apps)
         .into_iter()

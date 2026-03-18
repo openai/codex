@@ -253,7 +253,7 @@ impl MessageProcessor {
             analytics_events_client,
         );
         let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
-        let fs_api = FsApi;
+        let fs_api = FsApi::default();
 
         Self {
             outgoing,
@@ -332,7 +332,7 @@ impl MessageProcessor {
                     request_id.clone(),
                     codex_request,
                     session,
-                    None,
+                    /*outbound_initialized*/ None,
                     request_context.clone(),
                 )
                 .await;
@@ -358,7 +358,8 @@ impl MessageProcessor {
         };
         let request_span =
             crate::app_server_tracing::typed_request_span(&request, connection_id, session);
-        let request_context = RequestContext::new(request_id.clone(), request_span, None);
+        let request_context =
+            RequestContext::new(request_id.clone(), request_span, /*parent_trace*/ None);
         tracing::trace!(
             ?connection_id,
             request_id = ?request_id.request_id,

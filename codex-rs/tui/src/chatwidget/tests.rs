@@ -7,12 +7,13 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 use crate::app_event::RealtimeAudioDeviceKind;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
+use crate::chatwidget::realtime::RealtimeConversationPhase;
 use crate::history_cell::UserHistoryCell;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
@@ -95,6 +96,9 @@ use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess;
+use codex_protocol::protocol::RealtimeConversationClosedEvent;
+use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
+use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SessionConfiguredEvent;
@@ -1953,6 +1957,21 @@ fn next_interrupt_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
             Ok(_) => continue,
             Err(TryRecvError::Empty) => panic!("expected interrupt op but queue was empty"),
             Err(TryRecvError::Disconnected) => panic!("expected interrupt op but channel closed"),
+        }
+    }
+}
+
+fn next_realtime_close_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::RealtimeConversationClose) => return,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => {
+                panic!("expected realtime close op but queue was empty")
+            }
+            Err(TryRecvError::Disconnected) => {
+                panic!("expected realtime close op but channel closed")
+            }
         }
     }
 }
@@ -4745,6 +4764,25 @@ async fn ctrl_c_shutdown_works_with_caps_lock() {
 }
 
 #[tokio::test]
+async fn ctrl_c_closes_realtime_conversation_before_interrupt_or_quit() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
+    chat.bottom_pane
+        .set_composer_text("recording meter".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    next_realtime_close_op(&mut op_rx);
+    assert_eq!(
+        chat.realtime_conversation.phase,
+        RealtimeConversationPhase::Stopping
+    );
+    assert_eq!(chat.bottom_pane.composer_text(), "recording meter");
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
 async fn ctrl_d_quits_without_prompt() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
@@ -4791,6 +4829,45 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
 
     let images = chat.bottom_pane.take_recent_submission_images();
     assert_eq!(vec![PathBuf::from("/tmp/preview.png")], images);
+}
+
+#[tokio::test]
+async fn realtime_error_closes_without_followup_closed_info() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
+
+    chat.on_realtime_conversation_realtime(RealtimeConversationRealtimeEvent {
+        payload: RealtimeEvent::Error("boom".to_string()),
+    });
+    next_realtime_close_op(&mut op_rx);
+
+    chat.on_realtime_conversation_closed(RealtimeConversationClosedEvent {
+        reason: Some("error".to_string()),
+    });
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>();
+    assert_snapshot!(rendered.join("\n\n"), @"■ Realtime voice error: boom");
+}
+
+#[cfg(not(target_os = "linux"))]
+#[tokio::test]
+async fn removing_active_realtime_placeholder_closes_realtime_conversation() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
+    let placeholder_id = chat.bottom_pane.insert_transcription_placeholder("⠤⠤⠤⠤");
+    chat.realtime_conversation.meter_placeholder_id = Some(placeholder_id.clone());
+
+    chat.remove_transcription_placeholder(&placeholder_id);
+
+    next_realtime_close_op(&mut op_rx);
+    assert_eq!(chat.realtime_conversation.meter_placeholder_id, None);
+    assert_eq!(
+        chat.realtime_conversation.phase,
+        RealtimeConversationPhase::Stopping
+    );
 }
 
 #[tokio::test]
@@ -6604,6 +6681,50 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     lines.join("\n")
 }
 
+fn selected_permissions_popup_line(popup: &str) -> &str {
+    popup
+        .lines()
+        .find(|line| {
+            line.contains('›')
+                && (line.contains("Default")
+                    || line.contains("Read Only")
+                    || line.contains("Guardian Approvals")
+                    || line.contains("Full Access"))
+        })
+        .unwrap_or_else(|| {
+            panic!("expected permissions popup to have a selected preset row: {popup}")
+        })
+}
+
+fn selected_permissions_popup_name(popup: &str) -> &'static str {
+    selected_permissions_popup_line(popup)
+        .trim_start()
+        .strip_prefix('›')
+        .map(str::trim_start)
+        .and_then(|line| line.split_once(". ").map(|(_, rest)| rest))
+        .and_then(|line| {
+            ["Read Only", "Default", "Guardian Approvals", "Full Access"]
+                .into_iter()
+                .find(|label| line.starts_with(label))
+        })
+        .unwrap_or_else(|| {
+            panic!("expected permissions popup row to start with a preset label: {popup}")
+        })
+}
+
+fn move_permissions_popup_selection_to(chat: &mut ChatWidget, label: &str, direction: KeyCode) {
+    for _ in 0..4 {
+        let popup = render_bottom_popup(chat, 120);
+        if selected_permissions_popup_name(&popup) == label {
+            return;
+        }
+        chat.handle_key_event(KeyEvent::from(direction));
+    }
+
+    let popup = render_bottom_popup(chat, 120);
+    panic!("expected permissions popup to select {label}: {popup}");
+}
+
 #[tokio::test]
 async fn apps_popup_stays_loading_until_final_snapshot_updates() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -7621,7 +7742,7 @@ async fn personality_selection_popup_snapshot() {
     assert_snapshot!("personality_selection_popup", popup);
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 #[tokio::test]
 async fn realtime_audio_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
@@ -7631,7 +7752,7 @@ async fn realtime_audio_selection_popup_snapshot() {
     assert_snapshot!("realtime_audio_selection_popup", popup);
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 #[tokio::test]
 async fn realtime_audio_selection_popup_narrow_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
@@ -7641,7 +7762,7 @@ async fn realtime_audio_selection_popup_narrow_snapshot() {
     assert_snapshot!("realtime_audio_selection_popup_narrow", popup);
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 #[tokio::test]
 async fn realtime_microphone_picker_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
@@ -7655,7 +7776,7 @@ async fn realtime_microphone_picker_popup_snapshot() {
     assert_snapshot!("realtime_microphone_picker_popup", popup);
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 #[tokio::test]
 async fn realtime_audio_picker_emits_persist_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
@@ -8333,7 +8454,25 @@ async fn permissions_selection_emits_history_cell_when_selection_changes() {
     chat.config.notices.hide_full_access_warning = Some(true);
 
     chat.open_permissions_popup();
+    let popup = render_bottom_popup(&chat, 120);
+    #[cfg(target_os = "windows")]
+    let expected_initial = "Read Only";
+    #[cfg(not(target_os = "windows"))]
+    let expected_initial = "Default";
+    assert!(
+        selected_permissions_popup_name(&popup) == expected_initial,
+        "expected permissions popup to open with {expected_initial} selected: {popup}"
+    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    let popup = render_bottom_popup(&chat, 120);
+    #[cfg(target_os = "windows")]
+    let expected_after_one_down = "Default";
+    #[cfg(not(target_os = "windows"))]
+    let expected_after_one_down = "Full Access";
+    assert!(
+        selected_permissions_popup_name(&popup) == expected_after_one_down,
+        "expected moving down to select {expected_after_one_down} before confirmation: {popup}"
+    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let cells = drain_insert_history(&mut rx);
@@ -8360,9 +8499,21 @@ async fn permissions_selection_history_snapshot_after_mode_switch() {
     chat.config.notices.hide_full_access_warning = Some(true);
 
     chat.open_permissions_popup();
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    let popup = render_bottom_popup(&chat, 120);
     #[cfg(target_os = "windows")]
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    let expected_initial = "Read Only";
+    #[cfg(not(target_os = "windows"))]
+    let expected_initial = "Default";
+    assert!(
+        selected_permissions_popup_name(&popup) == expected_initial,
+        "expected permissions popup to open with {expected_initial} selected: {popup}"
+    );
+    move_permissions_popup_selection_to(&mut chat, "Full Access", KeyCode::Down);
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        selected_permissions_popup_name(&popup) == "Full Access",
+        "expected navigation to land on Full Access before confirmation: {popup}"
+    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let cells = drain_insert_history(&mut rx);
@@ -8395,10 +8546,16 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
 
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, 120);
-    chat.handle_key_event(KeyEvent::from(KeyCode::Up));
-    if popup.contains("Guardian Approvals") {
-        chat.handle_key_event(KeyEvent::from(KeyCode::Up));
-    }
+    assert!(
+        selected_permissions_popup_name(&popup) == "Full Access",
+        "expected permissions popup to open with Full Access selected: {popup}"
+    );
+    move_permissions_popup_selection_to(&mut chat, "Default", KeyCode::Up);
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        selected_permissions_popup_name(&popup) == "Default",
+        "expected navigation to land on Default before confirmation: {popup}"
+    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let cells = drain_insert_history(&mut rx);
@@ -8437,6 +8594,11 @@ async fn permissions_selection_emits_history_cell_when_current_is_selected() {
         .expect("set sandbox policy");
 
     chat.open_permissions_popup();
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        selected_permissions_popup_name(&popup) == "Default",
+        "expected permissions popup to open with Default selected: {popup}"
+    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let cells = drain_insert_history(&mut rx);
@@ -8542,7 +8704,8 @@ async fn permissions_selection_marks_guardian_approvals_current_after_session_co
     let popup = render_bottom_popup(&chat, 120);
 
     assert!(
-        popup.contains("Guardian Approvals (current)"),
+        selected_permissions_popup_name(&popup) == "Guardian Approvals"
+            && selected_permissions_popup_line(&popup).contains("(current)"),
         "expected Guardian Approvals to be current after SessionConfigured sync: {popup}"
     );
 }
@@ -8597,7 +8760,8 @@ async fn permissions_selection_marks_guardian_approvals_current_with_custom_work
     let popup = render_bottom_popup(&chat, 120);
 
     assert!(
-        popup.contains("Guardian Approvals (current)"),
+        selected_permissions_popup_name(&popup) == "Guardian Approvals"
+            && selected_permissions_popup_line(&popup).contains("(current)"),
         "expected Guardian Approvals to be current even with custom workspace-write details: {popup}"
     );
 }
@@ -8622,9 +8786,22 @@ async fn permissions_selection_can_disable_guardian_approvals() {
         .sandbox_policy
         .set(SandboxPolicy::new_workspace_write_policy())
         .expect("set sandbox policy");
+    chat.set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
 
     chat.open_permissions_popup();
-    chat.handle_key_event(KeyEvent::from(KeyCode::Up));
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        selected_permissions_popup_name(&popup) == "Guardian Approvals"
+            && selected_permissions_popup_line(&popup).contains("(current)"),
+        "expected permissions popup to open with Guardian Approvals selected: {popup}"
+    );
+
+    move_permissions_popup_selection_to(&mut chat, "Default", KeyCode::Up);
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        selected_permissions_popup_name(&popup) == "Default",
+        "expected one Up from Guardian Approvals to select Default: {popup}"
+    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
@@ -8668,18 +8845,14 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup
-            .lines()
-            .any(|line| line.contains("(current)") && line.contains('›')),
+        selected_permissions_popup_line(&popup).contains("(current)"),
         "expected permissions popup to open with the current preset selected: {popup}"
     );
 
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    move_permissions_popup_selection_to(&mut chat, "Guardian Approvals", KeyCode::Down);
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup
-            .lines()
-            .any(|line| line.contains("Guardian Approvals") && line.contains('›')),
+        selected_permissions_popup_name(&popup) == "Guardian Approvals",
         "expected one Down from Default to select Guardian Approvals: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -8720,9 +8893,7 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
     chat.config.notices.hide_full_access_warning = None;
 
     chat.open_permissions_popup();
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-    #[cfg(target_os = "windows")]
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    move_permissions_popup_selection_to(&mut chat, "Full Access", KeyCode::Down);
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let mut open_confirmation_event = None;

@@ -485,6 +485,7 @@ function codeModeWorkerMain() {
       writable: false,
     });
 
+    parentPort.postMessage({ type: 'started' });
     try {
       await runModule(context, start, callTool, helpers);
       parentPort.postMessage({
@@ -662,6 +663,10 @@ function startSession(protocol, sessions, start) {
     content_items: [],
     default_yield_time_ms: normalizeYieldTime(start.default_yield_time_ms),
     id: start.cell_id,
+    initial_yield_time_ms:
+      start.yield_time_ms == null
+        ? normalizeYieldTime(start.default_yield_time_ms)
+        : normalizeYieldTime(start.yield_time_ms),
     initial_yield_timer: null,
     initial_yield_triggered: false,
     max_output_tokens_per_exec_call: maxOutputTokensPerExecCall,
@@ -674,11 +679,6 @@ function startSession(protocol, sessions, start) {
     }),
   };
   sessions.set(session.id, session);
-  const initialYieldTime =
-    start.yield_time_ms == null
-      ? session.default_yield_time_ms
-      : normalizeYieldTime(start.yield_time_ms);
-  scheduleInitialYield(protocol, session, initialYieldTime);
 
   session.worker.on('message', (message) => {
     void handleWorkerMessage(protocol, sessions, session, message).catch((error) => {
@@ -714,6 +714,11 @@ async function handleWorkerMessage(protocol, sessions, session, message) {
 
   if (message.type === 'content_item') {
     session.content_items.push(cloneJsonValue(message.item));
+    return;
+  }
+
+  if (message.type === 'started') {
+    scheduleInitialYield(protocol, session, session.initial_yield_time_ms);
     return;
   }
 

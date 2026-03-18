@@ -180,7 +180,7 @@ impl UnifiedExecProcessManager {
             context.session.as_ref(),
             context.turn.as_ref(),
             &context.call_id,
-            None,
+            /*turn_diff_tracker*/ None,
         );
         let emitter = ToolEmitter::unified_exec(
             &request.command,

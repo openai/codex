@@ -1,5 +1,5 @@
-use super::HandoffOutput;
 use super::RealtimeHandoffState;
+use super::RealtimeSessionKind;
 use super::realtime_text_from_handoff_request;
 use async_channel::bounded;
 use codex_protocol::protocol::RealtimeHandoffRequested;
@@ -57,7 +57,7 @@ fn ignores_empty_handoff_request_input_transcript() {
 #[tokio::test]
 async fn clears_active_handoff_explicitly() {
     let (tx, _rx) = bounded(1);
-    let state = RealtimeHandoffState::new(tx);
+    let state = RealtimeHandoffState::new(tx, RealtimeSessionKind::V1);
 
     *state.active_handoff.lock().await = Some("handoff_1".to_string());
     assert_eq!(
@@ -67,48 +67,4 @@ async fn clears_active_handoff_explicitly() {
 
     *state.active_handoff.lock().await = None;
     assert_eq!(state.active_handoff.lock().await.clone(), None);
-}
-
-#[tokio::test]
-async fn sends_multiple_handoff_outputs_until_cleared() {
-    let (tx, rx) = bounded(4);
-    let state = RealtimeHandoffState::new(tx);
-
-    state
-        .send_output("ignored".to_string())
-        .await
-        .expect("send");
-    assert!(rx.is_empty());
-
-    *state.active_handoff.lock().await = Some("handoff_1".to_string());
-    state.send_output("result".to_string()).await.expect("send");
-    state
-        .send_output("result 2".to_string())
-        .await
-        .expect("send");
-
-    let output_1 = rx.recv().await.expect("recv");
-    assert_eq!(
-        output_1,
-        HandoffOutput {
-            handoff_id: "handoff_1".to_string(),
-            output_text: "result".to_string(),
-        }
-    );
-
-    let output_2 = rx.recv().await.expect("recv");
-    assert_eq!(
-        output_2,
-        HandoffOutput {
-            handoff_id: "handoff_1".to_string(),
-            output_text: "result 2".to_string(),
-        }
-    );
-
-    *state.active_handoff.lock().await = None;
-    state
-        .send_output("ignored after clear".to_string())
-        .await
-        .expect("send");
-    assert!(rx.is_empty());
 }

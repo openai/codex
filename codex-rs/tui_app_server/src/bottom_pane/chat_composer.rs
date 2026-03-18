@@ -674,7 +674,12 @@ impl ChatComposer {
         };
         let [composer_rect, popup_rect] =
             Layout::vertical([Constraint::Min(3), popup_constraint]).areas(area);
-        let mut textarea_rect = composer_rect.inset(Insets::tlbr(1, LIVE_PREFIX_COLS, 1, 1));
+        let mut textarea_rect = composer_rect.inset(Insets::tlbr(
+            /*top*/ 1,
+            LIVE_PREFIX_COLS,
+            /*bottom*/ 1,
+            /*right*/ 1,
+        ));
         let remote_images_height = self
             .remote_images_lines(textarea_rect.width)
             .len()
@@ -1037,7 +1042,7 @@ impl ChatComposer {
         self.bind_mentions_from_snapshot(mention_bindings);
         self.relabel_attached_images_and_update_placeholders();
         self.selected_remote_image_index = None;
-        self.textarea.set_cursor(0);
+        self.textarea.set_cursor(/*pos*/ 0);
         self.sync_popups();
     }
 
@@ -2092,14 +2097,14 @@ impl ChatComposer {
     ///
     /// The returned string **does not** include the leading `@`.
     fn current_at_token(textarea: &TextArea) -> Option<String> {
-        Self::current_prefixed_token(textarea, '@', false)
+        Self::current_prefixed_token(textarea, '@', /*allow_empty*/ false)
     }
 
     fn current_mention_token(&self) -> Option<String> {
         if !self.mentions_enabled() {
             return None;
         }
-        Self::current_prefixed_token(&self.textarea, '$', true)
+        Self::current_prefixed_token(&self.textarea, '$', /*allow_empty*/ true)
     }
 
     /// Replace the active `@token` (the one under the cursor) with `path`.
@@ -2342,7 +2347,7 @@ impl ChatComposer {
                         )));
                     } else {
                         self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                            history_cell::new_info_event(message, None),
+                            history_cell::new_info_event(message, /*hint*/ None),
                         )));
                     }
                     self.set_text_content_with_mention_bindings(
@@ -2495,7 +2500,9 @@ impl ChatComposer {
             return (result, true);
         }
 
-        if let Some((text, text_elements)) = self.prepare_submission_text(true) {
+        if let Some((text, text_elements)) =
+            self.prepare_submission_text(/*record_history*/ true)
+        {
             if should_queue {
                 (
                     InputResult::Queued {
@@ -2802,7 +2809,7 @@ impl ChatComposer {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
                 ..
-            } => self.handle_submission(false),
+            } => self.handle_submission(/*should_queue*/ false),
             input => self.handle_input_basic(input),
         }
     }
@@ -4175,7 +4182,7 @@ impl Renderable for ChatComposer {
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.render_with_mask(area, buf, None);
+        self.render_with_mask(area, buf, /*mask_char*/ None);
     }
 }
 
@@ -4269,7 +4276,10 @@ impl ChatComposer {
                 let right_line = if status_line_active {
                     let full =
                         mode_indicator_line(self.collaboration_mode_indicator, show_cycle_hint);
-                    let compact = mode_indicator_line(self.collaboration_mode_indicator, false);
+                    let compact = mode_indicator_line(
+                        self.collaboration_mode_indicator,
+                        /*show_cycle_hint*/ false,
+                    );
                     let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);
                     if can_show_left_with_context(hint_rect, left_width, full_width) {
                         full

@@ -17,6 +17,7 @@ runs:
     - name: Cosign Linux artifacts
       shell: bash
       env:
+        ARTIFACTS_DIR: ${{ inputs.artifacts-dir }}
         COSIGN_EXPERIMENTAL: "1"
         COSIGN_YES: "true"
         COSIGN_OIDC_CLIENT_ID: "sigstore"
@@ -24,7 +25,7 @@ runs:
       run: |
         set -euo pipefail
 
-        dest="${{ inputs.artifacts-dir }}"
+        dest="$ARTIFACTS_DIR"
         if [[ ! -d "$dest" ]]; then
           echo "Destination $dest does not exist"
           exit 1

@@ -61,7 +61,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         Err(e) => {
             session.services.session_telemetry.counter(
                 metrics::MEMORY_PHASE_TWO_JOBS,
-                1,
+                /*inc*/ 1,
                 &[("status", e)],
             );
             return;
@@ -198,7 +198,7 @@ mod job {
             } => {
                 session_telemetry.counter(
                     metrics::MEMORY_PHASE_TWO_JOBS,
-                    1,
+                    /*inc*/ 1,
                     &[("status", "claimed")],
                 );
                 (ownership_token, input_watermark)
@@ -218,7 +218,7 @@ mod job {
     ) {
         session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_TWO_JOBS,
-            1,
+            /*inc*/ 1,
             &[("status", reason)],
         );
         if matches!(
@@ -250,7 +250,7 @@ mod job {
     ) {
         session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_TWO_JOBS,
-            1,
+            /*inc*/ 1,
             &[("status", reason)],
         );
         let _ = db
@@ -462,7 +462,7 @@ fn emit_metrics(session: &Arc<Session>, counters: Counters) {
 
     otel.counter(
         metrics::MEMORY_PHASE_TWO_JOBS,
-        1,
+        /*inc*/ 1,
         &[("status", "agent_spawned")],
     );
 }

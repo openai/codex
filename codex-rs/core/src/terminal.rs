@@ -108,7 +108,13 @@ impl TerminalInfo {
         version: Option<String>,
         multiplexer: Option<Multiplexer>,
     ) -> Self {
-        Self::new(name, Some(term_program), version, None, multiplexer)
+        Self::new(
+            name,
+            Some(term_program),
+            version,
+            /*term*/ None,
+            multiplexer,
+        )
     }
 
     /// Creates terminal metadata from a `TERM_PROGRAM` match plus a `TERM` value.
@@ -128,7 +134,13 @@ impl TerminalInfo {
         version: Option<String>,
         multiplexer: Option<Multiplexer>,
     ) -> Self {
-        Self::new(name, None, version, None, multiplexer)
+        Self::new(
+            name,
+            /*term_program*/ None,
+            version,
+            /*term*/ None,
+            multiplexer,
+        )
     }
 
     /// Creates terminal metadata from a `TERM` capability value.
@@ -138,12 +150,24 @@ impl TerminalInfo {
         } else {
             TerminalName::Unknown
         };
-        Self::new(name, None, None, Some(term), multiplexer)
+        Self::new(
+            name,
+            /*term_program*/ None,
+            /*version*/ None,
+            Some(term),
+            multiplexer,
+        )
     }
 
     /// Creates terminal metadata for unknown terminals.
     fn unknown(multiplexer: Option<Multiplexer>) -> Self {
-        Self::new(TerminalName::Unknown, None, None, None, multiplexer)
+        Self::new(
+            TerminalName::Unknown,
+            /*term_program*/ None,
+            /*version*/ None,
+            /*term*/ None,
+            multiplexer,
+        )
     }
 
     /// Formats the terminal info as a User-Agent token.
@@ -279,11 +303,15 @@ fn detect_terminal_info_from_env(env: &dyn Environment) -> TerminalInfo {
     }
 
     if env.has("ITERM_SESSION_ID") || env.has("ITERM_PROFILE") || env.has("ITERM_PROFILE_NAME") {
-        return TerminalInfo::from_name(TerminalName::Iterm2, None, multiplexer);
+        return TerminalInfo::from_name(TerminalName::Iterm2, /*version*/ None, multiplexer);
     }
 
     if env.has("TERM_SESSION_ID") {
-        return TerminalInfo::from_name(TerminalName::AppleTerminal, None, multiplexer);
+        return TerminalInfo::from_name(
+            TerminalName::AppleTerminal,
+            /*version*/ None,
+            multiplexer,
+        );
     }
 
     if env.has("KITTY_WINDOW_ID")
@@ -292,7 +320,7 @@ fn detect_terminal_info_from_env(env: &dyn Environment) -> TerminalInfo {
             .map(|term| term.contains("kitty"))
             .unwrap_or(false)
     {
-        return TerminalInfo::from_name(TerminalName::Kitty, None, multiplexer);
+        return TerminalInfo::from_name(TerminalName::Kitty, /*version*/ None, multiplexer);
     }
 
     if env.has("ALACRITTY_SOCKET")
@@ -301,7 +329,11 @@ fn detect_terminal_info_from_env(env: &dyn Environment) -> TerminalInfo {
             .map(|term| term == "alacritty")
             .unwrap_or(false)
     {
-        return TerminalInfo::from_name(TerminalName::Alacritty, None, multiplexer);
+        return TerminalInfo::from_name(
+            TerminalName::Alacritty,
+            /*version*/ None,
+            multiplexer,
+        );
     }
 
     if env.has("KONSOLE_VERSION") {
@@ -310,7 +342,11 @@ fn detect_terminal_info_from_env(env: &dyn Environment) -> TerminalInfo {
     }
 
     if env.has("GNOME_TERMINAL_SCREEN") {
-        return TerminalInfo::from_name(TerminalName::GnomeTerminal, None, multiplexer);
+        return TerminalInfo::from_name(
+            TerminalName::GnomeTerminal,
+            /*version*/ None,
+            multiplexer,
+        );
     }
 
     if env.has("VTE_VERSION") {
@@ -319,7 +355,11 @@ fn detect_terminal_info_from_env(env: &dyn Environment) -> TerminalInfo {
     }
 
     if env.has("WT_SESSION") {
-        return TerminalInfo::from_name(TerminalName::WindowsTerminal, None, multiplexer);
+        return TerminalInfo::from_name(
+            TerminalName::WindowsTerminal,
+            /*version*/ None,
+            multiplexer,
+        );
     }
 
     if let Some(term) = env.var_non_empty("TERM") {

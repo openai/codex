@@ -305,7 +305,7 @@ async fn code_mode_only_restricts_prompt_tools() -> Result<()> {
     let first_body = resp_mock.single_request().body_json();
     assert_eq!(
         tool_names(&first_body),
-        vec!["exec".to_string(), "exec_wait".to_string()]
+        vec!["exec".to_string(), "wait".to_string()]
     );
 
     Ok(())
@@ -539,7 +539,7 @@ Error:\ boom\n
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_can_yield_and_resume_with_exec_wait() -> Result<()> {
+async fn code_mode_can_yield_and_resume_with_wait() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -602,7 +602,7 @@ text("phase 3");
             ev_response_created("resp-3"),
             responses::ev_function_call(
                 "call-2",
-                "exec_wait",
+                "wait",
                 &serde_json::to_string(&serde_json::json!({
                     "cell_id": cell_id.clone(),
                     "yield_time_ms": 1_000,
@@ -646,7 +646,7 @@ text("phase 3");
             ev_response_created("resp-5"),
             responses::ev_function_call(
                 "call-3",
-                "exec_wait",
+                "wait",
                 &serde_json::to_string(&serde_json::json!({
                     "cell_id": cell_id.clone(),
                     "yield_time_ms": 1_000,
@@ -742,7 +742,7 @@ while (true) {}
             ev_response_created("resp-3"),
             responses::ev_function_call(
                 "call-2",
-                "exec_wait",
+                "wait",
                 &serde_json::to_string(&serde_json::json!({
                     "cell_id": cell_id.clone(),
                     "terminate": true,
@@ -869,7 +869,7 @@ text("session b done");
             ev_response_created("resp-5"),
             responses::ev_function_call(
                 "call-3",
-                "exec_wait",
+                "wait",
                 &serde_json::to_string(&serde_json::json!({
                     "cell_id": session_a_id.clone(),
                     "yield_time_ms": 1_000,
@@ -909,7 +909,7 @@ text("session b done");
             ev_response_created("resp-7"),
             responses::ev_function_call(
                 "call-4",
-                "exec_wait",
+                "wait",
                 &serde_json::to_string(&serde_json::json!({
                     "cell_id": session_b_id.clone(),
                     "yield_time_ms": 1_000,
@@ -947,7 +947,7 @@ text("session b done");
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_wait_can_terminate_and_continue() -> Result<()> {
+async fn code_mode_wait_can_terminate_and_continue() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -999,7 +999,7 @@ text("phase 2");
             ev_response_created("resp-3"),
             responses::ev_function_call(
                 "call-2",
-                "exec_wait",
+                "wait",
                 &serde_json::to_string(&serde_json::json!({
                     "cell_id": cell_id.clone(),
                     "terminate": true,
@@ -1073,7 +1073,7 @@ text("after terminate");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_wait_returns_error_for_unknown_session() -> Result<()> {
+async fn code_mode_wait_returns_error_for_unknown_session() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1088,7 +1088,7 @@ async fn code_mode_exec_wait_returns_error_for_unknown_session() -> Result<()> {
             ev_response_created("resp-1"),
             responses::ev_function_call(
                 "call-1",
-                "exec_wait",
+                "wait",
                 &serde_json::to_string(&serde_json::json!({
                     "cell_id": "999999",
                     "yield_time_ms": 1_000,
@@ -1134,7 +1134,7 @@ async fn code_mode_exec_wait_returns_error_for_unknown_session() -> Result<()> {
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_wait_terminate_returns_completed_session_if_it_finished_after_yield_control()
+async fn code_mode_wait_terminate_returns_completed_session_if_it_finished_after_yield_control()
 -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1229,7 +1229,7 @@ text("session b done");
             ev_response_created("resp-5"),
             responses::ev_function_call(
                 "call-3",
-                "exec_wait",
+                "wait",
                 &serde_json::to_string(&serde_json::json!({
                     "cell_id": session_b_id.clone(),
                     "yield_time_ms": 1_000,
@@ -1279,7 +1279,7 @@ text("session b done");
             ev_response_created("resp-7"),
             responses::ev_function_call(
                 "call-4",
-                "exec_wait",
+                "wait",
                 &serde_json::to_string(&serde_json::json!({
                     "cell_id": session_a_id.clone(),
                     "terminate": true,
@@ -1330,7 +1330,7 @@ text("session b done");
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_background_keeps_running_on_later_turn_without_exec_wait() -> Result<()> {
+async fn code_mode_background_keeps_running_on_later_turn_without_wait() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1423,7 +1423,7 @@ text("after yield");
 
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_wait_uses_its_own_max_tokens_budget() -> Result<()> {
+async fn code_mode_wait_uses_its_own_max_tokens_budget() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -1476,7 +1476,7 @@ text("token one token two token three token four token five token six token seve
             ev_response_created("resp-3"),
             responses::ev_function_call(
                 "call-2",
-                "exec_wait",
+                "wait",
                 &serde_json::to_string(&serde_json::json!({
                     "cell_id": cell_id.clone(),
                     "yield_time_ms": 1_000,

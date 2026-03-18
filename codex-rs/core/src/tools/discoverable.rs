@@ -3,6 +3,8 @@ use codex_app_server_protocol::AppInfo;
 use serde::Deserialize;
 use serde::Serialize;
 
+const TUI_APP_SERVER_CLIENT_NAME: &str = "codex-tui";
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum DiscoverableToolType {
@@ -69,6 +71,13 @@ impl DiscoverableTool {
             Self::Plugin(plugin) => plugin.description.as_deref(),
         }
     }
+
+    pub(crate) fn install_url(&self) -> Option<&str> {
+        match self {
+            Self::Connector(connector) => connector.install_url.as_deref(),
+            Self::Plugin(_) => None,
+        }
+    }
 }
 
 impl From<AppInfo> for DiscoverableTool {
@@ -81,6 +90,20 @@ impl From<DiscoverablePluginInfo> for DiscoverableTool {
     fn from(value: DiscoverablePluginInfo) -> Self {
         Self::Plugin(Box::new(value))
     }
+}
+
+pub(crate) fn filter_tool_suggest_discoverable_tools_for_client(
+    discoverable_tools: Vec<DiscoverableTool>,
+    app_server_client_name: Option<&str>,
+) -> Vec<DiscoverableTool> {
+    if app_server_client_name != Some(TUI_APP_SERVER_CLIENT_NAME) {
+        return discoverable_tools;
+    }
+
+    discoverable_tools
+        .into_iter()
+        .filter(|tool| !matches!(tool, DiscoverableTool::Plugin(_)))
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

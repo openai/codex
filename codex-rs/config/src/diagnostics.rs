@@ -142,7 +142,10 @@ pub async fn first_layer_config_error<T: DeserializeOwned>(
     // per-file error to point users at a specific file and range rather than an
     // opaque merged-layer failure.
     first_layer_config_error_for_entries::<T, _>(
-        layers.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false),
+        layers.get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ false,
+        ),
         config_toml_file,
     )
     .await

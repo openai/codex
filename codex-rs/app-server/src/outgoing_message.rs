@@ -234,7 +234,10 @@ impl OutgoingMessageSender {
         &self,
         request: ServerRequestPayload,
     ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
-        self.send_request_to_connections(None, request, None).await
+        self.send_request_to_connections(
+            /*connection_ids*/ None, request, /*thread_id*/ None,
+        )
+        .await
     }
 
     fn next_request_id(&self) -> RequestId {

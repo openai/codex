@@ -194,7 +194,11 @@ impl CodexAuth {
         codex_home: &Path,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
     ) -> std::io::Result<Option<Self>> {
-        load_auth(codex_home, false, auth_credentials_store_mode)
+        load_auth(
+            codex_home,
+            /*enable_codex_api_key_env*/ false,
+            auth_credentials_store_mode,
+        )
     }
 
     pub fn auth_mode(&self) -> AuthMode {
@@ -457,7 +461,7 @@ pub fn load_auth_dot_json(
 pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
     let Some(auth) = load_auth(
         &config.codex_home,
-        true,
+        /*enable_codex_api_key_env*/ true,
         config.cli_auth_credentials_store_mode,
     )?
     else {
@@ -1244,6 +1248,10 @@ impl AuthManager {
         self.auth_cached()
             .as_ref()
             .is_some_and(CodexAuth::is_external_chatgpt_tokens)
+    }
+
+    pub fn codex_api_key_env_enabled(&self) -> bool {
+        self.enable_codex_api_key_env
     }
 
     /// Convenience constructor returning an `Arc` wrapper.

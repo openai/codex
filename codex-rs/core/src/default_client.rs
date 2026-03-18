@@ -97,7 +97,7 @@ pub fn originator() -> Originator {
     }
 
     if std::env::var(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR).is_ok() {
-        let originator = get_originator_value(None);
+        let originator = get_originator_value(/*provided*/ None);
         if let Ok(mut guard) = ORIGINATOR.write() {
             match guard.as_ref() {
                 Some(originator) => return originator.clone(),
@@ -107,7 +107,7 @@ pub fn originator() -> Originator {
         return originator;
     }
 
-    get_originator_value(None)
+    get_originator_value(/*provided*/ None)
 }
 
 pub fn is_first_party_originator(originator_value: &str) -> bool {

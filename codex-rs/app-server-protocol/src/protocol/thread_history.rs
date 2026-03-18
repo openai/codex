@@ -201,7 +201,7 @@ impl ThreadHistoryBuilder {
         let mut turn = self
             .current_turn
             .take()
-            .unwrap_or_else(|| self.new_turn(None));
+            .unwrap_or_else(|| self.new_turn(/*id*/ None));
         let id = self.next_item_id();
         let content = self.build_user_inputs(payload);
         turn.items.push(ThreadItem::UserMessage { id, content });
@@ -937,7 +937,7 @@ impl ThreadHistoryBuilder {
 
     fn ensure_turn(&mut self) -> &mut PendingTurn {
         if self.current_turn.is_none() {
-            let turn = self.new_turn(None);
+            let turn = self.new_turn(/*id*/ None);
             return self.current_turn.insert(turn);
         }
 

@@ -12,8 +12,9 @@ python -m pip install -e .
 ```
 
 Published SDK builds pin an exact `codex-cli-bin` runtime dependency. For local
-repo development, pass `AppServerConfig(codex_bin=...)` to point at a local
-build explicitly.
+repo development, either pass `AppServerConfig(codex_bin=...)` to point at a
+local build explicitly, or use the repo examples/notebook bootstrap which
+installs the pinned runtime package automatically.
 
 ## Quickstart
 
@@ -22,8 +23,9 @@ from codex_app_server import Codex, TextInput
 
 with Codex() as codex:
     thread = codex.thread_start(model="gpt-5")
-    result = thread.turn(TextInput("Say hello in one sentence.")).run()
-    print(result.text)
+    completed_turn = thread.turn(TextInput("Say hello in one sentence.")).run()
+    print(completed_turn.status)
+    print(completed_turn.id)
 ```
 
 ## Docs map
@@ -54,7 +56,8 @@ wheel.
 
 For local repo development, the checked-in `sdk/python-runtime` package is only
 a template for staged release artifacts. Editable installs should use an
-explicit `codex_bin` override instead.
+explicit `codex_bin` override for manual SDK usage; the repo examples and
+notebook bootstrap the pinned runtime package automatically.
 
 ## Maintainer workflow
 

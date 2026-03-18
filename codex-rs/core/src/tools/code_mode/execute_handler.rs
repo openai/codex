@@ -86,7 +86,10 @@ impl CodeModeExecuteHandler {
                 Ok(message) => message,
                 Err(error) => return Err(FunctionCallError::RespondToModel(error)),
             };
-            handle_node_message(&exec, cell_id, message, None, started_at).await
+            handle_node_message(
+                &exec, cell_id, message, /*poll_max_output_tokens*/ None, started_at,
+            )
+            .await
         };
         match result {
             Ok(CodeModeSessionProgress::Finished(output))

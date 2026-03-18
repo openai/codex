@@ -793,7 +793,7 @@ def _render_thread_block(
         "        input: Input,",
         "        *,",
         *_kw_signature_lines(turn_fields),
-        "    ) -> Turn:",
+        "    ) -> TurnHandle:",
         "        wire_input = _to_wire_input(input)",
         "        params = TurnStartParams(",
         "            thread_id=self.id,",
@@ -801,7 +801,7 @@ def _render_thread_block(
         *_model_arg_lines(turn_fields),
         "        )",
         "        turn = self._client.turn_start(self.id, wire_input, params=params)",
-        "        return Turn(self._client, self.id, turn.turn.id)",
+        "        return TurnHandle(self._client, self.id, turn.turn.id)",
     ]
     return "\n".join(lines)
 
@@ -815,7 +815,7 @@ def _render_async_thread_block(
         "        input: Input,",
         "        *,",
         *_kw_signature_lines(turn_fields),
-        "    ) -> AsyncTurn:",
+        "    ) -> AsyncTurnHandle:",
         "        await self._codex._ensure_initialized()",
         "        wire_input = _to_wire_input(input)",
         "        params = TurnStartParams(",
@@ -828,14 +828,14 @@ def _render_async_thread_block(
         "            wire_input,",
         "            params=params,",
         "        )",
-        "        return AsyncTurn(self._codex, self.id, turn.turn.id)",
+        "        return AsyncTurnHandle(self._codex, self.id, turn.turn.id)",
     ]
     return "\n".join(lines)
 
 
 def generate_public_api_flat_methods() -> None:
     src_dir = sdk_root() / "src"
-    public_api_path = src_dir / "codex_app_server" / "public_api.py"
+    public_api_path = src_dir / "codex_app_server" / "api.py"
     if not public_api_path.exists():
         # PR2 can run codegen before the ergonomic public API layer is added.
         return

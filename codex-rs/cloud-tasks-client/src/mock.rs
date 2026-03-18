@@ -70,7 +70,10 @@ impl CloudBackend for MockClient {
     }
 
     async fn get_task_summary(&self, id: TaskId) -> Result<TaskSummary> {
-        let tasks = self.list_tasks(None, None, None).await?.tasks;
+        let tasks = self
+            .list_tasks(/*env*/ None, /*limit*/ None, /*cursor*/ None)
+            .await?
+            .tasks;
         tasks
             .into_iter()
             .find(|t| t.id == id)

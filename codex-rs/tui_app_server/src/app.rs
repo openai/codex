@@ -44,7 +44,13 @@ use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
+use codex_app_server_client::AppServerRequestHandle;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::ListMcpServerStatusParams;
+use codex_app_server_protocol::ListMcpServerStatusResponse;
+use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::RequestId;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -74,6 +80,8 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FinalOutput;
 use codex_protocol::protocol::ListSkillsResponseEvent;
+#[cfg(test)]
+use codex_protocol::protocol::McpAuthStatus;
 #[cfg(test)]
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
@@ -111,6 +119,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
+use uuid::Uuid;
 mod agent_navigation;
 mod app_server_adapter;
 mod app_server_requests;
@@ -118,6 +127,7 @@ mod pending_interactive_replay;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
+use self::app_server_adapter::thread_snapshot_events;
 use self::app_server_requests::PendingAppServerRequests;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 
@@ -236,10 +246,10 @@ fn emit_skill_load_warnings(app_event_tx: &AppEventSender, errors: &[SkillErrorI
 fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) {
     let mut disabled_folders = Vec::new();
 
-    for layer in config
-        .config_layer_stack
-        .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
-    {
+    for layer in config.config_layer_stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ true,
+    ) {
         let ConfigLayerSource::Project { dot_codex_folder } = &layer.name else {
             continue;
         };
@@ -270,6 +280,16 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
         message.push_str(&format!("    {display_index}. {folder}\n"));
         message.push_str(&format!("       {reason}\n"));
     }
+
+    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+        history_cell::new_warning_event(message),
+    )));
+}
+
+fn emit_missing_system_bwrap_warning(app_event_tx: &AppEventSender) {
+    let Some(message) = codex_core::config::missing_system_bwrap_warning() else {
+        return;
+    };
 
     app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
         history_cell::new_warning_event(message),
@@ -1117,17 +1137,17 @@ impl App {
             // this runtime patch, the config edit would only affect future
             // sessions or turns recreated from disk.
             let op = AppCommand::override_turn_context(
-                None,
+                /*cwd*/ None,
                 approval_policy_override,
                 approvals_reviewer_override,
                 sandbox_policy_override,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
+                /*windows_sandbox_level*/ None,
+                /*model*/ None,
+                /*effort*/ None,
+                /*summary*/ None,
+                /*service_tier*/ None,
+                /*collaboration_mode*/ None,
+                /*personality*/ None,
             );
             let replay_state_op =
                 ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
@@ -1163,8 +1183,10 @@ impl App {
         }
 
         if let Some(label) = permissions_history_label {
-            self.chat_widget
-                .add_info_message(format!("Permissions updated to {label}"), None);
+            self.chat_widget.add_info_message(
+                format!("Permissions updated to {label}"),
+                /*hint*/ None,
+            );
         }
     }
 
@@ -1176,7 +1198,7 @@ impl App {
         }
 
         self.chat_widget
-            .add_info_message(format!("Opened {url} in your browser."), None);
+            .add_info_message(format!("Opened {url} in your browser."), /*hint*/ None);
     }
 
     fn clear_ui_header_lines_with_version(
@@ -1292,7 +1314,7 @@ impl App {
         if self.active_thread_id.is_some() {
             return;
         }
-        self.set_thread_active(thread_id, true).await;
+        self.set_thread_active(thread_id, /*active*/ true).await;
         let receiver = if let Some(channel) = self.thread_event_channels.get_mut(&thread_id) {
             channel.receiver.take()
         } else {
@@ -1333,7 +1355,7 @@ impl App {
 
     async fn clear_active_thread(&mut self) {
         if let Some(active_id) = self.active_thread_id.take() {
-            self.set_thread_active(active_id, false).await;
+            self.set_thread_active(active_id, /*active*/ false).await;
         }
         self.active_thread_rx = None;
         self.refresh_pending_thread_approvals().await;
@@ -1531,6 +1553,72 @@ impl App {
 
         self.submit_op_to_thread(thread_id, op).await;
         Ok(())
+    }
+
+    /// Spawn a background task that fetches the full MCP server inventory from the
+    /// app-server via paginated RPCs, then delivers the result back through
+    /// `AppEvent::McpInventoryLoaded`.
+    ///
+    /// The spawned task is fire-and-forget: no `JoinHandle` is stored, so a stale
+    /// result may arrive after the user has moved on. We currently accept that
+    /// tradeoff because the effect is limited to stale inventory output in history,
+    /// while request-token invalidation would add cross-cutting async state for a
+    /// low-severity path.
+    fn fetch_mcp_inventory(&mut self, app_server: &AppServerSession) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = fetch_all_mcp_server_statuses(request_handle)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::McpInventoryLoaded { result });
+        });
+    }
+
+    /// Process the completed MCP inventory fetch: clear the loading spinner, then
+    /// render either the full tool/resource listing or an error into chat history.
+    ///
+    /// When both the local config and the app-server report zero servers, a special
+    /// "empty" cell is shown instead of the full table.
+    fn handle_mcp_inventory_result(&mut self, result: Result<Vec<McpServerStatus>, String>) {
+        let config = self.chat_widget.config_ref().clone();
+        self.chat_widget.clear_mcp_inventory_loading();
+        self.clear_committed_mcp_inventory_loading();
+
+        let statuses = match result {
+            Ok(statuses) => statuses,
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to load MCP inventory: {err}"));
+                return;
+            }
+        };
+
+        if config.mcp_servers.get().is_empty() && statuses.is_empty() {
+            self.chat_widget
+                .add_to_history(history_cell::empty_mcp_output());
+            return;
+        }
+
+        self.chat_widget
+            .add_to_history(history_cell::new_mcp_tools_output_from_statuses(
+                &config, &statuses,
+            ));
+    }
+
+    fn clear_committed_mcp_inventory_loading(&mut self) {
+        let Some(index) = self
+            .transcript_cells
+            .iter()
+            .rposition(|cell| cell.as_any().is::<history_cell::McpInventoryLoadingCell>())
+        else {
+            return;
+        };
+
+        self.transcript_cells.remove(index);
+        if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
+            overlay.replace_cells(self.transcript_cells.clone());
+        }
     }
 
     async fn try_submit_active_thread_op_via_app_server(
@@ -1860,7 +1948,10 @@ impl App {
             let thread_id = session.session_id;
             self.primary_thread_id = Some(thread_id);
             self.primary_session_configured = Some(session.clone());
-            self.upsert_agent_picker_thread(thread_id, None, None, false);
+            self.upsert_agent_picker_thread(
+                thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
+                /*is_closed*/ false,
+            );
             self.ensure_thread_channel(thread_id);
             self.activate_thread_channel(thread_id).await;
             self.enqueue_thread_event(thread_id, event).await?;
@@ -1886,7 +1977,10 @@ impl App {
         for thread_id in thread_ids {
             if self.thread_event_listener_tasks.contains_key(&thread_id) {
                 if self.agent_navigation.get(&thread_id).is_none() {
-                    self.upsert_agent_picker_thread(thread_id, None, None, false);
+                    self.upsert_agent_picker_thread(
+                        thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
+                        /*is_closed*/ false,
+                    );
                 }
             } else {
                 self.mark_agent_picker_thread_closed(thread_id);
@@ -1903,7 +1997,7 @@ impl App {
 
         if self.agent_navigation.is_empty() {
             self.chat_widget
-                .add_info_message("No agents available yet.".to_string(), None);
+                .add_info_message("No agents available yet.".to_string(), /*hint*/ None);
             return;
         }
 
@@ -2014,7 +2108,7 @@ impl App {
         if is_replay_only {
             self.chat_widget.add_info_message(
                 format!("Agent thread {thread_id} is closed. Replaying saved transcript."),
-                None,
+                /*hint*/ None,
             );
         }
         self.drain_active_thread_events(tui).await?;
@@ -2042,6 +2136,7 @@ impl App {
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
+        self.primary_session_configured = None;
         self.pending_primary_events.clear();
         self.pending_app_server_requests.clear();
         self.chat_widget.set_pending_thread_approvals(Vec::new());
@@ -2109,11 +2204,66 @@ impl App {
         let init = self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
         self.chat_widget = ChatWidget::new_with_app_event(init);
         self.reset_thread_event_state();
-        self.enqueue_primary_event(Event {
+        self.restore_started_app_server_thread(started).await
+    }
+
+    /// Hydrate thread state from an `AppServerStartedThread` returned by the
+    /// app-server start/resume/fork handshake.
+    ///
+    /// This is the single path that every session-start variant funnels
+    /// through. It performs four things in order:
+    ///
+    /// 1. Converts the `Thread` snapshot into protocol-level `Event`s.
+    /// 2. Builds a **lossless** replay snapshot from a temporary store so that
+    ///    the initial render sees all history even when the thread has more
+    ///    turns than the bounded channel capacity.
+    /// 3. Pushes the same events into the real channel store for backtrack and
+    ///    navigation.
+    /// 4. Activates the thread channel and replays the snapshot into the chat
+    ///    widget.
+    async fn restore_started_app_server_thread(
+        &mut self,
+        started: AppServerStartedThread,
+    ) -> Result<()> {
+        let session_configured = started.session_configured;
+        let thread_id = session_configured.session_id;
+        let session_event = Event {
             id: String::new(),
-            msg: EventMsg::SessionConfigured(started.session_configured),
-        })
-        .await
+            msg: EventMsg::SessionConfigured(session_configured.clone()),
+        };
+        let history_events =
+            thread_snapshot_events(&started.thread, started.show_raw_agent_reasoning);
+        let replay_snapshot = {
+            let mut replay_store = ThreadEventStore::new(history_events.len().saturating_add(1));
+            replay_store.push_event(session_event.clone());
+            for event in &history_events {
+                replay_store.push_event(event.clone());
+            }
+            replay_store.snapshot()
+        };
+
+        self.primary_thread_id = Some(thread_id);
+        self.primary_session_configured = Some(session_configured);
+        self.upsert_agent_picker_thread(
+            thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
+            /*is_closed*/ false,
+        );
+
+        let store = {
+            let channel = self.ensure_thread_channel(thread_id);
+            Arc::clone(&channel.store)
+        };
+        {
+            let mut store = store.lock().await;
+            store.push_event(session_event);
+            for event in history_events {
+                store.push_event(event);
+            }
+        }
+
+        self.activate_thread_channel(thread_id).await;
+        self.replay_thread_snapshot(replay_snapshot, /*resume_restored_queue*/ false);
+        Ok(())
     }
 
     fn fresh_session_config(&self) -> Config {
@@ -2179,16 +2329,23 @@ impl App {
         snapshot: ThreadEventSnapshot,
         resume_restored_queue: bool,
     ) {
+        self.chat_widget
+            .set_initial_user_message_submit_suppressed(/*suppressed*/ true);
         if let Some(event) = snapshot.session_configured {
             self.handle_codex_event_replay(event);
         }
-        self.chat_widget.set_queue_autosend_suppressed(true);
+        self.chat_widget
+            .set_queue_autosend_suppressed(/*suppressed*/ true);
         self.chat_widget
             .restore_thread_input_state(snapshot.input_state);
         for event in snapshot.events {
             self.handle_codex_event_replay(event);
         }
-        self.chat_widget.set_queue_autosend_suppressed(false);
+        self.chat_widget
+            .set_queue_autosend_suppressed(/*suppressed*/ false);
+        self.chat_widget
+            .set_initial_user_message_submit_suppressed(/*suppressed*/ false);
+        self.chat_widget.submit_initial_user_message_if_pending();
         if resume_restored_queue {
             self.chat_widget.maybe_send_next_queued_input();
         }
@@ -2236,6 +2393,7 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_project_config_warnings(&app_event_tx, &config);
+        emit_missing_system_bwrap_warning(&app_event_tx);
         tui.set_notification_method(config.tui_notification_method);
 
         let harness_overrides =
@@ -2282,7 +2440,7 @@ impl App {
             ThreadId::new(),
             model.as_str(),
             model.as_str(),
-            None,
+            /*account_id*/ None,
             bootstrap.account_email.clone(),
             auth_mode,
             codex_core::default_client::originator().value,
@@ -2295,7 +2453,7 @@ impl App {
             .as_ref()
             .is_some_and(|cmd| !cmd.is_empty())
         {
-            session_telemetry.counter("codex.status_line", 1, &[]);
+            session_telemetry.counter("codex.status_line", /*inc*/ 1, &[]);
         }
 
         let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
@@ -2303,7 +2461,7 @@ impl App {
         let enhanced_keys_supported = tui.enhanced_keys_supported();
         let wait_for_initial_session_configured =
             Self::should_wait_for_initial_session(&session_selection);
-        let (mut chat_widget, initial_session_configured) = match session_selection {
+        let (mut chat_widget, initial_started_thread) = match session_selection {
             SessionSelection::StartFresh | SessionSelection::Exit => {
                 let started = app_server.start_thread(&config).await?;
                 let startup_tooltip_override =
@@ -2332,10 +2490,7 @@ impl App {
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                (
-                    ChatWidget::new_with_app_event(init),
-                    Some(started.session_configured),
-                )
+                (ChatWidget::new_with_app_event(init), started)
             }
             SessionSelection::Resume(target_session) => {
                 let resumed = app_server
@@ -2368,13 +2523,14 @@ impl App {
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                (
-                    ChatWidget::new_with_app_event(init),
-                    Some(resumed.session_configured),
-                )
+                (ChatWidget::new_with_app_event(init), resumed)
             }
             SessionSelection::Fork(target_session) => {
-                session_telemetry.counter("codex.thread.fork", 1, &[("source", "cli_subcommand")]);
+                session_telemetry.counter(
+                    "codex.thread.fork",
+                    /*inc*/ 1,
+                    &[("source", "cli_subcommand")],
+                );
                 let forked = app_server
                     .fork_thread(config.clone(), target_session.thread_id)
                     .await
@@ -2405,10 +2561,7 @@ impl App {
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     session_telemetry: session_telemetry.clone(),
                 };
-                (
-                    ChatWidget::new_with_app_event(init),
-                    Some(forked.session_configured),
-                )
+                (ChatWidget::new_with_app_event(init), forked)
             }
         };
 
@@ -2460,13 +2613,8 @@ impl App {
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
         };
-        if let Some(session_configured) = initial_session_configured {
-            app.enqueue_primary_event(Event {
-                id: String::new(),
-                msg: EventMsg::SessionConfigured(session_configured),
-            })
+        app.restore_started_app_server_thread(initial_started_thread)
             .await?;
-        }
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -2680,7 +2828,7 @@ impl App {
                     .await;
             }
             AppEvent::ClearUi => {
-                self.clear_terminal_ui(tui, false)?;
+                self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
                 self.reset_app_ui_state_after_clear();
 
                 self.start_fresh_session_with_summary_hint(tui, app_server)
@@ -2707,7 +2855,7 @@ impl App {
                 match crate::resume_picker::run_resume_picker_with_app_server(
                     tui,
                     &self.config,
-                    false,
+                    /*show_all*/ false,
                     picker_app_server,
                 )
                 .await?
@@ -2724,7 +2872,7 @@ impl App {
                                 target_session.thread_id,
                                 target_session.path.as_deref(),
                                 CwdPromptAction::Resume,
-                                true,
+                                /*allow_prompt*/ true,
                             )
                             .await?
                             {
@@ -2806,7 +2954,7 @@ impl App {
             AppEvent::ForkCurrentSession => {
                 self.session_telemetry.counter(
                     "codex.thread.fork",
-                    1,
+                    /*inc*/ 1,
                     &[("source", "slash_command")],
                 );
                 let summary = session_summary(
@@ -2985,6 +3133,12 @@ impl App {
             AppEvent::RefreshConnectors { force_refetch } => {
                 self.chat_widget.refresh_connectors(force_refetch);
             }
+            AppEvent::FetchMcpInventory => {
+                self.fetch_mcp_inventory(app_server);
+            }
+            AppEvent::McpInventoryLoaded { result } => {
+                self.handle_mcp_inventory_result(result);
+            }
             AppEvent::StartFileSearch(query) => {
                 self.file_search.on_user_query(query);
             }
@@ -3065,7 +3219,7 @@ impl App {
             AppEvent::OpenWindowsSandboxFallbackPrompt { preset } => {
                 self.session_telemetry.counter(
                     "codex.windows_sandbox.fallback_prompt_shown",
-                    1,
+                    /*inc*/ 1,
                     &[],
                 );
                 self.chat_widget.clear_windows_sandbox_setup_status();
@@ -3259,7 +3413,7 @@ impl App {
                     self.chat_widget
                         .add_to_history(history_cell::new_info_event(
                             format!("Sandbox read access granted for {}", path.display()),
-                            None,
+                            /*hint*/ None,
                         ));
                 }
             },
@@ -3398,7 +3552,7 @@ impl App {
                             message.push_str(profile);
                             message.push_str(" profile");
                         }
-                        self.chat_widget.add_info_message(message, None);
+                        self.chat_widget.add_info_message(message, /*hint*/ None);
                     }
                     Err(err) => {
                         tracing::error!(
@@ -3432,7 +3586,7 @@ impl App {
                             message.push_str(profile);
                             message.push_str(" profile");
                         }
-                        self.chat_widget.add_info_message(message, None);
+                        self.chat_widget.add_info_message(message, /*hint*/ None);
                     }
                     Err(err) => {
                         tracing::error!(
@@ -3468,7 +3622,7 @@ impl App {
                             message.push_str(profile);
                             message.push_str(" profile");
                         }
-                        self.chat_widget.add_info_message(message, None);
+                        self.chat_widget.add_info_message(message, /*hint*/ None);
                     }
                     Err(err) => {
                         tracing::error!(error = %err, "failed to persist fast mode selection");
@@ -3515,7 +3669,7 @@ impl App {
                             let selection = name.unwrap_or_else(|| "System default".to_string());
                             self.chat_widget.add_info_message(
                                 format!("Realtime {} set to {selection}", kind.noun()),
-                                None,
+                                /*hint*/ None,
                             );
                         }
                     }
@@ -3661,7 +3815,7 @@ impl App {
             }
             AppEvent::PersistFullAccessWarningAcknowledged => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .set_hide_full_access_warning(true)
+                    .set_hide_full_access_warning(/*acknowledged*/ true)
                     .apply()
                     .await
                 {
@@ -3676,7 +3830,7 @@ impl App {
             }
             AppEvent::PersistWorldWritableWarningAcknowledged => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .set_hide_world_writable_warning(true)
+                    .set_hide_world_writable_warning(/*acknowledged*/ true)
                     .apply()
                     .await
                 {
@@ -3691,7 +3845,7 @@ impl App {
             }
             AppEvent::PersistRateLimitSwitchPromptHidden => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
-                    .set_hide_rate_limit_model_nudge(true)
+                    .set_hide_rate_limit_model_nudge(/*acknowledged*/ true)
                     .apply()
                     .await
                 {
@@ -4090,7 +4244,7 @@ impl App {
                     format!(
                         "Agent thread {closed_thread_id} closed. Switched back to main thread."
                     ),
-                    None,
+                    /*hint*/ None,
                 );
             } else {
                 self.clear_active_thread().await;
@@ -4237,7 +4391,7 @@ impl App {
     fn reset_external_editor_state(&mut self, tui: &mut tui::Tui) {
         self.chat_widget
             .set_external_editor_state(ExternalEditorState::Closed);
-        self.chat_widget.set_footer_hint_override(None);
+        self.chat_widget.set_footer_hint_override(/*items*/ None);
         tui.frame_requester().schedule_frame();
     }
 
@@ -4301,7 +4455,7 @@ impl App {
                 if !self.chat_widget.can_run_ctrl_l_clear_now() {
                     return;
                 }
-                if let Err(err) = self.clear_terminal_ui(tui, false) {
+                if let Err(err) = self.clear_terminal_ui(tui, /*redraw_header*/ false) {
                     tracing::warn!(error = %err, "failed to clear terminal UI");
                     self.chat_widget
                         .add_error_message(format!("Failed to clear terminal UI: {err}"));
@@ -4407,12 +4561,87 @@ impl App {
     }
 }
 
+/// Collect every MCP server status from the app-server by walking the paginated
+/// `mcpServerStatus/list` RPC until no `next_cursor` is returned.
+///
+/// All pages are eagerly gathered into a single `Vec` so the caller can render
+/// the inventory atomically. Each page requests up to 100 entries.
+async fn fetch_all_mcp_server_statuses(
+    request_handle: AppServerRequestHandle,
+) -> Result<Vec<McpServerStatus>> {
+    let mut cursor = None;
+    let mut statuses = Vec::new();
+
+    loop {
+        let request_id = RequestId::String(format!("mcp-inventory-{}", Uuid::new_v4()));
+        let response: ListMcpServerStatusResponse = request_handle
+            .request_typed(ClientRequest::McpServerStatusList {
+                request_id,
+                params: ListMcpServerStatusParams {
+                    cursor: cursor.clone(),
+                    limit: Some(100),
+                },
+            })
+            .await
+            .wrap_err("mcpServerStatus/list failed in app-server TUI")?;
+        statuses.extend(response.data);
+        if let Some(next_cursor) = response.next_cursor {
+            cursor = Some(next_cursor);
+        } else {
+            break;
+        }
+    }
+
+    Ok(statuses)
+}
+
+/// Convert flat `McpServerStatus` responses into the per-server maps used by the
+/// in-process MCP subsystem (tools keyed as `mcp__{server}__{tool}`, plus
+/// per-server resource/template/auth maps). Test-only because the app-server TUI
+/// renders directly from `McpServerStatus` rather than these maps.
+#[cfg(test)]
+type McpInventoryMaps = (
+    HashMap<String, codex_protocol::mcp::Tool>,
+    HashMap<String, Vec<codex_protocol::mcp::Resource>>,
+    HashMap<String, Vec<codex_protocol::mcp::ResourceTemplate>>,
+    HashMap<String, McpAuthStatus>,
+);
+
+#[cfg(test)]
+fn mcp_inventory_maps_from_statuses(statuses: Vec<McpServerStatus>) -> McpInventoryMaps {
+    let mut tools = HashMap::new();
+    let mut resources = HashMap::new();
+    let mut resource_templates = HashMap::new();
+    let mut auth_statuses = HashMap::new();
+
+    for status in statuses {
+        let server_name = status.name;
+        auth_statuses.insert(
+            server_name.clone(),
+            match status.auth_status {
+                codex_app_server_protocol::McpAuthStatus::Unsupported => McpAuthStatus::Unsupported,
+                codex_app_server_protocol::McpAuthStatus::NotLoggedIn => McpAuthStatus::NotLoggedIn,
+                codex_app_server_protocol::McpAuthStatus::BearerToken => McpAuthStatus::BearerToken,
+                codex_app_server_protocol::McpAuthStatus::OAuth => McpAuthStatus::OAuth,
+            },
+        );
+        resources.insert(server_name.clone(), status.resources);
+        resource_templates.insert(server_name.clone(), status.resource_templates);
+        for (tool_name, tool) in status.tools {
+            tools.insert(format!("mcp__{server_name}__{tool_name}"), tool);
+        }
+    }
+
+    (tools, resources, resource_templates, auth_statuses)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::app_backtrack::BacktrackSelection;
     use crate::app_backtrack::BacktrackState;
     use crate::app_backtrack::user_count;
+    use crate::app_server_session::AppServerStartedThread;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use crate::chatwidget::tests::set_chatgpt_auth;
     use crate::file_search::FileSearchManager;
@@ -4423,6 +4652,11 @@ mod tests {
     use crate::multi_agents::AgentPickerThreadEntry;
     use assert_matches::assert_matches;
 
+    use codex_app_server_protocol::Thread;
+    use codex_app_server_protocol::ThreadItem;
+    use codex_app_server_protocol::ThreadStatus;
+    use codex_app_server_protocol::Turn;
+    use codex_app_server_protocol::TurnStatus;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::types::ModelAvailabilityNuxConfig;
@@ -4432,11 +4666,13 @@ mod tests {
     use codex_protocol::config_types::CollaborationModeMask;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
+    use codex_protocol::mcp::Tool;
     use codex_protocol::openai_models::ModelAvailabilityNux;
     use codex_protocol::protocol::AgentMessageDeltaEvent;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::McpAuthStatus;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionConfiguredEvent;
     use codex_protocol::protocol::SessionSource;
@@ -4475,6 +4711,75 @@ mod tests {
             vec![base_cwd.join("rel")]
         );
         Ok(())
+    }
+
+    #[test]
+    fn mcp_inventory_maps_prefix_tool_names_by_server() {
+        let statuses = vec![
+            McpServerStatus {
+                name: "docs".to_string(),
+                tools: HashMap::from([(
+                    "list".to_string(),
+                    Tool {
+                        description: None,
+                        name: "list".to_string(),
+                        title: None,
+                        input_schema: serde_json::json!({"type": "object"}),
+                        output_schema: None,
+                        annotations: None,
+                        icons: None,
+                        meta: None,
+                    },
+                )]),
+                resources: Vec::new(),
+                resource_templates: Vec::new(),
+                auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+            },
+            McpServerStatus {
+                name: "disabled".to_string(),
+                tools: HashMap::new(),
+                resources: Vec::new(),
+                resource_templates: Vec::new(),
+                auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+            },
+        ];
+
+        let (tools, resources, resource_templates, auth_statuses) =
+            mcp_inventory_maps_from_statuses(statuses);
+        let mut resource_names = resources.keys().cloned().collect::<Vec<_>>();
+        resource_names.sort();
+        let mut template_names = resource_templates.keys().cloned().collect::<Vec<_>>();
+        template_names.sort();
+
+        assert_eq!(
+            tools.keys().cloned().collect::<Vec<_>>(),
+            vec!["mcp__docs__list".to_string()]
+        );
+        assert_eq!(resource_names, vec!["disabled", "docs"]);
+        assert_eq!(template_names, vec!["disabled", "docs"]);
+        assert_eq!(
+            auth_statuses.get("disabled"),
+            Some(&McpAuthStatus::Unsupported)
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_mcp_inventory_result_clears_committed_loading_cell() {
+        let mut app = make_test_app().await;
+        app.transcript_cells
+            .push(Arc::new(history_cell::new_mcp_inventory_loading(
+                /*animations_enabled*/ false,
+            )));
+
+        app.handle_mcp_inventory_result(Ok(vec![McpServerStatus {
+            name: "docs".to_string(),
+            tools: HashMap::new(),
+            resources: Vec::new(),
+            resource_templates: Vec::new(),
+            auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
+        }]));
+
+        assert_eq!(app.transcript_cells.len(), 0);
     }
 
     #[test]
@@ -6664,6 +6969,392 @@ guardian_approval = true
             rx,
             op_rx,
         )
+    }
+
+    #[tokio::test]
+    async fn restore_started_app_server_thread_replays_remote_history() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+
+        app.restore_started_app_server_thread(AppServerStartedThread {
+            thread: Thread {
+                id: thread_id.to_string(),
+                preview: "hello".to_string(),
+                ephemeral: false,
+                model_provider: "test-provider".to_string(),
+                created_at: 0,
+                updated_at: 0,
+                status: ThreadStatus::Idle,
+                path: None,
+                cwd: PathBuf::from("/tmp/project"),
+                cli_version: "test".to_string(),
+                source: SessionSource::Cli.into(),
+                agent_nickname: None,
+                agent_role: None,
+                git_info: None,
+                name: Some("restored".to_string()),
+                turns: vec![Turn {
+                    id: "turn-1".to_string(),
+                    items: vec![
+                        ThreadItem::UserMessage {
+                            id: "user-1".to_string(),
+                            content: vec![codex_app_server_protocol::UserInput::Text {
+                                text: "hello from remote".to_string(),
+                                text_elements: Vec::new(),
+                            }],
+                        },
+                        ThreadItem::AgentMessage {
+                            id: "assistant-1".to_string(),
+                            text: "restored response".to_string(),
+                            phase: None,
+                        },
+                    ],
+                    status: TurnStatus::Completed,
+                    error: None,
+                }],
+            },
+            session_configured: SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: Some("restored".to_string()),
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            },
+            show_raw_agent_reasoning: false,
+        })
+        .await?;
+
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let cell: Arc<dyn HistoryCell> = cell.into();
+                app.transcript_cells.push(cell);
+            }
+        }
+
+        assert_eq!(app.primary_thread_id, Some(thread_id));
+        assert_eq!(app.active_thread_id, Some(thread_id));
+
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+        let agent_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<AgentMessageCell>()
+                    .map(|cell| {
+                        cell.display_lines(80)
+                            .into_iter()
+                            .map(|line| line.to_string())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+            })
+            .collect();
+
+        assert_eq!(user_messages, vec!["hello from remote".to_string()]);
+        assert_eq!(agent_messages, vec!["• restored response".to_string()]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn restore_started_app_server_thread_submits_initial_prompt_after_history_replay()
+    -> Result<()> {
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        app.chat_widget.set_initial_user_message_for_test(
+            crate::chatwidget::create_initial_user_message(
+                Some("resume prompt".to_string()),
+                Vec::new(),
+                Vec::new(),
+            ),
+        );
+
+        app.restore_started_app_server_thread(AppServerStartedThread {
+            thread: Thread {
+                id: thread_id.to_string(),
+                preview: "hello".to_string(),
+                ephemeral: false,
+                model_provider: "test-provider".to_string(),
+                created_at: 0,
+                updated_at: 0,
+                status: ThreadStatus::Idle,
+                path: None,
+                cwd: PathBuf::from("/tmp/project"),
+                cli_version: "test".to_string(),
+                source: SessionSource::Cli.into(),
+                agent_nickname: None,
+                agent_role: None,
+                git_info: None,
+                name: Some("restored".to_string()),
+                turns: vec![Turn {
+                    id: "turn-1".to_string(),
+                    items: vec![
+                        ThreadItem::UserMessage {
+                            id: "user-1".to_string(),
+                            content: vec![codex_app_server_protocol::UserInput::Text {
+                                text: "hello from remote".to_string(),
+                                text_elements: Vec::new(),
+                            }],
+                        },
+                        ThreadItem::AgentMessage {
+                            id: "assistant-1".to_string(),
+                            text: "restored response".to_string(),
+                            phase: None,
+                        },
+                    ],
+                    status: TurnStatus::Completed,
+                    error: None,
+                }],
+            },
+            session_configured: SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: Some("restored".to_string()),
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            },
+            show_raw_agent_reasoning: false,
+        })
+        .await?;
+
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let cell: Arc<dyn HistoryCell> = cell.into();
+                app.transcript_cells.push(cell);
+            }
+        }
+
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+
+        assert_eq!(
+            user_messages,
+            vec!["hello from remote".to_string(), "resume prompt".to_string()]
+        );
+        match next_user_turn_op(&mut op_rx) {
+            Op::UserTurn { items, .. } => assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "resume prompt".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            ),
+            other => panic!("expected resume prompt submission, got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn restore_started_app_server_thread_replays_history_beyond_store_capacity() -> Result<()>
+    {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let turn_count = THREAD_EVENT_CHANNEL_CAPACITY + 5;
+
+        let turns = (0..turn_count)
+            .map(|index| Turn {
+                id: format!("turn-{index}"),
+                items: vec![ThreadItem::UserMessage {
+                    id: format!("user-{index}"),
+                    content: vec![codex_app_server_protocol::UserInput::Text {
+                        text: format!("message {index}"),
+                        text_elements: Vec::new(),
+                    }],
+                }],
+                status: TurnStatus::Completed,
+                error: None,
+            })
+            .collect();
+
+        app.restore_started_app_server_thread(AppServerStartedThread {
+            thread: Thread {
+                id: thread_id.to_string(),
+                preview: "hello".to_string(),
+                ephemeral: false,
+                model_provider: "test-provider".to_string(),
+                created_at: 0,
+                updated_at: 0,
+                status: ThreadStatus::Idle,
+                path: None,
+                cwd: PathBuf::from("/tmp/project"),
+                cli_version: "test".to_string(),
+                source: SessionSource::Cli.into(),
+                agent_nickname: None,
+                agent_role: None,
+                git_info: None,
+                name: Some("restored".to_string()),
+                turns,
+            },
+            session_configured: SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: Some("restored".to_string()),
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            },
+            show_raw_agent_reasoning: false,
+        })
+        .await?;
+
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let cell: Arc<dyn HistoryCell> = cell.into();
+                app.transcript_cells.push(cell);
+            }
+        }
+
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+
+        assert_eq!(user_messages.len(), turn_count);
+        assert_eq!(user_messages.first().map(String::as_str), Some("message 0"));
+        let last_message = format!("message {}", turn_count - 1);
+        assert_eq!(
+            user_messages.last().map(String::as_str),
+            Some(last_message.as_str())
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn restore_started_app_server_thread_replays_raw_reasoning_when_enabled() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+
+        app.restore_started_app_server_thread(AppServerStartedThread {
+            thread: Thread {
+                id: thread_id.to_string(),
+                preview: "hello".to_string(),
+                ephemeral: false,
+                model_provider: "test-provider".to_string(),
+                created_at: 0,
+                updated_at: 0,
+                status: ThreadStatus::Idle,
+                path: None,
+                cwd: PathBuf::from("/tmp/project"),
+                cli_version: "test".to_string(),
+                source: SessionSource::Cli.into(),
+                agent_nickname: None,
+                agent_role: None,
+                git_info: None,
+                name: Some("restored".to_string()),
+                turns: vec![Turn {
+                    id: "turn-1".to_string(),
+                    items: vec![ThreadItem::Reasoning {
+                        id: "reasoning-1".to_string(),
+                        summary: vec!["summary reasoning".to_string()],
+                        content: vec!["raw reasoning".to_string()],
+                    }],
+                    status: TurnStatus::Completed,
+                    error: None,
+                }],
+            },
+            session_configured: SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: Some("restored".to_string()),
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            },
+            show_raw_agent_reasoning: true,
+        })
+        .await?;
+
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let cell: Arc<dyn HistoryCell> = cell.into();
+                app.transcript_cells.push(cell);
+            }
+        }
+
+        let channel = app
+            .thread_event_channels
+            .get(&thread_id)
+            .expect("restored thread channel should exist");
+        let snapshot = channel.store.lock().await.snapshot();
+        let replayed_raw_reasoning = snapshot.events.iter().any(|event| {
+            matches!(
+                &event.msg,
+                EventMsg::AgentReasoningRawContent(raw) if raw.text == "raw reasoning"
+            )
+        });
+
+        assert!(
+            replayed_raw_reasoning,
+            "expected restored snapshot to keep raw reasoning event: {:?}",
+            snapshot.events
+        );
+
+        Ok(())
     }
 
     #[test]

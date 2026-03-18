@@ -13,7 +13,6 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_windows_sandbox::allow_null_device;
 use codex_windows_sandbox::convert_string_sid_to_sid;
-use codex_windows_sandbox::create_process_as_user;
 use codex_windows_sandbox::create_readonly_token_with_caps_from;
 use codex_windows_sandbox::create_workspace_write_token_with_caps_from;
 use codex_windows_sandbox::get_current_token_for_restriction;
@@ -37,8 +36,6 @@ use codex_windows_sandbox::PipeSpawnHandles;
 use codex_windows_sandbox::SandboxPolicy;
 use codex_windows_sandbox::StderrMode;
 use codex_windows_sandbox::StdinMode;
-use serde::Deserialize;
-use std::collections::HashMap;
 use std::ffi::c_void;
 use std::fs::File;
 use std::os::windows::io::FromRawHandle;
@@ -76,22 +73,6 @@ mod cwd_junction;
 #[allow(dead_code)]
 #[path = "../read_acl_mutex.rs"]
 mod read_acl_mutex;
-
-#[derive(Debug, Deserialize)]
-struct RunnerRequest {
-    policy_json_or_preset: String,
-    codex_home: PathBuf,
-    real_codex_home: PathBuf,
-    cap_sids: Vec<String>,
-    command: Vec<String>,
-    cwd: PathBuf,
-    env_map: HashMap<String, String>,
-    timeout_ms: Option<u64>,
-    use_private_desktop: bool,
-    stdin_pipe: String,
-    stdout_pipe: String,
-    stderr_pipe: String,
-}
 
 const WAIT_TIMEOUT: u32 = 0x0000_0102;
 
@@ -142,13 +123,6 @@ fn open_pipe(name: &str, access: u32) -> Result<HANDLE> {
         return Err(anyhow::anyhow!("CreateFileW failed for pipe {name}: {err}"));
     }
     Ok(handle)
-}
-
-fn read_request_file(req_path: &Path) -> Result<String> {
-    let content = std::fs::read_to_string(req_path)
-        .with_context(|| format!("read request file {}", req_path.display()));
-    let _ = std::fs::remove_file(req_path);
-    content
 }
 
 /// Send an error frame back to the parent process.
@@ -225,11 +199,6 @@ fn spawn_ipc_process(
     );
 
     let policy = parse_policy(&req.policy_json_or_preset).context("parse policy_json_or_preset")?;
-    if !policy.has_full_disk_read_access() {
-        anyhow::bail!(
-            "Restricted read-only access is not yet supported by the Windows sandbox backend"
-        );
-    }
     let mut cap_psids: Vec<*mut c_void> = Vec::new();
     for sid in &req.cap_sids {
         let Some(psid) = (unsafe { convert_string_sid_to_sid(sid) }) else {
@@ -288,6 +257,8 @@ fn spawn_ipc_process(
             &req.command,
             &effective_cwd,
             &req.env,
+            req.use_private_desktop,
+            Some(log_dir.as_path()),
         )?;
         let (hpc, input_write, output_read) = conpty.into_raw();
         hpc_handle = Some(hpc);
@@ -318,6 +289,7 @@ fn spawn_ipc_process(
             &req.env,
             stdin_mode,
             StderrMode::Separate,
+            false,
         )?;
         (
             pipe_handles.process,
@@ -435,174 +407,14 @@ fn spawn_input_loop(
 
 /// Entry point for the Windows command runner process.
 pub fn main() -> Result<()> {
-    let mut request_file = None;
     let mut pipe_in = None;
     let mut pipe_out = None;
-    let mut pipe_single = None;
     for arg in std::env::args().skip(1) {
-        if let Some(rest) = arg.strip_prefix("--request-file=") {
-            request_file = Some(rest.to_string());
-        } else if let Some(rest) = arg.strip_prefix("--pipe-in=") {
+        if let Some(rest) = arg.strip_prefix("--pipe-in=") {
             pipe_in = Some(rest.to_string());
         } else if let Some(rest) = arg.strip_prefix("--pipe-out=") {
             pipe_out = Some(rest.to_string());
-        } else if let Some(rest) = arg.strip_prefix("--pipe=") {
-            pipe_single = Some(rest.to_string());
         }
-    }
-    if pipe_in.is_none() && pipe_out.is_none() {
-        if let Some(single) = pipe_single {
-            pipe_in = Some(single.clone());
-            pipe_out = Some(single);
-        }
-    }
-
-    if let Some(request_file) = request_file {
-        let req_path = PathBuf::from(request_file);
-        let input = read_request_file(&req_path)?;
-        let req: RunnerRequest =
-            serde_json::from_str(&input).context("parse runner request json")?;
-        let log_dir = Some(req.codex_home.as_path());
-        hide_current_user_profile_dir(req.codex_home.as_path());
-        log_note(
-            &format!(
-                "runner start cwd={} cmd={:?} real_codex_home={}",
-                req.cwd.display(),
-                req.command,
-                req.real_codex_home.display()
-            ),
-            Some(&req.codex_home),
-        );
-
-        let policy =
-            parse_policy(&req.policy_json_or_preset).context("parse policy_json_or_preset")?;
-        if !policy.has_full_disk_read_access() {
-            anyhow::bail!(
-                "Restricted read-only access is not yet supported by the Windows sandbox backend"
-            );
-        }
-        let mut cap_psids: Vec<*mut c_void> = Vec::new();
-        for sid in &req.cap_sids {
-            let Some(psid) = (unsafe { convert_string_sid_to_sid(sid) }) else {
-                anyhow::bail!("ConvertStringSidToSidW failed for capability SID");
-            };
-            cap_psids.push(psid);
-        }
-        if cap_psids.is_empty() {
-            anyhow::bail!("runner: empty capability SID list");
-        }
-
-        let base = unsafe { get_current_token_for_restriction()? };
-        let token_res: Result<HANDLE> = unsafe {
-            match &policy {
-                SandboxPolicy::ReadOnly { .. } => {
-                    create_readonly_token_with_caps_from(base, &cap_psids)
-                }
-                SandboxPolicy::WorkspaceWrite { .. } => {
-                    create_workspace_write_token_with_caps_from(base, &cap_psids)
-                }
-                SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
-                    unreachable!()
-                }
-            }
-        };
-        let h_token = token_res?;
-        unsafe {
-            CloseHandle(base);
-            for psid in &cap_psids {
-                allow_null_device(*psid);
-            }
-            for psid in cap_psids {
-                if !psid.is_null() {
-                    LocalFree(psid as HLOCAL);
-                }
-            }
-        }
-
-        let h_stdin = open_pipe(&req.stdin_pipe, FILE_GENERIC_READ)?;
-        let h_stdout = open_pipe(&req.stdout_pipe, FILE_GENERIC_WRITE)?;
-        let h_stderr = open_pipe(&req.stderr_pipe, FILE_GENERIC_WRITE)?;
-        let stdio = Some((h_stdin, h_stdout, h_stderr));
-
-        let effective_cwd = effective_cwd(&req.cwd, log_dir);
-        log_note(
-            &format!(
-                "runner: effective cwd={} (requested {})",
-                effective_cwd.display(),
-                req.cwd.display()
-            ),
-            log_dir,
-        );
-
-        let spawn_result = unsafe {
-            create_process_as_user(
-                h_token,
-                &req.command,
-                &effective_cwd,
-                &req.env_map,
-                Some(&req.codex_home),
-                stdio,
-                req.use_private_desktop,
-            )
-        };
-        let created = match spawn_result {
-            Ok(v) => v,
-            Err(err) => {
-                log_note(&format!("runner: spawn failed: {err:?}"), log_dir);
-                unsafe {
-                    CloseHandle(h_stdin);
-                    CloseHandle(h_stdout);
-                    CloseHandle(h_stderr);
-                    CloseHandle(h_token);
-                }
-                return Err(err);
-            }
-        };
-        let proc_info = created.process_info;
-
-        let h_job = unsafe { create_job_kill_on_close().ok() };
-        if let Some(job) = h_job {
-            unsafe {
-                let _ = AssignProcessToJobObject(job, proc_info.hProcess);
-            }
-        }
-
-        let wait_res = unsafe {
-            WaitForSingleObject(
-                proc_info.hProcess,
-                req.timeout_ms.map(|ms| ms as u32).unwrap_or(INFINITE),
-            )
-        };
-        let timed_out = wait_res == WAIT_TIMEOUT;
-
-        let exit_code: i32;
-        unsafe {
-            if timed_out {
-                let _ = TerminateProcess(proc_info.hProcess, 1);
-                exit_code = 128 + 64;
-            } else {
-                let mut raw_exit: u32 = 1;
-                GetExitCodeProcess(proc_info.hProcess, &mut raw_exit);
-                exit_code = raw_exit as i32;
-            }
-            if proc_info.hThread != 0 {
-                CloseHandle(proc_info.hThread);
-            }
-            if proc_info.hProcess != 0 {
-                CloseHandle(proc_info.hProcess);
-            }
-            CloseHandle(h_stdin);
-            CloseHandle(h_stdout);
-            CloseHandle(h_stderr);
-            CloseHandle(h_token);
-            if let Some(job) = h_job {
-                CloseHandle(job);
-            }
-        }
-        if exit_code != 0 {
-            eprintln!("runner child exited with code {exit_code}");
-        }
-        std::process::exit(exit_code);
     }
 
     let Some(pipe_in) = pipe_in else {
