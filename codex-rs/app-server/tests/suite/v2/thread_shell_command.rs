@@ -93,7 +93,11 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
     assert_eq!(status, &CommandExecutionStatus::InProgress);
 
     let delta = wait_for_command_execution_output_delta(&mut mcp, &command_id).await?;
-    assert_eq!(delta.delta, b"hello from bang\n");
+    assert_eq!(delta.delta, "hello from bang\n");
+    assert_eq!(
+        delta.delta_base64.as_deref(),
+        Some("aGVsbG8gZnJvbSBiYW5nCg==")
+    );
 
     let completed = wait_for_command_execution_completed(&mut mcp, Some(&command_id)).await?;
     let ThreadItem::CommandExecution {
@@ -101,7 +105,6 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
         source,
         status,
         aggregated_output,
-        formatted_output,
         exit_code,
         ..
     } = &completed.item
@@ -112,7 +115,6 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
     assert_eq!(source, &CommandExecutionSource::UserShell);
     assert_eq!(status, &CommandExecutionStatus::Completed);
     assert_eq!(aggregated_output.as_deref(), Some("hello from bang\n"));
-    assert_eq!(formatted_output, "hello from bang\n");
     assert_eq!(*exit_code, Some(0));
 
     timeout(
@@ -138,7 +140,6 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
         source,
         status,
         aggregated_output,
-        formatted_output,
         ..
     } = thread.turns[0]
         .items
@@ -151,7 +152,6 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
     assert_eq!(source, &CommandExecutionSource::UserShell);
     assert_eq!(status, &CommandExecutionStatus::Completed);
     assert_eq!(aggregated_output.as_deref(), Some("hello from bang\n"));
-    assert_eq!(formatted_output, "");
 
     Ok(())
 }

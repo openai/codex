@@ -345,7 +345,6 @@ impl ThreadHistoryBuilder {
             status: CommandExecutionStatus::InProgress,
             command_actions,
             aggregated_output: None,
-            formatted_output: String::new(),
             exit_code: None,
             duration_ms: None,
         };
@@ -377,7 +376,6 @@ impl ThreadHistoryBuilder {
             status,
             command_actions,
             aggregated_output,
-            formatted_output: payload.formatted_output.clone(),
             exit_code: Some(payload.exit_code),
             duration_ms: Some(duration_ms),
         };
@@ -1756,7 +1754,6 @@ mod tests {
                     command: "echo hello world".into(),
                 }],
                 aggregated_output: Some("hello world\n".into()),
-                formatted_output: String::new(),
                 exit_code: Some(0),
                 duration_ms: Some(12),
             }
@@ -1906,7 +1903,6 @@ mod tests {
                     command: "ls".into(),
                 }],
                 aggregated_output: Some("exec command rejected by user".into()),
-                formatted_output: String::new(),
                 exit_code: Some(-1),
                 duration_ms: Some(0),
             }
@@ -2002,7 +1998,6 @@ mod tests {
                     command: "echo done".into(),
                 }],
                 aggregated_output: Some("done\n".into()),
-                formatted_output: "done\n".into(),
                 exit_code: Some(0),
                 duration_ms: Some(5),
             }

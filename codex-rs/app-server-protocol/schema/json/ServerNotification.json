@@ -725,8 +725,16 @@
     "CommandExecutionOutputDeltaNotification": {
       "properties": {
         "delta": {
-          "description": "Raw bytes from the command stream (may not be valid UTF-8).",
+          "description": "Best-effort UTF-8 view of the output chunk for backwards compatibility.",
           "type": "string"
+        },
+        "deltaBase64": {
+          "default": null,
+          "description": "Exact raw bytes for the chunk, base64-encoded.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "itemId": {
           "type": "string"
@@ -2391,11 +2399,6 @@
                 "integer",
                 "null"
               ]
-            },
-            "formattedOutput": {
-              "default": "",
-              "description": "The command's output after applying the model-facing formatter/truncation policy.",
-              "type": "string"
             },
             "id": {
               "type": "string"

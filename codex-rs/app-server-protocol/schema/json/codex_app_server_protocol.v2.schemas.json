@@ -2757,8 +2757,16 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "delta": {
-          "description": "Raw bytes from the command stream (may not be valid UTF-8).",
+          "description": "Best-effort UTF-8 view of the output chunk for backwards compatibility.",
           "type": "string"
+        },
+        "deltaBase64": {
+          "default": null,
+          "description": "Exact raw bytes for the chunk, base64-encoded.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "itemId": {
           "type": "string"
@@ -9842,11 +9850,6 @@
                 "null"
               ]
             },
-            "formattedOutput": {
-              "default": "",
-              "description": "The command's output after applying the model-facing formatter/truncation policy.",
-              "type": "string"
-            },
             "id": {
               "type": "string"
             },
@@ -10908,6 +10911,7 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "command": {
+          "description": "Shell command string evaluated by the thread's configured shell. Unlike `command/exec`, this intentionally preserves shell syntax such as pipes, redirects, and quoting for legacy `!` parity.",
           "type": "string"
         },
         "threadId": {

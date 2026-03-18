@@ -17,6 +17,10 @@ use crate::app_server_session::AppServerSession;
 use crate::app_server_session::app_server_rate_limit_snapshot_to_core;
 use crate::app_server_session::status_account_display_from_auth_mode;
 use crate::local_chatgpt_auth::load_local_chatgpt_auth;
+#[cfg(test)]
+use base64::Engine;
+#[cfg(test)]
+use base64::engine::general_purpose::STANDARD;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
@@ -709,7 +713,11 @@ fn server_notification_thread_events(
                 msg: EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
                     call_id: notification.item_id,
                     stream: ExecOutputStream::Stdout,
-                    chunk: notification.delta,
+                    chunk: notification
+                        .delta_base64
+                        .as_deref()
+                        .and_then(|value| STANDARD.decode(value).ok())
+                        .unwrap_or_else(|| notification.delta.into_bytes()),
                 }),
             }],
         )),
@@ -1064,7 +1072,6 @@ fn command_execution_completed_event(turn_id: &str, item: &ThreadItem) -> Option
         status,
         command_actions,
         aggregated_output,
-        formatted_output,
         exit_code,
         duration_ms,
     } = item
@@ -1115,11 +1122,7 @@ fn command_execution_completed_event(turn_id: &str, item: &ThreadItem) -> Option
             aggregated_output: aggregated_output.clone(),
             exit_code: exit_code.unwrap_or(-1),
             duration,
-            formatted_output: if formatted_output.is_empty() {
-                aggregated_output
-            } else {
-                formatted_output.clone()
-            },
+            formatted_output: aggregated_output,
             status,
         }),
     }])
@@ -1472,7 +1475,6 @@ mod tests {
                 command: "printf hello world".to_string(),
             }],
             aggregated_output: None,
-            formatted_output: String::new(),
             exit_code: None,
             duration_ms: None,
         };
@@ -1505,7 +1507,8 @@ mod tests {
                     thread_id: thread_id.clone(),
                     turn_id: turn_id.clone(),
                     item_id: "cmd-1".to_string(),
-                    delta: b"hello world\n".to_vec(),
+                    delta: "hello world\n".to_string(),
+                    delta_base64: Some("aGVsbG8gd29ybGQK".to_string()),
                 },
             ))
             .expect("command execution delta should bridge");
@@ -1529,7 +1532,6 @@ mod tests {
                 command: "printf hello world".to_string(),
             }],
             aggregated_output: Some("hello world\n".to_string()),
-            formatted_output: "hello world\n".to_string(),
             exit_code: Some(0),
             duration_ms: Some(5),
         };
@@ -1565,7 +1567,6 @@ mod tests {
             status: CommandExecutionStatus::InProgress,
             command_actions: vec![],
             aggregated_output: None,
-            formatted_output: String::new(),
             exit_code: None,
             duration_ms: None,
         };
@@ -1615,7 +1616,6 @@ mod tests {
                         command: "printf hello world".to_string(),
                     }],
                     aggregated_output: Some("hello world\n".to_string()),
-                    formatted_output: "hello world\n".to_string(),
                     exit_code: Some(0),
                     duration_ms: Some(5),
                 }],

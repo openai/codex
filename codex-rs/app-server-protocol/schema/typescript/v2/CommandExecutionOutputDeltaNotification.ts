@@ -4,6 +4,10 @@
 
 export type CommandExecutionOutputDeltaNotification = { threadId: string, turnId: string, itemId: string, 
 /**
- * Raw bytes from the command stream (may not be valid UTF-8).
+ * Best-effort UTF-8 view of the output chunk for backwards compatibility.
  */
-delta: string, };
+delta: string, 
+/**
+ * Exact raw bytes for the chunk, base64-encoded.
+ */
+deltaBase64: string | null, };

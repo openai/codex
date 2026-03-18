@@ -12,6 +12,8 @@ use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
 use crate::thread_status::ThreadWatchActiveGuard;
 use crate::thread_status::ThreadWatchManager;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
 use codex_app_server_protocol::AdditionalPermissionProfile as V2AdditionalPermissionProfile;
 use codex_app_server_protocol::AgentMessageDeltaNotification;
@@ -1568,7 +1570,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 status: CommandExecutionStatus::InProgress,
                 command_actions,
                 aggregated_output: None,
-                formatted_output: String::new(),
                 exit_code: None,
                 duration_ms: None,
             };
@@ -1612,7 +1613,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
                     item_id,
-                    delta: exec_command_output_delta_event.chunk,
+                    delta: String::from_utf8_lossy(&exec_command_output_delta_event.chunk)
+                        .to_string(),
+                    delta_base64: Some(STANDARD.encode(&exec_command_output_delta_event.chunk)),
                 };
                 outgoing
                     .send_server_notification(ServerNotification::CommandExecutionOutputDelta(
@@ -1643,7 +1646,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 parsed_cmd,
                 process_id,
                 aggregated_output,
-                formatted_output,
                 exit_code,
                 duration,
                 source,
@@ -1682,7 +1684,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 status,
                 command_actions,
                 aggregated_output,
-                formatted_output,
                 exit_code: Some(exit_code),
                 duration_ms: Some(duration_ms),
             };
@@ -1957,7 +1958,6 @@ async fn complete_command_execution_item(
         status,
         command_actions,
         aggregated_output: None,
-        formatted_output: String::new(),
         exit_code: None,
         duration_ms: None,
     };

@@ -5560,7 +5560,6 @@ impl ChatWidget {
                 status,
                 command_actions,
                 aggregated_output,
-                formatted_output,
                 exit_code,
                 duration_ms,
             } => {
@@ -5602,11 +5601,7 @@ impl ChatWidget {
                         duration: Duration::from_millis(
                             duration_ms.unwrap_or_default().max(0) as u64
                         ),
-                        formatted_output: if formatted_output.is_empty() {
-                            aggregated_output
-                        } else {
-                            formatted_output
-                        },
+                        formatted_output: aggregated_output,
                         status: match status {
                             codex_app_server_protocol::CommandExecutionStatus::Completed => {
                                 codex_protocol::protocol::ExecCommandStatus::Completed

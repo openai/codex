@@ -2881,6 +2881,9 @@ pub struct ThreadCompactStartResponse {}
 #[ts(export_to = "v2/")]
 pub struct ThreadShellCommandParams {
     pub thread_id: String,
+    /// Shell command string evaluated by the thread's configured shell.
+    /// Unlike `command/exec`, this intentionally preserves shell syntax
+    /// such as pipes, redirects, and quoting for legacy `!` parity.
     pub command: String,
 }
 
@@ -4163,9 +4166,6 @@ pub enum ThreadItem {
         command_actions: Vec<CommandAction>,
         /// The command's output, aggregated from stdout and stderr.
         aggregated_output: Option<String>,
-        /// The command's output after applying the model-facing formatter/truncation policy.
-        #[serde(default)]
-        formatted_output: String,
         /// The command's exit code.
         exit_code: Option<i32>,
         /// The duration of the command execution in milliseconds.
@@ -4904,11 +4904,12 @@ pub struct CommandExecutionOutputDeltaNotification {
     pub thread_id: String,
     pub turn_id: String,
     pub item_id: String,
-    /// Raw bytes from the command stream (may not be valid UTF-8).
-    #[serde_as(as = "serde_with::base64::Base64")]
-    #[schemars(with = "String")]
-    #[ts(type = "string")]
-    pub delta: Vec<u8>,
+    /// Best-effort UTF-8 view of the output chunk for backwards compatibility.
+    pub delta: String,
+    /// Exact raw bytes for the chunk, base64-encoded.
+    #[serde(default)]
+    #[ts(type = "string | null")]
+    pub delta_base64: Option<String>,
 }
 
 /// Base64-encoded output chunk emitted for a streaming `command/exec` request.
@@ -6685,7 +6686,8 @@ mod tests {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             item_id: "item-1".to_string(),
-            delta: vec![0xff, b'a', b'\n'],
+            delta: "\u{fffd}a\n".to_string(),
+            delta_base64: Some("/2EK".to_string()),
         };
 
         let value = serde_json::to_value(&notification)
@@ -6696,7 +6698,8 @@ mod tests {
                 "threadId": "thread-1",
                 "turnId": "turn-1",
                 "itemId": "item-1",
-                "delta": "/2EK",
+                "delta": "\u{fffd}a\n",
+                "deltaBase64": "/2EK",
             })
         );
 

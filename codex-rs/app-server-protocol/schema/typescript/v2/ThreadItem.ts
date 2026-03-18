@@ -45,10 +45,6 @@ commandActions: Array<CommandAction>,
  */
 aggregatedOutput: string | null, 
 /**
- * The command's output after applying the model-facing formatter/truncation policy.
- */
-formattedOutput: string, 
-/**
  * The command's exit code.
  */
 exitCode: number | null, 
