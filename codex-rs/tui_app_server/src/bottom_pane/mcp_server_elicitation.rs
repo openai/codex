@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use codex_app_server_protocol::McpElicitationEnumSchema;
 use codex_app_server_protocol::McpElicitationPrimitiveSchema;
 use codex_app_server_protocol::McpElicitationSingleSelectEnumSchema;
+use codex_app_server_protocol::McpServerElicitationRequest;
+use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::approvals::ElicitationRequest;
@@ -201,6 +203,36 @@ impl FooterTip {
 }
 
 impl McpServerElicitationFormRequest {
+    pub(crate) fn from_app_server_request(
+        thread_id: ThreadId,
+        request_id: McpRequestId,
+        request: McpServerElicitationRequestParams,
+    ) -> Option<Self> {
+        let McpServerElicitationRequestParams {
+            server_name,
+            request,
+            ..
+        } = request;
+        let McpServerElicitationRequest::Form {
+            meta,
+            message,
+            requested_schema,
+        } = request
+        else {
+            return None;
+        };
+
+        let requested_schema = serde_json::to_value(requested_schema).ok()?;
+        Self::from_parts(
+            thread_id,
+            server_name,
+            request_id,
+            meta,
+            message,
+            requested_schema,
+        )
+    }
+
     pub(crate) fn from_event(
         thread_id: ThreadId,
         request: ElicitationRequestEvent,
@@ -214,6 +246,24 @@ impl McpServerElicitationFormRequest {
             return None;
         };
 
+        Self::from_parts(
+            thread_id,
+            request.server_name,
+            request.id,
+            meta,
+            message,
+            requested_schema,
+        )
+    }
+
+    fn from_parts(
+        thread_id: ThreadId,
+        server_name: String,
+        request_id: McpRequestId,
+        meta: Option<Value>,
+        message: String,
+        requested_schema: Value,
+    ) -> Option<Self> {
         let tool_suggestion = parse_tool_suggestion_request(meta.as_ref());
         let is_tool_approval = meta
             .as_ref()
@@ -313,8 +363,8 @@ impl McpServerElicitationFormRequest {
 
         Some(Self {
             thread_id,
-            server_name: request.server_name,
-            request_id: request.id,
+            server_name,
+            request_id,
             message,
             approval_display_params,
             response_mode,

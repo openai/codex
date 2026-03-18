@@ -15,6 +15,7 @@ use crate::error::CodexErr;
 use crate::error::Result;
 use crate::function_tool::FunctionCallError;
 use crate::memories::citations::get_thread_id_from_citations;
+use crate::memories::citations::parse_memory_citation;
 use crate::parse_turn_item;
 use crate::state_db;
 use crate::tools::parallel::ToolCallRuntime;
@@ -36,6 +37,22 @@ fn strip_hidden_assistant_markup(text: &str, plan_mode: bool) -> String {
     } else {
         without_citations
     }
+}
+
+fn strip_hidden_assistant_markup_and_parse_memory_citation(
+    text: &str,
+    plan_mode: bool,
+) -> (
+    String,
+    Option<codex_protocol::memory_citation::MemoryCitation>,
+) {
+    let (without_citations, citations) = strip_citations(text);
+    let visible_text = if plan_mode {
+        strip_proposed_plan_blocks(&without_citations)
+    } else {
+        without_citations
+    };
+    (visible_text, parse_memory_citation(citations))
 }
 
 pub(crate) fn raw_assistant_output_text_from_item(item: &ResponseItem) -> Option<String> {
@@ -297,9 +314,11 @@ pub(crate) async fn handle_non_tool_response_item(
                         codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
                     })
                     .collect::<String>();
-                let stripped = strip_hidden_assistant_markup(&combined, plan_mode);
+                let (stripped, memory_citation) =
+                    strip_hidden_assistant_markup_and_parse_memory_citation(&combined, plan_mode);
                 agent_message.content =
                     vec![codex_protocol::items::AgentMessageContent::Text { text: stripped }];
+                agent_message.memory_citation = memory_citation;
             }
             if let TurnItem::ImageGeneration(image_item) = &mut turn_item {
                 match save_image_generation_result(&image_item.id, &image_item.result).await {
@@ -365,12 +384,15 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
                 output: output.clone(),
             })
         }
-        ResponseInputItem::CustomToolCallOutput { call_id, output } => {
-            Some(ResponseItem::CustomToolCallOutput {
-                call_id: call_id.clone(),
-                output: output.clone(),
-            })
-        }
+        ResponseInputItem::CustomToolCallOutput {
+            call_id,
+            name,
+            output,
+        } => Some(ResponseItem::CustomToolCallOutput {
+            call_id: call_id.clone(),
+            name: name.clone(),
+            output: output.clone(),
+        }),
         ResponseInputItem::McpToolCallOutput { call_id, output } => {
             let output = output.as_function_call_output_payload();
             Some(ResponseItem::FunctionCallOutput {

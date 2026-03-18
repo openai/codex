@@ -1759,6 +1759,12 @@
             "call_id": {
               "type": "string"
             },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "output": {
               "$ref": "#/definitions/FunctionCallOutputBody"
             },
@@ -2888,6 +2894,7 @@
         "vscode",
         "exec",
         "appServer",
+        "custom",
         "subAgent",
         "subAgentReview",
         "subAgentCompact",

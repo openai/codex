@@ -174,6 +174,8 @@ export type { McpToolCallError } from "./McpToolCallError";
 export type { McpToolCallProgressNotification } from "./McpToolCallProgressNotification";
 export type { McpToolCallResult } from "./McpToolCallResult";
 export type { McpToolCallStatus } from "./McpToolCallStatus";
+export type { MemoryCitation } from "./MemoryCitation";
+export type { MemoryCitationEntry } from "./MemoryCitationEntry";
 export type { MergeStrategy } from "./MergeStrategy";
 export type { Model } from "./Model";
 export type { ModelAvailabilityNux } from "./ModelAvailabilityNux";

@@ -450,6 +450,7 @@ async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is
             "payload": serde_json::to_value(EventMsg::AgentMessage(AgentMessageEvent {
                 message: "Still running".to_string(),
                 phase: None,
+                memory_citation: None,
             }))?,
         })
         .to_string(),

@@ -3137,6 +3137,7 @@ class ThreadSourceKind(Enum):
     vscode = "vscode"
     exec = "exec"
     app_server = "appServer"
+    custom = "custom"
     sub_agent = "subAgent"
     sub_agent_review = "subAgentReview"
     sub_agent_compact = "subAgentCompact"
@@ -5819,11 +5820,19 @@ class SubAgentSessionSource(BaseModel):
     sub_agent: Annotated[SubAgentSource, Field(alias="subAgent")]
 
 
-class SessionSource(RootModel[SessionSourceValue | SubAgentSessionSource]):
+class CustomSessionSource(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+    )
+    custom: str
+
+
+class SessionSource(RootModel[SessionSourceValue | CustomSessionSource | SubAgentSessionSource]):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-    root: SessionSourceValue | SubAgentSessionSource
+    root: SessionSourceValue | CustomSessionSource | SubAgentSessionSource
 
 
 class Thread(BaseModel):

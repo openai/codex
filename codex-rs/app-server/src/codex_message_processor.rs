@@ -425,7 +425,10 @@ impl CodexMessageProcessor {
             Ok(config) => self
                 .thread_manager
                 .plugins_manager()
-                .maybe_start_curated_repo_sync_for_config(&config),
+                .maybe_start_curated_repo_sync_for_config(
+                    &config,
+                    &self.thread_manager.session_source(),
+                ),
             Err(err) => warn!("failed to load latest config for curated plugin sync: {err:?}"),
         }
     }
@@ -1945,6 +1948,7 @@ impl CodexMessageProcessor {
             config_overrides,
             typesafe_overrides,
             &cloud_requirements,
+            &listener_task_context.codex_home,
         )
         .await
         {
@@ -3394,6 +3398,7 @@ impl CodexMessageProcessor {
             typesafe_overrides,
             history_cwd,
             &cloud_requirements,
+            &self.config.codex_home,
         )
         .await
         {
@@ -3920,6 +3925,7 @@ impl CodexMessageProcessor {
             typesafe_overrides,
             history_cwd,
             &cloud_requirements,
+            &self.config.codex_home,
         )
         .await
         {
@@ -5301,6 +5307,7 @@ impl CodexMessageProcessor {
             force_reload,
             per_cwd_extra_user_roots,
         } = params;
+        let session_source = self.thread_manager.session_source();
         let cwds = if cwds.is_empty() {
             vec![self.config.cwd.clone()]
         } else {
@@ -5345,9 +5352,12 @@ impl CodexMessageProcessor {
             let extra_roots = extra_roots_by_cwd
                 .get(&cwd)
                 .map_or(&[][..], std::vec::Vec::as_slice);
-            let outcome = skills_manager
-                .skills_for_cwd_with_extra_user_roots(&cwd, force_reload, extra_roots)
-                .await;
+            let outcome = codex_core::skills::filter_skill_load_outcome_for_session_source(
+                skills_manager
+                    .skills_for_cwd_with_extra_user_roots(&cwd, force_reload, extra_roots)
+                    .await,
+                &session_source,
+            );
             let errors = errors_to_info(&outcome.errors);
             let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
             data.push(codex_app_server_protocol::SkillsListEntry {
@@ -5363,6 +5373,7 @@ impl CodexMessageProcessor {
 
     async fn plugin_list(&self, request_id: ConnectionRequestId, params: PluginListParams) {
         let plugins_manager = self.thread_manager.plugins_manager();
+        let session_source = self.thread_manager.session_source();
         let PluginListParams {
             cwds,
             force_remote_sync,
@@ -5417,15 +5428,13 @@ impl CodexMessageProcessor {
             Ok::<Vec<PluginMarketplaceEntry>, MarketplaceError>(
                 marketplaces
                     .into_iter()
-                    .map(|marketplace| PluginMarketplaceEntry {
-                        name: marketplace.name,
-                        path: marketplace.path,
-                        interface: marketplace.interface.map(|interface| MarketplaceInterface {
-                            display_name: interface.display_name,
-                        }),
-                        plugins: marketplace
+                    .filter_map(|marketplace| {
+                        let plugins = marketplace
                             .plugins
                             .into_iter()
+                            .filter(|plugin| {
+                                session_source.matches_product_restriction(&plugin.policy.products)
+                            })
                             .map(|plugin| PluginSummary {
                                 id: plugin.id,
                                 installed: plugin.installed,
@@ -5436,7 +5445,18 @@ impl CodexMessageProcessor {
                                 auth_policy: plugin.policy.authentication.into(),
                                 interface: plugin.interface.map(plugin_interface_to_info),
                             })
-                            .collect(),
+                            .collect::<Vec<_>>();
+
+                        (!plugins.is_empty()).then_some(PluginMarketplaceEntry {
+                            name: marketplace.name,
+                            path: marketplace.path,
+                            interface: marketplace.interface.map(|interface| {
+                                MarketplaceInterface {
+                                    display_name: interface.display_name,
+                                }
+                            }),
+                            plugins,
+                        })
                     })
                     .collect(),
             )
@@ -5531,6 +5551,11 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let session_source = self.thread_manager.session_source();
+        let plugin_skills = codex_core::skills::filter_skills_for_session_source(
+            outcome.plugin.skills,
+            &session_source,
+        );
         let app_summaries =
             plugin_app_helpers::load_plugin_app_summaries(&config, &outcome.plugin.apps).await;
         let plugin = PluginDetail {
@@ -5547,7 +5572,7 @@ impl CodexMessageProcessor {
                 interface: outcome.plugin.interface.map(plugin_interface_to_info),
             },
             description: outcome.plugin.description,
-            skills: plugin_skills_to_info(&outcome.plugin.skills),
+            skills: plugin_skills_to_info(&plugin_skills),
             apps: app_summaries,
             mcp_servers: outcome.plugin.mcp_server_names,
         };
@@ -7039,6 +7064,7 @@ impl CodexMessageProcessor {
                 },
                 Some(command_cwd.clone()),
                 &cloud_requirements,
+                &config.codex_home,
             )
             .await;
             let setup_result = match derived_config {
@@ -7633,6 +7659,7 @@ async fn derive_config_from_params(
     request_overrides: Option<HashMap<String, serde_json::Value>>,
     typesafe_overrides: ConfigOverrides,
     cloud_requirements: &CloudRequirementsLoader,
+    codex_home: &Path,
 ) -> std::io::Result<Config> {
     let merged_cli_overrides = cli_overrides
         .iter()
@@ -7646,6 +7673,7 @@ async fn derive_config_from_params(
         .collect::<Vec<_>>();
 
     codex_core::config::ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
         .cloud_requirements(cloud_requirements.clone())
@@ -7659,6 +7687,7 @@ async fn derive_config_for_cwd(
     typesafe_overrides: ConfigOverrides,
     cwd: Option<PathBuf>,
     cloud_requirements: &CloudRequirementsLoader,
+    codex_home: &Path,
 ) -> std::io::Result<Config> {
     let merged_cli_overrides = cli_overrides
         .iter()
@@ -7672,6 +7701,7 @@ async fn derive_config_for_cwd(
         .collect::<Vec<_>>();
 
     codex_core::config::ConfigBuilder::default()
+        .codex_home(codex_home.to_path_buf())
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
         .fallback_cwd(cwd)

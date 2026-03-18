@@ -13,7 +13,6 @@ use tracing::warn;
 
 use super::CODE_MODE_RUNNER_SOURCE;
 use super::PUBLIC_TOOL_NAME;
-use super::protocol::CodeModeToolCall;
 use super::protocol::HostToNodeMessage;
 use super::protocol::NodeToHostMessage;
 use super::protocol::message_request_id;
@@ -23,7 +22,7 @@ pub(super) struct CodeModeProcess {
     pub(super) stdin: Arc<Mutex<tokio::process::ChildStdin>>,
     pub(super) stdout_task: JoinHandle<()>,
     pub(super) response_waiters: Arc<Mutex<HashMap<String, oneshot::Sender<NodeToHostMessage>>>>,
-    pub(super) tool_call_rx: Arc<Mutex<mpsc::UnboundedReceiver<CodeModeToolCall>>>,
+    pub(super) message_rx: Arc<Mutex<mpsc::UnboundedReceiver<NodeToHostMessage>>>,
 }
 
 impl CodeModeProcess {
@@ -92,7 +91,7 @@ pub(super) async fn spawn_code_mode_process(
         String,
         oneshot::Sender<NodeToHostMessage>,
     >::new()));
-    let (tool_call_tx, tool_call_rx) = mpsc::unbounded_channel();
+    let (message_tx, message_rx) = mpsc::unbounded_channel();
 
     tokio::spawn(async move {
         let mut reader = BufReader::new(stderr);
@@ -135,12 +134,14 @@ pub(super) async fn spawn_code_mode_process(
                     }
                 };
                 match message {
-                    NodeToHostMessage::ToolCall { tool_call } => {
-                        let _ = tool_call_tx.send(tool_call);
+                    message @ (NodeToHostMessage::ToolCall { .. }
+                    | NodeToHostMessage::Notify { .. }) => {
+                        let _ = message_tx.send(message);
                     }
                     message => {
-                        let request_id = message_request_id(&message).to_string();
-                        if let Some(waiter) = response_waiters.lock().await.remove(&request_id) {
+                        if let Some(request_id) = message_request_id(&message)
+                            && let Some(waiter) = response_waiters.lock().await.remove(request_id)
+                        {
                             let _ = waiter.send(message);
                         }
                     }
@@ -155,7 +156,7 @@ pub(super) async fn spawn_code_mode_process(
         stdin,
         stdout_task,
         response_waiters,
-        tool_call_rx: Arc::new(Mutex::new(tool_call_rx)),
+        message_rx: Arc::new(Mutex::new(message_rx)),
     })
 }
 

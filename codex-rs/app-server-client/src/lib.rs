@@ -1033,6 +1033,10 @@ mod tests {
         for (session_source, expected_source) in [
             (SessionSource::Exec, ApiSessionSource::Exec),
             (SessionSource::Cli, ApiSessionSource::Cli),
+            (
+                SessionSource::Custom("atlas".to_string()),
+                ApiSessionSource::Custom("atlas".to_string()),
+            ),
         ] {
             let client = start_test_client(session_source).await;
             let parsed: ThreadStartResponse = client

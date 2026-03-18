@@ -7,12 +7,13 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 use crate::app_event::RealtimeAudioDeviceKind;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
+use crate::chatwidget::realtime::RealtimeConversationPhase;
 use crate::history_cell::UserHistoryCell;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
@@ -95,6 +96,9 @@ use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess;
+use codex_protocol::protocol::RealtimeConversationClosedEvent;
+use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
+use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SessionConfiguredEvent;
@@ -199,6 +203,7 @@ async fn resumed_initial_messages_render_history() {
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "assistant reply".to_string(),
                 phase: None,
+                memory_citation: None,
             }),
         ]),
         network_proxy: None,
@@ -247,6 +252,7 @@ async fn thread_snapshot_replay_does_not_duplicate_agent_message_history() {
                     text: "assistant reply".to_string(),
                 }],
                 phase: None,
+                memory_citation: None,
             }),
         }),
     });
@@ -255,6 +261,7 @@ async fn thread_snapshot_replay_does_not_duplicate_agent_message_history() {
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "assistant reply".to_string(),
             phase: None,
+            memory_citation: None,
         }),
     });
 
@@ -1543,6 +1550,7 @@ async fn live_agent_message_renders_during_review_mode() {
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Review progress update".to_string(),
             phase: None,
+            memory_citation: None,
         }),
     });
 
@@ -1569,6 +1577,7 @@ async fn thread_snapshot_replay_preserves_agent_message_during_review_mode() {
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Review progress update".to_string(),
             phase: None,
+            memory_citation: None,
         }),
     });
 
@@ -1953,6 +1962,21 @@ fn next_interrupt_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
             Ok(_) => continue,
             Err(TryRecvError::Empty) => panic!("expected interrupt op but queue was empty"),
             Err(TryRecvError::Disconnected) => panic!("expected interrupt op but channel closed"),
+        }
+    }
+}
+
+fn next_realtime_close_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::RealtimeConversationClose) => return,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => {
+                panic!("expected realtime close op but queue was empty")
+            }
+            Err(TryRecvError::Disconnected) => {
+                panic!("expected realtime close op but channel closed")
+            }
         }
     }
 }
@@ -3532,6 +3556,7 @@ fn complete_assistant_message(
                     text: text.to_string(),
                 }],
                 phase,
+                memory_citation: None,
             }),
         }),
     });
@@ -4127,6 +4152,7 @@ async fn live_legacy_agent_message_after_item_completed_does_not_duplicate_assis
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "hello".into(),
             phase: Some(MessagePhase::FinalAnswer),
+            memory_citation: None,
         }),
     });
 
@@ -4745,6 +4771,25 @@ async fn ctrl_c_shutdown_works_with_caps_lock() {
 }
 
 #[tokio::test]
+async fn ctrl_c_closes_realtime_conversation_before_interrupt_or_quit() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
+    chat.bottom_pane
+        .set_composer_text("recording meter".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    next_realtime_close_op(&mut op_rx);
+    assert_eq!(
+        chat.realtime_conversation.phase,
+        RealtimeConversationPhase::Stopping
+    );
+    assert_eq!(chat.bottom_pane.composer_text(), "recording meter");
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
 async fn ctrl_d_quits_without_prompt() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
@@ -4791,6 +4836,45 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
 
     let images = chat.bottom_pane.take_recent_submission_images();
     assert_eq!(vec![PathBuf::from("/tmp/preview.png")], images);
+}
+
+#[tokio::test]
+async fn realtime_error_closes_without_followup_closed_info() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
+
+    chat.on_realtime_conversation_realtime(RealtimeConversationRealtimeEvent {
+        payload: RealtimeEvent::Error("boom".to_string()),
+    });
+    next_realtime_close_op(&mut op_rx);
+
+    chat.on_realtime_conversation_closed(RealtimeConversationClosedEvent {
+        reason: Some("error".to_string()),
+    });
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>();
+    assert_snapshot!(rendered.join("\n\n"), @"■ Realtime voice error: boom");
+}
+
+#[cfg(not(target_os = "linux"))]
+#[tokio::test]
+async fn removing_active_realtime_placeholder_closes_realtime_conversation() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
+    let placeholder_id = chat.bottom_pane.insert_transcription_placeholder("⠤⠤⠤⠤");
+    chat.realtime_conversation.meter_placeholder_id = Some(placeholder_id.clone());
+
+    chat.remove_transcription_placeholder(&placeholder_id);
+
+    next_realtime_close_op(&mut op_rx);
+    assert_eq!(chat.realtime_conversation.meter_placeholder_id, None);
+    assert_eq!(
+        chat.realtime_conversation.phase,
+        RealtimeConversationPhase::Stopping
+    );
 }
 
 #[tokio::test]
@@ -5933,6 +6017,7 @@ async fn slash_copy_is_unavailable_when_legacy_agent_message_is_not_repeated_on_
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Legacy final message".into(),
             phase: None,
+            memory_citation: None,
         }),
     });
     let _ = drain_insert_history(&mut rx);
@@ -7665,7 +7750,7 @@ async fn personality_selection_popup_snapshot() {
     assert_snapshot!("personality_selection_popup", popup);
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 #[tokio::test]
 async fn realtime_audio_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
@@ -7675,7 +7760,7 @@ async fn realtime_audio_selection_popup_snapshot() {
     assert_snapshot!("realtime_audio_selection_popup", popup);
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 #[tokio::test]
 async fn realtime_audio_selection_popup_narrow_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
@@ -7685,7 +7770,7 @@ async fn realtime_audio_selection_popup_narrow_snapshot() {
     assert_snapshot!("realtime_audio_selection_popup_narrow", popup);
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 #[tokio::test]
 async fn realtime_microphone_picker_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
@@ -7699,7 +7784,7 @@ async fn realtime_microphone_picker_popup_snapshot() {
     assert_snapshot!("realtime_microphone_picker_popup", popup);
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 #[tokio::test]
 async fn realtime_audio_picker_emits_persist_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
@@ -10778,6 +10863,7 @@ async fn deltas_then_same_final_message_are_rendered_snapshot() {
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Here is the result.".into(),
             phase: None,
+            memory_citation: None,
         }),
     });
 
