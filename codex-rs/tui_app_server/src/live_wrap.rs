@@ -66,7 +66,7 @@ impl RowBuilder {
                 if start < i {
                     self.current_line.push_str(&fragment[start..i]);
                 }
-                self.flush_current_line(true);
+                self.flush_current_line(/*explicit_break*/ true);
                 start = i + ch.len_utf8();
             }
         }
@@ -78,7 +78,7 @@ impl RowBuilder {
 
     /// Mark the end of the current logical line (equivalent to pushing a '\n').
     pub fn end_line(&mut self) {
-        self.flush_current_line(true);
+        self.flush_current_line(/*explicit_break*/ true);
     }
 
     /// Drain and return all produced rows.

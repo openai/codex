@@ -18,6 +18,7 @@ use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use dirs::home_dir;
@@ -114,6 +115,8 @@ struct Dependencies {
 struct Policy {
     #[serde(default)]
     allow_implicit_invocation: Option<bool>,
+    #[serde(default)]
+    products: Vec<Product>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -247,9 +250,10 @@ fn skill_roots_from_layer_stack_inner(
 ) -> Vec<SkillRoot> {
     let mut roots = Vec::new();
 
-    for layer in
-        config_layer_stack.get_layers(ConfigLayerStackOrdering::HighestPrecedenceFirst, true)
-    {
+    for layer in config_layer_stack.get_layers(
+        ConfigLayerStackOrdering::HighestPrecedenceFirst,
+        /*include_disabled*/ true,
+    ) {
         let Some(config_folder) = layer.config_folder() else {
             continue;
         };
@@ -321,9 +325,10 @@ fn repo_agents_skill_roots(config_layer_stack: &ConfigLayerStack, cwd: &Path) ->
 
 fn project_root_markers_from_stack(config_layer_stack: &ConfigLayerStack) -> Vec<String> {
     let mut merged = TomlValue::Table(toml::map::Map::new());
-    for layer in
-        config_layer_stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false)
-    {
+    for layer in config_layer_stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ false,
+    ) {
         if matches!(layer.name, ConfigLayerSource::Project { .. }) {
             continue;
         }
@@ -733,6 +738,7 @@ fn resolve_dependencies(dependencies: Option<Dependencies>) -> Option<SkillDepen
 fn resolve_policy(policy: Option<Policy>) -> Option<SkillPolicy> {
     policy.map(|policy| SkillPolicy {
         allow_implicit_invocation: policy.allow_implicit_invocation,
+        products: policy.products,
     })
 }
 

@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::Product;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use serde::Deserialize;
 
@@ -41,11 +43,19 @@ impl SkillMetadata {
             .and_then(|policy| policy.allow_implicit_invocation)
             .unwrap_or(true)
     }
+
+    pub fn matches_product_restriction(&self, session_source: &SessionSource) -> bool {
+        match &self.policy {
+            Some(policy) => session_source.matches_product_restriction(&policy.products),
+            None => true,
+        }
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SkillPolicy {
     pub allow_implicit_invocation: Option<bool>,
+    pub products: Vec<Product>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,4 +120,40 @@ impl SkillLoadOutcome {
             .iter()
             .map(|skill| (skill, self.is_skill_enabled(skill)))
     }
+}
+
+pub fn filter_skill_load_outcome_for_session_source(
+    mut outcome: SkillLoadOutcome,
+    session_source: &SessionSource,
+) -> SkillLoadOutcome {
+    outcome
+        .skills
+        .retain(|skill| skill.matches_product_restriction(session_source));
+    outcome.implicit_skills_by_scripts_dir = Arc::new(
+        outcome
+            .implicit_skills_by_scripts_dir
+            .iter()
+            .filter(|(_, skill)| skill.matches_product_restriction(session_source))
+            .map(|(path, skill)| (path.clone(), skill.clone()))
+            .collect(),
+    );
+    outcome.implicit_skills_by_doc_path = Arc::new(
+        outcome
+            .implicit_skills_by_doc_path
+            .iter()
+            .filter(|(_, skill)| skill.matches_product_restriction(session_source))
+            .map(|(path, skill)| (path.clone(), skill.clone()))
+            .collect(),
+    );
+    outcome
+}
+
+pub fn filter_skills_for_session_source(
+    skills: Vec<SkillMetadata>,
+    session_source: &SessionSource,
+) -> Vec<SkillMetadata> {
+    skills
+        .into_iter()
+        .filter(|skill| skill.matches_product_restriction(session_source))
+        .collect()
 }

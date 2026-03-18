@@ -17,6 +17,7 @@ use crate::protocol::common::EXPERIMENTAL_CLIENT_METHODS;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use codex_protocol::protocol::RolloutLine;
 use schemars::JsonSchema;
 use schemars::schema_for;
 use serde::Serialize;
@@ -182,7 +183,13 @@ pub fn generate_ts_with_options(
 }
 
 pub fn generate_json(out_dir: &Path) -> Result<()> {
-    generate_json_with_experimental(out_dir, false)
+    generate_json_with_experimental(out_dir, /*experimental_api*/ false)
+}
+
+pub fn generate_internal_json_schema(out_dir: &Path) -> Result<()> {
+    ensure_dir(out_dir)?;
+    write_json_schema::<RolloutLine>(out_dir, "RolloutLine")?;
+    Ok(())
 }
 
 pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -> Result<()> {
@@ -1984,7 +1991,7 @@ pub(crate) fn generate_index_ts_tree(tree: &mut BTreeMap<PathBuf, String>) {
     if !v2_entries.is_empty() {
         tree.insert(
             PathBuf::from("v2").join("index.ts"),
-            index_ts_entries(&v2_entries, false),
+            index_ts_entries(&v2_entries, /*has_v2_ts*/ false),
         );
     }
 }

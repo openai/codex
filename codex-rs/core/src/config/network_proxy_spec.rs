@@ -77,7 +77,7 @@ impl NetworkProxySpec {
     }
 
     pub fn proxy_host_and_port(&self) -> String {
-        host_and_port_from_network_addr(&self.config.network.proxy_url, 3128)
+        host_and_port_from_network_addr(&self.config.network.proxy_url, /*default_port*/ 3128)
     }
 
     pub fn socks_enabled(&self) -> bool {

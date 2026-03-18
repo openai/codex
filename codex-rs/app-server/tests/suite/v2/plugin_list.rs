@@ -152,6 +152,9 @@ async fn plugin_list_includes_install_and_enabled_state_from_config() -> Result<
         repo_root.path().join(".agents/plugins/marketplace.json"),
         r#"{
   "name": "codex-curated",
+  "interface": {
+    "displayName": "ChatGPT Official"
+  },
   "plugins": [
     {
       "name": "enabled-plugin",
@@ -220,6 +223,13 @@ enabled = false
         .expect("expected repo marketplace entry");
 
     assert_eq!(marketplace.name, "codex-curated");
+    assert_eq!(
+        marketplace
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.display_name.as_deref()),
+        Some("ChatGPT Official")
+    );
     assert_eq!(marketplace.plugins.len(), 3);
     assert_eq!(marketplace.plugins[0].id, "enabled-plugin@codex-curated");
     assert_eq!(marketplace.plugins[0].name, "enabled-plugin");
@@ -368,6 +378,179 @@ enabled = false
 }
 
 #[tokio::test]
+async fn plugin_list_filters_plugins_for_custom_session_source_products() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
+    std::fs::write(
+        repo_root.path().join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "all-products",
+      "source": {
+        "source": "local",
+        "path": "./all-products"
+      }
+    },
+    {
+      "name": "chatgpt-only",
+      "source": {
+        "source": "local",
+        "path": "./chatgpt-only"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL",
+        "products": ["CHATGPT"]
+      }
+    },
+    {
+      "name": "atlas-only",
+      "source": {
+        "source": "local",
+        "path": "./atlas-only"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL",
+        "products": ["ATLAS"]
+      }
+    },
+    {
+      "name": "codex-only",
+      "source": {
+        "source": "local",
+        "path": "./codex-only"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL",
+        "products": ["CODEX"]
+      }
+    }
+  ]
+}"#,
+    )?;
+
+    let mut mcp =
+        McpProcess::new_with_args(codex_home.path(), &["--session-source", "chatgpt"]).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
+            force_remote_sync: false,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginListResponse = to_response(response)?;
+
+    let marketplace = response
+        .marketplaces
+        .into_iter()
+        .find(|marketplace| marketplace.name == "codex-curated")
+        .expect("expected marketplace entry");
+
+    assert_eq!(
+        marketplace
+            .plugins
+            .into_iter()
+            .map(|plugin| plugin.name)
+            .collect::<Vec<_>>(),
+        vec!["all-products".to_string(), "chatgpt-only".to_string()]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_list_defaults_non_custom_session_source_to_codex_products() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
+    std::fs::write(
+        repo_root.path().join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "all-products",
+      "source": {
+        "source": "local",
+        "path": "./all-products"
+      }
+    },
+    {
+      "name": "chatgpt-only",
+      "source": {
+        "source": "local",
+        "path": "./chatgpt-only"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL",
+        "products": ["CHATGPT"]
+      }
+    },
+    {
+      "name": "codex-only",
+      "source": {
+        "source": "local",
+        "path": "./codex-only"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL",
+        "products": ["CODEX"]
+      }
+    }
+  ]
+}"#,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
+            force_remote_sync: false,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginListResponse = to_response(response)?;
+
+    let marketplace = response
+        .marketplaces
+        .into_iter()
+        .find(|marketplace| marketplace.name == "codex-curated")
+        .expect("expected marketplace entry");
+
+    assert_eq!(
+        marketplace
+            .plugins
+            .into_iter()
+            .map(|plugin| plugin.name)
+            .collect::<Vec<_>>(),
+        vec!["all-products".to_string(), "codex-only".to_string()]
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_list_returns_plugin_interface_with_absolute_asset_paths() -> Result<()> {
     let codex_home = TempDir::new()?;
     let repo_root = TempDir::new()?;
@@ -386,8 +569,10 @@ async fn plugin_list_returns_plugin_interface_with_absolute_asset_paths() -> Res
         "source": "local",
         "path": "./plugins/demo-plugin"
       },
-      "installPolicy": "AVAILABLE",
-      "authPolicy": "ON_INSTALL",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
       "category": "Design"
     }
   ]
@@ -625,6 +810,7 @@ async fn plugin_list_force_remote_sync_reconciles_curated_plugin_state() -> Resu
     )?;
     write_openai_curated_marketplace(codex_home.path(), &["linear", "gmail", "calendar"])?;
     write_installed_plugin(&codex_home, "openai-curated", "linear")?;
+    write_installed_plugin(&codex_home, "openai-curated", "gmail")?;
     write_installed_plugin(&codex_home, "openai-curated", "calendar")?;
 
     Mock::given(method("GET"))
@@ -671,14 +857,14 @@ async fn plugin_list_force_remote_sync_reconciles_curated_plugin_state() -> Resu
             .collect::<Vec<_>>(),
         vec![
             ("linear@openai-curated".to_string(), true, true),
-            ("gmail@openai-curated".to_string(), true, false),
+            ("gmail@openai-curated".to_string(), false, false),
             ("calendar@openai-curated".to_string(), false, false),
         ]
     );
 
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     assert!(config.contains(r#"[plugins."linear@openai-curated"]"#));
-    assert!(config.contains(r#"[plugins."gmail@openai-curated"]"#));
+    assert!(!config.contains(r#"[plugins."gmail@openai-curated"]"#));
     assert!(!config.contains(r#"[plugins."calendar@openai-curated"]"#));
 
     assert!(
@@ -688,12 +874,10 @@ async fn plugin_list_force_remote_sync_reconciles_curated_plugin_state() -> Resu
             .is_dir()
     );
     assert!(
-        codex_home
+        !codex_home
             .path()
-            .join(format!(
-                "plugins/cache/openai-curated/gmail/{TEST_CURATED_PLUGIN_SHA}"
-            ))
-            .is_dir()
+            .join("plugins/cache/openai-curated/gmail")
+            .exists()
     );
     assert!(
         !codex_home
@@ -734,6 +918,9 @@ chatgpt_base_url = "{base_url}"
 plugins = true
 
 [plugins."linear@openai-curated"]
+enabled = false
+
+[plugins."gmail@openai-curated"]
 enabled = false
 
 [plugins."calendar@openai-curated"]

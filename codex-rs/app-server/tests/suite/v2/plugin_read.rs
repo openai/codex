@@ -36,8 +36,10 @@ async fn plugin_read_returns_plugin_details_with_bundle_contents() -> Result<()>
         "source": "local",
         "path": "./plugins/demo-plugin"
       },
-      "installPolicy": "AVAILABLE",
-      "authPolicy": "ON_INSTALL",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
       "category": "Design"
     }
   ]

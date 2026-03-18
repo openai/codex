@@ -47,6 +47,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::TurnContextItem;
 use codex_state::log_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_oss::ensure_oss_provider_ready;
@@ -78,6 +79,19 @@ mod app_server_session;
 mod ascii_animation;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 mod audio_device;
+#[cfg(all(not(target_os = "linux"), not(feature = "voice-input")))]
+mod audio_device {
+    use crate::app_event::RealtimeAudioDeviceKind;
+
+    pub(crate) fn list_realtime_audio_device_names(
+        kind: RealtimeAudioDeviceKind,
+    ) -> Result<Vec<String>, String> {
+        Err(format!(
+            "Failed to load realtime {} devices: voice input is unavailable in this build",
+            kind.noun()
+        ))
+    }
+}
 mod bottom_pane;
 mod chatwidget;
 mod cli;
@@ -100,6 +114,7 @@ pub mod insert_history;
 mod key_hint;
 mod line_truncation;
 pub mod live_wrap;
+mod local_chatgpt_auth;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
@@ -504,7 +519,10 @@ async fn lookup_session_target_with_app_server(
                 return Ok(None);
             }
         };
-        return match app_server.thread_read(thread_id, false).await {
+        return match app_server
+            .thread_read(thread_id, /*include_turns*/ false)
+            .await
+        {
             Ok(thread) => Ok(session_target_from_app_server_thread(thread)),
             Err(err) => {
                 warn!(
@@ -668,7 +686,7 @@ pub async fn run_main(
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
     let cloud_requirements = cloud_requirements_loader_for_storage(
         codex_home.to_path_buf(),
-        false,
+        /*enable_codex_api_key_env*/ false,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
         chatgpt_base_url,
     );
@@ -825,7 +843,12 @@ pub async fn run_main(
     }
 
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"), None, true)
+        codex_core::otel_init::build_provider(
+            &config,
+            env!("CARGO_PKG_VERSION"),
+            /*service_name_override*/ None,
+            /*default_analytics_enabled*/ true,
+        )
     })) {
         Ok(Ok(otel)) => otel,
         Ok(Err(e)) => {
@@ -1004,7 +1027,7 @@ async fn run_ratatui_app(
         if show_login_screen && !remote_mode {
             cloud_requirements = cloud_requirements_loader_for_storage(
                 initial_config.codex_home.clone(),
-                false,
+                /*enable_codex_api_key_env*/ false,
                 initial_config.cli_auth_credentials_store_mode,
                 initial_config.chatgpt_base_url.clone(),
             );
@@ -1086,7 +1109,11 @@ async fn run_ratatui_app(
             let Some(app_server) = session_lookup_app_server.as_mut() else {
                 unreachable!("session lookup app server should be initialized for --fork --last");
             };
-            match lookup_latest_session_target_with_app_server(app_server, &config, None).await? {
+            match lookup_latest_session_target_with_app_server(
+                app_server, &config, /*cwd_filter*/ None,
+            )
+            .await?
+            {
                 Some(target_session) => resume_picker::SessionSelection::Fork(target_session),
                 None => resume_picker::SessionSelection::StartFresh,
             }
@@ -1329,7 +1356,7 @@ pub(crate) async fn read_session_cwd(
     // changes, but the rollout is an append-only JSONL log and rewriting the head
     // would be error-prone.
     let path = path?;
-    if let Some(cwd) = parse_latest_turn_context_cwd(path).await {
+    if let Some(cwd) = read_latest_turn_context(path).await.map(|item| item.cwd) {
         return Some(cwd);
     }
     match read_session_meta_line(path).await {
@@ -1346,7 +1373,23 @@ pub(crate) async fn read_session_cwd(
     }
 }
 
-async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
+pub(crate) async fn read_session_model(
+    config: &Config,
+    thread_id: ThreadId,
+    path: Option<&Path>,
+) -> Option<String> {
+    if let Some(state_db_ctx) = get_state_db(config).await
+        && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
+        && let Some(model) = metadata.model
+    {
+        return Some(model);
+    }
+
+    let path = path?;
+    read_latest_turn_context(path).await.map(|item| item.model)
+}
+
+async fn read_latest_turn_context(path: &Path) -> Option<TurnContextItem> {
     let text = tokio::fs::read_to_string(path).await.ok()?;
     for line in text.lines().rev() {
         let trimmed = line.trim();
@@ -1357,7 +1400,7 @@ async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
             continue;
         };
         if let RolloutItem::TurnContext(item) = rollout_line.item {
-            return Some(item.cwd);
+            return Some(item);
         }
     }
     None
@@ -1475,8 +1518,13 @@ async fn load_config_or_exit(
     overrides: ConfigOverrides,
     cloud_requirements: CloudRequirementsLoader,
 ) -> Config {
-    load_config_or_exit_with_fallback_cwd(cli_kv_overrides, overrides, cloud_requirements, None)
-        .await
+    load_config_or_exit_with_fallback_cwd(
+        cli_kv_overrides,
+        overrides,
+        cloud_requirements,
+        /*fallback_cwd*/ None,
+    )
+    .await
 }
 
 async fn load_config_or_exit_with_fallback_cwd(

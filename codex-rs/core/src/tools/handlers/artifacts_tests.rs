@@ -1,6 +1,5 @@
 use super::*;
-use codex_artifacts::RuntimeEntrypoints;
-use codex_artifacts::RuntimePathEntry;
+use crate::packages::versions;
 use tempfile::TempDir;
 
 #[test]
@@ -8,14 +7,6 @@ fn parse_freeform_args_without_pragma() {
     let args = parse_freeform_args("console.log('ok');").expect("parse args");
     assert_eq!(args.source, "console.log('ok');");
     assert_eq!(args.timeout_ms, None);
-}
-
-#[test]
-fn parse_freeform_args_with_pragma() {
-    let args = parse_freeform_args("// codex-artifacts: timeout_ms=45000\nconsole.log('ok');")
-        .expect("parse args");
-    assert_eq!(args.source, "console.log('ok');");
-    assert_eq!(args.timeout_ms, Some(45_000));
 }
 
 #[test]
@@ -46,7 +37,7 @@ fn default_runtime_manager_uses_openai_codex_release_base() {
     );
     assert_eq!(
         manager.config().release().runtime_version(),
-        PINNED_ARTIFACT_RUNTIME_VERSION
+        versions::ARTIFACT_RUNTIME
     );
 }
 
@@ -59,56 +50,40 @@ fn load_cached_runtime_reads_pinned_cache_path() {
         .path()
         .join("packages")
         .join("artifacts")
-        .join(PINNED_ARTIFACT_RUNTIME_VERSION)
+        .join(versions::ARTIFACT_RUNTIME)
         .join(platform.as_str());
     std::fs::create_dir_all(&install_dir).expect("create install dir");
+    std::fs::create_dir_all(install_dir.join("dist")).expect("create build entrypoint dir");
     std::fs::write(
-        install_dir.join("manifest.json"),
+        install_dir.join("package.json"),
         serde_json::json!({
-            "schema_version": 1,
-            "runtime_version": PINNED_ARTIFACT_RUNTIME_VERSION,
-            "node": { "relative_path": "node/bin/node" },
-            "entrypoints": {
-                "build_js": { "relative_path": "artifact-tool/dist/artifact_tool.mjs" },
-                "render_cli": { "relative_path": "granola-render/dist/render_cli.mjs" }
+            "name": "@oai/artifact-tool",
+            "version": versions::ARTIFACT_RUNTIME,
+            "type": "module",
+            "exports": {
+                ".": "./dist/artifact_tool.mjs"
             }
         })
         .to_string(),
     )
-    .expect("write manifest");
-    std::fs::create_dir_all(install_dir.join("artifact-tool/dist"))
-        .expect("create build entrypoint dir");
-    std::fs::create_dir_all(install_dir.join("granola-render/dist"))
-        .expect("create render entrypoint dir");
+    .expect("write package json");
     std::fs::write(
-        install_dir.join("artifact-tool/dist/artifact_tool.mjs"),
+        install_dir.join("dist/artifact_tool.mjs"),
         "export const ok = true;\n",
     )
     .expect("write build entrypoint");
-    std::fs::write(
-        install_dir.join("granola-render/dist/render_cli.mjs"),
-        "export const ok = true;\n",
-    )
-    .expect("write render entrypoint");
 
     let runtime = codex_artifacts::load_cached_runtime(
         &codex_home
             .path()
             .join(codex_artifacts::DEFAULT_CACHE_ROOT_RELATIVE),
-        PINNED_ARTIFACT_RUNTIME_VERSION,
+        versions::ARTIFACT_RUNTIME,
     )
     .expect("resolve runtime");
-    assert_eq!(runtime.runtime_version(), PINNED_ARTIFACT_RUNTIME_VERSION);
+    assert_eq!(runtime.runtime_version(), versions::ARTIFACT_RUNTIME);
     assert_eq!(
-        runtime.manifest().entrypoints,
-        RuntimeEntrypoints {
-            build_js: RuntimePathEntry {
-                relative_path: "artifact-tool/dist/artifact_tool.mjs".to_string(),
-            },
-            render_cli: RuntimePathEntry {
-                relative_path: "granola-render/dist/render_cli.mjs".to_string(),
-            },
-        }
+        runtime.build_js_path(),
+        install_dir.join("dist/artifact_tool.mjs")
     );
 }
 

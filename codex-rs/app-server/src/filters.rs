@@ -1,17 +1,24 @@
 use codex_app_server_protocol::ThreadSourceKind;
-use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
+
+fn interactive_source_kinds() -> Vec<ThreadSourceKind> {
+    vec![
+        ThreadSourceKind::Cli,
+        ThreadSourceKind::VsCode,
+        ThreadSourceKind::Custom,
+    ]
+}
 
 pub(crate) fn compute_source_filters(
     source_kinds: Option<Vec<ThreadSourceKind>>,
 ) -> (Vec<CoreSessionSource>, Option<Vec<ThreadSourceKind>>) {
     let Some(source_kinds) = source_kinds else {
-        return (INTERACTIVE_SESSION_SOURCES.to_vec(), None);
+        return (Vec::new(), Some(interactive_source_kinds()));
     };
 
     if source_kinds.is_empty() {
-        return (INTERACTIVE_SESSION_SOURCES.to_vec(), None);
+        return (Vec::new(), Some(interactive_source_kinds()));
     }
 
     let requires_post_filter = source_kinds.iter().any(|kind| {
@@ -19,6 +26,7 @@ pub(crate) fn compute_source_filters(
             kind,
             ThreadSourceKind::Exec
                 | ThreadSourceKind::AppServer
+                | ThreadSourceKind::Custom
                 | ThreadSourceKind::SubAgent
                 | ThreadSourceKind::SubAgentReview
                 | ThreadSourceKind::SubAgentCompact
@@ -38,6 +46,7 @@ pub(crate) fn compute_source_filters(
                 ThreadSourceKind::VsCode => Some(CoreSessionSource::VSCode),
                 ThreadSourceKind::Exec
                 | ThreadSourceKind::AppServer
+                | ThreadSourceKind::Custom
                 | ThreadSourceKind::SubAgent
                 | ThreadSourceKind::SubAgentReview
                 | ThreadSourceKind::SubAgentCompact
@@ -56,6 +65,7 @@ pub(crate) fn source_kind_matches(source: &CoreSessionSource, filter: &[ThreadSo
         ThreadSourceKind::VsCode => matches!(source, CoreSessionSource::VSCode),
         ThreadSourceKind::Exec => matches!(source, CoreSessionSource::Exec),
         ThreadSourceKind::AppServer => matches!(source, CoreSessionSource::Mcp),
+        ThreadSourceKind::Custom => matches!(source, CoreSessionSource::Custom(_)),
         ThreadSourceKind::SubAgent => matches!(source, CoreSessionSource::SubAgent(_)),
         ThreadSourceKind::SubAgentReview => {
             matches!(
@@ -92,16 +102,16 @@ mod tests {
     fn compute_source_filters_defaults_to_interactive_sources() {
         let (allowed_sources, filter) = compute_source_filters(None);
 
-        assert_eq!(allowed_sources, INTERACTIVE_SESSION_SOURCES.to_vec());
-        assert_eq!(filter, None);
+        assert_eq!(allowed_sources, Vec::new());
+        assert_eq!(filter, Some(interactive_source_kinds()));
     }
 
     #[test]
     fn compute_source_filters_empty_means_interactive_sources() {
         let (allowed_sources, filter) = compute_source_filters(Some(Vec::new()));
 
-        assert_eq!(allowed_sources, INTERACTIVE_SESSION_SOURCES.to_vec());
-        assert_eq!(filter, None);
+        assert_eq!(allowed_sources, Vec::new());
+        assert_eq!(filter, Some(interactive_source_kinds()));
     }
 
     #[test]
@@ -119,6 +129,15 @@ mod tests {
     #[test]
     fn compute_source_filters_subagent_variant_requires_post_filtering() {
         let source_kinds = vec![ThreadSourceKind::SubAgentReview];
+        let (allowed_sources, filter) = compute_source_filters(Some(source_kinds.clone()));
+
+        assert_eq!(allowed_sources, Vec::new());
+        assert_eq!(filter, Some(source_kinds));
+    }
+
+    #[test]
+    fn compute_source_filters_custom_requires_post_filtering() {
+        let source_kinds = vec![ThreadSourceKind::Custom];
         let (allowed_sources, filter) = compute_source_filters(Some(source_kinds.clone()));
 
         assert_eq!(allowed_sources, Vec::new());
@@ -153,5 +172,13 @@ mod tests {
             &spawn,
             &[ThreadSourceKind::SubAgentReview]
         ));
+    }
+
+    #[test]
+    fn source_kind_matches_custom_sources() {
+        let custom = CoreSessionSource::Custom("atlas".to_string());
+
+        assert!(source_kind_matches(&custom, &[ThreadSourceKind::Custom]));
+        assert!(!source_kind_matches(&custom, &[ThreadSourceKind::Cli]));
     }
 }

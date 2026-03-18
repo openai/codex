@@ -871,24 +871,6 @@
         }
       ]
     },
-    "FunctionCallOutputPayload": {
-      "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`body` serializes directly as the wire value for `function_call_output.output`. `success` remains internal metadata for downstream handling.",
-      "properties": {
-        "body": {
-          "$ref": "#/definitions/FunctionCallOutputBody"
-        },
-        "success": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "body"
-      ],
-      "type": "object"
-    },
     "FuzzyFileSearchParams": {
       "properties": {
         "cancellationToken": {
@@ -954,15 +936,6 @@
         "preexisting_untracked_files"
       ],
       "type": "object"
-    },
-    "HazelnutScope": {
-      "enum": [
-        "example",
-        "workspace-shared",
-        "all-shared",
-        "personal"
-      ],
-      "type": "string"
     },
     "ImageDetail": {
       "enum": [
@@ -1280,6 +1253,10 @@
     },
     "PluginInstallParams": {
       "properties": {
+        "forceRemoteSync": {
+          "description": "When true, apply the remote plugin change before the local install flow.",
+          "type": "boolean"
+        },
         "marketplacePath": {
           "$ref": "#/definitions/AbsolutePathBuf"
         },
@@ -1329,6 +1306,10 @@
     },
     "PluginUninstallParams": {
       "properties": {
+        "forceRemoteSync": {
+          "description": "When true, apply the remote plugin change before the local uninstall flow.",
+          "type": "boolean"
+        },
         "pluginId": {
           "type": "string"
         }
@@ -1337,15 +1318,6 @@
         "pluginId"
       ],
       "type": "object"
-    },
-    "ProductSurface": {
-      "enum": [
-        "chatgpt",
-        "codex",
-        "api",
-        "atlas"
-      ],
-      "type": "string"
     },
     "ReadOnlyAccess": {
       "oneOf": [
@@ -1575,10 +1547,6 @@
                 "null"
               ]
             },
-            "id": {
-              "type": "string",
-              "writeOnly": true
-            },
             "summary": {
               "items": {
                 "$ref": "#/definitions/ReasoningItemReasoningSummary"
@@ -1594,7 +1562,6 @@
             }
           },
           "required": [
-            "id",
             "summary",
             "type"
           ],
@@ -1728,7 +1695,7 @@
               "type": "string"
             },
             "output": {
-              "$ref": "#/definitions/FunctionCallOutputPayload"
+              "$ref": "#/definitions/FunctionCallOutputBody"
             },
             "type": {
               "enum": [
@@ -1792,8 +1759,14 @@
             "call_id": {
               "type": "string"
             },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "output": {
-              "$ref": "#/definitions/FunctionCallOutputPayload"
+              "$ref": "#/definitions/FunctionCallOutputBody"
             },
             "type": {
               "enum": [
@@ -2425,42 +2398,6 @@
       },
       "type": "object"
     },
-    "SkillsRemoteReadParams": {
-      "properties": {
-        "enabled": {
-          "default": false,
-          "type": "boolean"
-        },
-        "hazelnutScope": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/HazelnutScope"
-            }
-          ],
-          "default": "example"
-        },
-        "productSurface": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ProductSurface"
-            }
-          ],
-          "default": "codex"
-        }
-      },
-      "type": "object"
-    },
-    "SkillsRemoteWriteParams": {
-      "properties": {
-        "hazelnutId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "hazelnutId"
-      ],
-      "type": "object"
-    },
     "TextElement": {
       "properties": {
         "byteRange": {
@@ -2771,6 +2708,12 @@
         "data": {
           "type": "string"
         },
+        "itemId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "numChannels": {
           "format": "uint16",
           "minimum": 0.0,
@@ -2951,6 +2894,7 @@
         "vscode",
         "exec",
         "appServer",
+        "custom",
         "subAgent",
         "subAgentReview",
         "subAgentCompact",
@@ -3809,54 +3753,6 @@
         "params"
       ],
       "title": "Plugin/readRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "skills/remote/list"
-          ],
-          "title": "Skills/remote/listRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/SkillsRemoteReadParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Skills/remote/listRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "skills/remote/export"
-          ],
-          "title": "Skills/remote/exportRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/SkillsRemoteWriteParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Skills/remote/exportRequest",
       "type": "object"
     },
     {

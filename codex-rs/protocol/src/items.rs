@@ -1,3 +1,4 @@
+use crate::memory_citation::MemoryCitation;
 use crate::models::MessagePhase;
 use crate::models::WebSearchAction;
 use crate::protocol::AgentMessageEvent;
@@ -58,6 +59,9 @@ pub struct AgentMessageItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub phase: Option<MessagePhase>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub memory_citation: Option<MemoryCitation>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -201,6 +205,7 @@ impl AgentMessageItem {
             id: uuid::Uuid::new_v4().to_string(),
             content: content.to_vec(),
             phase: None,
+            memory_citation: None,
         }
     }
 
@@ -211,6 +216,7 @@ impl AgentMessageItem {
                 AgentMessageContent::Text { text } => EventMsg::AgentMessage(AgentMessageEvent {
                     message: text.clone(),
                     phase: self.phase.clone(),
+                    memory_citation: self.memory_citation.clone(),
                 }),
             })
             .collect()

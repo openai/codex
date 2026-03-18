@@ -81,7 +81,7 @@ fn emit_skill_injected_metric(
 
     otel.counter(
         "codex.skill.injected",
-        1,
+        /*inc*/ 1,
         &[("status", status), ("skill", skill.name.as_str())],
     );
 }

@@ -4,6 +4,7 @@ use codex_app_server::run_main_with_transport;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_core::config_loader::LoaderOverrides;
+use codex_protocol::protocol::SessionSource;
 use codex_utils_cli::CliConfigOverrides;
 use std::path::PathBuf;
 
@@ -21,6 +22,17 @@ struct AppServerArgs {
         default_value = AppServerTransport::DEFAULT_LISTEN_URL
     )]
     listen: AppServerTransport,
+
+    /// Session source stamped into new threads started by this app-server.
+    ///
+    /// Known values such as `vscode`, `cli`, `exec`, and `mcp` map to built-in
+    /// sources. Any other non-empty value is recorded as a custom source.
+    #[arg(
+        long = "session-source",
+        value_name = "SOURCE",
+        default_value = "vscode"
+    )]
+    session_source: String,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -32,13 +44,16 @@ fn main() -> anyhow::Result<()> {
             ..Default::default()
         };
         let transport = args.listen;
+        let session_source = SessionSource::from_startup_arg(args.session_source.as_str())
+            .map_err(|err| anyhow::anyhow!("invalid --session-source: {err}"))?;
 
         run_main_with_transport(
             arg0_paths,
             CliConfigOverrides::default(),
             loader_overrides,
-            false,
+            /*default_analytics_enabled*/ false,
             transport,
+            session_source,
         )
         .await?;
         Ok(())

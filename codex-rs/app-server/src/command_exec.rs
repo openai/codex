@@ -201,7 +201,9 @@ impl CommandExecManager {
             let sessions = Arc::clone(&self.sessions);
             tokio::spawn(async move {
                 let _started_network_proxy = started_network_proxy;
-                match codex_core::sandboxing::execute_env(exec_request, None).await {
+                match codex_core::sandboxing::execute_env(exec_request, /*stdout_stream*/ None)
+                    .await
+                {
                     Ok(output) => {
                         outgoing
                             .send_response(

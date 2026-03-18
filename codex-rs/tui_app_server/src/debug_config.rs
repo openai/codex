@@ -60,7 +60,10 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
             .bold()
             .into(),
     );
-    let layers = stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true);
+    let layers = stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ true,
+    );
     if layers.is_empty() {
         lines.push("  <none>".dim().into());
     } else {
@@ -186,7 +189,7 @@ fn render_non_file_layer_details(layer: &ConfigLayerEntry) -> Vec<Line<'static>>
 
 fn render_session_flag_details(config: &TomlValue) -> Vec<Line<'static>> {
     let mut pairs = Vec::new();
-    flatten_toml_key_values(config, None, &mut pairs);
+    flatten_toml_key_values(config, /*prefix*/ None, &mut pairs);
 
     if pairs.is_empty() {
         return vec!["     - <none>".dim().into()];
@@ -525,6 +528,7 @@ mod tests {
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
+            guardian_developer_instructions: None,
             feature_requirements: None,
             mcp_servers: Some(BTreeMap::from([(
                 "docs".to_string(),
@@ -652,6 +656,7 @@ approval_policy = "never"
             allowed_approval_policies: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
+            guardian_developer_instructions: None,
             feature_requirements: None,
             mcp_servers: None,
             apps: None,

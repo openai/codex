@@ -95,7 +95,11 @@ pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
 
 impl McpProcess {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
-        Self::new_with_env(codex_home, &[]).await
+        Self::new_with_env_and_args(codex_home, &[], &[]).await
+    }
+
+    pub async fn new_with_args(codex_home: &Path, args: &[&str]) -> anyhow::Result<Self> {
+        Self::new_with_env_and_args(codex_home, &[], args).await
     }
 
     /// Creates a new MCP process, allowing tests to override or remove
@@ -106,6 +110,14 @@ impl McpProcess {
     pub async fn new_with_env(
         codex_home: &Path,
         env_overrides: &[(&str, Option<&str>)],
+    ) -> anyhow::Result<Self> {
+        Self::new_with_env_and_args(codex_home, env_overrides, &[]).await
+    }
+
+    pub async fn new_with_env_and_args(
+        codex_home: &Path,
+        env_overrides: &[(&str, Option<&str>)],
+        args: &[&str],
     ) -> anyhow::Result<Self> {
         let program = codex_utils_cargo_bin::cargo_bin("codex-app-server")
             .context("should find binary for codex-app-server")?;
@@ -118,6 +130,7 @@ impl McpProcess {
         cmd.env("CODEX_HOME", codex_home);
         cmd.env("RUST_LOG", "info");
         cmd.env_remove(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR);
+        cmd.args(args);
 
         for (k, v) in env_overrides {
             match v {
@@ -267,7 +280,8 @@ impl McpProcess {
 
     /// Send an `account/rateLimits/read` JSON-RPC request.
     pub async fn send_get_account_rate_limits_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("account/rateLimits/read", None).await
+        self.send_request("account/rateLimits/read", /*params*/ None)
+            .await
     }
 
     /// Send an `account/read` JSON-RPC request.
@@ -768,7 +782,7 @@ impl McpProcess {
 
     /// Send an `account/logout` JSON-RPC request.
     pub async fn send_logout_account_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("account/logout", None).await
+        self.send_request("account/logout", /*params*/ None).await
     }
 
     /// Send an `account/login/start` JSON-RPC request for API key login.
@@ -1030,6 +1044,31 @@ impl McpProcess {
         Ok(notification)
     }
 
+    pub async fn read_stream_until_matching_notification<F>(
+        &mut self,
+        description: &str,
+        predicate: F,
+    ) -> anyhow::Result<JSONRPCNotification>
+    where
+        F: Fn(&JSONRPCNotification) -> bool,
+    {
+        eprintln!("in read_stream_until_matching_notification({description})");
+
+        let message = self
+            .read_stream_until_message(|message| {
+                matches!(
+                    message,
+                    JSONRPCMessage::Notification(notification) if predicate(notification)
+                )
+            })
+            .await?;
+
+        let JSONRPCMessage::Notification(notification) = message else {
+            unreachable!("expected JSONRPCMessage::Notification, got {message:?}");
+        };
+        Ok(notification)
+    }
+
     pub async fn read_next_message(&mut self) -> anyhow::Result<JSONRPCMessage> {
         self.read_stream_until_message(|_| true).await
     }
@@ -1040,6 +1079,16 @@ impl McpProcess {
     /// messages buffered from the prior turn.
     pub fn clear_message_buffer(&mut self) {
         self.pending_messages.clear();
+    }
+
+    pub fn pending_notification_methods(&self) -> Vec<String> {
+        self.pending_messages
+            .iter()
+            .filter_map(|message| match message {
+                JSONRPCMessage::Notification(notification) => Some(notification.method.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Reads the stream until a message matches `predicate`, buffering any non-matching messages

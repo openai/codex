@@ -167,7 +167,7 @@ async fn run_session_picker(
                 INTERACTIVE_SESSION_SOURCES,
                 Some(provider_filter.as_slice()),
                 request.default_provider.as_str(),
-                None,
+                /*search_term*/ None,
             )
             .await;
             let _ = tx.send(BackgroundEvent::PageLoaded {
@@ -416,7 +416,13 @@ impl PickerState {
                     let path = row.path.clone();
                     let thread_id = match row.thread_id {
                         Some(thread_id) => Some(thread_id),
-                        None => crate::resolve_session_thread_id(path.as_path(), None).await,
+                        None => {
+                            crate::resolve_session_thread_id(
+                                path.as_path(),
+                                /*id_str_if_uuid*/ None,
+                            )
+                            .await
+                        }
                     };
                     if let Some(thread_id) = thread_id {
                         return Ok(Some(self.action.selection(path, thread_id)));
@@ -1255,14 +1261,14 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
         let created = format_created_label(row);
         let updated = format_updated_label(row);
         let branch_raw = row.git_branch.clone().unwrap_or_default();
-        let branch = right_elide(&branch_raw, 24);
+        let branch = right_elide(&branch_raw, /*max*/ 24);
         let cwd = if include_cwd {
             let cwd_raw = row
                 .cwd
                 .as_ref()
                 .map(|p| display_path_for(p, std::path::Path::new("/")))
                 .unwrap_or_default();
-            right_elide(&cwd_raw, 24)
+            right_elide(&cwd_raw, /*max*/ 24)
         } else {
             String::new()
         };

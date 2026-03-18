@@ -41,7 +41,7 @@ pub fn merge_base_with_head(
             OsString::from(head),
             OsString::from(preferred_ref),
         ],
-        None,
+        /*env*/ None,
     )?;
 
     Ok(Some(merge_base))
@@ -55,7 +55,7 @@ fn resolve_branch_ref(repo_root: &Path, branch: &str) -> Result<Option<String>, 
             OsString::from("--verify"),
             OsString::from(branch),
         ],
-        None,
+        /*env*/ None,
     );
 
     match rev {
@@ -77,7 +77,7 @@ fn resolve_upstream_if_remote_ahead(
             OsString::from("--symbolic-full-name"),
             OsString::from(format!("{branch}@{{upstream}}")),
         ],
-        None,
+        /*env*/ None,
     ) {
         Ok(name) => {
             let trimmed = name.trim();
@@ -98,7 +98,7 @@ fn resolve_upstream_if_remote_ahead(
             OsString::from("--count"),
             OsString::from(format!("{branch}...{upstream}")),
         ],
-        None,
+        /*env*/ None,
     ) {
         Ok(counts) => counts,
         Err(GitToolingError::GitCommand { .. }) => return Ok(None),

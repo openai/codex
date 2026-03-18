@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use codex_utils_image::PromptImageMode;
-use codex_utils_image::load_for_prompt;
+use codex_utils_image::load_for_prompt_bytes;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -231,6 +231,8 @@ pub enum ResponseInputItem {
     },
     FunctionCallOutput {
         call_id: String,
+        #[ts(as = "FunctionCallOutputBody")]
+        #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
     },
     McpToolCallOutput {
@@ -239,6 +241,11 @@ pub enum ResponseInputItem {
     },
     CustomToolCallOutput {
         call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        name: Option<String>,
+        #[ts(as = "FunctionCallOutputBody")]
+        #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
     },
     ToolSearchOutput {
@@ -306,6 +313,7 @@ pub enum ResponseItem {
     Reasoning {
         #[serde(default, skip_serializing)]
         #[ts(skip)]
+        #[schemars(skip)]
         id: String,
         summary: Vec<ReasoningItemReasoningSummary>,
         #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
@@ -356,6 +364,8 @@ pub enum ResponseItem {
     // We keep this behavior centralized in `FunctionCallOutputPayload`.
     FunctionCallOutput {
         call_id: String,
+        #[ts(as = "FunctionCallOutputBody")]
+        #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
     },
     CustomToolCall {
@@ -375,6 +385,11 @@ pub enum ResponseItem {
     // text or structured content items.
     CustomToolCallOutput {
         call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        name: Option<String>,
+        #[ts(as = "FunctionCallOutputBody")]
+        #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
     },
     ToolSearchOutput {
@@ -935,10 +950,11 @@ fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> Co
 
 pub fn local_image_content_items_with_label_number(
     path: &std::path::Path,
+    file_bytes: Vec<u8>,
     label_number: Option<usize>,
     mode: PromptImageMode,
 ) -> Vec<ContentItem> {
-    match load_for_prompt(path, mode) {
+    match load_for_prompt_bytes(path, file_bytes, mode) {
         Ok(image) => {
             let mut items = Vec::with_capacity(3);
             if let Some(label_number) = label_number {
@@ -998,9 +1014,15 @@ impl From<ResponseInputItem> for ResponseItem {
                 let output = output.into_function_call_output_payload();
                 Self::FunctionCallOutput { call_id, output }
             }
-            ResponseInputItem::CustomToolCallOutput { call_id, output } => {
-                Self::CustomToolCallOutput { call_id, output }
-            }
+            ResponseInputItem::CustomToolCallOutput {
+                call_id,
+                name,
+                output,
+            } => Self::CustomToolCallOutput {
+                call_id,
+                name,
+                output,
+            },
             ResponseInputItem::ToolSearchOutput {
                 call_id,
                 status,
@@ -1105,11 +1127,15 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                     }
                     UserInput::LocalImage { path } => {
                         image_index += 1;
-                        local_image_content_items_with_label_number(
-                            &path,
-                            Some(image_index),
-                            PromptImageMode::ResizeToFit,
-                        )
+                        match std::fs::read(&path) {
+                            Ok(file_bytes) => local_image_content_items_with_label_number(
+                                &path,
+                                file_bytes,
+                                Some(image_index),
+                                PromptImageMode::ResizeToFit,
+                            ),
+                            Err(err) => vec![local_image_error_placeholder(&path, err)],
+                        }
                     }
                     UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(), // Tool bodies are injected later in core
                 })
@@ -2378,6 +2404,7 @@ mod tests {
     fn serializes_custom_tool_image_outputs_as_array() -> Result<()> {
         let item = ResponseInputItem::CustomToolCallOutput {
             call_id: "call1".into(),
+            name: None,
             output: FunctionCallOutputPayload::from_content_items(vec![
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "data:image/png;base64,BASE64".into(),

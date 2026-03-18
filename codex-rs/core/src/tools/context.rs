@@ -230,7 +230,7 @@ impl ToolOutput for AbortedToolOutput {
                 vec![FunctionCallOutputContentItem::InputText {
                     text: self.message.clone(),
                 }],
-                None,
+                /*success*/ None,
             ),
         }
     }
@@ -417,6 +417,7 @@ fn function_tool_response(
     if matches!(payload, ToolPayload::Custom { .. }) {
         return ResponseInputItem::CustomToolCallOutput {
             call_id: call_id.to_string(),
+            name: None,
             output: FunctionCallOutputPayload { body, success },
         };
     }

@@ -9,6 +9,13 @@ mod windows_impl {
     use crate::helper_materialization::resolve_helper_for_launch;
     use crate::helper_materialization::HelperExecutable;
     use crate::identity::require_logon_sandbox_creds;
+    use crate::ipc_framed::decode_bytes;
+    use crate::ipc_framed::read_frame;
+    use crate::ipc_framed::write_frame;
+    use crate::ipc_framed::FramedMessage;
+    use crate::ipc_framed::Message;
+    use crate::ipc_framed::OutputStream;
+    use crate::ipc_framed::SpawnRequest;
     use crate::logging::log_failure;
     use crate::logging::log_note;
     use crate::logging::log_start;
@@ -26,8 +33,9 @@ mod windows_impl {
     use rand::SeedableRng;
     use std::collections::HashMap;
     use std::ffi::c_void;
-    use std::fs;
+    use std::fs::File;
     use std::io;
+    use std::os::windows::io::FromRawHandle;
     use std::path::Path;
     use std::path::PathBuf;
     use std::ptr;
@@ -40,15 +48,12 @@ mod windows_impl {
     use windows_sys::Win32::System::Diagnostics::Debug::SetErrorMode;
     use windows_sys::Win32::System::Pipes::ConnectNamedPipe;
     use windows_sys::Win32::System::Pipes::CreateNamedPipeW;
-    // PIPE_ACCESS_DUPLEX is 0x00000003; not exposed in windows-sys 0.52, so use the value directly.
-    const PIPE_ACCESS_DUPLEX: u32 = 0x0000_0003;
+    const PIPE_ACCESS_INBOUND: u32 = 0x0000_0001;
+    const PIPE_ACCESS_OUTBOUND: u32 = 0x0000_0002;
     use windows_sys::Win32::System::Pipes::PIPE_READMODE_BYTE;
     use windows_sys::Win32::System::Pipes::PIPE_TYPE_BYTE;
     use windows_sys::Win32::System::Pipes::PIPE_WAIT;
     use windows_sys::Win32::System::Threading::CreateProcessWithLogonW;
-    use windows_sys::Win32::System::Threading::GetExitCodeProcess;
-    use windows_sys::Win32::System::Threading::WaitForSingleObject;
-    use windows_sys::Win32::System::Threading::INFINITE;
     use windows_sys::Win32::System::Threading::LOGON_WITH_PROFILE;
     use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
     use windows_sys::Win32::System::Threading::STARTUPINFOW;
@@ -183,24 +188,16 @@ mod windows_impl {
 
     pub use crate::windows_impl::CaptureResult;
 
-    #[derive(serde::Serialize)]
-    struct RunnerPayload {
-        policy_json_or_preset: String,
-        sandbox_policy_cwd: PathBuf,
-        // Writable log dir for sandbox user (.codex in sandbox profile).
-        codex_home: PathBuf,
-        // Real user's CODEX_HOME for shared data (caps, config).
-        real_codex_home: PathBuf,
-        cap_sids: Vec<String>,
-        request_file: Option<PathBuf>,
-        command: Vec<String>,
-        cwd: PathBuf,
-        env_map: HashMap<String, String>,
-        timeout_ms: Option<u64>,
-        use_private_desktop: bool,
-        stdin_pipe: String,
-        stdout_pipe: String,
-        stderr_pipe: String,
+    fn read_spawn_ready(pipe_read: &mut File) -> Result<()> {
+        let msg = read_frame(pipe_read)?
+            .ok_or_else(|| anyhow::anyhow!("runner pipe closed before spawn_ready"))?;
+        match msg.message {
+            Message::SpawnReady { .. } => Ok(()),
+            Message::Error { payload } => Err(anyhow::anyhow!("runner error: {}", payload.message)),
+            other => Err(anyhow::anyhow!(
+                "expected spawn_ready from runner, got {other:?}"
+            )),
+        }
     }
 
     /// Launches the command runner under the sandbox user and captures its output.
@@ -241,11 +238,6 @@ mod windows_impl {
         ) {
             anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
         }
-        if !policy.has_full_disk_read_access() {
-            anyhow::bail!(
-                "Restricted read-only access is not yet supported by the Windows sandbox backend"
-            );
-        }
         let caps = load_or_create_cap_sids(codex_home)?;
         let (psid_to_use, cap_sids) = match &policy {
             SandboxPolicy::ReadOnly { .. } => (
@@ -271,25 +263,10 @@ mod windows_impl {
             allow_null_device(psid_to_use);
         }
 
-        // Prepare named pipes for runner.
-        let stdin_name = pipe_name("stdin");
-        let stdout_name = pipe_name("stdout");
-        let stderr_name = pipe_name("stderr");
-        let h_stdin_pipe = create_named_pipe(
-            &stdin_name,
-            PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-            &sandbox_sid,
-        )?;
-        let h_stdout_pipe = create_named_pipe(
-            &stdout_name,
-            PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-            &sandbox_sid,
-        )?;
-        let h_stderr_pipe = create_named_pipe(
-            &stderr_name,
-            PIPE_ACCESS_DUPLEX | PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-            &sandbox_sid,
-        )?;
+        let pipe_in_name = pipe_name("in");
+        let pipe_out_name = pipe_name("out");
+        let h_pipe_in = create_named_pipe(&pipe_in_name, PIPE_ACCESS_OUTBOUND, &sandbox_sid)?;
+        let h_pipe_out = create_named_pipe(&pipe_out_name, PIPE_ACCESS_INBOUND, &sandbox_sid)?;
 
         // Launch runner as sandbox user via CreateProcessWithLogonW.
         let runner_exe = find_runner_exe(codex_home, logs_base_dir);
@@ -297,40 +274,11 @@ mod windows_impl {
             .to_str()
             .map(|s| s.to_string())
             .unwrap_or_else(|| "codex-command-runner.exe".to_string());
-        // Write request to a file under the sandbox base dir for the runner to read.
-        // TODO(iceweasel) - use a different mechanism for invoking the runner.
-        let base_tmp = sandbox_base.join("requests");
-        std::fs::create_dir_all(&base_tmp)?;
-        let mut rng = SmallRng::from_entropy();
-        let req_file = base_tmp.join(format!("request-{:x}.json", rng.gen::<u128>()));
-        let payload = RunnerPayload {
-            policy_json_or_preset: policy_json_or_preset.to_string(),
-            sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),
-            codex_home: sandbox_base.clone(),
-            real_codex_home: codex_home.to_path_buf(),
-            cap_sids: cap_sids.clone(),
-            request_file: Some(req_file.clone()),
-            command: command.clone(),
-            cwd: cwd.to_path_buf(),
-            env_map: env_map.clone(),
-            timeout_ms,
-            use_private_desktop,
-            stdin_pipe: stdin_name.clone(),
-            stdout_pipe: stdout_name.clone(),
-            stderr_pipe: stderr_name.clone(),
-        };
-        let payload_json = serde_json::to_string(&payload)?;
-        if let Err(e) = fs::write(&req_file, &payload_json) {
-            log_note(
-                &format!("error writing request file {}: {}", req_file.display(), e),
-                logs_base_dir,
-            );
-            return Err(e.into());
-        }
         let runner_full_cmd = format!(
-            "{} {}",
+            "{} {} {}",
             quote_windows_arg(&runner_cmdline),
-            quote_windows_arg(&format!("--request-file={}", req_file.display()))
+            quote_windows_arg(&format!("--pipe-in={pipe_in_name}")),
+            quote_windows_arg(&format!("--pipe-out={pipe_out_name}"))
         );
         let mut cmdline_vec: Vec<u16> = to_wide(&runner_full_cmd);
         let exe_w: Vec<u16> = to_wide(&runner_cmdline);
@@ -390,73 +338,99 @@ mod windows_impl {
             return Err(anyhow::anyhow!("CreateProcessWithLogonW failed: {}", err));
         }
 
-        // Pipes are no longer passed as std handles; no stdin payload is sent.
-        connect_pipe(h_stdin_pipe)?;
-        connect_pipe(h_stdout_pipe)?;
-        connect_pipe(h_stderr_pipe)?;
-        unsafe {
-            CloseHandle(h_stdin_pipe);
+        if let Err(err) = connect_pipe(h_pipe_in) {
+            unsafe {
+                CloseHandle(h_pipe_in);
+                CloseHandle(h_pipe_out);
+                if pi.hThread != 0 {
+                    CloseHandle(pi.hThread);
+                }
+                if pi.hProcess != 0 {
+                    CloseHandle(pi.hProcess);
+                }
+            }
+            return Err(err.into());
+        }
+        if let Err(err) = connect_pipe(h_pipe_out) {
+            unsafe {
+                CloseHandle(h_pipe_in);
+                CloseHandle(h_pipe_out);
+                if pi.hThread != 0 {
+                    CloseHandle(pi.hThread);
+                }
+                if pi.hProcess != 0 {
+                    CloseHandle(pi.hProcess);
+                }
+            }
+            return Err(err.into());
         }
 
-        // Read stdout/stderr.
-        let (tx_out, rx_out) = std::sync::mpsc::channel::<Vec<u8>>();
-        let (tx_err, rx_err) = std::sync::mpsc::channel::<Vec<u8>>();
-        let t_out = std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let mut tmp = [0u8; 8192];
-            loop {
-                let mut read_bytes: u32 = 0;
-                let ok = unsafe {
-                    windows_sys::Win32::Storage::FileSystem::ReadFile(
-                        h_stdout_pipe,
-                        tmp.as_mut_ptr(),
-                        tmp.len() as u32,
-                        &mut read_bytes,
-                        std::ptr::null_mut(),
-                    )
-                };
-                if ok == 0 || read_bytes == 0 {
-                    break;
-                }
-                buf.extend_from_slice(&tmp[..read_bytes as usize]);
-            }
-            let _ = tx_out.send(buf);
-        });
-        let t_err = std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let mut tmp = [0u8; 8192];
-            loop {
-                let mut read_bytes: u32 = 0;
-                let ok = unsafe {
-                    windows_sys::Win32::Storage::FileSystem::ReadFile(
-                        h_stderr_pipe,
-                        tmp.as_mut_ptr(),
-                        tmp.len() as u32,
-                        &mut read_bytes,
-                        std::ptr::null_mut(),
-                    )
-                };
-                if ok == 0 || read_bytes == 0 {
-                    break;
-                }
-                buf.extend_from_slice(&tmp[..read_bytes as usize]);
-            }
-            let _ = tx_err.send(buf);
-        });
+        let result = (|| -> Result<CaptureResult> {
+            let mut pipe_write = unsafe { File::from_raw_handle(h_pipe_in as _) };
+            let mut pipe_read = unsafe { File::from_raw_handle(h_pipe_out as _) };
 
-        let timeout = timeout_ms.map(|ms| ms as u32).unwrap_or(INFINITE);
-        let res = unsafe { WaitForSingleObject(pi.hProcess, timeout) };
-        let timed_out = res == 0x0000_0102;
-        let mut exit_code_u32: u32 = 1;
-        if !timed_out {
-            unsafe {
-                GetExitCodeProcess(pi.hProcess, &mut exit_code_u32);
+            let spawn_request = FramedMessage {
+                version: 1,
+                message: Message::SpawnRequest {
+                    payload: Box::new(SpawnRequest {
+                        command: command.clone(),
+                        cwd: cwd.to_path_buf(),
+                        env: env_map.clone(),
+                        policy_json_or_preset: policy_json_or_preset.to_string(),
+                        sandbox_policy_cwd: sandbox_policy_cwd.to_path_buf(),
+                        codex_home: sandbox_base.clone(),
+                        real_codex_home: codex_home.to_path_buf(),
+                        cap_sids,
+                        timeout_ms,
+                        tty: false,
+                        stdin_open: false,
+                        use_private_desktop,
+                    }),
+                },
+            };
+            write_frame(&mut pipe_write, &spawn_request)?;
+            read_spawn_ready(&mut pipe_read)?;
+            drop(pipe_write);
+
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let (exit_code, timed_out) = loop {
+                let msg = read_frame(&mut pipe_read)?
+                    .ok_or_else(|| anyhow::anyhow!("runner pipe closed before exit"))?;
+                match msg.message {
+                    Message::SpawnReady { .. } => {}
+                    Message::Output { payload } => {
+                        let bytes = decode_bytes(&payload.data_b64)?;
+                        match payload.stream {
+                            OutputStream::Stdout => stdout.extend_from_slice(&bytes),
+                            OutputStream::Stderr => stderr.extend_from_slice(&bytes),
+                        }
+                    }
+                    Message::Exit { payload } => break (payload.exit_code, payload.timed_out),
+                    Message::Error { payload } => {
+                        return Err(anyhow::anyhow!("runner error: {}", payload.message));
+                    }
+                    other => {
+                        return Err(anyhow::anyhow!(
+                            "unexpected runner message during capture: {other:?}"
+                        ));
+                    }
+                }
+            };
+
+            if exit_code == 0 {
+                log_success(&command, logs_base_dir);
+            } else {
+                log_failure(&command, &format!("exit code {}", exit_code), logs_base_dir);
             }
-        } else {
-            unsafe {
-                windows_sys::Win32::System::Threading::TerminateProcess(pi.hProcess, 1);
-            }
-        }
+
+            Ok(CaptureResult {
+                exit_code,
+                stdout,
+                stderr,
+                timed_out,
+            })
+        })();
 
         unsafe {
             if pi.hThread != 0 {
@@ -465,31 +439,9 @@ mod windows_impl {
             if pi.hProcess != 0 {
                 CloseHandle(pi.hProcess);
             }
-            CloseHandle(h_stdout_pipe);
-            CloseHandle(h_stderr_pipe);
-        }
-        let _ = t_out.join();
-        let _ = t_err.join();
-        let stdout = rx_out.recv().unwrap_or_default();
-        let stderr = rx_err.recv().unwrap_or_default();
-        let exit_code = if timed_out {
-            128 + 64
-        } else {
-            exit_code_u32 as i32
-        };
-
-        if exit_code == 0 {
-            log_success(&command, logs_base_dir);
-        } else {
-            log_failure(&command, &format!("exit code {}", exit_code), logs_base_dir);
         }
 
-        Ok(CaptureResult {
-            exit_code,
-            stdout,
-            stderr,
-            timed_out,
-        })
+        result
     }
 
     #[cfg(test)]

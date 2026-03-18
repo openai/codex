@@ -199,7 +199,9 @@ impl WidgetRef for SkillPopup {
         };
         let rows = self.rows_from_matches(self.filtered());
         render_rows_single_line(
-            list_area.inset(Insets::tlbr(0, 2, 0, 0)),
+            list_area.inset(Insets::tlbr(
+                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
+            )),
             buf,
             &rows,
             &self.state,

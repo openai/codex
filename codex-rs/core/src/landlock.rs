@@ -38,12 +38,13 @@ where
     let network_sandbox_policy = NetworkSandboxPolicy::from(sandbox_policy);
     let args = create_linux_sandbox_command_args_for_policies(
         command,
+        command_cwd.as_path(),
         sandbox_policy,
         &file_system_sandbox_policy,
         network_sandbox_policy,
         sandbox_policy_cwd,
         use_legacy_landlock,
-        allow_network_for_proxy(false),
+        allow_network_for_proxy(/*enforce_managed_network*/ false),
     );
     let arg0 = Some("codex-linux-sandbox");
     spawn_child_async(SpawnChildRequest {
@@ -74,8 +75,9 @@ pub(crate) fn allow_network_for_proxy(enforce_managed_network: bool) -> bool {
 /// flags so the argv order matches the helper's CLI shape. See
 /// `docs/linux_sandbox.md` for the Linux semantics.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn create_linux_sandbox_command_args_for_policies(
+pub fn create_linux_sandbox_command_args_for_policies(
     command: Vec<String>,
+    command_cwd: &Path,
     sandbox_policy: &SandboxPolicy,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,
@@ -93,10 +95,16 @@ pub(crate) fn create_linux_sandbox_command_args_for_policies(
         .to_str()
         .unwrap_or_else(|| panic!("cwd must be valid UTF-8"))
         .to_string();
+    let command_cwd = command_cwd
+        .to_str()
+        .unwrap_or_else(|| panic!("command cwd must be valid UTF-8"))
+        .to_string();
 
     let mut linux_cmd: Vec<String> = vec![
         "--sandbox-policy-cwd".to_string(),
         sandbox_policy_cwd,
+        "--command-cwd".to_string(),
+        command_cwd,
         "--sandbox-policy".to_string(),
         sandbox_policy_json,
         "--file-system-sandbox-policy".to_string(),
@@ -120,16 +128,26 @@ pub(crate) fn create_linux_sandbox_command_args_for_policies(
 #[cfg(test)]
 pub(crate) fn create_linux_sandbox_command_args(
     command: Vec<String>,
+    command_cwd: &Path,
     sandbox_policy_cwd: &Path,
     use_legacy_landlock: bool,
     allow_network_for_proxy: bool,
 ) -> Vec<String> {
+    let command_cwd = command_cwd
+        .to_str()
+        .unwrap_or_else(|| panic!("command cwd must be valid UTF-8"))
+        .to_string();
     let sandbox_policy_cwd = sandbox_policy_cwd
         .to_str()
         .unwrap_or_else(|| panic!("cwd must be valid UTF-8"))
         .to_string();
 
-    let mut linux_cmd: Vec<String> = vec!["--sandbox-policy-cwd".to_string(), sandbox_policy_cwd];
+    let mut linux_cmd: Vec<String> = vec![
+        "--sandbox-policy-cwd".to_string(),
+        sandbox_policy_cwd,
+        "--command-cwd".to_string(),
+        command_cwd,
+    ];
     if use_legacy_landlock {
         linux_cmd.push("--use-legacy-landlock".to_string());
     }

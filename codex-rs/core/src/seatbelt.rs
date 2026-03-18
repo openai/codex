@@ -34,7 +34,7 @@ const MACOS_RESTRICTED_READ_ONLY_PLATFORM_DEFAULTS: &str =
 /// to defend against an attacker trying to inject a malicious version on the
 /// PATH. If /usr/bin/sandbox-exec has been tampered with, then the attacker
 /// already has root access.
-pub(crate) const MACOS_PATH_TO_SEATBELT_EXECUTABLE: &str = "/usr/bin/sandbox-exec";
+pub const MACOS_PATH_TO_SEATBELT_EXECUTABLE: &str = "/usr/bin/sandbox-exec";
 
 pub async fn spawn_command_under_seatbelt(
     command: Vec<String>,
@@ -45,8 +45,13 @@ pub async fn spawn_command_under_seatbelt(
     network: Option<&NetworkProxy>,
     mut env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
-    let args =
-        create_seatbelt_command_args(command, sandbox_policy, sandbox_policy_cwd, false, network);
+    let args = create_seatbelt_command_args(
+        command,
+        sandbox_policy,
+        sandbox_policy_cwd,
+        /*enforce_managed_network*/ false,
+        network,
+    );
     let arg0 = None;
     env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
     spawn_child_async(SpawnChildRequest {
@@ -325,6 +330,7 @@ fn dynamic_network_policy_for_network(
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn create_seatbelt_command_args(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
@@ -338,7 +344,7 @@ pub(crate) fn create_seatbelt_command_args(
         sandbox_policy_cwd,
         enforce_managed_network,
         network,
-        None,
+        /*extensions*/ None,
     )
 }
 
@@ -419,7 +425,7 @@ pub(crate) fn create_seatbelt_command_args_with_extensions(
     )
 }
 
-pub(crate) fn create_seatbelt_command_args_for_policies_with_extensions(
+pub fn create_seatbelt_command_args_for_policies_with_extensions(
     command: Vec<String>,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_sandbox_policy: NetworkSandboxPolicy,

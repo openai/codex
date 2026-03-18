@@ -55,7 +55,9 @@ impl ContextManager {
     pub(crate) fn new() -> Self {
         Self {
             items: Vec::new(),
-            token_info: TokenUsageInfo::new_or_append(&None, &None, None),
+            token_info: TokenUsageInfo::new_or_append(
+                &None, &None, /*model_context_window*/ None,
+            ),
             reference_context_item: None,
         }
     }
@@ -360,15 +362,15 @@ impl ContextManager {
                     ),
                 }
             }
-            ResponseItem::CustomToolCallOutput { call_id, output } => {
-                ResponseItem::CustomToolCallOutput {
-                    call_id: call_id.clone(),
-                    output: truncate_function_output_payload(
-                        output,
-                        policy_with_serialization_budget,
-                    ),
-                }
-            }
+            ResponseItem::CustomToolCallOutput {
+                call_id,
+                name,
+                output,
+            } => ResponseItem::CustomToolCallOutput {
+                call_id: call_id.clone(),
+                name: name.clone(),
+                output: truncate_function_output_payload(output, policy_with_serialization_budget),
+            },
             ResponseItem::Message { .. }
             | ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }

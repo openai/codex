@@ -464,7 +464,7 @@ fn is_domain_label(label: &str) -> bool {
 pub(crate) fn url_preserving_wrap_options<'a>(opts: RtOptions<'a>) -> RtOptions<'a> {
     opts.word_separator(textwrap::WordSeparator::AsciiSpace)
         .word_splitter(textwrap::WordSplitter::Custom(split_non_url_word))
-        .break_words(false)
+        .break_words(/*break_words*/ false)
 }
 
 /// Custom `textwrap::WordSplitter` callback. Returns empty (no split

@@ -237,6 +237,7 @@ impl ChatComposerHistory {
     }
 
     /// Integrate a GetHistoryEntryResponse event.
+    #[cfg(test)]
     pub fn on_entry_response(
         &mut self,
         log_id: u64,

@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use anyhow::Result;
+use codex_core::CodexThread;
 use codex_core::config::Constrained;
 use codex_core::config_loader::ConfigLayerStack;
 use codex_core::config_loader::ConfigLayerStackOrdering;
@@ -28,6 +29,7 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
@@ -46,9 +48,11 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::Request;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
@@ -122,7 +126,11 @@ impl ActionKind {
             ActionKind::WriteFile { target, content } => {
                 let (path, _) = target.resolve_for_patch(test);
                 let _ = fs::remove_file(&path);
-                let command = format!("printf {content:?} > {path:?} && cat {path:?}");
+                let path_str = path.display().to_string();
+                let script = format!(
+                    "from pathlib import Path; path = Path({path_str:?}); content = {content:?}; path.write_text(content, encoding='utf-8'); print(path.read_text(encoding='utf-8'), end='')",
+                );
+                let command = format!("python3 -c {script:?}");
                 let event = shell_event(call_id, &command, 5_000, sandbox_permissions)?;
                 Ok((event, Some(command)))
             }
@@ -675,6 +683,47 @@ async fn wait_for_completion(test: &TestCodex) {
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+}
+
+fn body_contains(req: &Request, text: &str) -> bool {
+    let is_zstd = req
+        .headers
+        .get("content-encoding")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|entry| entry.trim().eq_ignore_ascii_case("zstd"))
+        });
+    let bytes = if is_zstd {
+        zstd::stream::decode_all(std::io::Cursor::new(&req.body)).ok()
+    } else {
+        Some(req.body.clone())
+    };
+    bytes
+        .and_then(|body| String::from_utf8(body).ok())
+        .is_some_and(|body| body.contains(text))
+}
+
+async fn wait_for_spawned_thread(test: &TestCodex) -> Result<Arc<CodexThread>> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let ids = test.thread_manager.list_thread_ids().await;
+        if let Some(thread_id) = ids
+            .iter()
+            .find(|id| **id != test.session_configured.session_id)
+        {
+            return test
+                .thread_manager
+                .get_thread(*thread_id)
+                .await
+                .map_err(anyhow::Error::from);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for spawned thread");
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 fn scenarios() -> Vec<ScenarioSpec> {
@@ -1611,6 +1660,9 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
         .action
         .prepare(&test, &server, call_id, scenario.sandbox_permissions)
         .await?;
+    if let Some(command) = expected_command.as_deref() {
+        eprintln!("approval scenario {} command: {command}", scenario.name);
+    }
 
     let _ = mount_sse_once(
         &server,
@@ -1692,6 +1744,10 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
 
     let output_item = results_mock.single_request().function_call_output(call_id);
     let result = parse_result(&output_item);
+    eprintln!(
+        "approval scenario {} result: exit_code={:?} stdout={:?}",
+        scenario.name, result.exit_code, result.stdout
+    );
     scenario.expectation.verify(&test, &result)?;
 
     Ok(())
@@ -1981,6 +2037,188 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
         "",
         "unexpected file contents after second run"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawned_subagent_execpolicy_amendment_propagates_to_parent_session() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::UnlessTrusted;
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let sandbox_policy_for_config = sandbox_policy.clone();
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build(&server).await?;
+
+    const PARENT_PROMPT: &str = "spawn a child that repeats a command";
+    const CHILD_PROMPT: &str = "run the same command twice";
+    const SPAWN_CALL_ID: &str = "spawn-child-1";
+    const CHILD_CALL_ID_1: &str = "child-touch-1";
+    const PARENT_CALL_ID_2: &str = "parent-touch-2";
+
+    let child_file = test.cwd.path().join("subagent-allow-prefix.txt");
+    let _ = fs::remove_file(&child_file);
+
+    let spawn_args = serde_json::to_string(&json!({
+        "message": CHILD_PROMPT,
+    }))?;
+    mount_sse_once_match(
+        &server,
+        |req: &Request| body_contains(req, PARENT_PROMPT),
+        sse(vec![
+            ev_response_created("resp-parent-1"),
+            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            ev_completed("resp-parent-1"),
+        ]),
+    )
+    .await;
+
+    let child_cmd_args = serde_json::to_string(&json!({
+        "command": "touch subagent-allow-prefix.txt",
+        "timeout_ms": 1_000,
+        "prefix_rule": ["touch", "subagent-allow-prefix.txt"],
+    }))?;
+    mount_sse_once_match(
+        &server,
+        |req: &Request| body_contains(req, CHILD_PROMPT) && !body_contains(req, SPAWN_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-child-1"),
+            ev_function_call(CHILD_CALL_ID_1, "shell_command", &child_cmd_args),
+            ev_completed("resp-child-1"),
+        ]),
+    )
+    .await;
+
+    mount_sse_once_match(
+        &server,
+        |req: &Request| body_contains(req, CHILD_CALL_ID_1),
+        sse(vec![
+            ev_response_created("resp-child-2"),
+            ev_assistant_message("msg-child-2", "child done"),
+            ev_completed("resp-child-2"),
+        ]),
+    )
+    .await;
+
+    mount_sse_once_match(
+        &server,
+        |req: &Request| body_contains(req, SPAWN_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-parent-2"),
+            ev_assistant_message("msg-parent-2", "parent done"),
+            ev_completed("resp-parent-2"),
+        ]),
+    )
+    .await;
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-parent-3"),
+            ev_function_call(PARENT_CALL_ID_2, "shell_command", &child_cmd_args),
+            ev_completed("resp-parent-3"),
+        ]),
+    )
+    .await;
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-parent-4"),
+            ev_assistant_message("msg-parent-4", "parent rerun done"),
+            ev_completed("resp-parent-4"),
+        ]),
+    )
+    .await;
+
+    submit_turn(
+        &test,
+        PARENT_PROMPT,
+        approval_policy,
+        sandbox_policy.clone(),
+    )
+    .await?;
+
+    let child = wait_for_spawned_thread(&test).await?;
+    let approval_event = wait_for_event_with_timeout(
+        &child,
+        |event| {
+            matches!(
+                event,
+                EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+            )
+        },
+        Duration::from_secs(2),
+    )
+    .await;
+
+    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
+        panic!("expected child approval before completion");
+    };
+    let expected_execpolicy_amendment = ExecPolicyAmendment::new(vec![
+        "touch".to_string(),
+        "subagent-allow-prefix.txt".to_string(),
+    ]);
+    assert_eq!(
+        approval.proposed_execpolicy_amendment,
+        Some(expected_execpolicy_amendment.clone())
+    );
+
+    child
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::ApprovedExecpolicyAmendment {
+                proposed_execpolicy_amendment: expected_execpolicy_amendment,
+            },
+        })
+        .await?;
+
+    let child_event = wait_for_event_with_timeout(
+        &child,
+        |event| {
+            matches!(
+                event,
+                EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+            )
+        },
+        Duration::from_secs(2),
+    )
+    .await;
+    match child_event {
+        EventMsg::TurnComplete(_) => {}
+        EventMsg::ExecApprovalRequest(ev) => {
+            panic!("unexpected second child approval request: {:?}", ev.command)
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+    assert!(
+        child_file.exists(),
+        "expected subagent command to create file"
+    );
+    fs::remove_file(&child_file)?;
+    assert!(
+        !child_file.exists(),
+        "expected child file to be removed before parent rerun"
+    );
+
+    submit_turn(
+        &test,
+        "parent reruns child command",
+        approval_policy,
+        sandbox_policy,
+    )
+    .await?;
+    wait_for_completion_without_approval(&test).await;
 
     Ok(())
 }

@@ -29,7 +29,8 @@ Supported transports:
 When running with `--listen ws://IP:PORT`, the same listener also serves basic HTTP health probes:
 
 - `GET /readyz` returns `200 OK` once the listener is accepting new connections.
-- `GET /healthz` currently always returns `200 OK`.
+- `GET /healthz` returns `200 OK` when no `Origin` header is present.
+- Any request carrying an `Origin` header is rejected with `403 Forbidden`.
 
 Websocket transport is currently experimental and unsupported. Do not rely on it for production workloads.
 
@@ -167,8 +168,6 @@ Example with notification opt-out:
 - `plugin/list` — list discovered plugin marketplaces and plugin state, including effective marketplace install/auth policy metadata. `interface.category` uses the marketplace category when present; otherwise it falls back to the plugin manifest category. Pass `forceRemoteSync: true` to refresh curated plugin state before listing (**under development; do not call from production clients yet**).
 - `plugin/read` — read one plugin by `marketplacePath` plus `pluginName`, returning marketplace info, a list-style `summary`, manifest descriptions/interface metadata, and bundled skills/apps/MCP server names (**under development; do not call from production clients yet**).
 - `skills/changed` — notification emitted when watched local skill files change.
-- `skills/remote/list` — list public remote skills (**under development; do not call from production clients yet**).
-- `skills/remote/export` — download a remote skill by `hazelnutId` into `skills` under `codex_home` (**under development; do not call from production clients yet**).
 - `app/list` — list available apps.
 - `skills/config/write` — write user-level skill config by path.
 - `plugin/install` — install a plugin from a discovered marketplace entry, rejecting marketplace entries marked unavailable for install, and return the effective plugin auth policy plus any apps that still need auth (**under development; do not call from production clients yet**).
@@ -257,7 +256,7 @@ Experimental API: `thread/start`, `thread/resume`, and `thread/fork` accept `per
 - `limit` — server defaults to a reasonable page size if unset.
 - `sortKey` — `created_at` (default) or `updated_at`.
 - `modelProviders` — restrict results to specific providers; unset, null, or an empty array will include all providers.
-- `sourceKinds` — restrict results to specific sources; omit or pass `[]` for interactive sessions only (`cli`, `vscode`).
+- `sourceKinds` — restrict results to specific sources; omit or pass `[]` for interactive sessions only (`cli`, `vscode`, and custom product sources).
 - `archived` — when `true`, list archived threads only. When `false` or `null`, list non-archived threads (default).
 - `cwd` — restrict results to threads whose session cwd exactly matches this path.
 - `searchTerm` — restrict results to threads whose extracted title contains this substring (case-sensitive).

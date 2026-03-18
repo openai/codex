@@ -149,7 +149,7 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
         &BTreeMap::default(),
         REMOTE_AUTO_COMPACT_LIMIT,
         Some(true),
-        "openai",
+        "mock_provider",
         COMPACT_PROMPT,
     )?;
     write_chatgpt_auth(

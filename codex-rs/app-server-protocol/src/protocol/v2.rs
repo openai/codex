@@ -30,6 +30,8 @@ use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::Resource as McpResource;
 use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
 use codex_protocol::mcp::Tool as McpTool;
+use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
+use codex_protocol::memory_citation::MemoryCitationEntry as CoreMemoryCitationEntry;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
 use codex_protocol::models::MacOsAutomationPermission as CoreMacOsAutomationPermission;
 use codex_protocol::models::MacOsContactsPermission as CoreMacOsContactsPermission;
@@ -68,6 +70,7 @@ use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
+use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
@@ -342,7 +345,7 @@ v2_enum_from_core!(
 
 v2_enum_from_core!(
     pub enum HookEventName from CoreHookEventName {
-        SessionStart, Stop
+        SessionStart, UserPromptSubmit, Stop
     }
 );
 
@@ -1464,6 +1467,7 @@ pub enum SessionSource {
     VsCode,
     Exec,
     AppServer,
+    Custom(String),
     SubAgent(CoreSubAgentSource),
     #[serde(other)]
     Unknown,
@@ -1476,6 +1480,7 @@ impl From<CoreSessionSource> for SessionSource {
             CoreSessionSource::VSCode => SessionSource::VsCode,
             CoreSessionSource::Exec => SessionSource::Exec,
             CoreSessionSource::Mcp => SessionSource::AppServer,
+            CoreSessionSource::Custom(source) => SessionSource::Custom(source),
             CoreSessionSource::SubAgent(sub) => SessionSource::SubAgent(sub),
             CoreSessionSource::Unknown => SessionSource::Unknown,
         }
@@ -1489,6 +1494,7 @@ impl From<SessionSource> for CoreSessionSource {
             SessionSource::VsCode => CoreSessionSource::VSCode,
             SessionSource::Exec => CoreSessionSource::Exec,
             SessionSource::AppServer => CoreSessionSource::Mcp,
+            SessionSource::Custom(source) => CoreSessionSource::Custom(source),
             SessionSource::SubAgent(sub) => CoreSessionSource::SubAgent(sub),
             SessionSource::Unknown => CoreSessionSource::Unknown,
         }
@@ -2948,6 +2954,7 @@ pub enum ThreadSourceKind {
     VsCode,
     Exec,
     AppServer,
+    Custom,
     SubAgent,
     SubAgentReview,
     SubAgentCompact,
@@ -3107,73 +3114,6 @@ pub struct PluginReadResponse {
     pub plugin: PluginDetail,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SkillsRemoteReadParams {
-    #[serde(default)]
-    pub hazelnut_scope: HazelnutScope,
-    #[serde(default)]
-    pub product_surface: ProductSurface,
-    #[serde(default)]
-    pub enabled: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS, Default)]
-#[serde(rename_all = "kebab-case")]
-#[ts(rename_all = "kebab-case")]
-#[ts(export_to = "v2/")]
-pub enum HazelnutScope {
-    #[default]
-    Example,
-    WorkspaceShared,
-    AllShared,
-    Personal,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS, Default)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum ProductSurface {
-    Chatgpt,
-    #[default]
-    Codex,
-    Api,
-    Atlas,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct RemoteSkillSummary {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SkillsRemoteReadResponse {
-    pub data: Vec<RemoteSkillSummary>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SkillsRemoteWriteParams {
-    pub hazelnut_id: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SkillsRemoteWriteResponse {
-    pub id: String,
-    pub path: PathBuf,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -3276,7 +3216,15 @@ pub struct SkillsListEntry {
 pub struct PluginMarketplaceEntry {
     pub name: String,
     pub path: AbsolutePathBuf,
+    pub interface: Option<MarketplaceInterface>,
     pub plugins: Vec<PluginSummary>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MarketplaceInterface {
+    pub display_name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -3395,6 +3343,9 @@ pub struct SkillsConfigWriteResponse {
 pub struct PluginInstallParams {
     pub marketplace_path: AbsolutePathBuf,
     pub plugin_name: String,
+    /// When true, apply the remote plugin change before the local install flow.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force_remote_sync: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3410,6 +3361,9 @@ pub struct PluginInstallResponse {
 #[ts(export_to = "v2/")]
 pub struct PluginUninstallParams {
     pub plugin_id: String,
+    /// When true, apply the remote plugin change before the local uninstall flow.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force_remote_sync: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3620,6 +3574,44 @@ pub struct Turn {
     pub error: Option<TurnError>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MemoryCitation {
+    pub entries: Vec<MemoryCitationEntry>,
+    pub thread_ids: Vec<String>,
+}
+
+impl From<CoreMemoryCitation> for MemoryCitation {
+    fn from(value: CoreMemoryCitation) -> Self {
+        Self {
+            entries: value.entries.into_iter().map(Into::into).collect(),
+            thread_ids: value.rollout_ids,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MemoryCitationEntry {
+    pub path: String,
+    pub line_start: u32,
+    pub line_end: u32,
+    pub note: String,
+}
+
+impl From<CoreMemoryCitationEntry> for MemoryCitationEntry {
+    fn from(value: CoreMemoryCitationEntry) -> Self {
+        Self {
+            path: value.path,
+            line_start: value.line_start,
+            line_end: value.line_end,
+            note: value.note,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Error)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -3652,6 +3644,7 @@ pub struct ThreadRealtimeAudioChunk {
     pub sample_rate: u32,
     pub num_channels: u16,
     pub samples_per_channel: Option<u32>,
+    pub item_id: Option<String>,
 }
 
 impl From<CoreRealtimeAudioFrame> for ThreadRealtimeAudioChunk {
@@ -3661,12 +3654,14 @@ impl From<CoreRealtimeAudioFrame> for ThreadRealtimeAudioChunk {
             sample_rate,
             num_channels,
             samples_per_channel,
+            item_id,
         } = value;
         Self {
             data,
             sample_rate,
             num_channels,
             samples_per_channel,
+            item_id,
         }
     }
 }
@@ -3678,12 +3673,14 @@ impl From<ThreadRealtimeAudioChunk> for CoreRealtimeAudioFrame {
             sample_rate,
             num_channels,
             samples_per_channel,
+            item_id,
         } = value;
         Self {
             data,
             sample_rate,
             num_channels,
             samples_per_channel,
+            item_id,
         }
     }
 }
@@ -3756,6 +3753,7 @@ pub struct ThreadRealtimeStopResponse {}
 pub struct ThreadRealtimeStartedNotification {
     pub thread_id: String,
     pub session_id: Option<String>,
+    pub version: RealtimeConversationVersion,
 }
 
 /// EXPERIMENTAL - raw non-audio thread realtime item emitted by the backend.
@@ -4114,6 +4112,8 @@ pub enum ThreadItem {
         text: String,
         #[serde(default)]
         phase: Option<MessagePhase>,
+        #[serde(default)]
+        memory_citation: Option<MemoryCitation>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4363,6 +4363,7 @@ impl From<CoreTurnItem> for ThreadItem {
                     id: agent.id,
                     text,
                     phase: agent.phase,
+                    memory_citation: agent.memory_citation.map(Into::into),
                 }
             }
             CoreTurnItem::Plan(plan) => ThreadItem::Plan {
@@ -7439,6 +7440,7 @@ mod tests {
                 },
             ],
             phase: None,
+            memory_citation: None,
         });
 
         assert_eq!(
@@ -7447,6 +7449,7 @@ mod tests {
                 id: "agent-1".to_string(),
                 text: "Hello world".to_string(),
                 phase: None,
+                memory_citation: None,
             }
         );
 
@@ -7456,6 +7459,15 @@ mod tests {
                 text: "final".to_string(),
             }],
             phase: Some(MessagePhase::FinalAnswer),
+            memory_citation: Some(CoreMemoryCitation {
+                entries: vec![CoreMemoryCitationEntry {
+                    path: "MEMORY.md".to_string(),
+                    line_start: 1,
+                    line_end: 2,
+                    note: "summary".to_string(),
+                }],
+                rollout_ids: vec!["rollout-1".to_string()],
+            }),
         });
 
         assert_eq!(
@@ -7464,6 +7476,15 @@ mod tests {
                 id: "agent-2".to_string(),
                 text: "final".to_string(),
                 phase: Some(MessagePhase::FinalAnswer),
+                memory_citation: Some(MemoryCitation {
+                    entries: vec![MemoryCitationEntry {
+                        path: "MEMORY.md".to_string(),
+                        line_start: 1,
+                        line_end: 2,
+                        note: "summary".to_string(),
+                    }],
+                    thread_ids: vec!["rollout-1".to_string()],
+                }),
             }
         );
 
@@ -7565,6 +7586,69 @@ mod tests {
             .unwrap(),
             json!({
                 "cwds": null,
+                "forceRemoteSync": true,
+            }),
+        );
+    }
+
+    #[test]
+    fn plugin_install_params_serialization_uses_force_remote_sync() {
+        let marketplace_path = if cfg!(windows) {
+            r"C:\plugins\marketplace.json"
+        } else {
+            "/plugins/marketplace.json"
+        };
+        let marketplace_path = AbsolutePathBuf::try_from(PathBuf::from(marketplace_path)).unwrap();
+        let marketplace_path_json = marketplace_path.as_path().display().to_string();
+        assert_eq!(
+            serde_json::to_value(PluginInstallParams {
+                marketplace_path: marketplace_path.clone(),
+                plugin_name: "gmail".to_string(),
+                force_remote_sync: false,
+            })
+            .unwrap(),
+            json!({
+                "marketplacePath": marketplace_path_json,
+                "pluginName": "gmail",
+            }),
+        );
+
+        assert_eq!(
+            serde_json::to_value(PluginInstallParams {
+                marketplace_path,
+                plugin_name: "gmail".to_string(),
+                force_remote_sync: true,
+            })
+            .unwrap(),
+            json!({
+                "marketplacePath": marketplace_path_json,
+                "pluginName": "gmail",
+                "forceRemoteSync": true,
+            }),
+        );
+    }
+
+    #[test]
+    fn plugin_uninstall_params_serialization_uses_force_remote_sync() {
+        assert_eq!(
+            serde_json::to_value(PluginUninstallParams {
+                plugin_id: "gmail@openai-curated".to_string(),
+                force_remote_sync: false,
+            })
+            .unwrap(),
+            json!({
+                "pluginId": "gmail@openai-curated",
+            }),
+        );
+
+        assert_eq!(
+            serde_json::to_value(PluginUninstallParams {
+                plugin_id: "gmail@openai-curated".to_string(),
+                force_remote_sync: true,
+            })
+            .unwrap(),
+            json!({
+                "pluginId": "gmail@openai-curated",
                 "forceRemoteSync": true,
             }),
         );

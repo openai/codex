@@ -29,7 +29,7 @@ const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
 async fn apps_enabled(config: &Config) -> bool {
     let auth_manager = AuthManager::shared(
         config.codex_home.clone(),
-        false,
+        /*enable_codex_api_key_env*/ false,
         config.cli_auth_credentials_store_mode,
     );
     config.features.apps_enabled(Some(&auth_manager)).await
@@ -45,13 +45,15 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     let connectors = connectors_result?;
     let accessible = accessible_result?;
     Ok(with_app_enabled_state(
-        merge_connectors_with_accessible(connectors, accessible, true),
+        merge_connectors_with_accessible(
+            connectors, accessible, /*all_connectors_loaded*/ true,
+        ),
         config,
     ))
 }
 
 pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
-    list_all_connectors_with_options(config, false).await
+    list_all_connectors_with_options(config, /*force_refetch*/ false).await
 }
 
 pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>> {

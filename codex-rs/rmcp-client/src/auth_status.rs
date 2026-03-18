@@ -62,9 +62,11 @@ pub async fn determine_streamable_http_auth_status(
 
 /// Attempt to determine whether a streamable HTTP MCP server advertises OAuth login.
 pub async fn supports_oauth_login(url: &str) -> Result<bool> {
-    Ok(discover_streamable_http_oauth(url, None, None)
-        .await?
-        .is_some())
+    Ok(discover_streamable_http_oauth(
+        url, /*http_headers*/ None, /*env_http_headers*/ None,
+    )
+    .await?
+    .is_some())
 }
 
 pub async fn discover_streamable_http_oauth(

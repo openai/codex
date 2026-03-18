@@ -390,8 +390,8 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 Arc::clone(&outbound_initialized),
                 Arc::clone(&outbound_experimental_api_enabled),
                 Arc::clone(&outbound_opted_out_notification_methods),
-                true,
-                None,
+                /*allow_legacy_notifications*/ true,
+                /*disconnect_sender*/ None,
             ),
         );
         let mut outbound_handle = tokio::spawn(async move {
@@ -808,6 +808,10 @@ mod tests {
         for (requested_source, expected_source) in [
             (SessionSource::Cli, ApiSessionSource::Cli),
             (SessionSource::Exec, ApiSessionSource::Exec),
+            (
+                SessionSource::Custom("atlas".to_string()),
+                ApiSessionSource::Custom("atlas".to_string()),
+            ),
         ] {
             let client = start_test_client(requested_source).await;
             let response = client

@@ -23,7 +23,9 @@ fn assistant_output_text(text: &str) -> ResponseItem {
 #[tokio::test]
 async fn handle_non_tool_response_item_strips_citations_from_assistant_message() {
     let (session, turn_context) = make_session_and_context().await;
-    let item = assistant_output_text("hello<oai-mem-citation>doc1</oai-mem-citation> world");
+    let item = assistant_output_text(
+        "hello<oai-mem-citation><citation_entries>\nMEMORY.md:1-2|note=[x]\n</citation_entries>\n<rollout_ids>\n019cc2ea-1dff-7902-8d40-c8f6e5d83cc4\n</rollout_ids></oai-mem-citation> world",
+    );
 
     let turn_item = handle_non_tool_response_item(&session, &turn_context, &item, false)
         .await
@@ -40,6 +42,15 @@ async fn handle_non_tool_response_item_strips_citations_from_assistant_message()
         })
         .collect::<String>();
     assert_eq!(text, "hello world");
+    let memory_citation = agent_message
+        .memory_citation
+        .expect("memory citation should be parsed");
+    assert_eq!(memory_citation.entries.len(), 1);
+    assert_eq!(memory_citation.entries[0].path, "MEMORY.md");
+    assert_eq!(
+        memory_citation.rollout_ids,
+        vec!["019cc2ea-1dff-7902-8d40-c8f6e5d83cc4".to_string()]
+    );
 }
 
 #[test]

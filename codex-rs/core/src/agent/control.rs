@@ -3,6 +3,7 @@ use crate::agent::guards::Guards;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
+use crate::codex_thread::ThreadConfigSnapshot;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::find_thread_path_by_id_str;
@@ -106,6 +107,9 @@ impl AgentControl {
         let inherited_shell_snapshot = self
             .inherited_shell_snapshot_for_source(&state, session_source.as_ref())
             .await;
+        let inherited_exec_policy = self
+            .inherited_exec_policy_for_source(&state, session_source.as_ref(), &config)
+            .await;
         let session_source = match session_source {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -186,8 +190,9 @@ impl AgentControl {
                             initial_history,
                             self.clone(),
                             session_source,
-                            false,
+                            /*persist_extended_history*/ false,
                             inherited_shell_snapshot,
+                            inherited_exec_policy,
                         )
                         .await?
                 } else {
@@ -196,9 +201,10 @@ impl AgentControl {
                             config,
                             self.clone(),
                             session_source,
-                            false,
-                            None,
+                            /*persist_extended_history*/ false,
+                            /*metrics_service_name*/ None,
                             inherited_shell_snapshot,
+                            inherited_exec_policy,
                         )
                         .await?
                 }
@@ -270,6 +276,9 @@ impl AgentControl {
         let inherited_shell_snapshot = self
             .inherited_shell_snapshot_for_source(&state, Some(&session_source))
             .await;
+        let inherited_exec_policy = self
+            .inherited_exec_policy_for_source(&state, Some(&session_source), &config)
+            .await;
         let rollout_path =
             find_thread_path_by_id_str(config.codex_home.as_path(), &thread_id.to_string())
                 .await?
@@ -282,6 +291,7 @@ impl AgentControl {
                 self.clone(),
                 session_source,
                 inherited_shell_snapshot,
+                inherited_exec_policy,
             )
             .await?;
         reservation.commit(resumed_thread.thread_id);
@@ -358,6 +368,19 @@ impl AgentControl {
             session_source.get_nickname(),
             session_source.get_agent_role(),
         ))
+    }
+
+    pub(crate) async fn get_agent_config_snapshot(
+        &self,
+        agent_id: ThreadId,
+    ) -> Option<ThreadConfigSnapshot> {
+        let Ok(state) = self.upgrade() else {
+            return None;
+        };
+        let Ok(thread) = state.get_thread(agent_id).await else {
+            return None;
+        };
+        Some(thread.config_snapshot().await)
     }
 
     /// Subscribe to status updates for `agent_id`, yielding the latest value and changes.
@@ -484,6 +507,30 @@ impl AgentControl {
 
         let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
         parent_thread.codex.session.user_shell().shell_snapshot()
+    }
+
+    async fn inherited_exec_policy_for_source(
+        &self,
+        state: &Arc<ThreadManagerState>,
+        session_source: Option<&SessionSource>,
+        child_config: &crate::config::Config,
+    ) -> Option<Arc<crate::exec_policy::ExecPolicyManager>> {
+        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        })) = session_source
+        else {
+            return None;
+        };
+
+        let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
+        let parent_config = parent_thread.codex.session.get_config().await;
+        if !crate::exec_policy::child_uses_parent_exec_policy(&parent_config, child_config) {
+            return None;
+        }
+
+        Some(Arc::clone(
+            &parent_thread.codex.session.services.exec_policy,
+        ))
     }
 }
 #[cfg(test)]

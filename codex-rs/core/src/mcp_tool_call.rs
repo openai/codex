@@ -108,13 +108,15 @@ pub(crate) async fn handle_mcp_tool_call(
             &call_id,
             invocation,
             "MCP tool call blocked by app configuration".to_string(),
-            false,
+            /*already_started*/ false,
         )
         .await;
         let status = if result.is_ok() { "ok" } else { "error" };
-        turn_context
-            .session_telemetry
-            .counter("codex.mcp.call", 1, &[("status", status)]);
+        turn_context.session_telemetry.counter(
+            "codex.mcp.call",
+            /*inc*/ 1,
+            &[("status", status)],
+        );
         return CallToolResult::from_result(result);
     }
     let request_meta = build_mcp_tool_call_request_meta(&server, metadata.as_ref());
@@ -190,7 +192,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     &call_id,
                     invocation,
                     message,
-                    true,
+                    /*already_started*/ true,
                 )
                 .await
             }
@@ -202,7 +204,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     &call_id,
                     invocation,
                     message,
-                    true,
+                    /*already_started*/ true,
                 )
                 .await
             }
@@ -213,16 +215,18 @@ pub(crate) async fn handle_mcp_tool_call(
                     &call_id,
                     invocation,
                     message,
-                    true,
+                    /*already_started*/ true,
                 )
                 .await
             }
         };
 
         let status = if result.is_ok() { "ok" } else { "error" };
-        turn_context
-            .session_telemetry
-            .counter("codex.mcp.call", 1, &[("status", status)]);
+        turn_context.session_telemetry.counter(
+            "codex.mcp.call",
+            /*inc*/ 1,
+            &[("status", status)],
+        );
 
         return CallToolResult::from_result(result);
     }
@@ -263,7 +267,7 @@ pub(crate) async fn handle_mcp_tool_call(
     let status = if result.is_ok() { "ok" } else { "error" };
     turn_context
         .session_telemetry
-        .counter("codex.mcp.call", 1, &[("status", status)]);
+        .counter("codex.mcp.call", /*inc*/ 1, &[("status", status)]);
 
     CallToolResult::from_result(result)
 }

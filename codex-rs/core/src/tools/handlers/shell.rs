@@ -417,7 +417,12 @@ impl ShellHandler {
             source,
             freeform,
         );
-        let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
+        let event_ctx = ToolEventCtx::new(
+            session.as_ref(),
+            turn.as_ref(),
+            &call_id,
+            /*turn_diff_tracker*/ None,
+        );
         emitter.begin(event_ctx).await;
 
         let exec_approval_requirement = session
@@ -478,7 +483,12 @@ impl ShellHandler {
             )
             .await
             .map(|result| result.output);
-        let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
+        let event_ctx = ToolEventCtx::new(
+            session.as_ref(),
+            turn.as_ref(),
+            &call_id,
+            /*turn_diff_tracker*/ None,
+        );
         let content = emitter.finish(event_ctx, out).await?;
         Ok(FunctionToolOutput::from_text(content, Some(true)))
     }

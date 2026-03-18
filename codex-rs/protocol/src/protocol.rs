@@ -32,6 +32,7 @@ use crate::mcp::RequestId;
 use crate::mcp::Resource as McpResource;
 use crate::mcp::ResourceTemplate as McpResourceTemplate;
 use crate::mcp::Tool as McpTool;
+use crate::memory_citation::MemoryCitation;
 use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
@@ -139,6 +140,8 @@ pub struct RealtimeAudioFrame {
     pub num_channels: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub samples_per_channel: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -161,14 +164,26 @@ pub struct RealtimeHandoffRequested {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeInputAudioSpeechStarted {
+    pub item_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeResponseCancelled {
+    pub response_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub enum RealtimeEvent {
     SessionUpdated {
         session_id: String,
         instructions: Option<String>,
     },
+    InputAudioSpeechStarted(RealtimeInputAudioSpeechStarted),
     InputTranscriptDelta(RealtimeTranscriptDelta),
     OutputTranscriptDelta(RealtimeTranscriptDelta),
     AudioOut(RealtimeAudioFrame),
+    ResponseCancelled(RealtimeResponseCancelled),
     ConversationItemAdded(Value),
     ConversationItemDone {
         item_id: String,
@@ -438,16 +453,6 @@ pub enum Op {
         force_reload: bool,
     },
 
-    /// Request the list of remote skills available via ChatGPT sharing.
-    ListRemoteSkills {
-        hazelnut_scope: RemoteSkillHazelnutScope,
-        product_surface: RemoteSkillProductSurface,
-        enabled: Option<bool>,
-    },
-
-    /// Download a remote skill by id into the local skills cache.
-    DownloadRemoteSkill { hazelnut_id: String },
-
     /// Request the agent to summarize the current conversation context.
     /// The agent will use its existing context (either conversation history or previous response id)
     /// to generate a summary which will be returned as an AgentMessage event.
@@ -518,8 +523,6 @@ impl Op {
             Self::ReloadUserConfig => "reload_user_config",
             Self::ListCustomPrompts => "list_custom_prompts",
             Self::ListSkills { .. } => "list_skills",
-            Self::ListRemoteSkills { .. } => "list_remote_skills",
-            Self::DownloadRemoteSkill { .. } => "download_remote_skill",
             Self::Compact => "compact",
             Self::DropMemories => "drop_memories",
             Self::UpdateMemories => "update_memories",
@@ -1285,12 +1288,6 @@ pub enum EventMsg {
     /// List of skills available to the agent.
     ListSkillsResponse(ListSkillsResponseEvent),
 
-    /// List of remote skills available to the agent.
-    ListRemoteSkillsResponse(ListRemoteSkillsResponseEvent),
-
-    /// Remote skill downloaded to local cache.
-    RemoteSkillDownloaded(RemoteSkillDownloadedEvent),
-
     /// Notification that skill data may have been updated and clients may want to reload.
     SkillsUpdateAvailable,
 
@@ -1345,6 +1342,7 @@ pub enum EventMsg {
 #[serde(rename_all = "snake_case")]
 pub enum HookEventName {
     SessionStart,
+    UserPromptSubmit,
     Stop,
 }
 
@@ -1432,9 +1430,18 @@ pub struct HookCompletedEvent {
     pub run: HookRunSummary,
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RealtimeConversationVersion {
+    #[default]
+    V1,
+    V2,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct RealtimeConversationStartedEvent {
     pub session_id: Option<String>,
+    pub version: RealtimeConversationVersion,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -1990,6 +1997,8 @@ pub struct AgentMessageEvent {
     pub message: String,
     #[serde(default)]
     pub phase: Option<MessagePhase>,
+    #[serde(default)]
+    pub memory_citation: Option<MemoryCitation>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2263,6 +2272,7 @@ pub enum SessionSource {
     VSCode,
     Exec,
     Mcp,
+    Custom(String),
     SubAgent(SubAgentSource),
     #[serde(other)]
     Unknown,
@@ -2293,6 +2303,7 @@ impl fmt::Display for SessionSource {
             SessionSource::VSCode => f.write_str("vscode"),
             SessionSource::Exec => f.write_str("exec"),
             SessionSource::Mcp => f.write_str("mcp"),
+            SessionSource::Custom(source) => f.write_str(source),
             SessionSource::SubAgent(sub_source) => write!(f, "subagent_{sub_source}"),
             SessionSource::Unknown => f.write_str("unknown"),
         }
@@ -2300,6 +2311,23 @@ impl fmt::Display for SessionSource {
 }
 
 impl SessionSource {
+    pub fn from_startup_arg(value: &str) -> Result<Self, &'static str> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err("session source must not be empty");
+        }
+
+        let normalized = trimmed.to_ascii_lowercase();
+        Ok(match normalized.as_str() {
+            "cli" => SessionSource::Cli,
+            "vscode" => SessionSource::VSCode,
+            "exec" => SessionSource::Exec,
+            "mcp" | "appserver" | "app-server" | "app_server" => SessionSource::Mcp,
+            "unknown" => SessionSource::Unknown,
+            _ => SessionSource::Custom(trimmed.to_string()),
+        })
+    }
+
     pub fn get_nickname(&self) -> Option<String> {
         match self {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_nickname, .. }) => {
@@ -2322,6 +2350,25 @@ impl SessionSource {
             }
             _ => None,
         }
+    }
+
+    pub fn restriction_product(&self) -> Option<Product> {
+        match self {
+            SessionSource::Custom(source) => Product::from_session_source_name(source),
+            SessionSource::Cli
+            | SessionSource::VSCode
+            | SessionSource::Exec
+            | SessionSource::Mcp
+            | SessionSource::SubAgent(_)
+            | SessionSource::Unknown => Some(Product::Codex),
+        }
+    }
+
+    pub fn matches_product_restriction(&self, products: &[Product]) -> bool {
+        products.is_empty()
+            || self
+                .restriction_product()
+                .is_some_and(|product| products.contains(&product))
     }
 }
 
@@ -2903,47 +2950,29 @@ pub struct ListSkillsResponseEvent {
     pub skills: Vec<SkillsListEntry>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct RemoteSkillSummary {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(rename_all = "kebab-case")]
-#[ts(rename_all = "kebab-case")]
-pub enum RemoteSkillHazelnutScope {
-    WorkspaceShared,
-    AllShared,
-    Personal,
-    Example,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(rename_all = "lowercase")]
-pub enum RemoteSkillProductSurface {
+pub enum Product {
+    #[serde(alias = "CHATGPT")]
     Chatgpt,
+    #[serde(alias = "CODEX")]
     Codex,
-    Api,
+    #[serde(alias = "ATLAS")]
     Atlas,
 }
 
-/// Response payload for `Op::ListRemoteSkills`.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ListRemoteSkillsResponseEvent {
-    pub skills: Vec<RemoteSkillSummary>,
+impl Product {
+    pub fn from_session_source_name(value: &str) -> Option<Self> {
+        let normalized = value.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "chatgpt" => Some(Self::Chatgpt),
+            "codex" => Some(Self::Codex),
+            "atlas" => Some(Self::Atlas),
+            _ => None,
+        }
+    }
 }
-
-/// Response payload for `Op::DownloadRemoteSkill`.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct RemoteSkillDownloadedEvent {
-    pub id: String,
-    pub name: String,
-    pub path: PathBuf,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -3249,9 +3278,9 @@ pub struct CollabAgentSpawnEndEvent {
     /// Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the
     /// beginning.
     pub prompt: String,
-    /// Model requested for the spawned agent.
+    /// Effective model used by the spawned agent after inheritance and role overrides.
     pub model: String,
-    /// Reasoning effort requested for the spawned agent.
+    /// Effective reasoning effort used by the spawned agent after inheritance and role overrides.
     pub reasoning_effort: ReasoningEffortConfig,
     /// Last known status of the new agent reported to the sender agent.
     pub status: AgentStatus,
@@ -3442,6 +3471,92 @@ mod tests {
             .get_writable_roots_with_cwd(cwd)
             .iter()
             .any(|root| root.is_path_writable(path))
+    }
+
+    #[test]
+    fn session_source_from_startup_arg_maps_known_values() {
+        assert_eq!(
+            SessionSource::from_startup_arg("vscode").unwrap(),
+            SessionSource::VSCode
+        );
+        assert_eq!(
+            SessionSource::from_startup_arg("app-server").unwrap(),
+            SessionSource::Mcp
+        );
+    }
+
+    #[test]
+    fn session_source_from_startup_arg_preserves_custom_values() {
+        assert_eq!(
+            SessionSource::from_startup_arg("atlas").unwrap(),
+            SessionSource::Custom("atlas".to_string())
+        );
+    }
+
+    #[test]
+    fn session_source_restriction_product_defaults_non_custom_sources_to_codex() {
+        assert_eq!(
+            SessionSource::Cli.restriction_product(),
+            Some(Product::Codex)
+        );
+        assert_eq!(
+            SessionSource::VSCode.restriction_product(),
+            Some(Product::Codex)
+        );
+        assert_eq!(
+            SessionSource::Exec.restriction_product(),
+            Some(Product::Codex)
+        );
+        assert_eq!(
+            SessionSource::Mcp.restriction_product(),
+            Some(Product::Codex)
+        );
+        assert_eq!(
+            SessionSource::SubAgent(SubAgentSource::Review).restriction_product(),
+            Some(Product::Codex)
+        );
+        assert_eq!(
+            SessionSource::Unknown.restriction_product(),
+            Some(Product::Codex)
+        );
+    }
+
+    #[test]
+    fn session_source_restriction_product_maps_custom_sources_to_products() {
+        assert_eq!(
+            SessionSource::Custom("chatgpt".to_string()).restriction_product(),
+            Some(Product::Chatgpt)
+        );
+        assert_eq!(
+            SessionSource::Custom("ATLAS".to_string()).restriction_product(),
+            Some(Product::Atlas)
+        );
+        assert_eq!(
+            SessionSource::Custom("codex".to_string()).restriction_product(),
+            Some(Product::Codex)
+        );
+        assert_eq!(
+            SessionSource::Custom("atlas-dev".to_string()).restriction_product(),
+            None
+        );
+    }
+
+    #[test]
+    fn session_source_matches_product_restriction() {
+        assert!(
+            SessionSource::Custom("chatgpt".to_string())
+                .matches_product_restriction(&[Product::Chatgpt])
+        );
+        assert!(
+            !SessionSource::Custom("chatgpt".to_string())
+                .matches_product_restriction(&[Product::Codex])
+        );
+        assert!(SessionSource::VSCode.matches_product_restriction(&[Product::Codex]));
+        assert!(
+            !SessionSource::Custom("atlas-dev".to_string())
+                .matches_product_restriction(&[Product::Atlas])
+        );
+        assert!(SessionSource::Custom("atlas-dev".to_string()).matches_product_restriction(&[]));
     }
 
     fn sandbox_policy_probe_paths(policy: &SandboxPolicy, cwd: &Path) -> Vec<PathBuf> {
@@ -4078,6 +4193,7 @@ mod tests {
                 sample_rate: 24_000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
+                item_id: None,
             },
         });
         let start = Op::RealtimeConversationStart(ConversationStartParams {

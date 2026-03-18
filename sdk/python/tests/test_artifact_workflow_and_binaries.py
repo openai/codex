@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import io
 import json
 import sys
 import tomllib
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,17 @@ def _load_update_script_module():
     spec = importlib.util.spec_from_file_location("update_sdk_artifacts", script_path)
     if spec is None or spec.loader is None:
         raise AssertionError(f"Failed to load script module: {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_runtime_setup_module():
+    runtime_setup_path = ROOT / "_runtime_setup.py"
+    spec = importlib.util.spec_from_file_location("_runtime_setup", runtime_setup_path)
+    if spec is None or spec.loader is None:
+        raise AssertionError(f"Failed to load runtime setup module: {runtime_setup_path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -144,6 +157,39 @@ def test_runtime_package_template_has_no_checked_in_binaries() -> None:
         for path in runtime_root.rglob("*")
         if path.is_file() and "__pycache__" not in path.parts
     ) == ["__init__.py"]
+
+
+def test_examples_readme_matches_pinned_runtime_version() -> None:
+    runtime_setup = _load_runtime_setup_module()
+    readme = (ROOT / "examples" / "README.md").read_text()
+    assert (
+        f"Current pinned runtime version: `{runtime_setup.pinned_runtime_version()}`"
+        in readme
+    )
+
+
+def test_release_metadata_retries_without_invalid_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime_setup = _load_runtime_setup_module()
+    authorizations: list[str | None] = []
+
+    def fake_urlopen(request):
+        authorization = request.headers.get("Authorization")
+        authorizations.append(authorization)
+        if authorization is not None:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                401,
+                "Unauthorized",
+                hdrs=None,
+                fp=None,
+            )
+        return io.StringIO('{"assets": []}')
+
+    monkeypatch.setenv("GH_TOKEN", "invalid-token")
+    monkeypatch.setattr(runtime_setup.urllib.request, "urlopen", fake_urlopen)
+
+    assert runtime_setup._release_metadata("1.2.3") == {"assets": []}
+    assert authorizations == ["Bearer invalid-token", None]
 
 
 def test_runtime_package_is_wheel_only_and_builds_platform_specific_wheels() -> None:
