@@ -237,6 +237,7 @@ fn config_toml_deserializes_model_availability_nux() {
             show_tooltips: true,
             alternate_screen: AltScreenMode::default(),
             status_line: None,
+            terminal_title: None,
             theme: None,
             model_availability_nux: ModelAvailabilityNuxConfig {
                 shown_count: HashMap::from([
@@ -921,6 +922,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             show_tooltips: true,
             alternate_screen: AltScreenMode::Auto,
             status_line: None,
+            terminal_title: None,
             theme: None,
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
         }
@@ -4349,6 +4351,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tool_suggest: ToolSuggestConfig::default(),
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            tui_terminal_title: None,
             tui_theme: None,
             otel: OtelConfig::default(),
         },
@@ -4491,6 +4494,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_terminal_title: None,
         tui_theme: None,
         otel: OtelConfig::default(),
     };
@@ -4631,6 +4635,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_terminal_title: None,
         tui_theme: None,
         otel: OtelConfig::default(),
     };
@@ -4757,6 +4762,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_terminal_title: None,
         tui_theme: None,
         otel: OtelConfig::default(),
     };
