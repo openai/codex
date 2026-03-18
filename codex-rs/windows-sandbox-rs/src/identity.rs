@@ -124,6 +124,7 @@ fn select_identity(policy: &SandboxPolicy, codex_home: &Path) -> Result<Option<S
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn require_logon_sandbox_creds(
     policy: &SandboxPolicy,
     policy_cwd: &Path,

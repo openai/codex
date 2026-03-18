@@ -451,6 +451,7 @@ fn windows_elevated_supports_split_restricted_read_roots() {
     let temp_dir = tempfile::TempDir::new().expect("tempdir");
     let docs = temp_dir.path().join("docs");
     std::fs::create_dir_all(&docs).expect("create docs");
+    let expected_docs = dunce::canonicalize(&docs).expect("canonical docs");
     let policy = SandboxPolicy::ReadOnly {
         access: codex_protocol::protocol::ReadOnlyAccess::FullAccess,
         network_access: false,
@@ -475,7 +476,7 @@ fn windows_elevated_supports_split_restricted_read_roots() {
             WindowsSandboxLevel::Elevated,
         ),
         Ok(Some(WindowsElevatedFilesystemOverrides {
-            read_roots_override: Some(vec![docs]),
+            read_roots_override: Some(vec![expected_docs]),
             write_roots_override: None,
             additional_deny_write_paths: vec![],
         }))
@@ -487,6 +488,7 @@ fn windows_elevated_supports_split_write_read_carveouts() {
     let temp_dir = tempfile::TempDir::new().expect("tempdir");
     let docs = temp_dir.path().join("docs");
     std::fs::create_dir_all(&docs).expect("create docs");
+    let expected_docs = dunce::canonicalize(&docs).expect("canonical docs");
     let policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         read_only_access: codex_protocol::protocol::ReadOnlyAccess::FullAccess,
@@ -528,7 +530,7 @@ fn windows_elevated_supports_split_write_read_carveouts() {
         Ok(Some(WindowsElevatedFilesystemOverrides {
             read_roots_override: None,
             write_roots_override: None,
-            additional_deny_write_paths: vec![docs],
+            additional_deny_write_paths: vec![expected_docs],
         }))
     );
 }

@@ -239,6 +239,7 @@ fn transform_rejects_unsupported_windows_split_only_filesystem_policies() {
             codex_linux_sandbox_exe: None,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+            windows_sandbox_private_desktop: false,
         })
         .expect_err("unsupported split-only windows policy should fail closed");
 
@@ -302,6 +303,7 @@ fn transform_allows_supported_windows_split_write_read_carveouts() {
             codex_linux_sandbox_exe: None,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
+            windows_sandbox_private_desktop: false,
         })
         .expect("supported split write/read carveout should transform");
 
@@ -322,6 +324,7 @@ fn transform_allows_supported_windows_elevated_split_write_read_carveouts() {
     let docs = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("docs"))
         .expect("absolute docs path");
     std::fs::create_dir_all(docs.as_path()).expect("create docs");
+    let expected_docs = dunce::canonicalize(docs.as_path()).expect("canonical docs");
     let exec_request = manager
         .transform(super::SandboxTransformRequest {
             spec: super::CommandSpec {
@@ -369,6 +372,7 @@ fn transform_allows_supported_windows_elevated_split_write_read_carveouts() {
             codex_linux_sandbox_exe: None,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Elevated,
+            windows_sandbox_private_desktop: false,
         })
         .expect("supported elevated split write/read carveout should transform");
 
@@ -379,7 +383,7 @@ fn transform_allows_supported_windows_elevated_split_write_read_carveouts() {
         WindowsElevatedFilesystemOverrides {
             read_roots_override: None,
             write_roots_override: None,
-            additional_deny_write_paths: vec![docs.to_path_buf()],
+            additional_deny_write_paths: vec![expected_docs],
         }
     );
 }
@@ -438,6 +442,7 @@ fn transform_rejects_windows_elevated_unreadable_carveouts() {
             codex_linux_sandbox_exe: None,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Elevated,
+            windows_sandbox_private_desktop: false,
         })
         .expect_err("unsupported elevated unreadable carveout should fail closed");
 

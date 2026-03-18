@@ -1074,36 +1074,36 @@ pub(crate) fn resolve_windows_elevated_filesystem_overrides(
 
     let needs_direct_runtime_enforcement = file_system_sandbox_policy
         .needs_direct_runtime_enforcement(network_sandbox_policy, sandbox_policy_cwd);
+    let normalize_path = |path: PathBuf| dunce::canonicalize(&path).unwrap_or(path);
     let legacy_writable_roots = sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
     let legacy_readable_root_set: BTreeSet<PathBuf> = sandbox_policy
         .get_readable_roots_with_cwd(sandbox_policy_cwd)
         .into_iter()
         .map(codex_utils_absolute_path::AbsolutePathBuf::into_path_buf)
+        .map(&normalize_path)
         .collect();
     let legacy_root_paths: BTreeSet<PathBuf> = legacy_writable_roots
         .iter()
-        .map(|root| root.root.to_path_buf())
+        .map(|root| normalize_path(root.root.to_path_buf()))
         .collect();
     let split_readable_roots: Vec<PathBuf> = file_system_sandbox_policy
         .get_readable_roots_with_cwd(sandbox_policy_cwd)
         .into_iter()
         .map(codex_utils_absolute_path::AbsolutePathBuf::into_path_buf)
+        .map(&normalize_path)
         .collect();
     let split_readable_root_set: BTreeSet<PathBuf> = split_readable_roots.iter().cloned().collect();
     let split_root_paths: Vec<PathBuf> = split_writable_roots
         .iter()
-        .map(|root| root.root.to_path_buf())
+        .map(|root| normalize_path(root.root.to_path_buf()))
         .collect();
     let split_root_path_set: BTreeSet<PathBuf> = split_root_paths.iter().cloned().collect();
 
-    let read_roots_override = if file_system_sandbox_policy.has_full_disk_read_access()
-        == sandbox_policy.has_full_disk_read_access()
-        && split_readable_root_set == legacy_readable_root_set
-    {
-        None
-    } else if file_system_sandbox_policy.has_full_disk_read_access()
-        == sandbox_policy.has_full_disk_read_access()
-        && file_system_sandbox_policy.has_full_disk_read_access()
+    let matches_legacy_read_access = file_system_sandbox_policy.has_full_disk_read_access()
+        == sandbox_policy.has_full_disk_read_access();
+    let read_roots_override = if matches_legacy_read_access
+        && (file_system_sandbox_policy.has_full_disk_read_access()
+            || split_readable_root_set == legacy_readable_root_set)
     {
         None
     } else {
@@ -1130,7 +1130,7 @@ pub(crate) fn resolve_windows_elevated_filesystem_overrides(
                         .any(|candidate| candidate == read_only_subpath)
                 });
                 if !already_denied_by_legacy {
-                    deny_paths.insert(read_only_subpath.to_path_buf());
+                    deny_paths.insert(normalize_path(read_only_subpath.to_path_buf()));
                 }
             }
         }
