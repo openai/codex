@@ -100,7 +100,10 @@ pub(crate) fn child_uses_parent_exec_policy(parent_config: &Config, child_config
     fn exec_policy_config_folders(config: &Config) -> Vec<AbsolutePathBuf> {
         config
             .config_layer_stack
-            .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, false)
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ false,
+            )
             .into_iter()
             .filter_map(codex_config::ConfigLayerEntry::config_folder)
             .collect()
