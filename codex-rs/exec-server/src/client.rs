@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
-use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
 use tracing::warn;
@@ -18,7 +17,6 @@ use crate::protocol::InitializeResponse;
 use crate::rpc::RpcCallError;
 use crate::rpc::RpcClient;
 use crate::rpc::RpcClientEvent;
-use crate::rpc::RpcNotificationSender;
 
 mod local_backend;
 use local_backend::LocalBackend;
@@ -128,10 +126,7 @@ impl ExecServerClient {
     pub async fn connect_in_process(
         options: ExecServerClientConnectOptions,
     ) -> Result<Self, ExecServerError> {
-        let (outgoing_tx, _outgoing_rx) = mpsc::channel(1);
-        let backend = LocalBackend::new(crate::server::ExecServerHandler::new(
-            RpcNotificationSender::new(outgoing_tx),
-        ));
+        let backend = LocalBackend::new(crate::server::ExecServerHandler::new());
         let inner = Arc::new(Inner {
             backend: ClientBackend::InProcess(backend),
             reader_task: tokio::spawn(async {}),

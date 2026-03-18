@@ -4,19 +4,16 @@ use std::sync::atomic::Ordering;
 use codex_app_server_protocol::JSONRPCErrorError;
 
 use crate::protocol::InitializeResponse;
-use crate::protocol::PROTOCOL_VERSION;
-use crate::rpc::RpcNotificationSender;
+use crate::server::jsonrpc::invalid_request;
 
 pub(crate) struct ExecServerHandler {
-    _notifications: RpcNotificationSender,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
 }
 
 impl ExecServerHandler {
-    pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            _notifications: notifications,
             initialize_requested: AtomicBool::new(false),
             initialized: AtomicBool::new(false),
         }
@@ -26,13 +23,11 @@ impl ExecServerHandler {
 
     pub(crate) fn initialize(&self) -> Result<InitializeResponse, JSONRPCErrorError> {
         if self.initialize_requested.swap(true, Ordering::SeqCst) {
-            return Err(crate::rpc::invalid_request(
+            return Err(invalid_request(
                 "initialize may only be sent once per connection".to_string(),
             ));
         }
-        Ok(InitializeResponse {
-            protocol_version: PROTOCOL_VERSION.to_string(),
-        })
+        Ok(InitializeResponse {})
     }
 
     pub(crate) fn initialized(&self) -> Result<(), String> {

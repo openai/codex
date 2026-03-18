@@ -3,7 +3,6 @@ use serde::Serialize;
 
 pub const INITIALIZE_METHOD: &str = "initialize";
 pub const INITIALIZED_METHOD: &str = "initialized";
-pub const PROTOCOL_VERSION: &str = "exec-server.v0";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -13,6 +12,4 @@ pub struct InitializeParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct InitializeResponse {
-    pub protocol_version: String,
-}
+pub struct InitializeResponse {}

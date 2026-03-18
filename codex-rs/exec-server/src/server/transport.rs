@@ -38,10 +38,10 @@ impl std::fmt::Display for ExecServerTransportParseError {
 impl std::error::Error for ExecServerTransportParseError {}
 
 impl ExecServerTransport {
-    pub const DEFAULT_LISTEN_URL: &str = "stdio://";
+    pub const DEFAULT_LISTEN_URL: &str = "ws://127.0.0.1:0";
 
     pub fn from_listen_url(listen_url: &str) -> Result<Self, ExecServerTransportParseError> {
-        if listen_url == Self::DEFAULT_LISTEN_URL {
+        if listen_url == "stdio://" {
             return Ok(Self::Stdio);
         }
 
@@ -125,10 +125,22 @@ mod tests {
     use super::ExecServerTransport;
 
     #[test]
-    fn exec_server_transport_parses_stdio_listen_url() {
+    fn exec_server_transport_parses_default_websocket_listen_url() {
         let transport =
             ExecServerTransport::from_listen_url(ExecServerTransport::DEFAULT_LISTEN_URL)
-                .expect("stdio listen URL should parse");
+                .expect("default listen URL should parse");
+        assert_eq!(
+            transport,
+            ExecServerTransport::WebSocket {
+                bind_address: "127.0.0.1:0".parse().expect("valid socket address"),
+            }
+        );
+    }
+
+    #[test]
+    fn exec_server_transport_parses_stdio_listen_url() {
+        let transport = ExecServerTransport::from_listen_url("stdio://")
+            .expect("stdio listen URL should parse");
         assert_eq!(transport, ExecServerTransport::Stdio);
     }
 

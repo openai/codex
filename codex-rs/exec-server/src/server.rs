@@ -1,6 +1,6 @@
 mod handler;
+mod jsonrpc;
 mod processor;
-mod registry;
 mod transport;
 
 pub(crate) use handler::ExecServerHandler;

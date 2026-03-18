@@ -3,8 +3,8 @@ use codex_exec_server::ExecServerTransport;
 
 #[derive(Debug, Parser)]
 struct ExecServerArgs {
-    /// Transport endpoint URL. Supported values: `stdio://` (default),
-    /// `ws://IP:PORT`.
+    /// Transport endpoint URL. Supported values: `ws://IP:PORT` (default),
+    /// `stdio://`.
     #[arg(
         long = "listen",
         value_name = "URL",

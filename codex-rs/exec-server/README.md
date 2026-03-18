@@ -1,6 +1,6 @@
 # codex-exec-server
 
-`codex-exec-server` is a small standalone stdio JSON-RPC server for spawning
+`codex-exec-server` is a small standalone JSON-RPC server for spawning
 and controlling subprocesses through `codex-utils-pty`.
 
 This PR intentionally lands only the standalone binary, client, wire protocol,
@@ -18,20 +18,18 @@ unified-exec in this PR; it is only the standalone transport layer.
 
 ## Transport
 
-The server speaks newline-delimited JSON-RPC 2.0 over stdio.
+The server speaks the shared `codex-app-server-protocol` JSON-RPC message
+envelope without a `"jsonrpc":"2.0"` field.
 
-- `stdin`: one JSON-RPC message per line
-- `stdout`: one JSON-RPC message per line
-- `stderr`: reserved for logs / process errors
+The standalone binary supports:
 
-Like the app-server transport, messages on the wire omit the `"jsonrpc":"2.0"`
-field and use the shared `codex-app-server-protocol` envelope types.
+- `ws://IP:PORT` (default)
+- `stdio://`
 
-The current protocol version is:
+Wire framing:
 
-```text
-exec-server.v0
-```
+- websocket: one JSON-RPC message per websocket text frame
+- stdio: one newline-delimited JSON-RPC message per line on stdin/stdout
 
 ## Lifecycle
 
@@ -65,9 +63,7 @@ Request params:
 Response:
 
 ```json
-{
-  "protocolVersion": "exec-server.v0"
-}
+{}
 ```
 
 ### `initialized`
@@ -257,7 +253,7 @@ Initialize:
 
 ```json
 {"id":1,"method":"initialize","params":{"clientName":"example-client"}}
-{"id":1,"result":{"protocolVersion":"exec-server.v0"}}
+{"id":1,"result":{}}
 {"method":"initialized","params":{}}
 ```
 
