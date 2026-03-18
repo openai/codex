@@ -1660,13 +1660,35 @@ impl App {
             return;
         }
 
-        for event in retained_events {
-            if sender.send(event).await.is_err() {
-                self.clear_active_thread().await;
-                return;
+        self.active_thread_rx = Some(rx);
+
+        if retained_events.is_empty() {
+            return;
+        }
+
+        let mut pending_events = retained_events.into_iter();
+        while let Some(event) = pending_events.next() {
+            match sender.try_send(event) {
+                Ok(()) => {}
+                Err(TrySendError::Full(event)) => {
+                    let remaining_events: Vec<_> =
+                        std::iter::once(event).chain(pending_events).collect();
+                    tokio::spawn(async move {
+                        for event in remaining_events {
+                            if let Err(err) = sender.send(event).await {
+                                tracing::warn!("thread {thread_id} event channel closed: {err}");
+                                break;
+                            }
+                        }
+                    });
+                    return;
+                }
+                Err(TrySendError::Closed(_)) => {
+                    self.clear_active_thread().await;
+                    return;
+                }
             }
         }
-        self.active_thread_rx = Some(rx);
     }
 
     async fn active_turn_id_for_thread(&self, thread_id: ThreadId) -> Option<String> {
