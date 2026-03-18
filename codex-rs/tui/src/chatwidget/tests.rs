@@ -4852,7 +4852,7 @@ async fn realtime_error_closes_without_followup_closed_info() {
     assert_snapshot!(rendered.join("\n\n"), @"■ Realtime voice error: boom");
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 #[tokio::test]
 async fn removing_active_realtime_placeholder_closes_realtime_conversation() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
