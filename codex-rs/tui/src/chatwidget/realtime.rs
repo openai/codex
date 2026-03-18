@@ -9,6 +9,8 @@ use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeEvent;
 #[cfg(not(target_os = "linux"))]
 use std::sync::atomic::AtomicUsize;
+#[cfg(not(target_os = "linux"))]
+use std::time::Duration;
 
 const REALTIME_CONVERSATION_PROMPT: &str = "You are in a realtime voice conversation in the Codex TUI. Respond conversationally and concisely.";
 
