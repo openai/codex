@@ -1741,20 +1741,6 @@ impl App {
         }
     }
 
-    async fn submit_op_to_thread(&mut self, thread_id: ThreadId, op: AppCommand) {
-        let replay_state_op =
-            ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
-        crate::session_log::log_outbound_op(&op);
-        let submitted = false;
-        self.chat_widget.add_error_message(format!(
-            "Not available in app-server TUI yet for thread {thread_id}."
-        ));
-        if submitted && let Some(op) = replay_state_op.as_ref() {
-            self.note_thread_outbound_op(thread_id, op).await;
-            self.refresh_pending_thread_approvals().await;
-        }
-    }
-
     async fn submit_active_thread_op(
         &mut self,
         app_server: &mut AppServerSession,
@@ -1786,7 +1772,9 @@ impl App {
             return Ok(());
         }
 
-        self.submit_op_to_thread(thread_id, op).await;
+        self.chat_widget.add_error_message(format!(
+            "Not available in app-server TUI yet for thread {thread_id}."
+        ));
         Ok(())
     }
 
@@ -3466,7 +3454,15 @@ impl App {
                 {
                     return Ok(AppRunControl::Continue);
                 }
-                self.submit_op_to_thread(thread_id, app_command).await;
+                crate::session_log::log_outbound_op(&app_command);
+                tracing::error!(
+                    thread_id = %thread_id,
+                    op = ?app_command,
+                    "unexpected unresolved thread-scoped app command"
+                );
+                self.chat_widget.add_error_message(format!(
+                    "Thread-scoped request is no longer pending for thread {thread_id}."
+                ));
             }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
