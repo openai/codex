@@ -1,0 +1,7 @@
+---
+source: tui/src/app.rs
+expression: rendered
+---
+⚠ Custom prompts are deprecated and will soon be removed.
+Detected 1 custom prompt in `$CODEX_HOME/prompts`. Use the `$skill-creator` skill to convert each custom prompt into
+a skill.
