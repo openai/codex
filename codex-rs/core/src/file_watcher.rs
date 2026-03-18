@@ -345,7 +345,7 @@ impl FileWatcher {
                 .entry(watched_path.path.clone())
                 .or_default();
             let previous_mode = counts.effective_mode();
-            counts.increment(watched_path.recursive, 1);
+            counts.increment(watched_path.recursive, /*amount*/ 1);
             let next_mode = counts.effective_mode();
             if previous_mode != next_mode {
                 self.reconfigure_watch(&watched_path.path, next_mode, &mut inner_guard);
@@ -406,7 +406,7 @@ impl FileWatcher {
                 continue;
             };
             let previous_mode = counts.effective_mode();
-            counts.decrement(watched_path.recursive, 1);
+            counts.decrement(watched_path.recursive, /*amount*/ 1);
             let next_mode = counts.effective_mode();
             if counts.is_empty() {
                 state.path_ref_counts.remove(&watched_path.path);
