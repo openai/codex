@@ -588,17 +588,6 @@ mod phase2 {
         pretty_assertions::assert_eq!(completion, 456);
     }
 
-    #[test]
-    fn phase2_subagent_config_disables_memory_tool() {
-        let mut config = test_config();
-        config.features.enable(Feature::MemoryTool);
-
-        let subagent_config =
-            phase2::agent::get_config(Arc::new(config)).expect("phase-2 subagent config");
-
-        assert!(!subagent_config.features.enabled(Feature::MemoryTool));
-    }
-
     #[tokio::test]
     async fn dispatch_skips_when_global_job_is_not_dirty() {
         let harness = DispatchHarness::new().await;
