@@ -981,12 +981,17 @@ fn first_party_chat_originator_filters_target_and_openai_prefixed_connectors() {
 }
 
 #[tokio::test]
-async fn tool_suggest_connector_ids_include_configured_discoverable_connectors() {
+async fn tool_suggest_connector_ids_include_configured_tool_suggest_discoverables() {
     let codex_home = tempdir().expect("tempdir should succeed");
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"
-discoverable_connectors = ["connector_2128aebfecb84f64a069897515042a44", "   "]
+[tool_suggest]
+discoverables = [
+  { type = "connector", id = "connector_2128aebfecb84f64a069897515042a44" },
+  { type = "plugin", id = "slack@openai-curated" },
+  { type = "connector", id = "   " }
+]
 "#,
     )
     .expect("write config");
