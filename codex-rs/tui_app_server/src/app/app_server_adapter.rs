@@ -25,48 +25,89 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+#[cfg(test)]
 use codex_app_server_protocol::Thread;
+#[cfg(test)]
 use codex_app_server_protocol::ThreadItem;
+#[cfg(test)]
 use codex_app_server_protocol::Turn;
+#[cfg(test)]
 use codex_app_server_protocol::TurnStatus;
 use codex_protocol::ThreadId;
+#[cfg(test)]
 use codex_protocol::config_types::ModeKind;
+#[cfg(test)]
 use codex_protocol::items::AgentMessageContent;
+#[cfg(test)]
 use codex_protocol::items::AgentMessageItem;
+#[cfg(test)]
 use codex_protocol::items::ContextCompactionItem;
+#[cfg(test)]
 use codex_protocol::items::ImageGenerationItem;
+#[cfg(test)]
 use codex_protocol::items::PlanItem;
+#[cfg(test)]
 use codex_protocol::items::ReasoningItem;
+#[cfg(test)]
 use codex_protocol::items::TurnItem;
+#[cfg(test)]
 use codex_protocol::items::UserMessageItem;
+#[cfg(test)]
 use codex_protocol::items::WebSearchItem;
+#[cfg(test)]
 use codex_protocol::protocol::AgentMessageDeltaEvent;
+#[cfg(test)]
 use codex_protocol::protocol::AgentReasoningDeltaEvent;
+#[cfg(test)]
 use codex_protocol::protocol::AgentReasoningRawContentDeltaEvent;
+#[cfg(test)]
 use codex_protocol::protocol::ErrorEvent;
+#[cfg(test)]
 use codex_protocol::protocol::Event;
+#[cfg(test)]
 use codex_protocol::protocol::EventMsg;
+#[cfg(test)]
 use codex_protocol::protocol::ExecCommandBeginEvent;
+#[cfg(test)]
 use codex_protocol::protocol::ExecCommandEndEvent;
+#[cfg(test)]
 use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
+#[cfg(test)]
 use codex_protocol::protocol::ExecCommandStatus;
+#[cfg(test)]
 use codex_protocol::protocol::ExecOutputStream;
+#[cfg(test)]
 use codex_protocol::protocol::ItemCompletedEvent;
+#[cfg(test)]
 use codex_protocol::protocol::ItemStartedEvent;
+#[cfg(test)]
 use codex_protocol::protocol::PlanDeltaEvent;
+#[cfg(test)]
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
+#[cfg(test)]
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
+#[cfg(test)]
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
+#[cfg(test)]
 use codex_protocol::protocol::RealtimeEvent;
+#[cfg(test)]
 use codex_protocol::protocol::ThreadNameUpdatedEvent;
+#[cfg(test)]
 use codex_protocol::protocol::TokenCountEvent;
+#[cfg(test)]
 use codex_protocol::protocol::TokenUsage;
+#[cfg(test)]
 use codex_protocol::protocol::TokenUsageInfo;
+#[cfg(test)]
 use codex_protocol::protocol::TurnAbortReason;
+#[cfg(test)]
 use codex_protocol::protocol::TurnAbortedEvent;
+#[cfg(test)]
 use codex_protocol::protocol::TurnCompleteEvent;
+#[cfg(test)]
 use codex_protocol::protocol::TurnStartedEvent;
 use serde_json::Value;
+#[cfg(test)]
 use std::time::Duration;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -496,6 +537,7 @@ fn resolve_chatgpt_auth_tokens_refresh_response(
     Ok(auth.to_refresh_response())
 }
 
+#[cfg(test)]
 /// Convert a `Thread` snapshot into a flat sequence of protocol `Event`s
 /// suitable for replaying into the TUI event store.
 ///
@@ -563,6 +605,7 @@ fn legacy_thread_notification(
     }
 }
 
+#[cfg(test)]
 fn server_notification_thread_events(
     notification: ServerNotification,
 ) -> Option<(ThreadId, Vec<Event>)> {
@@ -759,6 +802,7 @@ fn server_notification_thread_events(
     }
 }
 
+#[cfg(test)]
 fn token_usage_from_app_server(
     value: codex_app_server_protocol::TokenUsageBreakdown,
 ) -> TokenUsage {
@@ -778,6 +822,7 @@ fn token_usage_from_app_server(
 /// agent-message items, while replaying the legacy events that still
 /// drive rendering for reasoning, web-search, image-generation, and
 /// context-compaction history cells.
+#[cfg(test)]
 fn turn_snapshot_events(
     thread_id: ThreadId,
     turn: &Turn,
@@ -843,6 +888,7 @@ fn turn_snapshot_events(
 /// - `Interrupted` → `TurnAborted { reason: Interrupted }`
 /// - `Failed` → `Error` (if present) then `TurnComplete`
 /// - `InProgress` → no events (the turn is still running)
+#[cfg(test)]
 fn append_terminal_turn_events(events: &mut Vec<Event>, turn: &Turn, include_failed_error: bool) {
     match turn.status {
         TurnStatus::Completed => events.push(Event {
@@ -886,6 +932,7 @@ fn append_terminal_turn_events(events: &mut Vec<Event>, turn: &Turn, include_fai
     }
 }
 
+#[cfg(test)]
 fn thread_item_to_core(item: &ThreadItem) -> Option<TurnItem> {
     match item {
         ThreadItem::UserMessage { id, content } => Some(TurnItem::UserMessage(UserMessageItem {
@@ -972,6 +1019,7 @@ fn thread_item_to_core(item: &ThreadItem) -> Option<TurnItem> {
     }
 }
 
+#[cfg(test)]
 fn command_execution_started_event(turn_id: &str, item: &ThreadItem) -> Option<Vec<Event>> {
     let ThreadItem::CommandExecution {
         id,
@@ -1005,6 +1053,7 @@ fn command_execution_started_event(turn_id: &str, item: &ThreadItem) -> Option<V
     }])
 }
 
+#[cfg(test)]
 fn command_execution_completed_event(turn_id: &str, item: &ThreadItem) -> Option<Vec<Event>> {
     let ThreadItem::CommandExecution {
         id,
@@ -1076,6 +1125,7 @@ fn command_execution_completed_event(turn_id: &str, item: &ThreadItem) -> Option
     }])
 }
 
+#[cfg(test)]
 fn command_execution_snapshot_events(turn_id: &str, item: &ThreadItem) -> Option<Vec<Event>> {
     let mut events = command_execution_started_event(turn_id, item)?;
     if let Some(end_events) = command_execution_completed_event(turn_id, item) {
@@ -1084,6 +1134,7 @@ fn command_execution_snapshot_events(turn_id: &str, item: &ThreadItem) -> Option
     Some(events)
 }
 
+#[cfg(test)]
 fn split_command_string(command: &str) -> Vec<String> {
     let Some(parts) = shlex::split(command) else {
         return vec![command.to_string()];
@@ -1207,6 +1258,7 @@ mod refresh_tests {
     }
 }
 
+#[cfg(test)]
 fn app_server_web_search_action_to_core(
     action: codex_app_server_protocol::WebSearchAction,
 ) -> Option<codex_protocol::models::WebSearchAction> {
@@ -1226,6 +1278,7 @@ fn app_server_web_search_action_to_core(
     }
 }
 
+#[cfg(test)]
 fn app_server_codex_error_info_to_core(
     value: codex_app_server_protocol::CodexErrorInfo,
 ) -> Option<codex_protocol::protocol::CodexErrorInfo> {
