@@ -1081,7 +1081,7 @@ impl PluginsManager {
                     })
                     .collect::<Vec<_>>();
             configured_curated_plugin_ids.sort_unstable_by_key(super::store::PluginId::as_key);
-            self.start_curated_repo_sync(configured_curated_plugin_ids, session_source.clone());
+            self.start_curated_repo_sync(configured_curated_plugin_ids);
 
             let config = config.clone();
             let auth_manager = auth_manager.clone();
