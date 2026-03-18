@@ -27,6 +27,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::watch;
@@ -243,6 +244,7 @@ impl AgentControl {
         thread_id: ThreadId,
         session_source: SessionSource,
     ) -> CodexResult<ThreadId> {
+        let root_depth = thread_spawn_depth(&session_source).unwrap_or(0);
         let resumed_thread_id = self
             .resume_single_agent_from_rollout(config.clone(), thread_id, session_source)
             .await?;
@@ -253,55 +255,55 @@ impl AgentControl {
         let Some(state_db_ctx) = resumed_thread.state_db() else {
             return Ok(resumed_thread_id);
         };
-        let descendant_ids = match state_db_ctx
-            .list_thread_spawn_descendants_with_status(
-                thread_id,
-                DirectionalThreadSpawnEdgeStatus::Open,
-            )
-            .await
-        {
-            Ok(descendant_ids) => descendant_ids,
-            Err(err) => {
-                warn!("failed to load persisted thread-spawn descendants for {thread_id}: {err}");
-                return Ok(resumed_thread_id);
-            }
-        };
 
-        for descendant_id in descendant_ids {
-            if state.get_thread(descendant_id).await.is_ok() {
-                continue;
-            }
-            let Some(metadata) = state_db_ctx.get_thread(descendant_id).await.ok().flatten() else {
-                continue;
-            };
-            let source = metadata.source;
-            let Ok(descendant_session_source) = serde_json::from_str(source.as_str())
-                .or_else(|_| serde_json::from_value(serde_json::Value::String(source)))
-            else {
-                continue;
-            };
-            if !matches!(
-                descendant_session_source,
-                SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
-            ) {
-                continue;
-            }
-            let Some(parent_thread_id) = thread_spawn_parent_thread_id(&descendant_session_source)
-            else {
-                continue;
-            };
-            if parent_thread_id != thread_id && state.get_thread(parent_thread_id).await.is_err() {
-                continue;
-            }
-            if let Err(err) = self
-                .resume_single_agent_from_rollout(
-                    config.clone(),
-                    descendant_id,
-                    descendant_session_source,
+        let mut resume_queue = VecDeque::from([(thread_id, root_depth)]);
+        while let Some((parent_thread_id, parent_depth)) = resume_queue.pop_front() {
+            let child_ids = match state_db_ctx
+                .list_thread_spawn_children_with_status(
+                    parent_thread_id,
+                    DirectionalThreadSpawnEdgeStatus::Open,
                 )
                 .await
             {
-                warn!("failed to resume descendant thread {descendant_id}: {err}");
+                Ok(child_ids) => child_ids,
+                Err(err) => {
+                    warn!(
+                        "failed to load persisted thread-spawn children for {parent_thread_id}: {err}"
+                    );
+                    continue;
+                }
+            };
+
+            for child_thread_id in child_ids {
+                let child_depth = parent_depth + 1;
+                let child_resumed = if state.get_thread(child_thread_id).await.is_ok() {
+                    true
+                } else {
+                    let child_session_source =
+                        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                            parent_thread_id,
+                            depth: child_depth,
+                            agent_nickname: None,
+                            agent_role: None,
+                        });
+                    match self
+                        .resume_single_agent_from_rollout(
+                            config.clone(),
+                            child_thread_id,
+                            child_session_source,
+                        )
+                        .await
+                    {
+                        Ok(_) => true,
+                        Err(err) => {
+                            warn!("failed to resume descendant thread {child_thread_id}: {err}");
+                            false
+                        }
+                    }
+                };
+                if child_resumed {
+                    resume_queue.push_back((child_thread_id, child_depth));
+                }
             }
         }
 
@@ -749,6 +751,13 @@ fn thread_spawn_parent_thread_id(session_source: &SessionSource) -> Option<Threa
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
         }) => Some(*parent_thread_id),
+        _ => None,
+    }
+}
+
+fn thread_spawn_depth(session_source: &SessionSource) -> Option<i32> {
+    match session_source {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) => Some(*depth),
         _ => None,
     }
 }

@@ -1642,6 +1642,134 @@ async fn resume_agent_from_rollout_reopens_open_descendants_after_manager_shutdo
 }
 
 #[tokio::test]
+async fn resume_agent_from_rollout_uses_edge_data_when_descendant_metadata_source_is_stale() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+
+    let child_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("hello child"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+        )
+        .await
+        .expect("child spawn should succeed");
+    let grandchild_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("hello grandchild"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: child_thread_id,
+                depth: 2,
+                agent_nickname: None,
+                agent_role: Some("worker".to_string()),
+            })),
+        )
+        .await
+        .expect("grandchild spawn should succeed");
+
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should exist");
+    let grandchild_thread = harness
+        .manager
+        .get_thread(grandchild_thread_id)
+        .await
+        .expect("grandchild thread should exist");
+    persist_thread_for_tree_resume(&parent_thread, "parent persisted").await;
+    persist_thread_for_tree_resume(&child_thread, "child persisted").await;
+    persist_thread_for_tree_resume(&grandchild_thread, "grandchild persisted").await;
+    wait_for_live_thread_spawn_children(&harness.control, parent_thread_id, &[child_thread_id])
+        .await;
+    wait_for_live_thread_spawn_children(&harness.control, child_thread_id, &[grandchild_thread_id])
+        .await;
+
+    let state_db = grandchild_thread
+        .state_db()
+        .expect("sqlite state db should be available");
+    let mut stale_metadata = state_db
+        .get_thread(grandchild_thread_id)
+        .await
+        .expect("grandchild metadata query should succeed")
+        .expect("grandchild metadata should exist");
+    stale_metadata.source =
+        serde_json::to_string(&SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: ThreadId::new(),
+            depth: 99,
+            agent_nickname: None,
+            agent_role: Some("worker".to_string()),
+        }))
+        .expect("stale session source should serialize");
+    state_db
+        .upsert_thread(&stale_metadata)
+        .await
+        .expect("stale grandchild metadata should persist");
+
+    let report = harness
+        .manager
+        .shutdown_all_threads_bounded(Duration::from_secs(5))
+        .await;
+    assert_eq!(report.submit_failed, Vec::<ThreadId>::new());
+    assert_eq!(report.timed_out, Vec::<ThreadId>::new());
+
+    let resumed_parent_thread_id = harness
+        .control
+        .resume_agent_from_rollout(
+            harness.config.clone(),
+            parent_thread_id,
+            SessionSource::Exec,
+        )
+        .await
+        .expect("tree resume should succeed");
+    assert_eq!(resumed_parent_thread_id, parent_thread_id);
+    assert_ne!(
+        harness.control.get_status(parent_thread_id).await,
+        AgentStatus::NotFound
+    );
+    assert_ne!(
+        harness.control.get_status(child_thread_id).await,
+        AgentStatus::NotFound
+    );
+    assert_ne!(
+        harness.control.get_status(grandchild_thread_id).await,
+        AgentStatus::NotFound
+    );
+
+    let resumed_grandchild_snapshot = harness
+        .manager
+        .get_thread(grandchild_thread_id)
+        .await
+        .expect("resumed grandchild thread should exist")
+        .config_snapshot()
+        .await;
+    let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id: resumed_parent_thread_id,
+        depth: resumed_depth,
+        ..
+    }) = resumed_grandchild_snapshot.session_source
+    else {
+        panic!("expected thread-spawn sub-agent source");
+    };
+    assert_eq!(resumed_parent_thread_id, child_thread_id);
+    assert_eq!(resumed_depth, 2);
+
+    let _ = harness
+        .control
+        .shutdown_agent_tree(parent_thread_id)
+        .await
+        .expect("tree shutdown after subtree resume should succeed");
+}
+
+#[tokio::test]
 async fn resume_agent_from_rollout_skips_descendants_when_parent_resume_fails() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
