@@ -408,7 +408,9 @@ impl RealtimeWebsocketEvents {
                 append_transcript_delta(&mut active_transcript.entries, "assistant", delta);
             }
             RealtimeEvent::HandoffRequested(handoff) => {
-                handoff.active_transcript = std::mem::take(&mut active_transcript.entries);
+                if self.event_parser == RealtimeEventParser::V1 {
+                    handoff.active_transcript = std::mem::take(&mut active_transcript.entries);
+                }
             }
             RealtimeEvent::SessionUpdated { .. }
             | RealtimeEvent::AudioOut(_)
