@@ -106,31 +106,36 @@ def _normalize_run_input(input: RunInput) -> Input:
     return input
 
 
-def _assistant_text_from_items(items: list[ThreadItem]) -> str:
+def _assistant_text_from_item(item: ThreadItem) -> str | None:
+    raw_item = item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+    if not isinstance(raw_item, dict):
+        return None
+
+    item_type = raw_item.get("type")
+    if item_type == "agentMessage":
+        text = raw_item.get("text")
+        return text if isinstance(text, str) and text else None
+
+    if item_type != "message" or raw_item.get("role") != "assistant":
+        return None
+
     chunks: list[str] = []
+    for content in raw_item.get("content") or []:
+        if not isinstance(content, dict) or content.get("type") != "output_text":
+            continue
+        text = content.get("text")
+        if isinstance(text, str) and text:
+            chunks.append(text)
+    return "".join(chunks) or None
+
+
+def _final_assistant_response_from_items(items: list[ThreadItem]) -> str:
+    final_response = ""
     for item in items:
-        raw_item = item.model_dump(mode="json") if hasattr(item, "model_dump") else item
-        if not isinstance(raw_item, dict):
-            continue
-
-        item_type = raw_item.get("type")
-        if item_type == "agentMessage":
-            text = raw_item.get("text")
-            if isinstance(text, str) and text:
-                chunks.append(text)
-            continue
-
-        if item_type != "message" or raw_item.get("role") != "assistant":
-            continue
-
-        for content in raw_item.get("content") or []:
-            if not isinstance(content, dict) or content.get("type") != "output_text":
-                continue
-            text = content.get("text")
-            if isinstance(text, str) and text:
-                chunks.append(text)
-
-    return "".join(chunks)
+        item_text = _assistant_text_from_item(item)
+        if item_text is not None:
+            final_response = item_text
+    return final_response
 
 
 def _raise_for_failed_turn(turn: AppServerTurn) -> None:
@@ -162,7 +167,7 @@ def _collect_run_result(stream: Iterator[Notification], *, turn_id: str) -> RunR
 
     _raise_for_failed_turn(completed.turn)
     return RunResult(
-        final_response=_assistant_text_from_items(items),
+        final_response=_final_assistant_response_from_items(items),
         items=items,
         usage=usage,
     )
@@ -191,7 +196,7 @@ async def _collect_async_run_result(
 
     _raise_for_failed_turn(completed.turn)
     return RunResult(
-        final_response=_assistant_text_from_items(items),
+        final_response=_final_assistant_response_from_items(items),
         items=items,
         usage=usage,
     )

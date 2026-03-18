@@ -322,6 +322,31 @@ def test_thread_run_accepts_string_input_and_returns_run_result() -> None:
     )
 
 
+def test_thread_run_uses_last_completed_assistant_message_as_final_response() -> None:
+    client = AppServerClient()
+    first_item_notification = _item_completed_notification(text="First message")
+    second_item_notification = _item_completed_notification(text="Second message")
+    notifications: deque[Notification] = deque(
+        [
+            first_item_notification,
+            second_item_notification,
+            _completed_notification(),
+        ]
+    )
+    client.next_notification = notifications.popleft  # type: ignore[method-assign]
+    client.turn_start = lambda thread_id, wire_input, *, params=None: SimpleNamespace(  # noqa: ARG005,E731
+        turn=SimpleNamespace(id="turn-1")
+    )
+
+    result = Thread(client, "thread-1").run("hello")
+
+    assert result.final_response == "Second message"
+    assert result.items == [
+        first_item_notification.payload.item,
+        second_item_notification.payload.item,
+    ]
+
+
 def test_thread_run_raises_on_failed_turn() -> None:
     client = AppServerClient()
     notifications: deque[Notification] = deque(
@@ -378,6 +403,44 @@ def test_async_thread_run_accepts_string_input_and_returns_run_result() -> None:
             items=[item_notification.payload.item],
             usage=usage_notification.payload.token_usage,
         )
+
+    asyncio.run(scenario())
+
+
+def test_async_thread_run_uses_last_completed_assistant_message_as_final_response() -> None:
+    async def scenario() -> None:
+        codex = AsyncCodex()
+
+        async def fake_ensure_initialized() -> None:
+            return None
+
+        first_item_notification = _item_completed_notification(text="First async message")
+        second_item_notification = _item_completed_notification(text="Second async message")
+        notifications: deque[Notification] = deque(
+            [
+                first_item_notification,
+                second_item_notification,
+                _completed_notification(),
+            ]
+        )
+
+        async def fake_turn_start(thread_id: str, wire_input: object, *, params=None):  # noqa: ANN001,ANN202,ARG001
+            return SimpleNamespace(turn=SimpleNamespace(id="turn-1"))
+
+        async def fake_next_notification() -> Notification:
+            return notifications.popleft()
+
+        codex._ensure_initialized = fake_ensure_initialized  # type: ignore[method-assign]
+        codex._client.turn_start = fake_turn_start  # type: ignore[method-assign]
+        codex._client.next_notification = fake_next_notification  # type: ignore[method-assign]
+
+        result = await AsyncThread(codex, "thread-1").run("hello")
+
+        assert result.final_response == "Second async message"
+        assert result.items == [
+            first_item_notification.payload.item,
+            second_item_notification.payload.item,
+        ]
 
     asyncio.run(scenario())
 
