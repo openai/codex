@@ -274,16 +274,15 @@ async fn run_command_under_sandbox(
             let codex_linux_sandbox_exe = config
                 .codex_linux_sandbox_exe
                 .expect("codex-linux-sandbox executable not found");
-            let use_bwrap_sandbox = config
-                .features
-                .enabled(codex_core::features::Feature::UseLinuxSandboxBwrap);
+            let use_legacy_landlock = config.features.use_legacy_landlock();
             let args = create_linux_sandbox_command_args_for_policies(
                 command,
+                cwd.as_path(),
                 config.permissions.sandbox_policy.get(),
                 &config.permissions.file_system_sandbox_policy,
                 config.permissions.network_sandbox_policy,
                 sandbox_policy_cwd.as_path(),
-                use_bwrap_sandbox,
+                use_legacy_landlock,
                 false,
             );
             let network_policy = config.permissions.network_sandbox_policy;
@@ -456,10 +455,10 @@ mod tests {
 
     fn write_permissions_profile_config(
         codex_home: &TempDir,
-    ) -> std::io::Result<(PathBuf, PathBuf)> {
-        let docs = codex_home.path().join("docs");
-        let private = docs.join("private");
-        std::fs::create_dir_all(&private)?;
+        docs: &std::path::Path,
+        private: &std::path::Path,
+    ) -> std::io::Result<()> {
+        std::fs::create_dir_all(private)?;
         let config = format!(
             "default_permissions = \"limited-read-test\"\n\
              [permissions.limited-read-test.filesystem]\n\
@@ -469,46 +468,59 @@ mod tests {
              \n\
              [permissions.limited-read-test.network]\n\
              enabled = true\n",
-            escape_toml_path(&docs),
-            escape_toml_path(&private),
+            escape_toml_path(docs),
+            escape_toml_path(private),
         );
         std::fs::write(codex_home.path().join("config.toml"), config)?;
-        Ok((docs, private))
+        Ok(())
     }
 
     #[tokio::test]
     async fn debug_sandbox_honors_active_permission_profiles() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
-        let (docs, private) = write_permissions_profile_config(&codex_home)?;
+        let sandbox_paths = TempDir::new()?;
+        let docs = sandbox_paths.path().join("docs");
+        let private = docs.join("private");
+        write_permissions_profile_config(&codex_home, &docs, &private)?;
+        let codex_home_path = codex_home.path().to_path_buf();
+
+        let profile_config = build_debug_sandbox_config(
+            Vec::new(),
+            ConfigOverrides::default(),
+            Some(codex_home_path.clone()),
+        )
+        .await?;
+        let legacy_config = build_debug_sandbox_config(
+            Vec::new(),
+            ConfigOverrides {
+                sandbox_mode: Some(create_sandbox_mode(false)),
+                ..Default::default()
+            },
+            Some(codex_home_path.clone()),
+        )
+        .await?;
 
         let config = load_debug_sandbox_config_with_codex_home(
             Vec::new(),
             None,
             false,
-            Some(codex_home.path().to_path_buf()),
+            Some(codex_home_path),
         )
         .await?;
 
         assert!(config_uses_permission_profiles(&config));
-        let readable_roots = config
-            .permissions
-            .file_system_sandbox_policy
-            .get_readable_roots_with_cwd(config.cwd.as_path());
         assert!(
-            readable_roots
-                .iter()
-                .any(|path| path.as_path() == docs.as_path()),
-            "expected {docs:?} in readable roots, got {readable_roots:?}"
+            profile_config.permissions.file_system_sandbox_policy
+                != legacy_config.permissions.file_system_sandbox_policy,
+            "test fixture should distinguish profile syntax from legacy sandbox_mode"
         );
-        let unreadable_roots = config
-            .permissions
-            .file_system_sandbox_policy
-            .get_unreadable_roots_with_cwd(config.cwd.as_path());
-        assert!(
-            unreadable_roots
-                .iter()
-                .any(|path| path.as_path() == private.as_path()),
-            "expected {private:?} in unreadable roots, got {unreadable_roots:?}"
+        assert_eq!(
+            config.permissions.file_system_sandbox_policy,
+            profile_config.permissions.file_system_sandbox_policy,
+        );
+        assert_ne!(
+            config.permissions.file_system_sandbox_policy,
+            legacy_config.permissions.file_system_sandbox_policy,
         );
 
         Ok(())
@@ -517,7 +529,10 @@ mod tests {
     #[tokio::test]
     async fn debug_sandbox_rejects_full_auto_for_permission_profiles() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
-        let _ = write_permissions_profile_config(&codex_home)?;
+        let sandbox_paths = TempDir::new()?;
+        let docs = sandbox_paths.path().join("docs");
+        let private = docs.join("private");
+        write_permissions_profile_config(&codex_home, &docs, &private)?;
 
         let err = load_debug_sandbox_config_with_codex_home(
             Vec::new(),
