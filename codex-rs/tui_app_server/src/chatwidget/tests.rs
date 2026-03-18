@@ -4239,6 +4239,7 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
                 id: "msg-1".to_string(),
                 text: "Yes. What do you need?".to_string(),
                 phase: Some(MessagePhase::FinalAnswer),
+                memory_citation: None,
             },
         }),
         None,

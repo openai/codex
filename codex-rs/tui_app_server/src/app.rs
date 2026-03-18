@@ -7676,157 +7676,32 @@ guardian_approval = true
         )
     }
 
-    #[tokio::test]
-    async fn restore_started_app_server_thread_replays_remote_history() -> Result<()> {
-        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let thread_id = ThreadId::new();
-
-        app.restore_started_app_server_thread(AppServerStartedThread {
-            thread: Thread {
-                id: thread_id.to_string(),
-                preview: "hello".to_string(),
-                ephemeral: false,
-                model_provider: "test-provider".to_string(),
-                created_at: 0,
-                updated_at: 0,
-                status: ThreadStatus::Idle,
-                path: None,
-                cwd: PathBuf::from("/tmp/project"),
-                cli_version: "test".to_string(),
-                source: SessionSource::Cli.into(),
-                agent_nickname: None,
-                agent_role: None,
-                git_info: None,
-                name: Some("restored".to_string()),
-                turns: vec![Turn {
-                    id: "turn-1".to_string(),
-                    items: vec![
-                        ThreadItem::UserMessage {
-                            id: "user-1".to_string(),
-                            content: vec![codex_app_server_protocol::UserInput::Text {
-                                text: "hello from remote".to_string(),
-                                text_elements: Vec::new(),
-                            }],
-                        },
-                        ThreadItem::AgentMessage {
-                            id: "assistant-1".to_string(),
-                            text: "restored response".to_string(),
-                            phase: None,
-                            memory_citation: None,
-                        },
-                    ],
-                    status: TurnStatus::Completed,
-                    error: None,
-                }],
-            },
-            session_configured: SessionConfiguredEvent {
-                session_id: thread_id,
-                forked_from_id: None,
-                thread_name: Some("restored".to_string()),
-                model: "gpt-test".to_string(),
-                model_provider_id: "test-provider".to_string(),
-                service_tier: None,
-                approval_policy: AskForApproval::Never,
-                approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/tmp/project"),
-                reasoning_effort: None,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: None,
-                network_proxy: None,
-                rollout_path: Some(PathBuf::new()),
-            },
-            show_raw_agent_reasoning: false,
-        })
-        .await?;
-
-        while let Ok(event) = app_event_rx.try_recv() {
-            if let AppEvent::InsertHistoryCell(cell) = event {
-                let cell: Arc<dyn HistoryCell> = cell.into();
-                app.transcript_cells.push(cell);
-            }
+    fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
+        ThreadSessionState {
+            thread_id,
+            forked_from_id: None,
+            thread_name: None,
+            model: "gpt-test".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd,
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            network_proxy: None,
+            rollout_path: Some(PathBuf::new()),
         }
     }
 
-    #[tokio::test]
-    async fn restore_started_app_server_thread_submits_initial_prompt_after_history_replay()
-    -> Result<()> {
-        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
-        let thread_id = ThreadId::new();
-        app.chat_widget.set_initial_user_message_for_test(
-            crate::chatwidget::create_initial_user_message(
-                Some("resume prompt".to_string()),
-                Vec::new(),
-                Vec::new(),
-            ),
-        );
-
-        app.restore_started_app_server_thread(AppServerStartedThread {
-            thread: Thread {
-                id: thread_id.to_string(),
-                preview: "hello".to_string(),
-                ephemeral: false,
-                model_provider: "test-provider".to_string(),
-                created_at: 0,
-                updated_at: 0,
-                status: ThreadStatus::Idle,
-                path: None,
-                cwd: PathBuf::from("/tmp/project"),
-                cli_version: "test".to_string(),
-                source: SessionSource::Cli.into(),
-                agent_nickname: None,
-                agent_role: None,
-                git_info: None,
-                name: Some("restored".to_string()),
-                turns: vec![Turn {
-                    id: "turn-1".to_string(),
-                    items: vec![
-                        ThreadItem::UserMessage {
-                            id: "user-1".to_string(),
-                            content: vec![codex_app_server_protocol::UserInput::Text {
-                                text: "hello from remote".to_string(),
-                                text_elements: Vec::new(),
-                            }],
-                        },
-                        ThreadItem::AgentMessage {
-                            id: "assistant-1".to_string(),
-                            text: "restored response".to_string(),
-                            phase: None,
-                            memory_citation: None,
-                        },
-                    ],
-                    status: TurnStatus::Completed,
-                    error: None,
-                }],
-            },
-            session_configured: SessionConfiguredEvent {
-                session_id: thread_id,
-                forked_from_id: None,
-                thread_name: Some("restored".to_string()),
-                model: "gpt-test".to_string(),
-                model_provider_id: "test-provider".to_string(),
-                service_tier: None,
-                approval_policy: AskForApproval::Never,
-                approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/tmp/project"),
-                reasoning_effort: None,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: None,
-                network_proxy: None,
-                rollout_path: Some(PathBuf::new()),
-            },
-            show_raw_agent_reasoning: false,
-        })
-        .await?;
-
-        while let Ok(event) = app_event_rx.try_recv() {
-            if let AppEvent::InsertHistoryCell(cell) = event {
-                let cell: Arc<dyn HistoryCell> = cell.into();
-                app.transcript_cells.push(cell);
-            }
+    fn test_turn(turn_id: &str, status: TurnStatus, items: Vec<ThreadItem>) -> Turn {
+        Turn {
+            id: turn_id.to_string(),
+            items,
+            status,
+            error: None,
         }
     }
 
@@ -8804,6 +8679,7 @@ guardian_approval = true
                                 id: "assistant-2".to_string(),
                                 text: "done".to_string(),
                                 phase: None,
+                                memory_citation: None,
                             },
                         ],
                         status: TurnStatus::Completed,
