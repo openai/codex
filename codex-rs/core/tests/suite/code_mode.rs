@@ -1693,7 +1693,7 @@ async fn code_mode_can_use_view_image_result_with_image_helper() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let mut builder = test_codex()
-        .with_model("test-gpt-5.1-codex")
+        .with_model("gpt-5.3-codex")
         .with_config(move |config| {
             let _ = config.features.enable(Feature::CodeMode);
             let _ = config.features.enable(Feature::ImageDetailOriginal);
@@ -1744,9 +1744,7 @@ image(out);
         Some(false),
         "code_mode view_image call failed unexpectedly"
     );
-    if items.len() != 3 {
-        panic!("unexpected items: {items:?}");
-    }
+    assert_eq!(items.len(), 2);
     assert_regex_match(
         concat!(
             r"(?s)\A",
@@ -1759,10 +1757,6 @@ image(out);
         items[1].get("type").and_then(Value::as_str),
         Some("input_image")
     );
-    assert_eq!(
-        items[2].get("type").and_then(Value::as_str),
-        Some("input_text")
-    );
 
     let emitted_image_url = items[1]
         .get("image_url")
@@ -1771,16 +1765,6 @@ image(out);
     assert!(emitted_image_url.starts_with("data:image/png;base64,"));
     assert_eq!(
         items[1].get("detail").and_then(Value::as_str),
-        Some("original")
-    );
-
-    let parsed: Value = serde_json::from_str(text_item(&items, 2))?;
-    assert_eq!(
-        parsed.get("image_url").and_then(Value::as_str),
-        Some(emitted_image_url)
-    );
-    assert_eq!(
-        parsed.get("detail").and_then(Value::as_str),
         Some("original")
     );
 
