@@ -3,7 +3,8 @@ use crate::logging::debug_log;
 use crate::policy::SandboxPolicy;
 use crate::setup::gather_read_roots;
 use crate::setup::gather_write_roots;
-use crate::setup::run_elevated_setup;
+use crate::setup::run_elevated_setup_with_overrides;
+use crate::setup::run_setup_refresh_with_overrides;
 use crate::setup::sandbox_users_path;
 use crate::setup::setup_marker_path;
 use crate::setup::SandboxUserRecord;
@@ -17,6 +18,7 @@ use base64::Engine;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 struct SandboxIdentity {
@@ -122,16 +124,24 @@ fn select_identity(policy: &SandboxPolicy, codex_home: &Path) -> Result<Option<S
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn require_logon_sandbox_creds(
     policy: &SandboxPolicy,
     policy_cwd: &Path,
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
     codex_home: &Path,
+    read_roots_override: Option<&[PathBuf]>,
+    write_roots_override: Option<&[PathBuf]>,
+    deny_write_paths_override: &[PathBuf],
 ) -> Result<SandboxCreds> {
     let sandbox_dir = crate::setup::sandbox_dir(codex_home);
-    let needed_read = gather_read_roots(command_cwd, policy, codex_home);
-    let needed_write = gather_write_roots(policy, policy_cwd, command_cwd, env_map);
+    let needed_read = read_roots_override
+        .map(|roots| roots.to_vec())
+        .unwrap_or_else(|| gather_read_roots(command_cwd, policy, codex_home));
+    let needed_write = write_roots_override
+        .map(|roots| roots.to_vec())
+        .unwrap_or_else(|| gather_write_roots(policy, policy_cwd, command_cwd, env_map));
     // NOTE: Do not add CODEX_HOME/.sandbox to `needed_write`; it must remain non-writable by the
     // restricted capability token. The setup helper's `lock_sandbox_dir` is responsible for
     // granting the sandbox group access to this directory without granting the capability SID.
@@ -163,7 +173,7 @@ pub fn require_logon_sandbox_creds(
         } else {
             crate::logging::log_note("sandbox setup required", Some(&sandbox_dir));
         }
-        run_elevated_setup(
+        run_elevated_setup_with_overrides(
             policy,
             policy_cwd,
             command_cwd,
@@ -171,11 +181,21 @@ pub fn require_logon_sandbox_creds(
             codex_home,
             Some(needed_read.clone()),
             Some(needed_write.clone()),
+            Some(deny_write_paths_override.to_vec()),
         )?;
         identity = select_identity(policy, codex_home)?;
     }
     // Always refresh ACLs (non-elevated) for current roots via the setup binary.
-    crate::setup::run_setup_refresh(policy, policy_cwd, command_cwd, env_map, codex_home)?;
+    run_setup_refresh_with_overrides(
+        policy,
+        policy_cwd,
+        command_cwd,
+        env_map,
+        codex_home,
+        Some(needed_read),
+        Some(needed_write),
+        Some(deny_write_paths_override.to_vec()),
+    )?;
     let identity = identity.ok_or_else(|| {
         anyhow!(
             "Windows sandbox setup is missing or out of date; rerun the sandbox setup with elevation"

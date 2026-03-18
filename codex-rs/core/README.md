@@ -74,10 +74,17 @@ for `read-only` and `workspace-write` policies. Restricted read access honors
 explicit readable roots plus the command `cwd`, and keeps writable roots
 readable when `workspace-write` is used.
 
+<<<<<<< HEAD
 When `include_platform_defaults = true`, the elevated Windows backend adds
 backend-managed system read roots required for basic execution, such as
 `C:\Windows`, `C:\Program Files`, `C:\Program Files (x86)`, and
 `C:\ProgramData`. When it is `false`, those extra system roots are omitted.
+
+The elevated Windows sandbox also supports:
+
+- legacy `ReadOnly` and `WorkspaceWrite` behavior
+- split filesystem policies that need exact readable roots, exact writable
+  roots, or extra read-only carveouts under writable roots
 
 The unelevated restricted-token backend still supports the legacy full-read
 Windows model for legacy `ReadOnly` and `WorkspaceWrite` behavior. It also
