@@ -4473,6 +4473,27 @@ impl App {
             let mut store = channel.store.lock().await;
             store.apply_thread_rollback(response);
         }
+        if self.active_thread_id == Some(thread_id)
+            && let Some(mut rx) = self.active_thread_rx.take()
+        {
+            let mut disconnected = false;
+            loop {
+                match rx.try_recv() {
+                    Ok(_) => {}
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
+                }
+            }
+
+            if !disconnected {
+                self.active_thread_rx = Some(rx);
+            } else {
+                self.clear_active_thread().await;
+            }
+        }
         self.handle_backtrack_rollback_succeeded(num_turns);
         self.chat_widget.handle_thread_rolled_back();
     }
@@ -8597,6 +8618,52 @@ guardian_approval = true
             _ => panic!("expected transcript overlay"),
         };
         assert_eq!(overlay_cell_count, app.transcript_cells.len());
+    }
+
+    #[tokio::test]
+    async fn thread_rollback_response_discards_queued_active_thread_events() {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let (tx, rx) = mpsc::channel(8);
+        app.active_thread_id = Some(thread_id);
+        app.active_thread_rx = Some(rx);
+        tx.send(ThreadBufferedEvent::LegacyWarning(
+            "stale warning".to_string(),
+        ))
+        .await
+        .expect("event should queue");
+
+        app.handle_thread_rollback_response(
+            thread_id,
+            1,
+            &ThreadRollbackResponse {
+                thread: Thread {
+                    id: thread_id.to_string(),
+                    preview: String::new(),
+                    ephemeral: false,
+                    model_provider: "openai".to_string(),
+                    created_at: 0,
+                    updated_at: 0,
+                    status: codex_app_server_protocol::ThreadStatus::Idle,
+                    path: None,
+                    cwd: PathBuf::from("/tmp/project"),
+                    cli_version: "0.0.0".to_string(),
+                    source: SessionSource::Cli.into(),
+                    agent_nickname: None,
+                    agent_role: None,
+                    git_info: None,
+                    name: None,
+                    turns: Vec::new(),
+                },
+            },
+        )
+        .await;
+
+        let rx = app
+            .active_thread_rx
+            .as_mut()
+            .expect("active receiver should remain attached");
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
     }
 
     #[tokio::test]
