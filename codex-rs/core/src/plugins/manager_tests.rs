@@ -9,12 +9,10 @@ use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
 use crate::plugins::MarketplacePluginInstallPolicy;
 use crate::plugins::test_support::TEST_CURATED_PLUGIN_SHA;
-use crate::plugins::test_support::write_curated_plugin;
 use crate::plugins::test_support::write_curated_plugin_sha_with as write_curated_plugin_sha;
 use crate::plugins::test_support::write_file;
 use crate::plugins::test_support::write_openai_curated_marketplace;
 use codex_app_server_protocol::ConfigLayerSource;
-use codex_protocol::protocol::SessionSource;
 use pretty_assertions::assert_eq;
 use std::fs;
 use tempfile::TempDir;
@@ -1034,12 +1032,6 @@ async fn list_marketplaces_includes_curated_repo_marketplace() {
         r#"{"name":"linear"}"#,
     )
     .unwrap();
-    write_file(
-        &tmp.path().join(CONFIG_TOML_FILE),
-        r#"[features]
-plugins = true
-"#,
-    );
 
     let config = load_config(tmp.path(), tmp.path()).await;
     let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
@@ -1635,13 +1627,8 @@ fn refresh_curated_plugin_cache_replaces_existing_local_version_with_sha() {
     );
 
     assert!(
-        refresh_curated_plugin_cache(
-            tmp.path(),
-            TEST_CURATED_PLUGIN_SHA,
-            &[plugin_id],
-            &SessionSource::Cli,
-        )
-        .expect("cache refresh should succeed")
+        refresh_curated_plugin_cache(tmp.path(), TEST_CURATED_PLUGIN_SHA, &[plugin_id])
+            .expect("cache refresh should succeed")
     );
 
     assert!(
@@ -1671,13 +1658,8 @@ fn refresh_curated_plugin_cache_reinstalls_missing_configured_plugin_with_curren
     .unwrap();
 
     assert!(
-        refresh_curated_plugin_cache(
-            tmp.path(),
-            TEST_CURATED_PLUGIN_SHA,
-            &[plugin_id],
-            &SessionSource::Cli,
-        )
-        .expect("cache refresh should recreate missing configured plugin")
+        refresh_curated_plugin_cache(tmp.path(), TEST_CURATED_PLUGIN_SHA, &[plugin_id])
+            .expect("cache refresh should recreate missing configured plugin")
     );
 
     assert!(
@@ -1706,64 +1688,8 @@ fn refresh_curated_plugin_cache_returns_false_when_configured_plugins_are_curren
     );
 
     assert!(
-        !refresh_curated_plugin_cache(
-            tmp.path(),
-            TEST_CURATED_PLUGIN_SHA,
-            &[plugin_id],
-            &SessionSource::Cli,
-        )
-        .expect("cache refresh should be a no-op when configured plugins are current")
-    );
-}
-
-#[test]
-fn refresh_curated_plugin_cache_skips_product_restricted_plugins_for_session_source() {
-    let tmp = tempfile::tempdir().unwrap();
-    let curated_root = curated_plugins_repo_path(tmp.path());
-    write_file(
-        &curated_root.join(".agents/plugins/marketplace.json"),
-        &format!(
-            r#"{{
-  "name": "{OPENAI_CURATED_MARKETPLACE_NAME}",
-  "plugins": [
-    {{
-      "name": "chatgpt-plugin",
-      "source": {{
-        "source": "local",
-        "path": "./plugins/chatgpt-plugin"
-      }},
-      "policy": {{
-        "products": ["CHATGPT"]
-      }}
-    }}
-  ]
-}}"#
-        ),
-    );
-    write_curated_plugin(&curated_root, "chatgpt-plugin");
-    write_curated_plugin_sha(tmp.path(), TEST_CURATED_PLUGIN_SHA);
-    let plugin_id = PluginId::new(
-        "chatgpt-plugin".to_string(),
-        OPENAI_CURATED_MARKETPLACE_NAME.to_string(),
-    )
-    .unwrap();
-
-    assert!(
-        !refresh_curated_plugin_cache(
-            tmp.path(),
-            TEST_CURATED_PLUGIN_SHA,
-            &[plugin_id],
-            &SessionSource::Cli,
-        )
-        .expect("cache refresh should skip disallowed product plugin")
-    );
-
-    assert!(
-        !tmp.path()
-            .join(format!(
-                "plugins/cache/openai-curated/chatgpt-plugin/{TEST_CURATED_PLUGIN_SHA}"
-            ))
-            .exists()
+        !refresh_curated_plugin_cache(tmp.path(), TEST_CURATED_PLUGIN_SHA, &[plugin_id])
+            .expect("cache refresh should be a no-op when configured plugins are current")
     );
 }
 
