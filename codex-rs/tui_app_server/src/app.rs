@@ -618,6 +618,7 @@ impl ThreadEventStore {
                         .pending_interactive_replay
                         .should_replay_snapshot_request(request),
                     ThreadBufferedEvent::Notification(_)
+                    | ThreadBufferedEvent::HistoryEntryResponse(_)
                     | ThreadBufferedEvent::LegacyWarning(_)
                     | ThreadBufferedEvent::LegacyRollback { .. } => true,
                 })
@@ -2385,6 +2386,50 @@ impl App {
         Ok(())
     }
 
+    async fn enqueue_thread_history_entry_response(
+        &mut self,
+        thread_id: ThreadId,
+        event: GetHistoryEntryResponseEvent,
+    ) -> Result<()> {
+        let (sender, store) = {
+            let channel = self.ensure_thread_channel(thread_id);
+            (channel.sender.clone(), Arc::clone(&channel.store))
+        };
+
+        let should_send = {
+            let mut guard = store.lock().await;
+            guard
+                .buffer
+                .push_back(ThreadBufferedEvent::HistoryEntryResponse(event.clone()));
+            if guard.buffer.len() > guard.capacity
+                && let Some(removed) = guard.buffer.pop_front()
+                && let ThreadBufferedEvent::Request(request) = &removed
+            {
+                guard
+                    .pending_interactive_replay
+                    .note_evicted_server_request(request);
+            }
+            guard.active
+        };
+
+        if should_send {
+            match sender.try_send(ThreadBufferedEvent::HistoryEntryResponse(event)) {
+                Ok(()) => {}
+                Err(TrySendError::Full(event)) => {
+                    tokio::spawn(async move {
+                        if let Err(err) = sender.send(event).await {
+                            tracing::warn!("thread {thread_id} event channel closed: {err}");
+                        }
+                    });
+                }
+                Err(TrySendError::Closed(_)) => {
+                    tracing::warn!("thread {thread_id} event channel closed");
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn enqueue_thread_legacy_rollback(
         &mut self,
         thread_id: ThreadId,
@@ -2475,6 +2520,10 @@ impl App {
                 }
                 ThreadBufferedEvent::Request(request) => {
                     self.enqueue_thread_request(thread_id, request).await?;
+                }
+                ThreadBufferedEvent::HistoryEntryResponse(event) => {
+                    self.enqueue_thread_history_entry_response(thread_id, event)
+                        .await?;
                 }
                 ThreadBufferedEvent::LegacyWarning(message) => {
                     self.enqueue_thread_legacy_warning(thread_id, message)
@@ -4801,6 +4850,9 @@ impl App {
                 self.chat_widget
                     .handle_server_request(request, /*replay_kind*/ None);
             }
+            ThreadBufferedEvent::HistoryEntryResponse(event) => {
+                self.chat_widget.handle_history_entry_response(event);
+            }
             ThreadBufferedEvent::LegacyWarning(message) => {
                 self.chat_widget.add_warning_message(message);
             }
@@ -4822,6 +4874,9 @@ impl App {
             ThreadBufferedEvent::Request(request) => self
                 .chat_widget
                 .handle_server_request(request, Some(ReplayKind::ThreadSnapshot)),
+            ThreadBufferedEvent::HistoryEntryResponse(event) => {
+                self.chat_widget.handle_history_entry_response(event)
+            }
             ThreadBufferedEvent::LegacyWarning(message) => {
                 self.chat_widget.add_warning_message(message);
             }
