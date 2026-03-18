@@ -74,7 +74,6 @@ pub fn can_manage_artifact_runtime() -> bool {
 
 pub(crate) fn resolve_machine_js_runtime() -> Option<JsRuntime> {
     resolve_js_runtime_from_candidates(
-        /*preferred_node_path*/ None,
         system_node_runtime(),
         system_electron_runtime(),
         codex_app_runtime_candidates(),
@@ -82,20 +81,15 @@ pub(crate) fn resolve_machine_js_runtime() -> Option<JsRuntime> {
 }
 
 pub(crate) fn resolve_js_runtime_from_candidates(
-    preferred_node_path: Option<&Path>,
     node_runtime: Option<JsRuntime>,
     electron_runtime: Option<JsRuntime>,
     codex_app_candidates: Vec<PathBuf>,
 ) -> Option<JsRuntime> {
-    preferred_node_path
-        .and_then(node_runtime_from_path)
-        .or(node_runtime)
-        .or(electron_runtime)
-        .or_else(|| {
-            codex_app_candidates
-                .into_iter()
-                .find_map(|candidate| electron_runtime_from_path(&candidate))
-        })
+    node_runtime.or(electron_runtime).or_else(|| {
+        codex_app_candidates
+            .into_iter()
+            .find_map(|candidate| electron_runtime_from_path(&candidate))
+    })
 }
 
 pub(crate) fn system_node_runtime() -> Option<JsRuntime> {

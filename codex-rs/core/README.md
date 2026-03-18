@@ -65,6 +65,30 @@ falls back to the vendored bubblewrap path otherwise. When `/usr/bin/bwrap` is
 missing, Codex also surfaces a startup warning through its normal notification
 path instead of printing directly from the sandbox helper.
 
+### Windows
+
+Legacy `SandboxPolicy` / `sandbox_mode` configs are still supported on
+Windows.
+
+The elevated setup/runner backend supports legacy `ReadOnlyAccess::Restricted`
+for `read-only` and `workspace-write` policies. Restricted read access honors
+explicit readable roots plus the command `cwd`, and keeps writable roots
+readable when `workspace-write` is used.
+
+When `include_platform_defaults = true`, the elevated Windows backend adds
+backend-managed system read roots required for basic execution, such as
+`C:\Windows`, `C:\Program Files`, `C:\Program Files (x86)`, and
+`C:\ProgramData`. When it is `false`, those extra system roots are omitted.
+
+The unelevated restricted-token backend still supports the legacy full-read
+Windows model only. Restricted read-only policies continue to fail closed there
+instead of running with weaker read enforcement.
+
+New `[permissions]` / split filesystem policies remain supported on Windows
+only when they round-trip through the legacy `SandboxPolicy` model without
+changing semantics. Richer split-only carveouts still fail closed instead of
+running with weaker enforcement.
+
 ### All Platforms
 
 Expects the binary containing `codex-core` to simulate the virtual `apply_patch` CLI when `arg1` is `--codex-run-as-apply-patch`. See the `codex-arg0` crate for details.

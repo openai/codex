@@ -110,6 +110,9 @@ async fn handle_node_message(
 ) -> Result<CodeModeSessionProgress, String> {
     match message {
         protocol::NodeToHostMessage::ToolCall { .. } => Err(protocol::unexpected_tool_call_error()),
+        protocol::NodeToHostMessage::Notify { .. } => Err(format!(
+            "unexpected {PUBLIC_TOOL_NAME} notify message in response path"
+        )),
         protocol::NodeToHostMessage::Yielded { content_items, .. } => {
             let mut delta_items = output_content_items_from_json_values(content_items)?;
             delta_items = truncate_code_mode_result(delta_items, poll_max_output_tokens.flatten());

@@ -1,10 +1,14 @@
 use super::*;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::config::Config;
+use crate::config::ConfigOverrides;
+use crate::config::ConfigToml;
 use crate::config::Constrained;
 use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::test_config;
+use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::FeatureRequirementsToml;
 use crate::config_loader::NetworkConstraints;
 use crate::config_loader::RequirementSource;
@@ -986,4 +990,68 @@ fn guardian_review_session_config_uses_parent_active_model_instead_of_hardcoded_
             .expect("guardian config");
 
     assert_eq!(guardian_config.model, Some("active-model".to_string()));
+}
+
+#[test]
+fn guardian_review_session_config_uses_requirements_guardian_override() {
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let workspace = tempfile::tempdir().expect("create temp dir");
+    let config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        Default::default(),
+        crate::config_loader::ConfigRequirementsToml {
+            guardian_developer_instructions: Some(
+                "  Use the workspace-managed guardian policy.  ".to_string(),
+            ),
+            ..Default::default()
+        },
+    )
+    .expect("config layer stack");
+    let parent_config = Config::load_config_with_layer_stack(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(workspace.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+        config_layer_stack,
+    )
+    .expect("load config");
+
+    let guardian_config =
+        build_guardian_review_session_config_for_test(&parent_config, None, "active-model", None)
+            .expect("guardian config");
+
+    assert_eq!(
+        guardian_config.developer_instructions,
+        Some("Use the workspace-managed guardian policy.".to_string())
+    );
+}
+
+#[test]
+fn guardian_review_session_config_uses_default_guardian_policy_without_requirements_override() {
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let workspace = tempfile::tempdir().expect("create temp dir");
+    let config_layer_stack =
+        ConfigLayerStack::new(Vec::new(), Default::default(), Default::default())
+            .expect("config layer stack");
+    let parent_config = Config::load_config_with_layer_stack(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(workspace.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+        config_layer_stack,
+    )
+    .expect("load config");
+
+    let guardian_config =
+        build_guardian_review_session_config_for_test(&parent_config, None, "active-model", None)
+            .expect("guardian config");
+
+    assert_eq!(
+        guardian_config.developer_instructions,
+        Some(guardian_policy_prompt())
+    );
 }

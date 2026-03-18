@@ -10,6 +10,8 @@ pub use events::session_start::SessionStartRequest;
 pub use events::session_start::SessionStartSource;
 pub use events::stop::StopOutcome;
 pub use events::stop::StopRequest;
+pub use events::user_prompt_submit::UserPromptSubmitOutcome;
+pub use events::user_prompt_submit::UserPromptSubmitRequest;
 pub use legacy_notify::legacy_notify_json;
 pub use legacy_notify::notify_hook;
 pub use registry::Hooks;

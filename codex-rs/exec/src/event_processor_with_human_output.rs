@@ -989,6 +989,7 @@ impl EventProcessorWithHumanOutput {
     fn hook_event_name(event_name: HookEventName) -> &'static str {
         match event_name {
             HookEventName::SessionStart => "SessionStart",
+            HookEventName::UserPromptSubmit => "UserPromptSubmit",
             HookEventName::Stop => "Stop",
         }
     }

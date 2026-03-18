@@ -34,6 +34,7 @@ use crate::spawn::spawn_child_async;
 use crate::text_encoding::bytes_to_string_smart;
 use crate::tools::sandboxing::SandboxablePreference;
 use codex_network_proxy::NetworkProxy;
+#[cfg(any(target_os = "windows", test))]
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -765,12 +766,14 @@ async fn exec(
 ) -> Result<RawExecToolCallOutput> {
     #[cfg(target_os = "windows")]
     if sandbox == SandboxType::WindowsRestrictedToken {
-        if let Some(reason) = unsupported_windows_restricted_token_sandbox_reason(
+        let support = windows_restricted_token_sandbox_support(
             sandbox,
+            params.windows_sandbox_level,
             sandbox_policy,
             file_system_sandbox_policy,
             network_sandbox_policy,
-        ) {
+        );
+        if let Some(reason) = support.unsupported_reason {
             return Err(CodexErr::Io(io::Error::other(reason)));
         }
         return exec_windows_sandbox(params, sandbox_policy).await;
@@ -817,41 +820,56 @@ async fn exec(
 }
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-fn should_use_windows_restricted_token_sandbox(
+#[derive(Debug, PartialEq, Eq)]
+struct WindowsRestrictedTokenSandboxSupport {
+    should_use: bool,
+    unsupported_reason: Option<String>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_restricted_token_sandbox_support(
     sandbox: SandboxType,
+    windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
     sandbox_policy: &SandboxPolicy,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
-) -> bool {
-    sandbox == SandboxType::WindowsRestrictedToken
-        && file_system_sandbox_policy.kind == FileSystemSandboxKind::Restricted
+    network_sandbox_policy: NetworkSandboxPolicy,
+) -> WindowsRestrictedTokenSandboxSupport {
+    if sandbox != SandboxType::WindowsRestrictedToken {
+        return WindowsRestrictedTokenSandboxSupport {
+            should_use: false,
+            unsupported_reason: None,
+        };
+    }
+
+    // Windows currently reuses SandboxType::WindowsRestrictedToken for both
+    // the legacy restricted-token backend and the elevated setup/runner path.
+    // The sandbox level decides whether restricted read-only policies are
+    // supported.
+    let should_use = file_system_sandbox_policy.kind == FileSystemSandboxKind::Restricted
         && !matches!(
             sandbox_policy,
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
         )
-}
+        && (matches!(
+            windows_sandbox_level,
+            codex_protocol::config_types::WindowsSandboxLevel::Elevated
+        ) || sandbox_policy.has_full_disk_read_access());
 
-#[cfg(any(target_os = "windows", test))]
-fn unsupported_windows_restricted_token_sandbox_reason(
-    sandbox: SandboxType,
-    sandbox_policy: &SandboxPolicy,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
-) -> Option<String> {
-    if should_use_windows_restricted_token_sandbox(
-        sandbox,
-        sandbox_policy,
-        file_system_sandbox_policy,
-    ) {
-        return None;
-    }
-
-    (sandbox == SandboxType::WindowsRestrictedToken).then(|| {
-        format!(
+    let unsupported_reason = if should_use {
+        None
+    } else {
+        Some(format!(
             "windows sandbox backend cannot enforce file_system={:?}, network={network_sandbox_policy:?}, legacy_policy={sandbox_policy:?}; refusing to run unsandboxed",
             file_system_sandbox_policy.kind,
-        )
-    })
+        ))
+    };
+
+    WindowsRestrictedTokenSandboxSupport {
+        should_use,
+        unsupported_reason,
+    }
 }
+
 /// Consumes the output of a child process, truncating it so it is suitable for
 /// use as the output of a `shell` tool call. Also enforces specified timeout.
 async fn consume_truncated_output(

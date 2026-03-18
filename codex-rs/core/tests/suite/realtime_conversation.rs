@@ -440,7 +440,7 @@ async fn conversation_start_preflight_failure_emits_realtime_error_only() -> Res
     if std::env::var_os(REALTIME_CONVERSATION_TEST_SUBPROCESS_ENV_VAR).is_none() {
         return run_realtime_conversation_test_in_subprocess(
             "suite::realtime_conversation::conversation_start_preflight_failure_emits_realtime_error_only",
-            None,
+            /*openai_api_key*/ None,
         );
     }
 
