@@ -421,6 +421,7 @@ mod phase2 {
     use crate::codex::make_session_and_context;
     use crate::config::Config;
     use crate::config::test_config;
+    use crate::features::Feature;
     use crate::memories::memory_root;
     use crate::memories::phase2;
     use crate::memories::raw_memories_file;
@@ -585,6 +586,17 @@ mod phase2 {
 
         let completion = phase2::get_watermark(200, &[older, newer]);
         pretty_assertions::assert_eq!(completion, 456);
+    }
+
+    #[test]
+    fn phase2_subagent_config_disables_memory_tool() {
+        let mut config = test_config();
+        config.features.enable(Feature::MemoryTool);
+
+        let subagent_config =
+            phase2::agent::get_config(Arc::new(config)).expect("phase-2 subagent config");
+
+        assert!(!subagent_config.features.enabled(Feature::MemoryTool));
     }
 
     #[tokio::test]
