@@ -4,6 +4,7 @@ use codex_client::BuildCustomCaTransportError;
 use codex_client::CodexHttpClient;
 pub use codex_client::CodexRequestBuilder;
 use codex_client::build_reqwest_client_with_custom_ca;
+use codex_terminal_detection::user_agent;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderValue;
 use std::sync::LazyLock;
@@ -130,7 +131,7 @@ pub fn get_codex_user_agent() -> String {
         os_info.os_type(),
         os_info.version(),
         os_info.architecture().unwrap_or("unknown"),
-        crate::terminal::user_agent()
+        user_agent()
     );
     let suffix = USER_AGENT_SUFFIX
         .lock()
