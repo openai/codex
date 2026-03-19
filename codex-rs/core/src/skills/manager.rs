@@ -92,18 +92,24 @@ impl SkillsManager {
         roots
     }
 
-    pub async fn skills_for_cwd(&self, cwd: &Path, force_reload: bool) -> SkillLoadOutcome {
+    pub async fn skills_for_cwd(
+        &self,
+        cwd: &Path,
+        config: &Config,
+        force_reload: bool,
+    ) -> SkillLoadOutcome {
         if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(cwd) {
             return outcome;
         }
 
-        self.skills_for_cwd_with_extra_user_roots(cwd, force_reload, &[])
+        self.skills_for_cwd_with_extra_user_roots(cwd, config, force_reload, &[])
             .await
     }
 
     pub async fn skills_for_cwd_with_extra_user_roots(
         &self,
         cwd: &Path,
+        config: &Config,
         force_reload: bool,
         extra_user_roots: &[PathBuf],
     ) -> SkillLoadOutcome {
@@ -147,9 +153,9 @@ impl SkillsManager {
             }
         };
 
-        let loaded_plugins =
-            self.plugins_manager
-                .plugins_for_layer_stack(cwd, &config_layer_stack, force_reload);
+        let loaded_plugins = self
+            .plugins_manager
+            .plugins_for_config_with_force_reload(config, force_reload);
         let mut roots = skill_roots(
             &config_layer_stack,
             cwd,

@@ -2187,7 +2187,7 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
     let parent_outcome = session
         .services
         .skills_manager
-        .skills_for_cwd(&parent_config.cwd, true)
+        .skills_for_cwd(&parent_config.cwd, &parent_config, true)
         .await;
     let parent_skill = parent_outcome
         .skills

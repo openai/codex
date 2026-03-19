@@ -4846,6 +4846,7 @@ impl CodexMessageProcessor {
             MarketplaceError::InvalidMarketplaceFile { .. }
             | MarketplaceError::PluginNotFound { .. }
             | MarketplaceError::PluginNotAvailable { .. }
+            | MarketplaceError::PluginsDisabled
             | MarketplaceError::InvalidPlugin(_) => {
                 self.send_invalid_request_error(request_id, err.to_string())
                     .await;
@@ -5367,6 +5368,13 @@ impl CodexMessageProcessor {
                 .extend(valid_extra_roots);
         }
 
+        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
+            Ok(config) => config,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
         let skills_manager = self.thread_manager.skills_manager();
         let mut data = Vec::new();
         for cwd in cwds {
@@ -5374,7 +5382,7 @@ impl CodexMessageProcessor {
                 .get(&cwd)
                 .map_or(&[][..], std::vec::Vec::as_slice);
             let outcome = skills_manager
-                .skills_for_cwd_with_extra_user_roots(&cwd, force_reload, extra_roots)
+                .skills_for_cwd_with_extra_user_roots(&cwd, &config, force_reload, extra_roots)
                 .await;
             let errors = errors_to_info(&outcome.errors);
             let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);

@@ -363,6 +363,38 @@ text(output.output);
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_update_plan_nested_tool_result_is_empty_object() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn(
+        &server,
+        "use exec to run update_plan",
+        r#"
+const result = await tools.update_plan({
+  plan: [{ step: "Run update_plan from code mode", status: "in_progress" }],
+});
+text(JSON.stringify(result));
+"#,
+        false,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec update_plan call failed unexpectedly: {output}"
+    );
+
+    let parsed: Value = serde_json::from_str(&output)?;
+    assert_eq!(parsed, serde_json::json!({}));
+
+    Ok(())
+}
+
 #[cfg_attr(windows, ignore = "flaky on windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_nested_tool_calls_can_run_in_parallel() -> Result<()> {
@@ -1879,6 +1911,7 @@ async fn code_mode_can_apply_patch_via_nested_tool() -> Result<()> {
         ),
         text_item(&items, 0),
     );
+    assert_eq!(text_item(&items, 1), "{}");
 
     let file_path = test.cwd_path().join(file_name);
     assert_eq!(fs::read_to_string(&file_path)?, "hello from code_mode\n");
