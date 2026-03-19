@@ -864,7 +864,23 @@ fn snapshot_fork_history(
             history.push(RolloutItem::ResponseItem(interrupted_turn_history_marker()));
             InitialHistory::Forked(history)
         }
-        (InitialHistory::Resumed(_), _) => unreachable!("truncate_before_nth_user_message"),
+        (InitialHistory::Resumed(resumed), ForkSnapshotMode::Committed) => {
+            debug_assert!(
+                false,
+                "truncate_before_nth_user_message should not return InitialHistory::Resumed"
+            );
+            InitialHistory::Forked(resumed.history)
+        }
+        (InitialHistory::Resumed(mut resumed), ForkSnapshotMode::Interrupted) => {
+            debug_assert!(
+                false,
+                "truncate_before_nth_user_message should not return InitialHistory::Resumed"
+            );
+            resumed
+                .history
+                .push(RolloutItem::ResponseItem(interrupted_turn_history_marker()));
+            InitialHistory::Forked(resumed.history)
+        }
     }
 }
 
