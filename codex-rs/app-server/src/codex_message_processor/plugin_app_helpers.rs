@@ -26,9 +26,47 @@ pub(super) async fn load_plugin_app_summaries(
             }
         };
 
-    connectors::connectors_for_plugin_apps(connectors, plugin_apps)
+    let plugin_connectors = connectors::connectors_for_plugin_apps(connectors, plugin_apps);
+
+    let accessible_connectors =
+        match connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status(
+            config, /*force_refetch*/ false,
+        )
+        .await
+        {
+            Ok(status) if status.codex_apps_ready => status.connectors,
+            Ok(_) => {
+                return plugin_connectors
+                    .into_iter()
+                    .map(AppSummary::from)
+                    .collect();
+            }
+            Err(err) => {
+                warn!("failed to load app auth state for plugin/read: {err:#}");
+                return plugin_connectors
+                    .into_iter()
+                    .map(AppSummary::from)
+                    .collect();
+            }
+        };
+
+    let accessible_ids = accessible_connectors
+        .iter()
+        .map(|connector| connector.id.as_str())
+        .collect::<HashSet<_>>();
+
+    plugin_connectors
         .into_iter()
-        .map(AppSummary::from)
+        .map(|connector| {
+            let needs_auth = !accessible_ids.contains(connector.id.as_str());
+            AppSummary {
+                id: connector.id,
+                name: connector.name,
+                description: connector.description,
+                install_url: connector.install_url,
+                needs_auth,
+            }
+        })
         .collect()
 }
 
@@ -58,7 +96,13 @@ pub(super) fn plugin_apps_needing_auth(
                 && !accessible_ids.contains(connector.id.as_str())
         })
         .cloned()
-        .map(AppSummary::from)
+        .map(|connector| AppSummary {
+            id: connector.id,
+            name: connector.name,
+            description: connector.description,
+            install_url: connector.install_url,
+            needs_auth: true,
+        })
         .collect()
 }
 

@@ -57,6 +57,8 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
+use codex_app_server_protocol::McpServerStartupState;
+use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::McpToolCallError;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
@@ -306,6 +308,34 @@ pub(crate) async fn apply_bespoke_event_handling(
                 outgoing
                     .send_server_notification(ServerNotification::SkillsChanged(
                         SkillsChangedNotification {},
+                    ))
+                    .await;
+            }
+        }
+        EventMsg::McpStartupUpdate(update) => {
+            if let ApiVersion::V2 = api_version {
+                let (status, error) = match update.status {
+                    codex_protocol::protocol::McpStartupStatus::Starting => {
+                        (McpServerStartupState::Starting, None)
+                    }
+                    codex_protocol::protocol::McpStartupStatus::Ready => {
+                        (McpServerStartupState::Ready, None)
+                    }
+                    codex_protocol::protocol::McpStartupStatus::Failed { error } => {
+                        (McpServerStartupState::Failed, Some(error))
+                    }
+                    codex_protocol::protocol::McpStartupStatus::Cancelled => {
+                        (McpServerStartupState::Cancelled, None)
+                    }
+                };
+                let notification = McpServerStatusUpdatedNotification {
+                    name: update.server,
+                    status,
+                    error,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::McpServerStatusUpdated(
+                        notification,
                     ))
                     .await;
             }
