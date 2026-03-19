@@ -185,6 +185,7 @@ use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
+use codex_core::ForkSnapshotMode;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
@@ -3981,6 +3982,7 @@ impl CodexMessageProcessor {
                 rollout_path.clone(),
                 persist_extended_history,
                 self.request_trace_context(&request_id).await,
+                ForkSnapshotMode::Committed,
             )
             .await
         {
@@ -6397,6 +6399,7 @@ impl CodexMessageProcessor {
                 rollout_path,
                 /*persist_extended_history*/ false,
                 self.request_trace_context(request_id).await,
+                ForkSnapshotMode::Committed,
             )
             .await
             .map_err(|err| JSONRPCErrorError {

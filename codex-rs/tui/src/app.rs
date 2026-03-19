@@ -2226,6 +2226,7 @@ impl App {
                         target_session.path.clone(),
                         /*persist_extended_history*/ false,
                         /*parent_trace*/ None,
+                        codex_core::ForkSnapshotMode::Committed,
                     )
                     .await
                     .wrap_err_with(|| {
@@ -2647,6 +2648,7 @@ impl App {
                                 path.clone(),
                                 /*persist_extended_history*/ false,
                                 /*parent_trace*/ None,
+                                codex_core::ForkSnapshotMode::Committed,
                             )
                             .await
                         {

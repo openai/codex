@@ -110,7 +110,14 @@ async fn fork_thread_twice_drops_to_first_message() {
         thread: codex_fork1,
         ..
     } = thread_manager
-        .fork_thread(1, config_for_fork.clone(), base_path.clone(), false, None)
+        .fork_thread(
+            1,
+            config_for_fork.clone(),
+            base_path.clone(),
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+            codex_core::ForkSnapshotMode::Committed,
+        )
         .await
         .expect("fork 1");
 
@@ -129,7 +136,14 @@ async fn fork_thread_twice_drops_to_first_message() {
         thread: codex_fork2,
         ..
     } = thread_manager
-        .fork_thread(0, config_for_fork.clone(), fork1_path.clone(), false, None)
+        .fork_thread(
+            0,
+            config_for_fork.clone(),
+            fork1_path.clone(),
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+            codex_core::ForkSnapshotMode::Committed,
+        )
         .await
         .expect("fork 2");
 

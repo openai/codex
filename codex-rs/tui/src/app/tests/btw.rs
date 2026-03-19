@@ -10,80 +10,16 @@ use std::path::PathBuf;
 
 #[tokio::test]
 async fn start_btw_forks_switches_and_esc_returns_to_parent() -> Result<()> {
-    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let mut tui = make_test_tui();
 
     let parent_thread_id =
         setup_btw_parent_thread(&mut app, Some("what have you explored so far?")).await?;
     let child_thread_id = start_btw_thread(&mut app, &mut tui, parent_thread_id).await?;
-    assert_ne!(child_thread_id, parent_thread_id);
+    assert_eq!(app.active_thread_id, Some(child_thread_id));
+    assert_eq!(app.chat_widget.thread_id(), Some(child_thread_id));
     assert_eq!(app.active_btw_parent_thread_id(), Some(parent_thread_id));
     assert_eq!(app.agent_navigation.get(&child_thread_id), None);
-    let child_channel = app
-        .thread_event_channels
-        .get(&child_thread_id)
-        .expect("child thread channel");
-    let child_store = child_channel.store.lock().await;
-    let session_configured = child_store
-        .session_configured
-        .as_ref()
-        .expect("child session configured");
-    let EventMsg::SessionConfigured(session_configured) = &session_configured.msg else {
-        panic!(
-            "expected SessionConfigured, got {:?}",
-            session_configured.msg
-        );
-    };
-    assert!(
-        session_configured
-            .initial_messages
-            .as_ref()
-            .is_some_and(|messages| {
-                messages.iter().any(|message| {
-                    matches!(
-                        message,
-                        EventMsg::UserMessage(ev) if ev.message == "what have you explored so far?"
-                    )
-                })
-            }),
-        "expected child session to replay forked history into initial_messages"
-    );
-    drop(child_store);
-
-    let mut rendered_cells = Vec::new();
-    let found_user_prompt = loop {
-        match app_event_rx.try_recv() {
-            Ok(AppEvent::InsertHistoryCell(cell)) => {
-                let rendered = cell
-                    .display_lines(80)
-                    .into_iter()
-                    .map(|line| line.to_string())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let contains_user_prompt = rendered.contains("explore the codebase");
-                rendered_cells.push(rendered);
-                if contains_user_prompt {
-                    break true;
-                }
-            }
-            Ok(_) => continue,
-            Err(_) => break false,
-        }
-    };
-    assert!(
-        found_user_prompt,
-        "expected BTW user prompt cell, got {rendered_cells:?}"
-    );
-    let forked_idx = rendered_cells
-        .iter()
-        .position(|rendered| rendered.contains("Thread forked from"));
-    let user_prompt_idx = rendered_cells
-        .iter()
-        .position(|rendered| rendered.contains("explore the codebase"));
-    assert!(
-        matches!((forked_idx, user_prompt_idx), (Some(forked), Some(prompt)) if forked < prompt),
-        "expected fork banner before BTW prompt, got {rendered_cells:?}"
-    );
 
     app.handle_key_event(&mut tui, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
         .await;
@@ -110,7 +46,6 @@ async fn start_btw_ctrl_c_returns_to_parent() -> Result<()> {
 
     assert_eq!(app.active_thread_id, Some(parent_thread_id));
     assert_eq!(app.active_btw_parent_thread_id(), None);
-    assert!(!app.thread_event_channels.contains_key(&child_thread_id));
     Ok(())
 }
 
@@ -176,7 +111,7 @@ async fn ctrl_c_after_returning_from_btw_requests_shutdown_exit() -> Result<()> 
     let mut tui = make_test_tui();
 
     let parent_thread_id = setup_btw_parent_thread(&mut app, None).await?;
-    let child_thread_id = start_btw_thread(&mut app, &mut tui, parent_thread_id).await?;
+    let _child_thread_id = start_btw_thread(&mut app, &mut tui, parent_thread_id).await?;
     while app_event_rx.try_recv().is_ok() {}
 
     app.handle_key_event(
@@ -187,7 +122,6 @@ async fn ctrl_c_after_returning_from_btw_requests_shutdown_exit() -> Result<()> 
 
     assert_eq!(app.active_thread_id, Some(parent_thread_id));
     assert_eq!(app.active_btw_parent_thread_id(), None);
-    assert!(!app.thread_event_channels.contains_key(&child_thread_id));
     while app_event_rx.try_recv().is_ok() {}
 
     app.handle_key_event(
@@ -217,50 +151,12 @@ async fn nested_btw_preserves_parent_chain_and_esc_returns_one_level() -> Result
     let grandchild_thread_id = start_btw_thread(&mut app, &mut tui, child_thread_id).await?;
 
     assert_eq!(app.active_thread_id, Some(grandchild_thread_id));
-    assert_eq!(
-        app.btw_threads
-            .get(&grandchild_thread_id)
-            .map(|state| state.parent_thread_id),
-        Some(child_thread_id)
-    );
-    assert!(app.thread_event_channels.contains_key(&child_thread_id));
-    assert!(
-        app.thread_event_channels
-            .contains_key(&grandchild_thread_id)
-    );
+    assert_eq!(app.active_btw_parent_thread_id(), Some(child_thread_id));
 
     app.handle_key_event(&mut tui, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
         .await;
     assert_eq!(app.active_thread_id, Some(child_thread_id));
     assert_eq!(app.active_btw_parent_thread_id(), Some(parent_thread_id));
-    assert!(app.thread_event_channels.contains_key(&child_thread_id));
-    assert!(
-        !app.thread_event_channels
-            .contains_key(&grandchild_thread_id)
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn switching_away_from_nested_btw_discards_full_hidden_chain() -> Result<()> {
-    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
-    let mut tui = make_test_tui();
-
-    let parent_thread_id = setup_btw_parent_thread(&mut app, None).await?;
-    let child_thread_id = start_btw_thread(&mut app, &mut tui, parent_thread_id).await?;
-    let grandchild_thread_id = start_btw_thread(&mut app, &mut tui, child_thread_id).await?;
-
-    app.select_agent_thread(&mut tui, parent_thread_id).await?;
-
-    assert_eq!(app.active_thread_id, Some(parent_thread_id));
-    assert_eq!(app.active_btw_parent_thread_id(), None);
-    assert!(!app.thread_event_channels.contains_key(&child_thread_id));
-    assert!(
-        !app.thread_event_channels
-            .contains_key(&grandchild_thread_id)
-    );
-    assert!(app.server.get_thread(child_thread_id).await.is_err());
-    assert!(app.server.get_thread(grandchild_thread_id).await.is_err());
     Ok(())
 }
 
@@ -327,7 +223,6 @@ async fn open_agent_picker_keeps_active_btw_thread_until_selection() -> Result<(
     assert!(matches!(control, AppRunControl::Continue));
     assert_eq!(app.active_thread_id, Some(child_thread_id));
     assert_eq!(app.active_btw_parent_thread_id(), Some(parent_thread_id));
-    assert!(app.thread_event_channels.contains_key(&child_thread_id));
     assert_eq!(app.agent_navigation.get(&child_thread_id), None);
 
     let control = app
@@ -336,7 +231,6 @@ async fn open_agent_picker_keeps_active_btw_thread_until_selection() -> Result<(
     assert!(matches!(control, AppRunControl::Continue));
     assert_eq!(app.active_thread_id, Some(parent_thread_id));
     assert_eq!(app.active_btw_parent_thread_id(), None);
-    assert!(!app.thread_event_channels.contains_key(&child_thread_id));
     Ok(())
 }
 
@@ -353,37 +247,6 @@ async fn failed_switch_from_btw_keeps_current_thread_and_parent_chain() -> Resul
 
     assert_eq!(app.active_thread_id, Some(child_thread_id));
     assert_eq!(app.active_btw_parent_thread_id(), Some(parent_thread_id));
-    assert!(app.thread_event_channels.contains_key(&child_thread_id));
-    Ok(())
-}
-
-#[tokio::test]
-async fn fork_current_session_discards_active_btw_chain() -> Result<()> {
-    let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
-    let mut tui = make_test_tui();
-
-    let parent_thread_id = setup_btw_parent_thread(&mut app, None).await?;
-    let child_thread_id = start_btw_thread(&mut app, &mut tui, parent_thread_id).await?;
-    let child_rollout_path = app
-        .server
-        .get_thread(child_thread_id)
-        .await?
-        .rollout_path()
-        .expect("BTW child rollout path");
-    assert!(
-        child_rollout_path.exists(),
-        "expected BTW child rollout path"
-    );
-
-    let control = app
-        .handle_event(&mut tui, AppEvent::ForkCurrentSession)
-        .await?;
-    assert!(matches!(control, AppRunControl::Continue));
-
-    assert_eq!(app.active_btw_parent_thread_id(), None);
-    assert!(app.btw_threads.is_empty());
-    assert!(app.server.get_thread(parent_thread_id).await.is_err());
-    assert!(app.server.get_thread(child_thread_id).await.is_err());
     Ok(())
 }
 

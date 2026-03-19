@@ -61,8 +61,8 @@ const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previo
 
 /// Model-visible history item recorded for an interrupted turn.
 ///
-/// Keep this in sync with the real interrupt path so forked BTW threads can inherit the same
-/// in-distribution marker instead of approximating it with ad hoc instructions.
+/// Shared by the real interrupt path and interrupted fork snapshots so both surfaces expose the
+/// same in-distribution `<turn_aborted>` marker to the model.
 pub(crate) fn interrupted_turn_history_marker() -> ResponseItem {
     ResponseItem::Message {
         id: None,

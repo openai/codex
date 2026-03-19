@@ -419,7 +419,14 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
     fork_config.permissions.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
     let forked = initial
         .thread_manager
-        .fork_thread(usize::MAX, fork_config, rollout_path, false, None)
+        .fork_thread(
+            usize::MAX,
+            fork_config,
+            rollout_path,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+            codex_core::ForkSnapshotMode::Committed,
+        )
         .await?;
     forked
         .thread

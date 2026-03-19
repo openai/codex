@@ -701,8 +701,15 @@ async fn fork_thread(
     path: std::path::PathBuf,
     nth_user_message: usize,
 ) -> Arc<CodexThread> {
-    Box::pin(manager.fork_thread(nth_user_message, config.clone(), path, false, None))
-        .await
-        .expect("fork conversation")
-        .thread
+    Box::pin(manager.fork_thread(
+        nth_user_message,
+        config.clone(),
+        path,
+        /*persist_extended_history*/ false,
+        /*parent_trace*/ None,
+        codex_core::ForkSnapshotMode::Committed,
+    ))
+    .await
+    .expect("fork conversation")
+    .thread
 }

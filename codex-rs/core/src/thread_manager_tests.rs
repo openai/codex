@@ -6,7 +6,6 @@ use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::RefreshStrategy;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
-use crate::tasks::interrupted_turn_history_marker;
 use assert_matches::assert_matches;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -192,7 +191,7 @@ async fn new_uses_configured_openai_provider_for_model_refresh() {
 }
 
 #[tokio::test]
-async fn fork_thread_from_interrupted_snapshot_replays_exact_interrupt_marker() {
+async fn fork_thread_with_interrupted_snapshot_appends_interrupt_marker() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config();
     config.codex_home = temp_dir.path().join("codex-home");
@@ -228,12 +227,13 @@ async fn fork_thread_from_interrupted_snapshot_replays_exact_interrupt_marker() 
     let parent_rollout_path = recorder.rollout_path().to_path_buf();
 
     let forked = manager
-        .fork_thread_from_interrupted_snapshot(
+        .fork_thread(
             /*nth_user_message*/ usize::MAX,
             config,
             parent_rollout_path,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
+            ForkSnapshotMode::Interrupted,
         )
         .await
         .expect("fork thread from interrupted snapshot");
@@ -246,12 +246,15 @@ async fn fork_thread_from_interrupted_snapshot_replays_exact_interrupt_marker() 
         .await
         .expect("read child rollout history")
         .get_rollout_items();
-
+    let expected_suffix = serde_json::to_value(vec![
+        RolloutItem::ResponseItem(user_msg("btw")),
+        RolloutItem::ResponseItem(crate::tasks::interrupted_turn_history_marker()),
+    ])
+    .unwrap();
     assert!(
-        child_history.into_iter().any(|item| matches!(
-            item,
-            RolloutItem::ResponseItem(item) if item == interrupted_turn_history_marker()
-        )),
-        "expected child rollout history to contain the exact interrupted-turn marker"
+        child_history
+            .windows(2)
+            .any(|window| { serde_json::to_value(window).ok() == Some(expected_suffix.clone()) }),
+        "expected child rollout history to append the interrupted marker after the forked user turn"
     );
 }

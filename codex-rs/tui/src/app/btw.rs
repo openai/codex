@@ -191,27 +191,22 @@ impl App {
             return Ok(AppRunControl::Continue);
         };
 
-        let fork_result = if self.chat_widget.agent_turn_running() {
-            self.server
-                .fork_thread_from_interrupted_snapshot(
-                    /*nth_user_message*/ usize::MAX,
-                    self.config.clone(),
-                    parent_rollout_path.clone(),
-                    /*persist_extended_history*/ false,
-                    /*parent_trace*/ None,
-                )
-                .await
+        let snapshot_mode = if self.chat_widget.agent_turn_running() {
+            codex_core::ForkSnapshotMode::Interrupted
         } else {
-            self.server
-                .fork_thread(
-                    /*nth_user_message*/ usize::MAX,
-                    self.config.clone(),
-                    parent_rollout_path.clone(),
-                    /*persist_extended_history*/ false,
-                    /*parent_trace*/ None,
-                )
-                .await
+            codex_core::ForkSnapshotMode::Committed
         };
+        let fork_result = self
+            .server
+            .fork_thread(
+                /*nth_user_message*/ usize::MAX,
+                self.config.clone(),
+                parent_rollout_path.clone(),
+                /*persist_extended_history*/ false,
+                /*parent_trace*/ None,
+                snapshot_mode,
+            )
+            .await;
 
         match fork_result {
             Ok(forked) => {

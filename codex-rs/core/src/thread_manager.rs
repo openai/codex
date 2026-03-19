@@ -125,6 +125,15 @@ pub struct NewThread {
     pub session_configured: SessionConfiguredEvent,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ForkSnapshotMode {
+    /// Fork from the durable rollout history exactly as recorded so far.
+    #[default]
+    Committed,
+    /// Fork from the durable rollout history and append the shared interrupt marker.
+    Interrupted,
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ThreadShutdownReport {
     pub completed: Vec<ThreadId>,
@@ -487,6 +496,9 @@ impl ThreadManager {
     /// the message at the given position) and starting a new thread with identical
     /// configuration (unless overridden by the caller's `config`). The new thread will have
     /// a fresh id. Pass `usize::MAX` to keep the full rollout history.
+    ///
+    /// `snapshot_mode` controls whether the child inherits the durable history exactly as written
+    /// so far or as an interrupted snapshot that appends the shared `<turn_aborted>` marker.
     pub async fn fork_thread(
         &self,
         nth_user_message: usize,
@@ -494,57 +506,14 @@ impl ThreadManager {
         path: PathBuf,
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
-    ) -> CodexResult<NewThread> {
-        self.fork_thread_and_append_items(
-            nth_user_message,
-            config,
-            path,
-            persist_extended_history,
-            parent_trace,
-            Vec::new(),
-        )
-        .await
-    }
-
-    /// Fork an existing thread as though the parent had been interrupted at this point.
-    ///
-    /// This preserves the durable rollout history and appends the same model-visible
-    /// `<turn_aborted>` marker that a real interrupt would record before the child continues
-    /// with a new task.
-    pub async fn fork_thread_from_interrupted_snapshot(
-        &self,
-        nth_user_message: usize,
-        config: Config,
-        path: PathBuf,
-        persist_extended_history: bool,
-        parent_trace: Option<W3cTraceContext>,
-    ) -> CodexResult<NewThread> {
-        // BTW side questions use this when the parent turn is still running so the child sees the
-        // same `<turn_aborted>` marker a real interrupt would have recorded before the new task.
-        self.fork_thread_and_append_items(
-            nth_user_message,
-            config,
-            path,
-            persist_extended_history,
-            parent_trace,
-            vec![RolloutItem::ResponseItem(interrupted_turn_history_marker())],
-        )
-        .await
-    }
-
-    async fn fork_thread_and_append_items(
-        &self,
-        nth_user_message: usize,
-        config: Config,
-        path: PathBuf,
-        persist_extended_history: bool,
-        parent_trace: Option<W3cTraceContext>,
-        appended_items: Vec<RolloutItem>,
+        snapshot_mode: ForkSnapshotMode,
     ) -> CodexResult<NewThread> {
         let history = RolloutRecorder::get_rollout_history(&path).await?;
         let mut items =
             truncate_before_nth_user_message(history, nth_user_message).get_rollout_items();
-        items.extend(appended_items);
+        if snapshot_mode == ForkSnapshotMode::Interrupted {
+            items.push(RolloutItem::ResponseItem(interrupted_turn_history_marker()));
+        }
         let history = if items.is_empty() {
             InitialHistory::New
         } else {

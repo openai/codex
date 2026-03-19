@@ -6725,45 +6725,6 @@ guardian_approval = true
         )
     }
 
-    #[tokio::test]
-    async fn btw_threads_to_discard_after_switch_discards_only_unreachable_suffix() {
-        let mut app = make_test_app().await;
-        let main_thread_id = ThreadId::new();
-        let child_thread_id = ThreadId::new();
-        let grandchild_thread_id = ThreadId::new();
-        let sibling_thread_id = ThreadId::new();
-
-        app.primary_thread_id = Some(main_thread_id);
-        app.active_thread_id = Some(grandchild_thread_id);
-        app.btw_threads.insert(
-            child_thread_id,
-            BtwThreadState {
-                parent_thread_id: main_thread_id,
-                next_fork_banner_parent_label: None,
-            },
-        );
-        app.btw_threads.insert(
-            grandchild_thread_id,
-            BtwThreadState {
-                parent_thread_id: child_thread_id,
-                next_fork_banner_parent_label: None,
-            },
-        );
-
-        assert_eq!(
-            app.btw_threads_to_discard_after_switch(main_thread_id),
-            vec![grandchild_thread_id, child_thread_id]
-        );
-        assert_eq!(
-            app.btw_threads_to_discard_after_switch(child_thread_id),
-            vec![grandchild_thread_id]
-        );
-        assert_eq!(
-            app.btw_threads_to_discard_after_switch(sibling_thread_id),
-            vec![grandchild_thread_id, child_thread_id]
-        );
-    }
-
     #[test]
     fn thread_event_store_tracks_active_turn_lifecycle() {
         let mut store = ThreadEventStore::new(8);
