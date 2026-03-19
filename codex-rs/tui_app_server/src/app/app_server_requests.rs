@@ -167,6 +167,13 @@ impl PendingAppServerRequests {
         }
     }
 
+    /// Builds the JSON-RPC result for an outbound approval/input response
+    /// without consuming the pending entry yet.
+    ///
+    /// Resolution is a two-step prepare/commit flow so transient
+    /// `resolve_server_request(...)` failures do not make replayable approval
+    /// prompts disappear. The stored response kind also preserves whether the
+    /// server expects the legacy v1 payload or the current v2 payload.
     pub(super) fn prepare_resolution<T>(
         &self,
         op: T,

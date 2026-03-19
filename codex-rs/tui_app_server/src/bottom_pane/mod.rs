@@ -924,6 +924,9 @@ impl BottomPane {
             !view.is_complete()
         });
         if changed {
+            // Resolved approvals can be hiding in a non-top overlay. We prune
+            // the full stack, then only resume the paused status/composer state
+            // if that removal actually dismisses the active modal layer.
             let active_view_removed = active_view_ptr.is_some_and(|active_view_ptr| {
                 !self.view_stack.iter().any(|view| {
                     std::ptr::eq(

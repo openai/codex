@@ -1605,6 +1605,13 @@ impl App {
         self.note_thread_outbound_op(thread_id, op).await;
     }
 
+    /// Clears any queued or visible exec approval that is no longer backed by
+    /// a live app-server request.
+    ///
+    /// Legacy approvals can be buffered in several places at once: the primary
+    /// pre-session queue, the active/inactive per-thread receivers, replay
+    /// state, and the live modal stack. Cleanup has to touch all of them so a
+    /// resolved approval cannot reappear after a thread switch or replay.
     async fn note_app_server_request_resolved(&mut self, resolved: ResolvedAppServerRequest) {
         if resolved.exec_approval_ids.is_empty() {
             return;
@@ -1642,6 +1649,8 @@ impl App {
         self.refresh_pending_thread_approvals().await;
     }
 
+    /// Drains the active receiver, filters resolved exec approvals, then
+    /// restores unrelated events in their existing queue order.
     async fn remove_resolved_exec_approvals_from_active_queue(&mut self, approval_ids: &[String]) {
         let Some(thread_id) = self.active_thread_id else {
             return;
@@ -1700,6 +1709,8 @@ impl App {
         }
     }
 
+    /// Applies the same resolved-approval filtering to stored receivers for
+    /// inactive threads so stale prompts do not resurface after reactivation.
     fn remove_resolved_exec_approvals_from_inactive_queues(&mut self, approval_ids: &[String]) {
         let active_thread_id = self.active_thread_id;
 
