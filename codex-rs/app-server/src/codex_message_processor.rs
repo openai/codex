@@ -197,7 +197,6 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::NetworkProxyAuditMetadata;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
-use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::config_loader::CloudRequirementsLoadError;
 use codex_core::config_loader::CloudRequirementsLoadErrorCode;
@@ -216,11 +215,8 @@ use codex_core::find_thread_name_by_id;
 use codex_core::find_thread_names_by_ids;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::git_info::git_diff_to_remote;
-use codex_core::mcp::auth::McpOAuthLoginSupport;
 use codex_core::mcp::auth::discover_supported_scopes;
-use codex_core::mcp::auth::oauth_login_support;
 use codex_core::mcp::auth::resolve_oauth_scopes;
-use codex_core::mcp::auth::should_retry_without_scopes;
 use codex_core::mcp::collect_mcp_snapshot;
 use codex_core::mcp::group_tools_by_server;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -277,7 +273,6 @@ use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
-use codex_rmcp_client::perform_oauth_login;
 use codex_rmcp_client::perform_oauth_login_return_url;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadata;
@@ -317,6 +312,7 @@ use codex_app_server_protocol::ServerRequest;
 
 mod apps_list_helpers;
 mod plugin_app_helpers;
+mod plugin_mcp_oauth;
 
 use crate::filters::compute_source_filters;
 use crate::filters::source_kind_matches;
@@ -5881,84 +5877,6 @@ impl CodexMessageProcessor {
                     }
                 }
             }
-        }
-    }
-
-    async fn start_plugin_mcp_oauth_logins(
-        &self,
-        config: &Config,
-        plugin_mcp_servers: HashMap<String, McpServerConfig>,
-    ) {
-        for (name, server) in plugin_mcp_servers {
-            let oauth_config = match oauth_login_support(&server.transport).await {
-                McpOAuthLoginSupport::Supported(config) => config,
-                McpOAuthLoginSupport::Unsupported => continue,
-                McpOAuthLoginSupport::Unknown(err) => {
-                    warn!(
-                        "MCP server may or may not require login for plugin install {name}: {err}"
-                    );
-                    continue;
-                }
-            };
-
-            let resolved_scopes = resolve_oauth_scopes(
-                /*explicit_scopes*/ None,
-                server.scopes.clone(),
-                oauth_config.discovered_scopes.clone(),
-            );
-
-            let store_mode = config.mcp_oauth_credentials_store_mode;
-            let callback_port = config.mcp_oauth_callback_port;
-            let callback_url = config.mcp_oauth_callback_url.clone();
-            let outgoing = Arc::clone(&self.outgoing);
-            let notification_name = name.clone();
-
-            tokio::spawn(async move {
-                let first_attempt = perform_oauth_login(
-                    &name,
-                    &oauth_config.url,
-                    store_mode,
-                    oauth_config.http_headers.clone(),
-                    oauth_config.env_http_headers.clone(),
-                    &resolved_scopes.scopes,
-                    server.oauth_resource.as_deref(),
-                    callback_port,
-                    callback_url.as_deref(),
-                )
-                .await;
-
-                let final_result = match first_attempt {
-                    Err(err) if should_retry_without_scopes(&resolved_scopes, &err) => {
-                        perform_oauth_login(
-                            &name,
-                            &oauth_config.url,
-                            store_mode,
-                            oauth_config.http_headers,
-                            oauth_config.env_http_headers,
-                            &[],
-                            server.oauth_resource.as_deref(),
-                            callback_port,
-                            callback_url.as_deref(),
-                        )
-                        .await
-                    }
-                    result => result,
-                };
-
-                let (success, error) = match final_result {
-                    Ok(()) => (true, None),
-                    Err(err) => (false, Some(err.to_string())),
-                };
-
-                let notification = ServerNotification::McpServerOauthLoginCompleted(
-                    McpServerOauthLoginCompletedNotification {
-                        name: notification_name,
-                        success,
-                        error,
-                    },
-                );
-                outgoing.send_server_notification(notification).await;
-            });
         }
     }
 
