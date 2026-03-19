@@ -197,6 +197,8 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::NetworkProxyAuditMetadata;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
+use codex_core::config::load_global_mcp_servers;
+use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::config_loader::CloudRequirementsLoadError;
 use codex_core::config_loader::CloudRequirementsLoadErrorCode;
@@ -232,6 +234,7 @@ use codex_core::plugins::PluginInstallRequest;
 use codex_core::plugins::PluginReadRequest;
 use codex_core::plugins::PluginUninstallError as CorePluginUninstallError;
 use codex_core::plugins::load_plugin_apps;
+use codex_core::plugins::load_plugin_mcp_servers;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
@@ -4604,10 +4607,7 @@ impl CodexMessageProcessor {
         &self,
         config: &Config,
     ) -> Result<(), JSONRPCErrorError> {
-        let configured_servers = self
-            .thread_manager
-            .mcp_manager()
-            .configured_servers(config);
+        let configured_servers = self.thread_manager.mcp_manager().configured_servers(config);
         let mcp_servers = match serde_json::to_value(configured_servers) {
             Ok(value) => value,
             Err(err) => {
@@ -5722,10 +5722,6 @@ impl CodexMessageProcessor {
         let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
 
         let plugins_manager = self.thread_manager.plugins_manager();
-        let plugin_read_request = PluginReadRequest {
-            plugin_name: plugin_name.clone(),
-            marketplace_path: marketplace_path.clone(),
-        };
         let request = PluginInstallRequest {
             plugin_name,
             marketplace_path,
@@ -5749,7 +5745,7 @@ impl CodexMessageProcessor {
 
         match install_result {
             Ok(result) => {
-                let config = match self.load_latest_config(config_cwd).await {
+                let mut config = match self.load_latest_config(config_cwd.clone()).await {
                     Ok(config) => config,
                     Err(err) => {
                         warn!(
@@ -5761,26 +5757,55 @@ impl CodexMessageProcessor {
 
                 self.clear_plugin_related_caches();
 
-                let plugin_mcp_server_names =
-                    match plugins_manager.read_plugin_for_config(&config, &plugin_read_request) {
-                        Ok(outcome) => outcome.plugin.mcp_server_names,
+                let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path());
+
+                if !plugin_mcp_servers.is_empty() {
+                    match load_global_mcp_servers(&config.codex_home).await {
+                        Ok(mut global_mcp_servers) => {
+                            let mut updated = false;
+                            for (name, server_config) in &plugin_mcp_servers {
+                                if global_mcp_servers.contains_key(name) {
+                                    continue;
+                                }
+                                global_mcp_servers.insert(name.clone(), server_config.clone());
+                                updated = true;
+                            }
+
+                            if updated
+                                && let Err(err) = ConfigEditsBuilder::new(&config.codex_home)
+                                    .replace_mcp_servers(&global_mcp_servers)
+                                    .apply()
+                                    .await
+                            {
+                                warn!(
+                                    plugin = result.plugin_id.as_key(),
+                                    "failed to persist plugin MCP servers to config.toml: {err:#}"
+                                );
+                            } else if updated {
+                                match self.load_latest_config(config_cwd).await {
+                                    Ok(latest_config) => config = latest_config,
+                                    Err(err) => {
+                                        warn!(
+                                            "failed to reload config after persisting plugin MCP servers, using previous config: {err:?}"
+                                        );
+                                    }
+                                }
+                            }
+                        }
                         Err(err) => {
                             warn!(
                                 plugin = result.plugin_id.as_key(),
-                                "failed to read plugin MCP servers after install: {err:#}"
+                                "failed to load global MCP servers after plugin install: {err:#}"
                             );
-                            Vec::new()
                         }
-                    };
-
-                if !plugin_mcp_server_names.is_empty() {
+                    }
                     if let Err(err) = self.queue_mcp_server_refresh_for_config(&config).await {
                         warn!(
                             plugin = result.plugin_id.as_key(),
                             "failed to queue MCP refresh after plugin install: {err:?}"
                         );
                     }
-                    self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_server_names)
+                    self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
                         .await;
                 }
 
@@ -5902,19 +5927,9 @@ impl CodexMessageProcessor {
     async fn start_plugin_mcp_oauth_logins(
         &self,
         config: &Config,
-        plugin_mcp_server_names: Vec<String>,
+        plugin_mcp_servers: HashMap<String, McpServerConfig>,
     ) {
-        let configured_servers = self.thread_manager.mcp_manager().configured_servers(config);
-
-        for name in plugin_mcp_server_names {
-            let Some(server) = configured_servers.get(&name).cloned() else {
-                warn!(
-                    mcp_server = name,
-                    "plugin MCP server was not found after install"
-                );
-                continue;
-            };
-
+        for (name, server) in plugin_mcp_servers {
             let oauth_config = match oauth_login_support(&server.transport).await {
                 McpOAuthLoginSupport::Supported(config) => config,
                 McpOAuthLoginSupport::Unsupported => continue,
