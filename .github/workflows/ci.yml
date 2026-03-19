@@ -36,14 +36,41 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Use a rust-release version that includes all native binaries.
-          CODEX_VERSION=0.74.0
+          # Use the newest successful rust-release workflow that still has native artifacts.
           OUTPUT_DIR="${RUNNER_TEMP}"
-          python3 ./scripts/stage_npm_packages.py \
-            --release-version "$CODEX_VERSION" \
-            --package codex \
-            --output-dir "$OUTPUT_DIR"
-          PACK_OUTPUT="${OUTPUT_DIR}/codex-npm-${CODEX_VERSION}.tgz"
+          set +e
+          WORKFLOW_URLS=$(gh run list \
+            --workflow .github/workflows/rust-release.yml \
+            --json status,conclusion,headBranch,url \
+            --jq 'map(select(.status=="completed" and .conclusion=="success" and (.headBranch | startswith("rust-v")) and (.url | contains("/actions/runs/")) ) | .[].url')
+          set -e
+
+          if [ -z "$WORKFLOW_URLS" ]; then
+            echo "Unable to resolve a completed successful rust-release workflow."
+            exit 1
+          fi
+
+          for WORKFLOW_URL in $WORKFLOW_URLS; do
+            CODEX_VERSION="$(gh run view "$WORKFLOW_URL" --json headBranch -q '.headBranch | sub("^rust-v"; "")')"
+
+            echo "Attempting npm staging from ${WORKFLOW_URL} (version ${CODEX_VERSION})."
+            if python3 ./scripts/stage_npm_packages.py \
+              --release-version "$CODEX_VERSION" \
+              --workflow-url "$WORKFLOW_URL" \
+              --package codex \
+              --output-dir "$OUTPUT_DIR"; then
+              PACK_OUTPUT="${OUTPUT_DIR}/codex-npm-${CODEX_VERSION}.tgz"
+              break
+            fi
+            echo "Npm staging failed for ${WORKFLOW_URL}; trying next rust-release run."
+          done
+
+          if [ -z "${PACK_OUTPUT:-}" ]; then
+            echo "::error::No eligible rust-release run could produce a stageable npm package."
+            exit 1
+          fi
+
+          echo "Staged package at ${PACK_OUTPUT}"
           echo "pack_output=$PACK_OUTPUT" >> "$GITHUB_OUTPUT"
 
       - name: Upload staged npm package artifact
