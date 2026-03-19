@@ -103,25 +103,14 @@ jobs:
             "--platforms=@llvm//platforms:${PLATFORM}"
             "${pair_target}"
             "${extra_targets[@]}"
-            --build_metadata=REPO_URL=https://github.com/${GITHUB_REPOSITORY}.git
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
-            --build_metadata=ROLE=CI
-            --build_metadata=VISIBILITY=PUBLIC
           )
 
-          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
-            bazel \
-              --noexperimental_remote_repo_contents_cache \
-              --bazelrc=.github/workflows/ci.bazelrc \
-              "${bazel_args[@]}" \
-              "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
-          else
-            bazel \
-              --noexperimental_remote_repo_contents_cache \
-              "${bazel_args[@]}" \
-              --remote_cache= \
-              --remote_executor=
-          fi
+          bazel \
+            --noexperimental_remote_repo_contents_cache \
+            --bazelrc=.github/workflows/v8-ci.bazelrc \
+            "${bazel_args[@]}" \
+            "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
 
       - name: Stage release pair
         env:
