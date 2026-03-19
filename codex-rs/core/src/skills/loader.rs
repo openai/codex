@@ -18,6 +18,7 @@ use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use dirs::home_dir;
@@ -114,6 +115,8 @@ struct Dependencies {
 struct Policy {
     #[serde(default)]
     allow_implicit_invocation: Option<bool>,
+    #[serde(default)]
+    products: Vec<Product>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -735,6 +738,7 @@ fn resolve_dependencies(dependencies: Option<Dependencies>) -> Option<SkillDepen
 fn resolve_policy(policy: Option<Policy>) -> Option<SkillPolicy> {
     policy.map(|policy| SkillPolicy {
         allow_implicit_invocation: policy.allow_implicit_invocation,
+        products: policy.products,
     })
 }
 

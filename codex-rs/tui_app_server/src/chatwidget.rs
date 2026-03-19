@@ -34,17 +34,22 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use std::time::Instant;
 
 use self::realtime::PendingSteerCompareKey;
 use crate::app_command::AppCommand;
 use crate::app_event::RealtimeAudioDeviceKind;
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+use crate::app_server_session::ThreadSessionState;
+#[cfg(not(target_os = "linux"))]
 use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
+use crate::mention_codec::LinkedMention;
+use crate::mention_codec::encode_history_mentions;
 use crate::model_catalog::ModelCatalog;
+use crate::multi_agents;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::StatusAccountDisplay;
 use crate::status::format_directory_display;
@@ -52,7 +57,26 @@ use crate::status::format_tokens_compact;
 use crate::status::rate_limit_snapshot_display_for_limit;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
+use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
+use codex_app_server_protocol::CollabAgentState as AppServerCollabAgentState;
+use codex_app_server_protocol::CollabAgentStatus as AppServerCollabAgentStatus;
+use codex_app_server_protocol::CollabAgentTool;
+use codex_app_server_protocol::CollabAgentToolCallStatus;
+use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::ErrorNotification;
+use codex_app_server_protocol::FileChangeRequestApprovalParams;
+use codex_app_server_protocol::ItemCompletedNotification;
+use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadTokenUsage;
+use codex_app_server_protocol::ToolRequestUserInputParams;
+use codex_app_server_protocol::Turn;
+use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnPlanStepStatus;
+use codex_app_server_protocol::TurnStatus;
 use codex_chatgpt::connectors;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
@@ -92,35 +116,55 @@ use codex_protocol::items::AgentMessageItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
+use codex_protocol::plan_tool::PlanItemArg as UpdatePlanItemArg;
+use codex_protocol::plan_tool::StepStatus as UpdatePlanItemStatus;
+#[cfg(test)]
 use codex_protocol::protocol::AgentMessageDeltaEvent;
+#[cfg(test)]
 use codex_protocol::protocol::AgentMessageEvent;
+#[cfg(test)]
 use codex_protocol::protocol::AgentReasoningDeltaEvent;
+#[cfg(test)]
 use codex_protocol::protocol::AgentReasoningEvent;
+#[cfg(test)]
 use codex_protocol::protocol::AgentReasoningRawContentDeltaEvent;
+#[cfg(test)]
 use codex_protocol::protocol::AgentReasoningRawContentEvent;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+#[cfg(test)]
 use codex_protocol::protocol::BackgroundEventEvent;
-use codex_protocol::protocol::CodexErrorInfo;
+#[cfg(test)]
+use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
+#[cfg(test)]
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
+use codex_protocol::protocol::CollabAgentStatusEntry;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::DeprecationNoticeEvent;
+#[cfg(test)]
 use codex_protocol::protocol::ErrorEvent;
+#[cfg(test)]
 use codex_protocol::protocol::Event;
+#[cfg(test)]
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::ExecCommandBeginEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecCommandSource;
+#[cfg(test)]
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::ImageGenerationBeginEvent;
 use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::ListSkillsResponseEvent;
+#[cfg(test)]
 use codex_protocol::protocol::McpListToolsResponseEvent;
+#[cfg(test)]
 use codex_protocol::protocol::McpStartupCompleteEvent;
 use codex_protocol::protocol::McpStartupStatus;
+#[cfg(test)]
 use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
@@ -130,22 +174,29 @@ use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
+#[cfg(test)]
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnAbortReason;
+#[cfg(test)]
 use codex_protocol::protocol::TurnCompleteEvent;
+#[cfg(test)]
 use codex_protocol::protocol::TurnDiffEvent;
+#[cfg(test)]
 use codex_protocol::protocol::UndoCompletedEvent;
+#[cfg(test)]
 use codex_protocol::protocol::UndoStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::ViewImageToolCallEvent;
+#[cfg(test)]
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
+use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use codex_utils_sleep_inhibitor::SleepInhibitor;
@@ -246,6 +297,7 @@ use crate::exec_cell::new_active_exec_command;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
+#[cfg(test)]
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::McpToolCallCell;
@@ -253,8 +305,8 @@ use crate::history_cell::PlainHistoryCell;
 use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
+#[cfg(test)]
 use crate::markdown::append_markdown;
-use crate::multi_agents;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::FlexRenderable;
@@ -269,8 +321,6 @@ use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 mod interrupts;
 use self::interrupts::InterruptManager;
-mod agent;
-use self::agent::spawn_agent_from_existing;
 mod session_header;
 use self::session_header::SessionHeader;
 mod skills;
@@ -504,11 +554,23 @@ enum RateLimitErrorKind {
     Generic,
 }
 
-fn rate_limit_error_kind(info: &CodexErrorInfo) -> Option<RateLimitErrorKind> {
+#[cfg(test)]
+fn core_rate_limit_error_kind(info: &CoreCodexErrorInfo) -> Option<RateLimitErrorKind> {
     match info {
-        CodexErrorInfo::ServerOverloaded => Some(RateLimitErrorKind::ServerOverloaded),
-        CodexErrorInfo::UsageLimitExceeded => Some(RateLimitErrorKind::UsageLimit),
-        CodexErrorInfo::ResponseTooManyFailedAttempts {
+        CoreCodexErrorInfo::ServerOverloaded => Some(RateLimitErrorKind::ServerOverloaded),
+        CoreCodexErrorInfo::UsageLimitExceeded => Some(RateLimitErrorKind::UsageLimit),
+        CoreCodexErrorInfo::ResponseTooManyFailedAttempts {
+            http_status_code: Some(429),
+        } => Some(RateLimitErrorKind::Generic),
+        _ => None,
+    }
+}
+
+fn app_server_rate_limit_error_kind(info: &AppServerCodexErrorInfo) -> Option<RateLimitErrorKind> {
+    match info {
+        AppServerCodexErrorInfo::ServerOverloaded => Some(RateLimitErrorKind::ServerOverloaded),
+        AppServerCodexErrorInfo::UsageLimitExceeded => Some(RateLimitErrorKind::UsageLimit),
+        AppServerCodexErrorInfo::ResponseTooManyFailedAttempts {
             http_status_code: Some(429),
         } => Some(RateLimitErrorKind::Generic),
         _ => None,
@@ -749,6 +811,7 @@ pub(crate) struct ChatWidget {
     quit_shortcut_key: Option<KeyBinding>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
+    #[cfg(test)]
     // Snapshot of token usage to restore after review mode exits.
     pre_review_token_info: Option<Option<TokenUsageInfo>>,
     // Whether the next streamed assistant content should be preceded by a final message separator.
@@ -802,6 +865,7 @@ pub(crate) struct ChatWidget {
     external_editor_state: ExternalEditorState,
     realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
+    last_non_retry_error: Option<(String, String)>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1070,9 +1134,320 @@ fn merge_user_messages(messages: Vec<UserMessage>) -> UserMessage {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ReplayKind {
+pub(crate) enum ReplayKind {
     ResumeInitialMessages,
     ThreadSnapshot,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ThreadItemRenderSource {
+    Live,
+    Replay(ReplayKind),
+}
+
+impl ThreadItemRenderSource {
+    fn is_replay(self) -> bool {
+        matches!(self, Self::Replay(_))
+    }
+
+    fn replay_kind(self) -> Option<ReplayKind> {
+        match self {
+            Self::Live => None,
+            Self::Replay(replay_kind) => Some(replay_kind),
+        }
+    }
+}
+
+fn thread_session_state_to_legacy_event(
+    session: ThreadSessionState,
+) -> codex_protocol::protocol::SessionConfiguredEvent {
+    codex_protocol::protocol::SessionConfiguredEvent {
+        session_id: session.thread_id,
+        forked_from_id: session.forked_from_id,
+        thread_name: session.thread_name,
+        model: session.model,
+        model_provider_id: session.model_provider_id,
+        service_tier: session.service_tier,
+        approval_policy: session.approval_policy,
+        approvals_reviewer: session.approvals_reviewer,
+        sandbox_policy: session.sandbox_policy,
+        cwd: session.cwd,
+        reasoning_effort: session.reasoning_effort,
+        history_log_id: session.history_log_id,
+        history_entry_count: usize::try_from(session.history_entry_count).unwrap_or(usize::MAX),
+        initial_messages: None,
+        network_proxy: session.network_proxy,
+        rollout_path: session.rollout_path,
+    }
+}
+
+fn convert_via_json<T, U>(value: T) -> Option<U>
+where
+    T: serde::Serialize,
+    U: serde::de::DeserializeOwned,
+{
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| serde_json::from_value(value).ok())
+}
+
+fn app_server_request_id_to_mcp_request_id(
+    request_id: &codex_app_server_protocol::RequestId,
+) -> codex_protocol::mcp::RequestId {
+    match request_id {
+        codex_app_server_protocol::RequestId::String(value) => {
+            codex_protocol::mcp::RequestId::String(value.clone())
+        }
+        codex_app_server_protocol::RequestId::Integer(value) => {
+            codex_protocol::mcp::RequestId::Integer(*value)
+        }
+    }
+}
+
+fn exec_approval_request_from_params(
+    params: CommandExecutionRequestApprovalParams,
+) -> ExecApprovalRequestEvent {
+    ExecApprovalRequestEvent {
+        call_id: params.item_id,
+        command: params.command.into_iter().collect(),
+        cwd: params.cwd.unwrap_or_default(),
+        reason: params.reason,
+        network_approval_context: params
+            .network_approval_context
+            .and_then(convert_via_json),
+        additional_permissions: params.additional_permissions.and_then(convert_via_json),
+        turn_id: params.turn_id,
+        approval_id: params.approval_id,
+        proposed_execpolicy_amendment: params
+            .proposed_execpolicy_amendment
+            .map(codex_app_server_protocol::ExecPolicyAmendment::into_core),
+        proposed_network_policy_amendments: params.proposed_network_policy_amendments.map(
+            |amendments| {
+                amendments
+                    .into_iter()
+                    .map(codex_app_server_protocol::NetworkPolicyAmendment::into_core)
+                    .collect()
+            },
+        ),
+        skill_metadata: params.skill_metadata.map(|metadata| {
+            codex_protocol::approvals::ExecApprovalRequestSkillMetadata {
+                path_to_skills_md: metadata.path_to_skills_md,
+            }
+        }),
+        available_decisions: params.available_decisions.map(|decisions| {
+            decisions
+                .into_iter()
+                .map(|decision| match decision {
+                    codex_app_server_protocol::CommandExecutionApprovalDecision::Accept => {
+                        codex_protocol::protocol::ReviewDecision::Approved
+                    }
+                    codex_app_server_protocol::CommandExecutionApprovalDecision::AcceptForSession => {
+                        codex_protocol::protocol::ReviewDecision::ApprovedForSession
+                    }
+                    codex_app_server_protocol::CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
+                        execpolicy_amendment,
+                    } => codex_protocol::protocol::ReviewDecision::ApprovedExecpolicyAmendment {
+                        proposed_execpolicy_amendment: execpolicy_amendment.into_core(),
+                    },
+                    codex_app_server_protocol::CommandExecutionApprovalDecision::ApplyNetworkPolicyAmendment {
+                        network_policy_amendment,
+                    } => codex_protocol::protocol::ReviewDecision::NetworkPolicyAmendment {
+                        network_policy_amendment: network_policy_amendment.into_core(),
+                    },
+                    codex_app_server_protocol::CommandExecutionApprovalDecision::Decline => {
+                        codex_protocol::protocol::ReviewDecision::Denied
+                    }
+                    codex_app_server_protocol::CommandExecutionApprovalDecision::Cancel => {
+                        codex_protocol::protocol::ReviewDecision::Abort
+                    }
+                })
+                .collect()
+        }),
+        parsed_cmd: params
+            .command_actions
+            .unwrap_or_default()
+            .into_iter()
+            .map(codex_app_server_protocol::CommandAction::into_core)
+            .collect(),
+    }
+}
+
+fn patch_approval_request_from_params(
+    params: FileChangeRequestApprovalParams,
+) -> ApplyPatchApprovalRequestEvent {
+    ApplyPatchApprovalRequestEvent {
+        call_id: params.item_id,
+        turn_id: params.turn_id,
+        changes: HashMap::new(),
+        reason: params.reason,
+        grant_root: params.grant_root,
+    }
+}
+
+fn app_server_patch_changes_to_core(
+    changes: Vec<codex_app_server_protocol::FileUpdateChange>,
+) -> HashMap<PathBuf, codex_protocol::protocol::FileChange> {
+    changes
+        .into_iter()
+        .map(|change| {
+            let path = PathBuf::from(change.path);
+            let file_change = match change.kind {
+                codex_app_server_protocol::PatchChangeKind::Add => {
+                    codex_protocol::protocol::FileChange::Add {
+                        content: change.diff,
+                    }
+                }
+                codex_app_server_protocol::PatchChangeKind::Delete => {
+                    codex_protocol::protocol::FileChange::Delete {
+                        content: change.diff,
+                    }
+                }
+                codex_app_server_protocol::PatchChangeKind::Update { move_path } => {
+                    codex_protocol::protocol::FileChange::Update {
+                        unified_diff: change.diff,
+                        move_path,
+                    }
+                }
+            };
+            (path, file_change)
+        })
+        .collect()
+}
+
+fn app_server_collab_thread_id_to_core(thread_id: &str) -> Option<ThreadId> {
+    match ThreadId::from_string(thread_id) {
+        Ok(thread_id) => Some(thread_id),
+        Err(err) => {
+            warn!("ignoring collab tool-call item with invalid thread id {thread_id}: {err}");
+            None
+        }
+    }
+}
+
+fn app_server_collab_state_to_core(state: &AppServerCollabAgentState) -> AgentStatus {
+    match state.status {
+        AppServerCollabAgentStatus::PendingInit => AgentStatus::PendingInit,
+        AppServerCollabAgentStatus::Running => AgentStatus::Running,
+        AppServerCollabAgentStatus::Interrupted => AgentStatus::Interrupted,
+        AppServerCollabAgentStatus::Completed => AgentStatus::Completed(state.message.clone()),
+        AppServerCollabAgentStatus::Errored => AgentStatus::Errored(
+            state
+                .message
+                .clone()
+                .unwrap_or_else(|| "Agent errored".into()),
+        ),
+        AppServerCollabAgentStatus::Shutdown => AgentStatus::Shutdown,
+        AppServerCollabAgentStatus::NotFound => AgentStatus::NotFound,
+    }
+}
+
+fn app_server_collab_agent_statuses_to_core(
+    receiver_thread_ids: &[String],
+    agents_states: &HashMap<String, AppServerCollabAgentState>,
+) -> (Vec<CollabAgentStatusEntry>, HashMap<ThreadId, AgentStatus>) {
+    let mut agent_statuses = Vec::new();
+    let mut statuses = HashMap::new();
+
+    for receiver_thread_id in receiver_thread_ids {
+        let Some(thread_id) = app_server_collab_thread_id_to_core(receiver_thread_id) else {
+            continue;
+        };
+        let Some(agent_state) = agents_states.get(receiver_thread_id) else {
+            continue;
+        };
+        let status = app_server_collab_state_to_core(agent_state);
+        agent_statuses.push(CollabAgentStatusEntry {
+            thread_id,
+            agent_nickname: None,
+            agent_role: None,
+            status: status.clone(),
+        });
+        statuses.insert(thread_id, status);
+    }
+
+    (agent_statuses, statuses)
+}
+
+fn request_permissions_from_params(
+    params: codex_app_server_protocol::PermissionsRequestApprovalParams,
+) -> RequestPermissionsEvent {
+    RequestPermissionsEvent {
+        turn_id: params.turn_id,
+        call_id: params.item_id,
+        reason: params.reason,
+        permissions: serde_json::from_value(
+            serde_json::to_value(params.permissions).unwrap_or(serde_json::Value::Null),
+        )
+        .unwrap_or_default(),
+    }
+}
+
+fn request_user_input_from_params(params: ToolRequestUserInputParams) -> RequestUserInputEvent {
+    RequestUserInputEvent {
+        turn_id: params.turn_id,
+        call_id: params.item_id,
+        questions: params
+            .questions
+            .into_iter()
+            .map(
+                |question| codex_protocol::request_user_input::RequestUserInputQuestion {
+                    id: question.id,
+                    header: question.header,
+                    question: question.question,
+                    is_other: question.is_other,
+                    is_secret: question.is_secret,
+                    options: question.options.map(|options| {
+                        options
+                            .into_iter()
+                            .map(|option| RequestUserInputQuestionOption {
+                                label: option.label,
+                                description: option.description,
+                            })
+                            .collect()
+                    }),
+                },
+            )
+            .collect(),
+    }
+}
+
+fn token_usage_info_from_app_server(token_usage: ThreadTokenUsage) -> TokenUsageInfo {
+    TokenUsageInfo {
+        total_token_usage: TokenUsage {
+            total_tokens: token_usage.total.total_tokens,
+            input_tokens: token_usage.total.input_tokens,
+            cached_input_tokens: token_usage.total.cached_input_tokens,
+            output_tokens: token_usage.total.output_tokens,
+            reasoning_output_tokens: token_usage.total.reasoning_output_tokens,
+        },
+        last_token_usage: TokenUsage {
+            total_tokens: token_usage.last.total_tokens,
+            input_tokens: token_usage.last.input_tokens,
+            cached_input_tokens: token_usage.last.cached_input_tokens,
+            output_tokens: token_usage.last.output_tokens,
+            reasoning_output_tokens: token_usage.last.reasoning_output_tokens,
+        },
+        model_context_window: token_usage.model_context_window,
+    }
+}
+
+fn web_search_action_to_core(
+    action: codex_app_server_protocol::WebSearchAction,
+) -> codex_protocol::models::WebSearchAction {
+    match action {
+        codex_app_server_protocol::WebSearchAction::Search { query, queries } => {
+            codex_protocol::models::WebSearchAction::Search { query, queries }
+        }
+        codex_app_server_protocol::WebSearchAction::OpenPage { url } => {
+            codex_protocol::models::WebSearchAction::OpenPage { url }
+        }
+        codex_app_server_protocol::WebSearchAction::FindInPage { url, pattern } => {
+            codex_protocol::models::WebSearchAction::FindInPage { url, pattern }
+        }
+        codex_app_server_protocol::WebSearchAction::Other => {
+            codex_protocol::models::WebSearchAction::Other
+        }
+    }
 }
 
 impl ChatWidget {
@@ -1082,7 +1457,7 @@ impl ChatWidget {
     }
 
     fn realtime_audio_device_selection_enabled(&self) -> bool {
-        self.realtime_conversation_enabled() && cfg!(feature = "voice-input")
+        self.realtime_conversation_enabled()
     }
 
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
@@ -1388,7 +1763,6 @@ impl ChatWidget {
                 Constrained::allow_only(event.sandbox_policy.clone());
         }
         self.config.approvals_reviewer = event.approvals_reviewer;
-        let initial_messages = event.initial_messages.clone();
         self.last_copyable_output = None;
         let forked_from_id = event.forked_from_id;
         let model_for_header = event.model.clone();
@@ -1408,6 +1782,8 @@ impl ChatWidget {
         self.refresh_plugin_mentions();
         let startup_tooltip_override = self.startup_tooltip_override.take();
         let show_fast_status = self.should_show_fast_status(&model_for_header, event.service_tier);
+        #[cfg(test)]
+        let initial_messages = event.initial_messages.clone();
         let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -1419,6 +1795,7 @@ impl ChatWidget {
         );
         self.apply_session_info_cell(session_info_cell);
 
+        #[cfg(test)]
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
@@ -1448,15 +1825,14 @@ impl ChatWidget {
         self.suppress_initial_user_message_submit = suppressed;
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_initial_user_message_for_test(&mut self, user_message: Option<UserMessage>) {
-        self.initial_user_message = user_message;
-    }
-
     pub(crate) fn submit_initial_user_message_if_pending(&mut self) {
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
+    }
+
+    pub(crate) fn handle_thread_session(&mut self, session: ThreadSessionState) {
+        self.on_session_configured(thread_session_state_to_legacy_event(session));
     }
 
     fn emit_forked_thread_event(&self, forked_from_id: ThreadId) {
@@ -1914,6 +2290,7 @@ impl ChatWidget {
         }
     }
 
+    #[cfg(test)]
     fn apply_turn_started_context_window(&mut self, model_context_window: Option<i64>) {
         let info = match self.token_info.take() {
             Some(mut info) => {
@@ -1957,6 +2334,7 @@ impl ChatWidget {
         Some(info.total_token_usage.tokens_in_context_window())
     }
 
+    #[cfg(test)]
     fn restore_pre_review_token_info(&mut self) {
         if let Some(saved) = self.pre_review_token_info.take() {
             match saved {
@@ -2103,11 +2481,32 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
     }
 
+    fn handle_non_retry_error(
+        &mut self,
+        message: String,
+        codex_error_info: Option<AppServerCodexErrorInfo>,
+    ) {
+        if let Some(info) = codex_error_info
+            .as_ref()
+            .and_then(app_server_rate_limit_error_kind)
+        {
+            match info {
+                RateLimitErrorKind::ServerOverloaded => self.on_server_overloaded_error(message),
+                RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
+                    self.on_error(message)
+                }
+            }
+        } else {
+            self.on_error(message);
+        }
+    }
+
     fn on_warning(&mut self, message: impl Into<String>) {
         self.add_to_history(history_cell::new_warning_event(message.into()));
         self.request_redraw();
     }
 
+    #[cfg(test)]
     fn on_mcp_startup_update(&mut self, ev: McpStartupUpdateEvent) {
         let mut status = self.mcp_startup_status.take().unwrap_or_default();
         if let McpStartupStatus::Failed { error } = &ev.status {
@@ -2154,6 +2553,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[cfg(test)]
     fn on_mcp_startup_complete(&mut self, ev: McpStartupCompleteEvent) {
         let mut parts = Vec::new();
         if !ev.failed.is_empty() {
@@ -2898,7 +3298,185 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_get_history_entry_response(
+    fn on_collab_agent_tool_call(&mut self, item: ThreadItem) {
+        let ThreadItem::CollabAgentToolCall {
+            id,
+            tool,
+            status,
+            sender_thread_id,
+            receiver_thread_ids,
+            prompt,
+            model,
+            reasoning_effort,
+            agents_states,
+        } = item
+        else {
+            return;
+        };
+        let sender_thread_id = app_server_collab_thread_id_to_core(&sender_thread_id)
+            .or(self.thread_id)
+            .unwrap_or_default();
+        let first_receiver = receiver_thread_ids
+            .first()
+            .and_then(|thread_id| app_server_collab_thread_id_to_core(thread_id));
+
+        match tool {
+            CollabAgentTool::SpawnAgent => {
+                if let (Some(model), Some(reasoning_effort)) = (model.clone(), reasoning_effort) {
+                    self.pending_collab_spawn_requests.insert(
+                        id.clone(),
+                        multi_agents::SpawnRequestSummary {
+                            model,
+                            reasoning_effort,
+                        },
+                    );
+                }
+
+                if !matches!(status, CollabAgentToolCallStatus::InProgress) {
+                    let spawn_request =
+                        self.pending_collab_spawn_requests.remove(&id).or_else(|| {
+                            model
+                                .zip(reasoning_effort)
+                                .map(|(model, reasoning_effort)| {
+                                    multi_agents::SpawnRequestSummary {
+                                        model,
+                                        reasoning_effort,
+                                    }
+                                })
+                        });
+                    self.on_collab_event(multi_agents::spawn_end(
+                        codex_protocol::protocol::CollabAgentSpawnEndEvent {
+                            call_id: id,
+                            sender_thread_id,
+                            new_thread_id: first_receiver,
+                            new_agent_nickname: None,
+                            new_agent_role: None,
+                            prompt: prompt.unwrap_or_default(),
+                            model: String::new(),
+                            reasoning_effort: ReasoningEffortConfig::Medium,
+                            status: first_receiver
+                                .as_ref()
+                                .and_then(|thread_id| agents_states.get(&thread_id.to_string()))
+                                .map(app_server_collab_state_to_core)
+                                .unwrap_or_else(|| {
+                                    AgentStatus::Errored("Agent spawn failed".into())
+                                }),
+                        },
+                        spawn_request.as_ref(),
+                    ));
+                }
+            }
+            CollabAgentTool::SendInput => {
+                if let Some(receiver_thread_id) = first_receiver
+                    && !matches!(status, CollabAgentToolCallStatus::InProgress)
+                {
+                    self.on_collab_event(multi_agents::interaction_end(
+                        codex_protocol::protocol::CollabAgentInteractionEndEvent {
+                            call_id: id,
+                            sender_thread_id,
+                            receiver_thread_id,
+                            receiver_agent_nickname: None,
+                            receiver_agent_role: None,
+                            prompt: prompt.unwrap_or_default(),
+                            status: receiver_thread_ids
+                                .iter()
+                                .find_map(|thread_id| agents_states.get(thread_id))
+                                .map(app_server_collab_state_to_core)
+                                .unwrap_or_else(|| {
+                                    AgentStatus::Errored("Agent interaction failed".into())
+                                }),
+                        },
+                    ));
+                }
+            }
+            CollabAgentTool::ResumeAgent => {
+                if let Some(receiver_thread_id) = first_receiver {
+                    if matches!(status, CollabAgentToolCallStatus::InProgress) {
+                        self.on_collab_event(multi_agents::resume_begin(
+                            codex_protocol::protocol::CollabResumeBeginEvent {
+                                call_id: id,
+                                sender_thread_id,
+                                receiver_thread_id,
+                                receiver_agent_nickname: None,
+                                receiver_agent_role: None,
+                            },
+                        ));
+                    } else {
+                        self.on_collab_event(multi_agents::resume_end(
+                            codex_protocol::protocol::CollabResumeEndEvent {
+                                call_id: id,
+                                sender_thread_id,
+                                receiver_thread_id,
+                                receiver_agent_nickname: None,
+                                receiver_agent_role: None,
+                                status: receiver_thread_ids
+                                    .iter()
+                                    .find_map(|thread_id| agents_states.get(thread_id))
+                                    .map(app_server_collab_state_to_core)
+                                    .unwrap_or_else(|| {
+                                        AgentStatus::Errored("Agent resume failed".into())
+                                    }),
+                            },
+                        ));
+                    }
+                }
+            }
+            CollabAgentTool::Wait => {
+                if matches!(status, CollabAgentToolCallStatus::InProgress) {
+                    self.on_collab_event(multi_agents::waiting_begin(
+                        codex_protocol::protocol::CollabWaitingBeginEvent {
+                            sender_thread_id,
+                            receiver_thread_ids: receiver_thread_ids
+                                .iter()
+                                .filter_map(|thread_id| {
+                                    app_server_collab_thread_id_to_core(thread_id)
+                                })
+                                .collect(),
+                            receiver_agents: Vec::new(),
+                            call_id: id,
+                        },
+                    ));
+                } else {
+                    let (agent_statuses, statuses) = app_server_collab_agent_statuses_to_core(
+                        &receiver_thread_ids,
+                        &agents_states,
+                    );
+                    self.on_collab_event(multi_agents::waiting_end(
+                        codex_protocol::protocol::CollabWaitingEndEvent {
+                            sender_thread_id,
+                            call_id: id,
+                            agent_statuses,
+                            statuses,
+                        },
+                    ));
+                }
+            }
+            CollabAgentTool::CloseAgent => {
+                if let Some(receiver_thread_id) = first_receiver
+                    && !matches!(status, CollabAgentToolCallStatus::InProgress)
+                {
+                    self.on_collab_event(multi_agents::close_end(
+                        codex_protocol::protocol::CollabCloseEndEvent {
+                            call_id: id,
+                            sender_thread_id,
+                            receiver_thread_id,
+                            receiver_agent_nickname: None,
+                            receiver_agent_role: None,
+                            status: receiver_thread_ids
+                                .iter()
+                                .find_map(|thread_id| agents_states.get(thread_id))
+                                .map(app_server_collab_state_to_core)
+                                .unwrap_or_else(|| {
+                                    AgentStatus::Errored("Agent close failed".into())
+                                }),
+                        },
+                    ));
+                }
+            }
+        }
+    }
+
+    pub(crate) fn handle_history_entry_response(
         &mut self,
         event: codex_protocol::protocol::GetHistoryEntryResponseEvent,
     ) {
@@ -2926,6 +3504,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[cfg(test)]
     fn on_background_event(&mut self, message: String) {
         debug!("BackgroundEvent: {message}");
         self.bottom_pane.ensure_status_indicator();
@@ -2965,6 +3544,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[cfg(test)]
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane
@@ -2975,6 +3555,7 @@ impl ChatWidget {
         self.set_status_header(message);
     }
 
+    #[cfg(test)]
     fn on_undo_completed(&mut self, event: UndoCompletedEvent) {
         let UndoCompletedEvent { success, message } = event;
         self.bottom_pane.hide_status_indicator();
@@ -3651,6 +4232,7 @@ impl ChatWidget {
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,
             is_review_mode: false,
+            #[cfg(test)]
             pre_review_token_info: None,
             needs_final_message_separator: false,
             had_work_activity: false,
@@ -3674,6 +4256,7 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_event: None,
+            last_non_retry_error: None,
         };
 
         widget.bottom_pane.set_voice_transcription_enabled(
@@ -3706,198 +4289,6 @@ impl ChatWidget {
         );
         widget.update_collaboration_mode_indicator();
 
-        widget
-            .bottom_pane
-            .set_connectors_enabled(widget.connectors_enabled());
-
-        widget
-    }
-
-    /// Create a ChatWidget attached to an existing conversation (e.g., a fork).
-    #[allow(dead_code)]
-    pub(crate) fn new_from_existing(
-        common: ChatWidgetInit,
-        conversation: std::sync::Arc<codex_core::CodexThread>,
-        session_configured: codex_protocol::protocol::SessionConfiguredEvent,
-    ) -> Self {
-        let ChatWidgetInit {
-            config,
-            frame_requester,
-            app_event_tx,
-            initial_user_message,
-            enhanced_keys_supported,
-            has_chatgpt_account,
-            model_catalog,
-            feedback,
-            is_first_run: _,
-            feedback_audience,
-            status_account_display,
-            initial_plan_type,
-            model,
-            startup_tooltip_override: _,
-            status_line_invalid_items_warned,
-            session_telemetry,
-        } = common;
-        let model = model.filter(|m| !m.trim().is_empty());
-        let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
-        let mut rng = rand::rng();
-        let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
-
-        let model_override = model.as_deref();
-        let header_model = model
-            .clone()
-            .unwrap_or_else(|| session_configured.model.clone());
-        let active_collaboration_mask =
-            Self::initial_collaboration_mask(&config, model_catalog.as_ref(), model_override);
-        let header_model = active_collaboration_mask
-            .as_ref()
-            .and_then(|mask| mask.model.clone())
-            .unwrap_or(header_model);
-
-        let current_cwd = Some(session_configured.cwd.clone());
-        let codex_op_tx =
-            spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
-
-        let fallback_default = Settings {
-            model: header_model.clone(),
-            reasoning_effort: None,
-            developer_instructions: None,
-        };
-        // Collaboration modes start in Default mode.
-        let current_collaboration_mode = CollaborationMode {
-            mode: ModeKind::Default,
-            settings: fallback_default,
-        };
-
-        let queued_message_edit_binding =
-            queued_message_edit_binding_for_terminal(terminal_info().name);
-        let mut widget = Self {
-            app_event_tx: app_event_tx.clone(),
-            frame_requester: frame_requester.clone(),
-            codex_op_target: CodexOpTarget::Direct(codex_op_tx),
-            bottom_pane: BottomPane::new(BottomPaneParams {
-                frame_requester,
-                app_event_tx,
-                has_input_focus: true,
-                enhanced_keys_supported,
-                placeholder_text: placeholder,
-                disable_paste_burst: config.disable_paste_burst,
-                animations_enabled: config.animations,
-                skills: None,
-            }),
-            active_cell: None,
-            active_cell_revision: 0,
-            config,
-            skills_all: Vec::new(),
-            skills_initial_state: None,
-            current_collaboration_mode,
-            active_collaboration_mask,
-            has_chatgpt_account,
-            model_catalog,
-            session_telemetry,
-            session_header: SessionHeader::new(header_model),
-            initial_user_message,
-            status_account_display,
-            token_info: None,
-            rate_limit_snapshots_by_limit_id: BTreeMap::new(),
-            plan_type: initial_plan_type,
-            rate_limit_warnings: RateLimitWarningState::default(),
-            rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
-            adaptive_chunking: AdaptiveChunkingPolicy::default(),
-            stream_controller: None,
-            plan_stream_controller: None,
-            last_copyable_output: None,
-            running_commands: HashMap::new(),
-            pending_collab_spawn_requests: HashMap::new(),
-            suppressed_exec_calls: HashSet::new(),
-            last_unified_wait: None,
-            unified_exec_wait_streak: None,
-            turn_sleep_inhibitor: SleepInhibitor::new(prevent_idle_sleep),
-            task_complete_pending: false,
-            unified_exec_processes: Vec::new(),
-            agent_turn_running: false,
-            mcp_startup_status: None,
-            connectors_cache: ConnectorsCacheState::default(),
-            connectors_partial_snapshot: None,
-            connectors_prefetch_in_flight: false,
-            connectors_force_refetch_pending: false,
-            interrupts: InterruptManager::new(),
-            reasoning_buffer: String::new(),
-            full_reasoning_buffer: String::new(),
-            current_status: StatusIndicatorState::working(),
-            pending_guardian_review_status: PendingGuardianReviewStatus::default(),
-            retry_status_header: None,
-            pending_status_indicator_restore: false,
-            suppress_queue_autosend: false,
-            thread_id: None,
-            thread_name: None,
-            forked_from: None,
-            queued_user_messages: VecDeque::new(),
-            pending_steers: VecDeque::new(),
-            submit_pending_steers_after_interrupt: false,
-            queued_message_edit_binding,
-            show_welcome_banner: false,
-            startup_tooltip_override: None,
-            suppress_session_configured_redraw: true,
-            suppress_initial_user_message_submit: false,
-            pending_notification: None,
-            quit_shortcut_expires_at: None,
-            quit_shortcut_key: None,
-            is_review_mode: false,
-            pre_review_token_info: None,
-            needs_final_message_separator: false,
-            had_work_activity: false,
-            saw_plan_update_this_turn: false,
-            saw_plan_item_this_turn: false,
-            plan_delta_buffer: String::new(),
-            plan_item_active: false,
-            last_separator_elapsed_secs: None,
-            turn_runtime_metrics: RuntimeMetricsSummary::default(),
-            last_rendered_width: std::cell::Cell::new(None),
-            feedback,
-            feedback_audience,
-            current_rollout_path: None,
-            current_cwd,
-            session_network_proxy: None,
-            status_line_invalid_items_warned,
-            status_line_branch: None,
-            status_line_branch_cwd: None,
-            status_line_branch_pending: false,
-            status_line_branch_lookup_complete: false,
-            external_editor_state: ExternalEditorState::Closed,
-            realtime_conversation: RealtimeConversationUiState::default(),
-            last_rendered_user_message_event: None,
-        };
-
-        widget.bottom_pane.set_voice_transcription_enabled(
-            widget.config.features.enabled(Feature::VoiceTranscription),
-        );
-        widget
-            .bottom_pane
-            .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
-        widget
-            .bottom_pane
-            .set_audio_device_selection_enabled(widget.realtime_audio_device_selection_enabled());
-        widget
-            .bottom_pane
-            .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
-        widget
-            .bottom_pane
-            .set_collaboration_modes_enabled(/*enabled*/ true);
-        widget.sync_fast_command_enabled();
-        widget.sync_personality_command_enabled();
-        widget
-            .bottom_pane
-            .set_queued_message_edit_binding(widget.queued_message_edit_binding);
-        #[cfg(target_os = "windows")]
-        widget.bottom_pane.set_windows_degraded_sandbox_active(
-            codex_core::windows_sandbox::ELEVATED_SANDBOX_NUX_ENABLED
-                && matches!(
-                    WindowsSandboxLevel::from_config(&widget.config),
-                    WindowsSandboxLevel::RestrictedToken
-                ),
-        );
-        widget.update_collaboration_mode_indicator();
         widget
             .bottom_pane
             .set_connectors_enabled(widget.connectors_enabled());
@@ -4436,21 +4827,14 @@ impl ChatWidget {
                 }
             }
             SlashCommand::TestApproval => {
-                use codex_protocol::protocol::EventMsg;
                 use std::collections::HashMap;
 
                 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
                 use codex_protocol::protocol::FileChange;
 
-                self.app_event_tx.send(AppEvent::CodexEvent(Event {
-                    id: "1".to_string(),
-                    // msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-                    //     call_id: "1".to_string(),
-                    //     command: vec!["git".into(), "apply".into()],
-                    //     cwd: self.config.cwd.clone(),
-                    //     reason: Some("test".to_string()),
-                    // }),
-                    msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+                self.on_apply_patch_approval_request(
+                    "1".to_string(),
+                    ApplyPatchApprovalRequestEvent {
                         call_id: "1".to_string(),
                         turn_id: "turn-1".to_string(),
                         changes: HashMap::from([
@@ -4470,8 +4854,8 @@ impl ChatWidget {
                         ]),
                         reason: None,
                         grant_root: Some(PathBuf::from("/tmp")),
-                    }),
-                }));
+                    },
+                );
             }
         }
     }
@@ -4886,6 +5270,12 @@ impl ChatWidget {
         }
 
         let effective_mode = self.effective_collaboration_mode();
+        if effective_mode.model().trim().is_empty() {
+            self.add_error_message(
+                "Thread model is unavailable. Wait for the thread to finish syncing or choose a model before sending input.".to_string(),
+            );
+            return;
+        }
         let collaboration_mode = if self.collaboration_modes_enabled() {
             self.active_collaboration_mask
                 .as_ref()
@@ -4927,9 +5317,19 @@ impl ChatWidget {
             return;
         }
 
-        // Persist the text to cross-session message history.
+        // Persist the text to cross-session message history. Mentions are
+        // encoded into placeholder syntax so recall can reconstruct the
+        // mention bindings in a future session.
         if !text.is_empty() {
-            warn!("skipping composer history persistence in app-server TUI");
+            let encoded_mentions = mention_bindings
+                .iter()
+                .map(|binding| LinkedMention {
+                    mention: binding.mention.clone(),
+                    path: binding.path.clone(),
+                })
+                .collect::<Vec<_>>();
+            let history_text = encode_history_mentions(&text, &encoded_mentions);
+            self.submit_op(Op::AddToHistory { text: history_text });
         }
 
         if let Some(pending_steer) = pending_steer {
@@ -5011,6 +5411,874 @@ impl ChatWidget {
     /// is intentionally conservative: only safe-to-replay items are rendered to
     /// avoid triggering side effects. Event ids are passed as `None` to
     /// distinguish replayed events from live ones.
+    pub(crate) fn replay_thread_turns(&mut self, turns: Vec<Turn>, replay_kind: ReplayKind) {
+        for turn in turns {
+            let Turn {
+                id: turn_id,
+                items,
+                status,
+                error,
+            } = turn;
+            if matches!(status, TurnStatus::InProgress) {
+                self.last_non_retry_error = None;
+                self.on_task_started();
+            }
+            for item in items {
+                self.replay_thread_item(item, turn_id.clone(), replay_kind);
+            }
+            if matches!(
+                status,
+                TurnStatus::Completed | TurnStatus::Interrupted | TurnStatus::Failed
+            ) {
+                self.handle_turn_completed_notification(
+                    TurnCompletedNotification {
+                        thread_id: self.thread_id.map(|id| id.to_string()).unwrap_or_default(),
+                        turn: Turn {
+                            id: turn_id,
+                            items: Vec::new(),
+                            status,
+                            error,
+                        },
+                    },
+                    Some(replay_kind),
+                );
+            }
+        }
+    }
+
+    pub(crate) fn replay_thread_item(
+        &mut self,
+        item: ThreadItem,
+        turn_id: String,
+        replay_kind: ReplayKind,
+    ) {
+        self.handle_thread_item(item, turn_id, ThreadItemRenderSource::Replay(replay_kind));
+    }
+
+    fn handle_thread_item(
+        &mut self,
+        item: ThreadItem,
+        turn_id: String,
+        render_source: ThreadItemRenderSource,
+    ) {
+        let from_replay = render_source.is_replay();
+        let replay_kind = render_source.replay_kind();
+        match item {
+            ThreadItem::UserMessage { id, content } => {
+                let user_message = codex_protocol::items::UserMessageItem {
+                    id,
+                    content: content
+                        .into_iter()
+                        .map(codex_app_server_protocol::UserInput::into_core)
+                        .collect(),
+                };
+                let codex_protocol::protocol::EventMsg::UserMessage(event) =
+                    user_message.as_legacy_event()
+                else {
+                    unreachable!("user message item should convert to a user message event");
+                };
+                if from_replay {
+                    self.on_user_message_event(event);
+                } else {
+                    let rendered = Self::rendered_user_message_event_from_event(&event);
+                    let compare_key =
+                        Self::pending_steer_compare_key_from_items(&user_message.content);
+                    if self
+                        .pending_steers
+                        .front()
+                        .is_some_and(|pending| pending.compare_key == compare_key)
+                    {
+                        if let Some(pending) = self.pending_steers.pop_front() {
+                            self.refresh_pending_input_preview();
+                            let pending_event = UserMessageEvent {
+                                message: pending.user_message.text,
+                                images: Some(pending.user_message.remote_image_urls),
+                                local_images: pending
+                                    .user_message
+                                    .local_images
+                                    .into_iter()
+                                    .map(|image| image.path)
+                                    .collect(),
+                                text_elements: pending.user_message.text_elements,
+                            };
+                            self.on_user_message_event(pending_event);
+                        } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered)
+                        {
+                            tracing::warn!(
+                                "pending steer matched compare key but queue was empty when rendering committed user message"
+                            );
+                            self.on_user_message_event(event);
+                        }
+                    } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered) {
+                        self.on_user_message_event(event);
+                    }
+                }
+            }
+            ThreadItem::AgentMessage {
+                id,
+                text,
+                phase,
+                memory_citation,
+            } => {
+                self.on_agent_message_item_completed(AgentMessageItem {
+                    id,
+                    content: vec![AgentMessageContent::Text { text }],
+                    phase,
+                    memory_citation: memory_citation.map(|citation| {
+                        codex_protocol::memory_citation::MemoryCitation {
+                            entries: citation
+                                .entries
+                                .into_iter()
+                                .map(
+                                    |entry| codex_protocol::memory_citation::MemoryCitationEntry {
+                                        path: entry.path,
+                                        line_start: entry.line_start,
+                                        line_end: entry.line_end,
+                                        note: entry.note,
+                                    },
+                                )
+                                .collect(),
+                            rollout_ids: citation.thread_ids,
+                        }
+                    }),
+                });
+            }
+            ThreadItem::Plan { text, .. } => self.on_plan_item_completed(text),
+            ThreadItem::Reasoning {
+                summary, content, ..
+            } => {
+                for delta in summary {
+                    self.on_agent_reasoning_delta(delta);
+                }
+                if self.config.show_raw_agent_reasoning {
+                    for delta in content {
+                        self.on_agent_reasoning_delta(delta);
+                    }
+                }
+                self.on_agent_reasoning_final();
+            }
+            ThreadItem::CommandExecution {
+                id,
+                command,
+                cwd,
+                process_id,
+                status,
+                command_actions,
+                aggregated_output,
+                exit_code,
+                duration_ms,
+            } => {
+                if matches!(
+                    status,
+                    codex_app_server_protocol::CommandExecutionStatus::InProgress
+                ) {
+                    self.on_exec_command_begin(ExecCommandBeginEvent {
+                        call_id: id,
+                        process_id,
+                        turn_id: turn_id.clone(),
+                        command: vec![command],
+                        cwd,
+                        parsed_cmd: command_actions
+                            .into_iter()
+                            .map(codex_app_server_protocol::CommandAction::into_core)
+                            .collect(),
+                        source: ExecCommandSource::Agent,
+                        interaction_input: None,
+                    });
+                } else {
+                    self.on_exec_command_end(ExecCommandEndEvent {
+                        call_id: id,
+                        process_id,
+                        turn_id: turn_id.clone(),
+                        command: vec![command],
+                        cwd,
+                        parsed_cmd: command_actions
+                            .into_iter()
+                            .map(codex_app_server_protocol::CommandAction::into_core)
+                            .collect(),
+                        source: ExecCommandSource::Agent,
+                        interaction_input: None,
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        aggregated_output: aggregated_output.unwrap_or_default(),
+                        exit_code: exit_code.unwrap_or_default(),
+                        duration: Duration::from_millis(
+                            duration_ms.unwrap_or_default().max(0) as u64
+                        ),
+                        formatted_output: String::new(),
+                        status: match status {
+                            codex_app_server_protocol::CommandExecutionStatus::Completed => {
+                                codex_protocol::protocol::ExecCommandStatus::Completed
+                            }
+                            codex_app_server_protocol::CommandExecutionStatus::Failed => {
+                                codex_protocol::protocol::ExecCommandStatus::Failed
+                            }
+                            codex_app_server_protocol::CommandExecutionStatus::Declined => {
+                                codex_protocol::protocol::ExecCommandStatus::Declined
+                            }
+                            codex_app_server_protocol::CommandExecutionStatus::InProgress => {
+                                codex_protocol::protocol::ExecCommandStatus::Failed
+                            }
+                        },
+                    });
+                }
+            }
+            ThreadItem::FileChange {
+                id,
+                changes,
+                status,
+            } => {
+                if !matches!(
+                    status,
+                    codex_app_server_protocol::PatchApplyStatus::InProgress
+                ) {
+                    self.on_patch_apply_end(codex_protocol::protocol::PatchApplyEndEvent {
+                        call_id: id,
+                        turn_id: turn_id.clone(),
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        success: !matches!(
+                            status,
+                            codex_app_server_protocol::PatchApplyStatus::Failed
+                        ),
+                        changes: app_server_patch_changes_to_core(changes),
+                        status: match status {
+                            codex_app_server_protocol::PatchApplyStatus::Completed => {
+                                codex_protocol::protocol::PatchApplyStatus::Completed
+                            }
+                            codex_app_server_protocol::PatchApplyStatus::Failed => {
+                                codex_protocol::protocol::PatchApplyStatus::Failed
+                            }
+                            codex_app_server_protocol::PatchApplyStatus::Declined => {
+                                codex_protocol::protocol::PatchApplyStatus::Declined
+                            }
+                            codex_app_server_protocol::PatchApplyStatus::InProgress => {
+                                codex_protocol::protocol::PatchApplyStatus::Failed
+                            }
+                        },
+                    });
+                }
+            }
+            ThreadItem::McpToolCall {
+                id,
+                server,
+                tool,
+                arguments,
+                result,
+                error,
+                duration_ms,
+                ..
+            } => {
+                self.on_mcp_tool_call_end(codex_protocol::protocol::McpToolCallEndEvent {
+                    call_id: id,
+                    invocation: codex_protocol::protocol::McpInvocation {
+                        server,
+                        tool,
+                        arguments: Some(arguments),
+                    },
+                    duration: Duration::from_millis(duration_ms.unwrap_or_default().max(0) as u64),
+                    result: match (result, error) {
+                        (_, Some(error)) => Err(error.message),
+                        (Some(result), None) => Ok(codex_protocol::mcp::CallToolResult {
+                            content: result.content,
+                            structured_content: result.structured_content,
+                            is_error: Some(false),
+                            meta: None,
+                        }),
+                        (None, None) => Err("MCP tool call completed without a result".to_string()),
+                    },
+                });
+            }
+            ThreadItem::WebSearch { id, query, action } => {
+                self.on_web_search_begin(WebSearchBeginEvent {
+                    call_id: id.clone(),
+                });
+                self.on_web_search_end(WebSearchEndEvent {
+                    call_id: id,
+                    query,
+                    action: action
+                        .map(web_search_action_to_core)
+                        .unwrap_or(codex_protocol::models::WebSearchAction::Other),
+                });
+            }
+            ThreadItem::ImageView { id, path } => {
+                self.on_view_image_tool_call(ViewImageToolCallEvent {
+                    call_id: id,
+                    path: path.into(),
+                });
+            }
+            ThreadItem::ImageGeneration {
+                id,
+                status,
+                revised_prompt,
+                result,
+            } => {
+                self.on_image_generation_end(ImageGenerationEndEvent {
+                    call_id: id,
+                    result,
+                    revised_prompt,
+                    status,
+                    saved_path: None,
+                });
+            }
+            ThreadItem::EnteredReviewMode { review, .. } => {
+                self.add_to_history(history_cell::new_review_status_line(format!(
+                    ">> Code review started: {review} <<"
+                )));
+                if !self.bottom_pane.is_task_running() {
+                    self.bottom_pane.set_task_running(/*running*/ true);
+                }
+                self.is_review_mode = true;
+            }
+            ThreadItem::ExitedReviewMode { review, .. } => {
+                self.on_agent_message(review);
+                self.is_review_mode = false;
+            }
+            ThreadItem::ContextCompaction { .. } => {
+                self.on_agent_message("Context compacted".to_owned());
+            }
+            ThreadItem::HookPrompt { .. } => {}
+            ThreadItem::CollabAgentToolCall {
+                id,
+                tool,
+                status,
+                sender_thread_id,
+                receiver_thread_ids,
+                prompt,
+                model,
+                reasoning_effort,
+                agents_states,
+            } => self.on_collab_agent_tool_call(ThreadItem::CollabAgentToolCall {
+                id,
+                tool,
+                status,
+                sender_thread_id,
+                receiver_thread_ids,
+                prompt,
+                model,
+                reasoning_effort,
+                agents_states,
+            }),
+            ThreadItem::DynamicToolCall { .. } => {}
+        }
+
+        if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot)) && turn_id.is_empty() {
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn handle_server_request(
+        &mut self,
+        request: ServerRequest,
+        replay_kind: Option<ReplayKind>,
+    ) {
+        let id = request.id().to_string();
+        match request {
+            ServerRequest::CommandExecutionRequestApproval { params, .. } => {
+                self.on_exec_approval_request(id, exec_approval_request_from_params(params));
+            }
+            ServerRequest::FileChangeRequestApproval { params, .. } => {
+                self.on_apply_patch_approval_request(
+                    id,
+                    patch_approval_request_from_params(params),
+                );
+            }
+            ServerRequest::McpServerElicitationRequest { request_id, params } => {
+                self.on_mcp_server_elicitation_request(
+                    app_server_request_id_to_mcp_request_id(&request_id),
+                    params,
+                );
+            }
+            ServerRequest::PermissionsRequestApproval { params, .. } => {
+                self.on_request_permissions(request_permissions_from_params(params));
+            }
+            ServerRequest::ToolRequestUserInput { params, .. } => {
+                self.on_request_user_input(request_user_input_from_params(params));
+            }
+            ServerRequest::DynamicToolCall { .. }
+            | ServerRequest::ChatgptAuthTokensRefresh { .. }
+            | ServerRequest::ApplyPatchApproval { .. }
+            | ServerRequest::ExecCommandApproval { .. } => {
+                if replay_kind.is_none() {
+                    self.add_error_message(APP_SERVER_TUI_STUB_MESSAGE.to_string());
+                }
+            }
+        }
+    }
+
+    pub(crate) fn handle_server_notification(
+        &mut self,
+        notification: ServerNotification,
+        replay_kind: Option<ReplayKind>,
+    ) {
+        let from_replay = replay_kind.is_some();
+        let is_resume_initial_replay =
+            matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages));
+        let is_retry_error = matches!(
+            &notification,
+            ServerNotification::Error(ErrorNotification {
+                will_retry: true,
+                ..
+            })
+        );
+        if !is_resume_initial_replay && !is_retry_error {
+            self.restore_retry_status_header_if_present();
+        }
+        match notification {
+            ServerNotification::ThreadTokenUsageUpdated(notification) => {
+                self.set_token_info(Some(token_usage_info_from_app_server(
+                    notification.token_usage,
+                )));
+            }
+            ServerNotification::ThreadNameUpdated(notification) => {
+                match ThreadId::from_string(&notification.thread_id) {
+                    Ok(thread_id) => self.on_thread_name_updated(
+                        codex_protocol::protocol::ThreadNameUpdatedEvent {
+                            thread_id,
+                            thread_name: notification.thread_name,
+                        },
+                    ),
+                    Err(err) => {
+                        tracing::warn!(
+                            thread_id = notification.thread_id,
+                            error = %err,
+                            "ignoring app-server ThreadNameUpdated with invalid thread_id"
+                        );
+                    }
+                }
+            }
+            ServerNotification::TurnStarted(_) => {
+                self.last_non_retry_error = None;
+                if !matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages)) {
+                    self.on_task_started();
+                }
+            }
+            ServerNotification::TurnCompleted(notification) => {
+                self.handle_turn_completed_notification(notification, replay_kind);
+            }
+            ServerNotification::ItemStarted(notification) => {
+                self.handle_item_started_notification(notification);
+            }
+            ServerNotification::ItemCompleted(notification) => {
+                self.handle_item_completed_notification(notification, replay_kind);
+            }
+            ServerNotification::AgentMessageDelta(notification) => {
+                self.on_agent_message_delta(notification.delta);
+            }
+            ServerNotification::PlanDelta(notification) => self.on_plan_delta(notification.delta),
+            ServerNotification::ReasoningSummaryTextDelta(notification) => {
+                self.on_agent_reasoning_delta(notification.delta);
+            }
+            ServerNotification::ReasoningTextDelta(notification) => {
+                if self.config.show_raw_agent_reasoning {
+                    self.on_agent_reasoning_delta(notification.delta);
+                }
+            }
+            ServerNotification::ReasoningSummaryPartAdded(_) => self.on_reasoning_section_break(),
+            ServerNotification::TerminalInteraction(notification) => {
+                self.on_terminal_interaction(TerminalInteractionEvent {
+                    call_id: notification.item_id,
+                    process_id: notification.process_id,
+                    stdin: notification.stdin,
+                })
+            }
+            ServerNotification::CommandExecutionOutputDelta(notification) => {
+                self.on_exec_command_output_delta(ExecCommandOutputDeltaEvent {
+                    call_id: notification.item_id,
+                    stream: codex_protocol::protocol::ExecOutputStream::Stdout,
+                    chunk: notification.delta.into_bytes(),
+                });
+            }
+            ServerNotification::FileChangeOutputDelta(notification) => {
+                self.on_patch_apply_output_delta(notification.item_id, notification.delta);
+            }
+            ServerNotification::TurnDiffUpdated(notification) => {
+                self.on_turn_diff(notification.diff)
+            }
+            ServerNotification::TurnPlanUpdated(notification) => {
+                self.on_plan_update(UpdatePlanArgs {
+                    explanation: notification.explanation,
+                    plan: notification
+                        .plan
+                        .into_iter()
+                        .map(|step| UpdatePlanItemArg {
+                            step: step.step,
+                            status: match step.status {
+                                TurnPlanStepStatus::Pending => UpdatePlanItemStatus::Pending,
+                                TurnPlanStepStatus::InProgress => UpdatePlanItemStatus::InProgress,
+                                TurnPlanStepStatus::Completed => UpdatePlanItemStatus::Completed,
+                            },
+                        })
+                        .collect(),
+                })
+            }
+            ServerNotification::HookStarted(notification) => {
+                if let Some(run) = convert_via_json(notification.run) {
+                    self.on_hook_started(codex_protocol::protocol::HookStartedEvent {
+                        turn_id: notification.turn_id,
+                        run,
+                    });
+                }
+            }
+            ServerNotification::HookCompleted(notification) => {
+                if let Some(run) = convert_via_json(notification.run) {
+                    self.on_hook_completed(codex_protocol::protocol::HookCompletedEvent {
+                        turn_id: notification.turn_id,
+                        run,
+                    });
+                }
+            }
+            ServerNotification::Error(notification) => {
+                if notification.will_retry {
+                    if !from_replay {
+                        self.on_stream_error(
+                            notification.error.message,
+                            notification.error.additional_details,
+                        );
+                    }
+                } else {
+                    self.last_non_retry_error = Some((
+                        notification.turn_id.clone(),
+                        notification.error.message.clone(),
+                    ));
+                    self.handle_non_retry_error(
+                        notification.error.message,
+                        notification.error.codex_error_info,
+                    );
+                }
+            }
+            ServerNotification::SkillsChanged(_) => {
+                self.submit_op(AppCommand::list_skills(
+                    Vec::new(),
+                    /*force_reload*/ true,
+                ));
+            }
+            ServerNotification::ModelRerouted(_) => {}
+            ServerNotification::DeprecationNotice(notification) => {
+                self.on_deprecation_notice(DeprecationNoticeEvent {
+                    summary: notification.summary,
+                    details: notification.details,
+                })
+            }
+            ServerNotification::ConfigWarning(notification) => self.on_warning(
+                notification
+                    .details
+                    .map(|details| format!("{}: {details}", notification.summary))
+                    .unwrap_or(notification.summary),
+            ),
+            ServerNotification::ItemGuardianApprovalReviewStarted(notification) => {
+                self.on_guardian_review_notification(
+                    notification.target_item_id,
+                    notification.turn_id,
+                    notification.review,
+                    notification.action,
+                );
+            }
+            ServerNotification::ItemGuardianApprovalReviewCompleted(notification) => {
+                self.on_guardian_review_notification(
+                    notification.target_item_id,
+                    notification.turn_id,
+                    notification.review,
+                    notification.action,
+                );
+            }
+            ServerNotification::ThreadClosed(_) => {
+                if !from_replay {
+                    self.on_shutdown_complete();
+                }
+            }
+            ServerNotification::ThreadRealtimeStarted(notification) => {
+                if !from_replay {
+                    self.on_realtime_conversation_started(
+                        codex_protocol::protocol::RealtimeConversationStartedEvent {
+                            session_id: notification.session_id,
+                            version: notification.version,
+                        },
+                    );
+                }
+            }
+            ServerNotification::ThreadRealtimeItemAdded(notification) => {
+                if !from_replay {
+                    self.on_realtime_conversation_realtime(
+                        codex_protocol::protocol::RealtimeConversationRealtimeEvent {
+                            payload: codex_protocol::protocol::RealtimeEvent::ConversationItemAdded(
+                                notification.item,
+                            ),
+                        },
+                    );
+                }
+            }
+            ServerNotification::ThreadRealtimeOutputAudioDelta(notification) => {
+                if !from_replay {
+                    self.on_realtime_conversation_realtime(
+                        codex_protocol::protocol::RealtimeConversationRealtimeEvent {
+                            payload: codex_protocol::protocol::RealtimeEvent::AudioOut(
+                                notification.audio.into(),
+                            ),
+                        },
+                    );
+                }
+            }
+            ServerNotification::ThreadRealtimeError(notification) => {
+                if !from_replay {
+                    self.on_realtime_conversation_realtime(
+                        codex_protocol::protocol::RealtimeConversationRealtimeEvent {
+                            payload: codex_protocol::protocol::RealtimeEvent::Error(
+                                notification.message,
+                            ),
+                        },
+                    );
+                }
+            }
+            ServerNotification::ThreadRealtimeClosed(notification) => {
+                if !from_replay {
+                    self.on_realtime_conversation_closed(
+                        codex_protocol::protocol::RealtimeConversationClosedEvent {
+                            reason: notification.reason,
+                        },
+                    );
+                }
+            }
+            ServerNotification::ServerRequestResolved(_)
+            | ServerNotification::AccountUpdated(_)
+            | ServerNotification::AccountRateLimitsUpdated(_)
+            | ServerNotification::ThreadStarted(_)
+            | ServerNotification::ThreadStatusChanged(_)
+            | ServerNotification::ThreadArchived(_)
+            | ServerNotification::ThreadUnarchived(_)
+            | ServerNotification::RawResponseItemCompleted(_)
+            | ServerNotification::CommandExecOutputDelta(_)
+            | ServerNotification::McpToolCallProgress(_)
+            | ServerNotification::McpServerOauthLoginCompleted(_)
+            | ServerNotification::AppListUpdated(_)
+            | ServerNotification::ContextCompacted(_)
+            | ServerNotification::FuzzyFileSearchSessionUpdated(_)
+            | ServerNotification::FuzzyFileSearchSessionCompleted(_)
+            | ServerNotification::WindowsWorldWritableWarning(_)
+            | ServerNotification::WindowsSandboxSetupCompleted(_)
+            | ServerNotification::AccountLoginCompleted(_) => {}
+        }
+    }
+
+    pub(crate) fn handle_skills_list_response(&mut self, response: ListSkillsResponseEvent) {
+        self.on_list_skills(response);
+    }
+
+    pub(crate) fn handle_thread_rolled_back(&mut self) {
+        self.last_copyable_output = None;
+    }
+
+    fn on_mcp_server_elicitation_request(
+        &mut self,
+        request_id: codex_protocol::mcp::RequestId,
+        params: codex_app_server_protocol::McpServerElicitationRequestParams,
+    ) {
+        let request = codex_protocol::approvals::ElicitationRequestEvent {
+            turn_id: params.turn_id,
+            server_name: params.server_name,
+            id: request_id,
+            request: match params.request {
+                codex_app_server_protocol::McpServerElicitationRequest::Form {
+                    meta,
+                    message,
+                    requested_schema,
+                } => codex_protocol::approvals::ElicitationRequest::Form {
+                    meta,
+                    message,
+                    requested_schema: serde_json::to_value(requested_schema)
+                        .unwrap_or(serde_json::Value::Null),
+                },
+                codex_app_server_protocol::McpServerElicitationRequest::Url {
+                    meta,
+                    message,
+                    url,
+                    elicitation_id,
+                } => codex_protocol::approvals::ElicitationRequest::Url {
+                    meta,
+                    message,
+                    url,
+                    elicitation_id,
+                },
+            },
+        };
+        self.on_elicitation_request(request);
+    }
+
+    fn handle_turn_completed_notification(
+        &mut self,
+        notification: TurnCompletedNotification,
+        replay_kind: Option<ReplayKind>,
+    ) {
+        match notification.turn.status {
+            TurnStatus::Completed => {
+                self.last_non_retry_error = None;
+                self.on_task_complete(/*last_agent_message*/ None, replay_kind.is_some())
+            }
+            TurnStatus::Interrupted => {
+                self.last_non_retry_error = None;
+                self.on_interrupted_turn(TurnAbortReason::Interrupted);
+            }
+            TurnStatus::Failed => {
+                if let Some(error) = notification.turn.error {
+                    if self.last_non_retry_error.as_ref()
+                        == Some(&(notification.turn.id.clone(), error.message.clone()))
+                    {
+                        self.last_non_retry_error = None;
+                    } else {
+                        self.handle_non_retry_error(error.message, error.codex_error_info);
+                    }
+                } else {
+                    self.last_non_retry_error = None;
+                    self.finalize_turn();
+                    self.request_redraw();
+                    self.maybe_send_next_queued_input();
+                }
+            }
+            TurnStatus::InProgress => {}
+        }
+    }
+
+    fn handle_item_started_notification(&mut self, notification: ItemStartedNotification) {
+        match notification.item {
+            ThreadItem::CommandExecution {
+                id,
+                command,
+                cwd,
+                process_id,
+                command_actions,
+                ..
+            } => {
+                self.on_exec_command_begin(ExecCommandBeginEvent {
+                    call_id: id,
+                    process_id,
+                    turn_id: notification.turn_id,
+                    command: vec![command],
+                    cwd,
+                    parsed_cmd: command_actions
+                        .into_iter()
+                        .map(codex_app_server_protocol::CommandAction::into_core)
+                        .collect(),
+                    source: ExecCommandSource::Agent,
+                    interaction_input: None,
+                });
+            }
+            ThreadItem::FileChange { id, changes, .. } => {
+                self.on_patch_apply_begin(PatchApplyBeginEvent {
+                    call_id: id,
+                    turn_id: notification.turn_id,
+                    auto_approved: false,
+                    changes: app_server_patch_changes_to_core(changes),
+                });
+            }
+            ThreadItem::McpToolCall {
+                id,
+                server,
+                tool,
+                arguments,
+                ..
+            } => {
+                self.on_mcp_tool_call_begin(McpToolCallBeginEvent {
+                    call_id: id,
+                    invocation: codex_protocol::protocol::McpInvocation {
+                        server,
+                        tool,
+                        arguments: Some(arguments),
+                    },
+                });
+            }
+            ThreadItem::WebSearch { id, .. } => {
+                self.on_web_search_begin(WebSearchBeginEvent { call_id: id });
+            }
+            ThreadItem::ImageGeneration { id, .. } => {
+                self.on_image_generation_begin(ImageGenerationBeginEvent { call_id: id });
+            }
+            ThreadItem::CollabAgentToolCall {
+                id,
+                tool,
+                status,
+                sender_thread_id,
+                receiver_thread_ids,
+                prompt,
+                model,
+                reasoning_effort,
+                agents_states,
+            } => self.on_collab_agent_tool_call(ThreadItem::CollabAgentToolCall {
+                id,
+                tool,
+                status,
+                sender_thread_id,
+                receiver_thread_ids,
+                prompt,
+                model,
+                reasoning_effort,
+                agents_states,
+            }),
+            ThreadItem::EnteredReviewMode { review, .. } => {
+                self.add_to_history(history_cell::new_review_status_line(format!(
+                    ">> Code review started: {review} <<"
+                )));
+                self.is_review_mode = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_item_completed_notification(
+        &mut self,
+        notification: ItemCompletedNotification,
+        replay_kind: Option<ReplayKind>,
+    ) {
+        self.handle_thread_item(
+            notification.item,
+            notification.turn_id,
+            replay_kind.map_or(ThreadItemRenderSource::Live, ThreadItemRenderSource::Replay),
+        );
+    }
+
+    fn on_patch_apply_output_delta(&mut self, _item_id: String, _delta: String) {}
+
+    fn on_guardian_review_notification(
+        &mut self,
+        id: String,
+        turn_id: String,
+        review: codex_app_server_protocol::GuardianApprovalReview,
+        action: Option<serde_json::Value>,
+    ) {
+        self.on_guardian_assessment(GuardianAssessmentEvent {
+            id,
+            turn_id,
+            status: match review.status {
+                codex_app_server_protocol::GuardianApprovalReviewStatus::InProgress => {
+                    GuardianAssessmentStatus::InProgress
+                }
+                codex_app_server_protocol::GuardianApprovalReviewStatus::Approved => {
+                    GuardianAssessmentStatus::Approved
+                }
+                codex_app_server_protocol::GuardianApprovalReviewStatus::Denied => {
+                    GuardianAssessmentStatus::Denied
+                }
+                codex_app_server_protocol::GuardianApprovalReviewStatus::Aborted => {
+                    GuardianAssessmentStatus::Aborted
+                }
+            },
+            risk_score: review.risk_score,
+            risk_level: review.risk_level.map(|risk_level| match risk_level {
+                codex_app_server_protocol::GuardianRiskLevel::Low => {
+                    codex_protocol::protocol::GuardianRiskLevel::Low
+                }
+                codex_app_server_protocol::GuardianRiskLevel::Medium => {
+                    codex_protocol::protocol::GuardianRiskLevel::Medium
+                }
+                codex_app_server_protocol::GuardianRiskLevel::High => {
+                    codex_protocol::protocol::GuardianRiskLevel::High
+                }
+            }),
+            rationale: review.rationale,
+            action,
+        });
+    }
+
+    #[cfg(test)]
     fn replay_initial_messages(&mut self, events: Vec<EventMsg>) {
         for msg in events {
             if matches!(
@@ -5028,11 +6296,13 @@ impl ChatWidget {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
         self.dispatch_event_msg(Some(id), msg, /*replay_kind*/ None);
     }
 
+    #[cfg(test)]
     pub(crate) fn handle_codex_event_replay(&mut self, event: Event) {
         let Event { msg, .. } = event;
         if matches!(msg, EventMsg::ShutdownComplete) {
@@ -5046,6 +6316,7 @@ impl ChatWidget {
     /// `id` is `Some` for live events and `None` for replayed events from
     /// `replay_initial_messages()`. Callers should treat `None` as a "fake" id
     /// that must not be used to correlate follow-up actions.
+    #[cfg(test)]
     fn dispatch_event_msg(
         &mut self,
         id: Option<String>,
@@ -5121,7 +6392,7 @@ impl ChatWidget {
                 codex_error_info,
             }) => {
                 if let Some(info) = codex_error_info
-                    && let Some(kind) = rate_limit_error_kind(&info)
+                    && let Some(kind) = core_rate_limit_error_kind(&info)
                 {
                     match kind {
                         RateLimitErrorKind::ServerOverloaded => {
@@ -5181,7 +6452,7 @@ impl ChatWidget {
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
             EventMsg::WebSearchBegin(ev) => self.on_web_search_begin(ev),
             EventMsg::WebSearchEnd(ev) => self.on_web_search_end(ev),
-            EventMsg::GetHistoryEntryResponse(ev) => self.on_get_history_entry_response(ev),
+            EventMsg::GetHistoryEntryResponse(ev) => self.handle_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListCustomPromptsResponse(_) => {
                 tracing::warn!(
@@ -5189,7 +6460,6 @@ impl ChatWidget {
                 );
             }
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
-            EventMsg::ListRemoteSkillsResponse(_) | EventMsg::RemoteSkillDownloaded(_) => {}
             EventMsg::SkillsUpdateAvailable => {
                 self.submit_op(AppCommand::list_skills(
                     Vec::new(),
@@ -5340,6 +6610,7 @@ impl ChatWidget {
         }
     }
 
+    #[cfg(test)]
     fn on_entered_review_mode(&mut self, review: ReviewRequest, from_replay: bool) {
         // Enter review mode and emit a concise banner
         if self.pre_review_token_info.is_none() {
@@ -5358,6 +6629,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[cfg(test)]
     fn on_exited_review_mode(&mut self, review: ExitedReviewModeEvent) {
         // Leave review mode; if output is present, flush pending stream + show results.
         if let Some(output) = review.review_output {
@@ -6178,7 +7450,7 @@ impl ChatWidget {
         });
     }
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn open_realtime_audio_device_selection(&mut self, kind: RealtimeAudioDeviceKind) {
         match list_realtime_audio_device_names(kind) {
             Ok(device_names) => {
@@ -6193,12 +7465,12 @@ impl ChatWidget {
         }
     }
 
-    #[cfg(any(target_os = "linux", not(feature = "voice-input")))]
+    #[cfg(target_os = "linux")]
     pub(crate) fn open_realtime_audio_device_selection(&mut self, kind: RealtimeAudioDeviceKind) {
         let _ = kind;
     }
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     fn open_realtime_audio_device_selection_with_names(
         &mut self,
         kind: RealtimeAudioDeviceKind,
@@ -7676,7 +8948,6 @@ impl ChatWidget {
                 self.request_realtime_conversation_close(Some(
                     "Realtime voice mode was closed because the feature was disabled.".to_string(),
                 ));
-                self.reset_realtime_conversation_state();
             }
         }
         if feature == Feature::FastMode {
@@ -7891,7 +9162,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn realtime_conversation_is_live(&self) -> bool {
-        self.realtime_conversation.is_active()
+        self.realtime_conversation.is_live()
     }
 
     fn current_realtime_audio_device_name(&self, kind: RealtimeAudioDeviceKind) -> Option<String> {
@@ -8223,6 +9494,10 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn add_warning_message(&mut self, message: String) {
+        self.on_warning(message);
+    }
+
     fn add_app_server_stub_message(&mut self, feature: &str) {
         warn!(feature, "stubbed unsupported app-server TUI feature");
         self.add_error_message(format!("{feature}: {APP_SERVER_TUI_STUB_MESSAGE}"));
@@ -8510,10 +9785,20 @@ impl ChatWidget {
     /// pane. If cancellable work is active, Ctrl+C also submits `Op::Interrupt` after the shortcut
     /// is armed.
     ///
+    /// Active realtime conversations take precedence over bottom-pane Ctrl+C handling so the
+    /// first press always stops live voice, even when the composer contains the recording meter.
+    ///
     /// If the same quit shortcut is pressed again before expiry, this requests a shutdown-first
     /// quit.
     fn on_ctrl_c(&mut self) {
         let key = key_hint::ctrl(KeyCode::Char('c'));
+        if self.realtime_conversation.is_live() {
+            self.bottom_pane.clear_quit_shortcut_hint();
+            self.quit_shortcut_expires_at = None;
+            self.quit_shortcut_key = None;
+            self.request_realtime_conversation_close(/*info_message*/ None);
+            return;
+        }
         let modal_or_popup_active = !self.bottom_pane.no_modal_or_popup_active();
         if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
             if DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
@@ -8614,6 +9899,11 @@ impl ChatWidget {
 
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.bottom_pane.composer_is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_task_running_for_test(&self) -> bool {
+        self.bottom_pane.is_task_running()
     }
 
     pub(crate) fn submit_user_message_with_mode(
@@ -8734,6 +10024,7 @@ impl ChatWidget {
         true
     }
 
+    #[cfg(test)]
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
         self.add_to_history(history_cell::new_mcp_tools_output(
             &self.config,
@@ -9113,6 +10404,13 @@ impl ChatWidget {
     }
 
     pub(crate) fn remove_transcription_placeholder(&mut self, id: &str) {
+        #[cfg(not(target_os = "linux"))]
+        if self.realtime_conversation.is_live()
+            && self.realtime_conversation.meter_placeholder_id.as_deref() == Some(id)
+        {
+            self.realtime_conversation.meter_placeholder_id = None;
+            self.request_realtime_conversation_close(/*info_message*/ None);
+        }
         self.bottom_pane.remove_transcription_placeholder(id);
         // Ensure the UI redraws to reflect placeholder removal.
         self.request_redraw();
@@ -9323,6 +10621,7 @@ fn extract_first_bold(s: &str) -> Option<String> {
 fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {
     match event_name {
         codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
+        codex_protocol::protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
         codex_protocol::protocol::HookEventName::Stop => "Stop",
     }
 }

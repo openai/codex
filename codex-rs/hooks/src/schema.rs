@@ -15,6 +15,8 @@ use std::path::PathBuf;
 const GENERATED_DIR: &str = "generated";
 const SESSION_START_INPUT_FIXTURE: &str = "session-start.command.input.schema.json";
 const SESSION_START_OUTPUT_FIXTURE: &str = "session-start.command.output.schema.json";
+const USER_PROMPT_SUBMIT_INPUT_FIXTURE: &str = "user-prompt-submit.command.input.schema.json";
+const USER_PROMPT_SUBMIT_OUTPUT_FIXTURE: &str = "user-prompt-submit.command.output.schema.json";
 const STOP_INPUT_FIXTURE: &str = "stop.command.input.schema.json";
 const STOP_OUTPUT_FIXTURE: &str = "stop.command.output.schema.json";
 
@@ -23,11 +25,11 @@ const STOP_OUTPUT_FIXTURE: &str = "stop.command.output.schema.json";
 pub(crate) struct NullableString(Option<String>);
 
 impl NullableString {
-    fn from_path(path: Option<PathBuf>) -> Self {
+    pub(crate) fn from_path(path: Option<PathBuf>) -> Self {
         Self(path.map(|path| path.display().to_string()))
     }
 
-    fn from_string(value: Option<String>) -> Self {
+    pub(crate) fn from_string(value: Option<String>) -> Self {
         Self(value)
     }
 }
@@ -63,6 +65,8 @@ pub(crate) struct HookUniversalOutputWire {
 pub(crate) enum HookEventNameWire {
     #[serde(rename = "SessionStart")]
     SessionStart,
+    #[serde(rename = "UserPromptSubmit")]
+    UserPromptSubmit,
     #[serde(rename = "Stop")]
     Stop,
 }
@@ -90,12 +94,36 @@ pub(crate) struct SessionStartHookSpecificOutputWire {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "user-prompt-submit.command.output")]
+pub(crate) struct UserPromptSubmitCommandOutputWire {
+    #[serde(flatten)]
+    pub universal: HookUniversalOutputWire,
+    #[serde(default)]
+    pub decision: Option<BlockDecisionWire>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub hook_specific_output: Option<UserPromptSubmitHookSpecificOutputWire>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UserPromptSubmitHookSpecificOutputWire {
+    pub hook_event_name: HookEventNameWire,
+    #[serde(default)]
+    pub additional_context: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 #[schemars(rename = "stop.command.output")]
 pub(crate) struct StopCommandOutputWire {
     #[serde(flatten)]
     pub universal: HookUniversalOutputWire,
     #[serde(default)]
-    pub decision: Option<StopDecisionWire>,
+    pub decision: Option<BlockDecisionWire>,
     /// Claude requires `reason` when `decision` is `block`; we enforce that
     /// semantic rule during output parsing rather than in the JSON schema.
     #[serde(default)]
@@ -103,7 +131,7 @@ pub(crate) struct StopCommandOutputWire {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-pub(crate) enum StopDecisionWire {
+pub(crate) enum BlockDecisionWire {
     #[serde(rename = "block")]
     Block,
 }
@@ -147,9 +175,28 @@ impl SessionStartCommandInput {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "user-prompt-submit.command.input")]
+pub(crate) struct UserPromptSubmitCommandInput {
+    pub session_id: String,
+    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
+    pub turn_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "user_prompt_submit_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    pub prompt: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 #[schemars(rename = "stop.command.input")]
 pub(crate) struct StopCommandInput {
     pub session_id: String,
+    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
+    pub turn_id: String,
     pub transcript_path: NullableString,
     pub cwd: String,
     #[schemars(schema_with = "stop_hook_event_name_schema")]
@@ -159,29 +206,6 @@ pub(crate) struct StopCommandInput {
     pub permission_mode: String,
     pub stop_hook_active: bool,
     pub last_assistant_message: NullableString,
-}
-
-impl StopCommandInput {
-    pub(crate) fn new(
-        session_id: impl Into<String>,
-        transcript_path: Option<PathBuf>,
-        cwd: impl Into<String>,
-        model: impl Into<String>,
-        permission_mode: impl Into<String>,
-        stop_hook_active: bool,
-        last_assistant_message: Option<String>,
-    ) -> Self {
-        Self {
-            session_id: session_id.into(),
-            transcript_path: NullableString::from_path(transcript_path),
-            cwd: cwd.into(),
-            hook_event_name: "Stop".to_string(),
-            model: model.into(),
-            permission_mode: permission_mode.into(),
-            stop_hook_active,
-            last_assistant_message: NullableString::from_string(last_assistant_message),
-        }
-    }
 }
 
 pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
@@ -195,6 +219,14 @@ pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
     write_schema(
         &generated_dir.join(SESSION_START_OUTPUT_FIXTURE),
         schema_json::<SessionStartCommandOutputWire>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(USER_PROMPT_SUBMIT_INPUT_FIXTURE),
+        schema_json::<UserPromptSubmitCommandInput>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(USER_PROMPT_SUBMIT_OUTPUT_FIXTURE),
+        schema_json::<UserPromptSubmitCommandOutputWire>()?,
     )?;
     write_schema(
         &generated_dir.join(STOP_INPUT_FIXTURE),
@@ -263,6 +295,10 @@ fn session_start_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("SessionStart")
 }
 
+fn user_prompt_submit_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("UserPromptSubmit")
+}
+
 fn stop_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("Stop")
 }
@@ -314,8 +350,14 @@ mod tests {
     use super::SESSION_START_OUTPUT_FIXTURE;
     use super::STOP_INPUT_FIXTURE;
     use super::STOP_OUTPUT_FIXTURE;
+    use super::StopCommandInput;
+    use super::USER_PROMPT_SUBMIT_INPUT_FIXTURE;
+    use super::USER_PROMPT_SUBMIT_OUTPUT_FIXTURE;
+    use super::UserPromptSubmitCommandInput;
+    use super::schema_json;
     use super::write_schema_fixtures;
     use pretty_assertions::assert_eq;
+    use serde_json::Value;
     use tempfile::TempDir;
 
     fn expected_fixture(name: &str) -> &'static str {
@@ -325,6 +367,12 @@ mod tests {
             }
             SESSION_START_OUTPUT_FIXTURE => {
                 include_str!("../schema/generated/session-start.command.output.schema.json")
+            }
+            USER_PROMPT_SUBMIT_INPUT_FIXTURE => {
+                include_str!("../schema/generated/user-prompt-submit.command.input.schema.json")
+            }
+            USER_PROMPT_SUBMIT_OUTPUT_FIXTURE => {
+                include_str!("../schema/generated/user-prompt-submit.command.output.schema.json")
             }
             STOP_INPUT_FIXTURE => {
                 include_str!("../schema/generated/stop.command.input.schema.json")
@@ -349,6 +397,8 @@ mod tests {
         for fixture in [
             SESSION_START_INPUT_FIXTURE,
             SESSION_START_OUTPUT_FIXTURE,
+            USER_PROMPT_SUBMIT_INPUT_FIXTURE,
+            USER_PROMPT_SUBMIT_OUTPUT_FIXTURE,
             STOP_INPUT_FIXTURE,
             STOP_OUTPUT_FIXTURE,
         ] {
@@ -357,6 +407,31 @@ mod tests {
                 .unwrap_or_else(|err| panic!("read generated schema {fixture}: {err}"));
             let actual = normalize_newlines(&actual);
             assert_eq!(expected, actual, "fixture should match generated schema");
+        }
+    }
+
+    #[test]
+    fn turn_scoped_hook_inputs_include_codex_turn_id_extension() {
+        // Codex intentionally diverges from Claude's public hook docs here so
+        // internal hook consumers can key off the active turn.
+        let user_prompt_submit: Value = serde_json::from_slice(
+            &schema_json::<UserPromptSubmitCommandInput>()
+                .expect("serialize user prompt submit input schema"),
+        )
+        .expect("parse user prompt submit input schema");
+        let stop: Value = serde_json::from_slice(
+            &schema_json::<StopCommandInput>().expect("serialize stop input schema"),
+        )
+        .expect("parse stop input schema");
+
+        for schema in [&user_prompt_submit, &stop] {
+            assert_eq!(schema["properties"]["turn_id"]["type"], "string");
+            assert!(
+                schema["required"]
+                    .as_array()
+                    .expect("schema required fields")
+                    .contains(&Value::String("turn_id".to_string()))
+            );
         }
     }
 }

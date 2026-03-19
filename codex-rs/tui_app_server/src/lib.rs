@@ -47,6 +47,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::TurnContextItem;
 use codex_state::log_db;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_oss::ensure_oss_provider_ready;
@@ -78,6 +79,19 @@ mod app_server_session;
 mod ascii_animation;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 mod audio_device;
+#[cfg(all(not(target_os = "linux"), not(feature = "voice-input")))]
+mod audio_device {
+    use crate::app_event::RealtimeAudioDeviceKind;
+
+    pub(crate) fn list_realtime_audio_device_names(
+        kind: RealtimeAudioDeviceKind,
+    ) -> Result<Vec<String>, String> {
+        Err(format!(
+            "Failed to load realtime {} devices: voice input is unavailable in this build",
+            kind.noun()
+        ))
+    }
+}
 mod bottom_pane;
 mod chatwidget;
 mod cli;
@@ -1342,7 +1356,7 @@ pub(crate) async fn read_session_cwd(
     // changes, but the rollout is an append-only JSONL log and rewriting the head
     // would be error-prone.
     let path = path?;
-    if let Some(cwd) = parse_latest_turn_context_cwd(path).await {
+    if let Some(cwd) = read_latest_turn_context(path).await.map(|item| item.cwd) {
         return Some(cwd);
     }
     match read_session_meta_line(path).await {
@@ -1359,7 +1373,23 @@ pub(crate) async fn read_session_cwd(
     }
 }
 
-async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
+pub(crate) async fn read_session_model(
+    config: &Config,
+    thread_id: ThreadId,
+    path: Option<&Path>,
+) -> Option<String> {
+    if let Some(state_db_ctx) = get_state_db(config).await
+        && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
+        && let Some(model) = metadata.model
+    {
+        return Some(model);
+    }
+
+    let path = path?;
+    read_latest_turn_context(path).await.map(|item| item.model)
+}
+
+async fn read_latest_turn_context(path: &Path) -> Option<TurnContextItem> {
     let text = tokio::fs::read_to_string(path).await.ok()?;
     for line in text.lines().rev() {
         let trimmed = line.trim();
@@ -1370,7 +1400,7 @@ async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
             continue;
         };
         if let RolloutItem::TurnContext(item) = rollout_line.item {
-            return Some(item.cwd);
+            return Some(item);
         }
     }
     None

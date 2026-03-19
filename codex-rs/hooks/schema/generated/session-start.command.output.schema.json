@@ -5,6 +5,7 @@
     "HookEventNameWire": {
       "enum": [
         "SessionStart",
+        "UserPromptSubmit",
         "Stop"
       ],
       "type": "string"

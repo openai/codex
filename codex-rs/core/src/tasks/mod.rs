@@ -23,7 +23,10 @@ use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::contextual_user_message::TURN_ABORTED_OPEN_TAG;
-use crate::event_mapping::parse_turn_item;
+use crate::hook_runtime::PendingInputHookDisposition;
+use crate::hook_runtime::inspect_pending_input;
+use crate::hook_runtime::record_additional_contexts;
+use crate::hook_runtime::record_pending_input;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
 use crate::protocol::TokenUsage;
@@ -38,7 +41,6 @@ use codex_otel::metrics::names::TURN_E2E_DURATION_METRIC;
 use codex_otel::metrics::names::TURN_NETWORK_PROXY_METRIC;
 use codex_otel::metrics::names::TURN_TOKEN_USAGE_METRIC;
 use codex_otel::metrics::names::TURN_TOOL_CALL_METRIC;
-use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -151,6 +153,8 @@ impl Session {
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
+        self.sync_mcp_request_headers_for_turn(turn_context.as_ref())
+            .await;
 
         let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();
@@ -231,6 +235,7 @@ impl Session {
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             active_turn.clear_pending().await;
         }
+        self.clear_mcp_request_headers().await;
     }
 
     pub async fn on_task_finished(
@@ -260,28 +265,20 @@ impl Session {
             *active = None;
         }
         drop(active);
+        if should_clear_active_turn {
+            self.clear_mcp_request_headers().await;
+        }
         if !pending_input.is_empty() {
-            let pending_response_items = pending_input
-                .into_iter()
-                .map(ResponseItem::from)
-                .collect::<Vec<_>>();
-            for response_item in pending_response_items {
-                if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
-                    // Keep leftover user input on the same persistence + lifecycle path as the
-                    // normal pre-sampling drain. This helper records the response item once, then
-                    // emits ItemStarted/UserMessage and ItemCompleted/UserMessage for clients.
-                    self.record_user_prompt_and_emit_turn_item(
-                        turn_context.as_ref(),
-                        &user_message.content,
-                        response_item,
-                    )
-                    .await;
-                } else {
-                    self.record_conversation_items(
-                        turn_context.as_ref(),
-                        std::slice::from_ref(&response_item),
-                    )
-                    .await;
+            for pending_input_item in pending_input {
+                match inspect_pending_input(self, &turn_context, pending_input_item).await {
+                    PendingInputHookDisposition::Accepted(pending_input) => {
+                        record_pending_input(self, &turn_context, *pending_input).await;
+                    }
+                    PendingInputHookDisposition::Blocked {
+                        additional_contexts,
+                    } => {
+                        record_additional_contexts(self, &turn_context, additional_contexts).await;
+                    }
                 }
             }
         }

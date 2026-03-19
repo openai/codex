@@ -1,6 +1,5 @@
 use super::load_plugin_manifest;
 use super::manifest::PLUGIN_MANIFEST_PATH;
-use super::plugin_manifest_name;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::fs;
 use std::io;
@@ -211,7 +210,7 @@ fn plugin_name_for_source(source_path: &Path) -> Result<String, PluginStoreError
         ))
     })?;
 
-    let plugin_name = plugin_manifest_name(&manifest, source_path);
+    let plugin_name = manifest.name;
     validate_plugin_segment(&plugin_name, "plugin name")
         .map_err(PluginStoreError::Invalid)
         .map(|_| plugin_name)

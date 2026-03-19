@@ -30,6 +30,8 @@ use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::Resource as McpResource;
 use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
 use codex_protocol::mcp::Tool as McpTool;
+use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
+use codex_protocol::memory_citation::MemoryCitationEntry as CoreMemoryCitationEntry;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
 use codex_protocol::models::MacOsAutomationPermission as CoreMacOsAutomationPermission;
 use codex_protocol::models::MacOsContactsPermission as CoreMacOsContactsPermission;
@@ -68,6 +70,7 @@ use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
+use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
@@ -342,7 +345,7 @@ v2_enum_from_core!(
 
 v2_enum_from_core!(
     pub enum HookEventName from CoreHookEventName {
-        SessionStart, Stop
+        SessionStart, UserPromptSubmit, Stop
     }
 );
 
@@ -3090,6 +3093,8 @@ pub struct PluginListParams {
 pub struct PluginListResponse {
     pub marketplaces: Vec<PluginMarketplaceEntry>,
     pub remote_sync_error: Option<String>,
+    #[serde(default)]
+    pub featured_plugin_ids: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3105,73 +3110,6 @@ pub struct PluginReadParams {
 #[ts(export_to = "v2/")]
 pub struct PluginReadResponse {
     pub plugin: PluginDetail,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SkillsRemoteReadParams {
-    #[serde(default)]
-    pub hazelnut_scope: HazelnutScope,
-    #[serde(default)]
-    pub product_surface: ProductSurface,
-    #[serde(default)]
-    pub enabled: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS, Default)]
-#[serde(rename_all = "kebab-case")]
-#[ts(rename_all = "kebab-case")]
-#[ts(export_to = "v2/")]
-pub enum HazelnutScope {
-    #[default]
-    Example,
-    WorkspaceShared,
-    AllShared,
-    Personal,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS, Default)]
-#[serde(rename_all = "camelCase")]
-#[ts(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum ProductSurface {
-    Chatgpt,
-    #[default]
-    Codex,
-    Api,
-    Atlas,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct RemoteSkillSummary {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SkillsRemoteReadResponse {
-    pub data: Vec<RemoteSkillSummary>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SkillsRemoteWriteParams {
-    pub hazelnut_id: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct SkillsRemoteWriteResponse {
-    pub id: String,
-    pub path: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -3634,6 +3572,44 @@ pub struct Turn {
     pub error: Option<TurnError>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MemoryCitation {
+    pub entries: Vec<MemoryCitationEntry>,
+    pub thread_ids: Vec<String>,
+}
+
+impl From<CoreMemoryCitation> for MemoryCitation {
+    fn from(value: CoreMemoryCitation) -> Self {
+        Self {
+            entries: value.entries.into_iter().map(Into::into).collect(),
+            thread_ids: value.rollout_ids,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MemoryCitationEntry {
+    pub path: String,
+    pub line_start: u32,
+    pub line_end: u32,
+    pub note: String,
+}
+
+impl From<CoreMemoryCitationEntry> for MemoryCitationEntry {
+    fn from(value: CoreMemoryCitationEntry) -> Self {
+        Self {
+            path: value.path,
+            line_start: value.line_start,
+            line_end: value.line_end,
+            note: value.note,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, Error)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -3775,6 +3751,7 @@ pub struct ThreadRealtimeStopResponse {}
 pub struct ThreadRealtimeStartedNotification {
     pub thread_id: String,
     pub session_id: Option<String>,
+    pub version: RealtimeConversationVersion,
 }
 
 /// EXPERIMENTAL - raw non-audio thread realtime item emitted by the backend.
@@ -4139,6 +4116,8 @@ pub enum ThreadItem {
         text: String,
         #[serde(default)]
         phase: Option<MessagePhase>,
+        #[serde(default)]
+        memory_citation: Option<MemoryCitation>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4405,6 +4384,7 @@ impl From<CoreTurnItem> for ThreadItem {
                     id: agent.id,
                     text,
                     phase: agent.phase,
+                    memory_citation: agent.memory_citation.map(Into::into),
                 }
             }
             CoreTurnItem::Plan(plan) => ThreadItem::Plan {
@@ -7490,6 +7470,7 @@ mod tests {
                 },
             ],
             phase: None,
+            memory_citation: None,
         });
 
         assert_eq!(
@@ -7498,6 +7479,7 @@ mod tests {
                 id: "agent-1".to_string(),
                 text: "Hello world".to_string(),
                 phase: None,
+                memory_citation: None,
             }
         );
 
@@ -7507,6 +7489,15 @@ mod tests {
                 text: "final".to_string(),
             }],
             phase: Some(MessagePhase::FinalAnswer),
+            memory_citation: Some(CoreMemoryCitation {
+                entries: vec![CoreMemoryCitationEntry {
+                    path: "MEMORY.md".to_string(),
+                    line_start: 1,
+                    line_end: 2,
+                    note: "summary".to_string(),
+                }],
+                rollout_ids: vec!["rollout-1".to_string()],
+            }),
         });
 
         assert_eq!(
@@ -7515,6 +7506,15 @@ mod tests {
                 id: "agent-2".to_string(),
                 text: "final".to_string(),
                 phase: Some(MessagePhase::FinalAnswer),
+                memory_citation: Some(MemoryCitation {
+                    entries: vec![MemoryCitationEntry {
+                        path: "MEMORY.md".to_string(),
+                        line_start: 1,
+                        line_end: 2,
+                        note: "summary".to_string(),
+                    }],
+                    thread_ids: vec!["rollout-1".to_string()],
+                }),
             }
         );
 

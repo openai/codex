@@ -1427,6 +1427,7 @@ dependencies = [
  "codex-chatgpt",
  "codex-cloud-requirements",
  "codex-core",
+ "codex-environment",
  "codex-feedback",
  "codex-file-search",
  "codex-login",
@@ -1462,7 +1463,6 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
- "walkdir",
  "wiremock",
 ]
 
@@ -1570,11 +1570,13 @@ name = "codex-artifacts"
 version = "0.0.0"
 dependencies = [
  "codex-package-manager",
+ "flate2",
  "pretty_assertions",
  "reqwest",
  "serde",
  "serde_json",
  "sha2",
+ "tar",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -1841,6 +1843,7 @@ dependencies = [
  "codex-client",
  "codex-config",
  "codex-connectors",
+ "codex-environment",
  "codex-execpolicy",
  "codex-file-search",
  "codex-git",
@@ -1945,6 +1948,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-environment"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "codex-utils-absolute-path",
+ "pretty_assertions",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "codex-exec"
 version = "0.0.0"
 dependencies = [
@@ -1987,6 +2001,24 @@ dependencies = [
  "uuid",
  "walkdir",
  "wiremock",
+]
+
+[[package]]
+name = "codex-exec-server"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-app-server-protocol",
+ "codex-utils-cargo-bin",
+ "futures",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
 ]
 
 [[package]]
@@ -2313,7 +2345,6 @@ dependencies = [
  "icu_decimal",
  "icu_locale_core",
  "icu_provider",
- "mime_guess",
  "pretty_assertions",
  "quick-xml",
  "schemars 0.8.22",
@@ -2745,7 +2776,7 @@ dependencies = [
  "base64 0.22.1",
  "codex-utils-cache",
  "image",
- "tempfile",
+ "mime_guess",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -3056,6 +3087,8 @@ dependencies = [
  "ctor 0.6.3",
  "futures",
  "notify",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "pretty_assertions",
  "regex-lite",
  "reqwest",
@@ -3064,6 +3097,9 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-tungstenite",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
  "walkdir",
  "wiremock",
  "zstd",

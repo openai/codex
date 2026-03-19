@@ -261,21 +261,22 @@ async fn plugin_install_tracks_analytics_event() -> Result<()> {
     let response: PluginInstallResponse = to_response(response)?;
     assert_eq!(response.apps_needing_auth, Vec::<AppSummary>::new());
 
-    let payloads = timeout(DEFAULT_TIMEOUT, async {
+    let payload = timeout(DEFAULT_TIMEOUT, async {
         loop {
             let Some(requests) = analytics_server.received_requests().await else {
                 tokio::time::sleep(Duration::from_millis(25)).await;
                 continue;
             };
-            if !requests.is_empty() {
-                break requests;
+            if let Some(request) = requests.iter().find(|request| {
+                request.method == "POST" && request.url.path() == "/codex/analytics-events/events"
+            }) {
+                break request.body.clone();
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     })
     .await?;
-    let payload: serde_json::Value =
-        serde_json::from_slice(&payloads[0].body).expect("analytics payload");
+    let payload: serde_json::Value = serde_json::from_slice(&payload).expect("analytics payload");
     assert_eq!(
         payload,
         json!({
@@ -655,12 +656,24 @@ fn write_plugin_marketplace(
     install_policy: Option<&str>,
     auth_policy: Option<&str>,
 ) -> std::io::Result<()> {
-    let install_policy = install_policy
-        .map(|install_policy| format!(",\n      \"installPolicy\": \"{install_policy}\""))
-        .unwrap_or_default();
-    let auth_policy = auth_policy
-        .map(|auth_policy| format!(",\n      \"authPolicy\": \"{auth_policy}\""))
-        .unwrap_or_default();
+    let policy = if install_policy.is_some() || auth_policy.is_some() {
+        let installation = install_policy
+            .map(|installation| format!("\n        \"installation\": \"{installation}\""))
+            .unwrap_or_default();
+        let separator = if install_policy.is_some() && auth_policy.is_some() {
+            ","
+        } else {
+            ""
+        };
+        let authentication = auth_policy
+            .map(|authentication| {
+                format!("{separator}\n        \"authentication\": \"{authentication}\"")
+            })
+            .unwrap_or_default();
+        format!(",\n      \"policy\": {{{installation}{authentication}\n      }}")
+    } else {
+        String::new()
+    };
     std::fs::create_dir_all(repo_root.join(".git"))?;
     std::fs::create_dir_all(repo_root.join(".agents/plugins"))?;
     std::fs::write(
@@ -674,7 +687,7 @@ fn write_plugin_marketplace(
       "source": {{
         "source": "local",
         "path": "{source_path}"
-      }}{install_policy}{auth_policy}
+      }}{policy}
     }}
   ]
 }}"#

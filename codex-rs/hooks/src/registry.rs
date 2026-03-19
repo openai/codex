@@ -7,6 +7,8 @@ use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
 use crate::events::stop::StopOutcome;
 use crate::events::stop::StopRequest;
+use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
+use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 use crate::types::Hook;
 use crate::types::HookEvent;
 use crate::types::HookPayload;
@@ -96,6 +98,20 @@ impl Hooks {
         turn_id: Option<String>,
     ) -> SessionStartOutcome {
         self.engine.run_session_start(request, turn_id).await
+    }
+
+    pub fn preview_user_prompt_submit(
+        &self,
+        request: &UserPromptSubmitRequest,
+    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
+        self.engine.preview_user_prompt_submit(request)
+    }
+
+    pub async fn run_user_prompt_submit(
+        &self,
+        request: UserPromptSubmitRequest,
+    ) -> UserPromptSubmitOutcome {
+        self.engine.run_user_prompt_submit(request).await
     }
 
     pub fn preview_stop(

@@ -22,9 +22,11 @@ members = [
     "shell-escalation",
     "skills",
     "core",
+    "environment",
     "hooks",
     "secrets",
     "exec",
+    "exec-server",
     "execpolicy",
     "execpolicy-legacy",
     "keyring-store",
@@ -103,6 +105,7 @@ codex-cloud-requirements = { path = "cloud-requirements" }
 codex-connectors = { path = "connectors" }
 codex-config = { path = "config" }
 codex-core = { path = "core" }
+codex-environment = { path = "environment" }
 codex-exec = { path = "exec" }
 codex-execpolicy = { path = "execpolicy" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }

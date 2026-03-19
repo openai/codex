@@ -980,6 +980,33 @@ fn first_party_chat_originator_filters_target_and_openai_prefixed_connectors() {
     );
 }
 
+#[tokio::test]
+async fn tool_suggest_connector_ids_include_configured_tool_suggest_discoverables() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[tool_suggest]
+discoverables = [
+  { type = "connector", id = "connector_2128aebfecb84f64a069897515042a44" },
+  { type = "plugin", id = "slack@openai-curated" },
+  { type = "connector", id = "   " }
+]
+"#,
+    )
+    .expect("write config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should load");
+
+    assert_eq!(
+        tool_suggest_connector_ids(&config),
+        HashSet::from(["connector_2128aebfecb84f64a069897515042a44".to_string()])
+    );
+}
+
 #[test]
 fn filter_tool_suggest_discoverable_connectors_keeps_only_plugin_backed_uninstalled_apps() {
     let filtered = filter_tool_suggest_discoverable_connectors(

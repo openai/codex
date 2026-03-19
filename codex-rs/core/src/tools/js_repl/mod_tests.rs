@@ -376,6 +376,7 @@ fn validate_emitted_image_url_rejects_non_data_scheme() {
 fn summarize_tool_call_response_for_multimodal_custom_output() {
     let response = ResponseInputItem::CustomToolCallOutput {
         call_id: "call-1".to_string(),
+        name: None,
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,abcd".to_string(),

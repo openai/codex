@@ -270,6 +270,10 @@ impl ThreadManager {
         self.state.session_source.clone()
     }
 
+    pub fn auth_manager(&self) -> Arc<AuthManager> {
+        self.state.auth_manager.clone()
+    }
+
     pub fn skills_manager(&self) -> Arc<SkillsManager> {
         self.state.skills_manager.clone()
     }
@@ -610,10 +614,12 @@ impl ThreadManagerState {
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
             /*inherited_shell_snapshot*/ None,
+            /*inherited_exec_policy*/ None,
         ))
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn_new_thread_with_source(
         &self,
         config: Config,
@@ -622,6 +628,7 @@ impl ThreadManagerState {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -633,6 +640,7 @@ impl ThreadManagerState {
             persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,
+            inherited_exec_policy,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
@@ -646,6 +654,7 @@ impl ThreadManagerState {
         agent_control: AgentControl,
         session_source: SessionSource,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
         Box::pin(self.spawn_thread_with_source(
@@ -658,12 +667,14 @@ impl ThreadManagerState {
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
+            inherited_exec_policy,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn fork_thread_with_source(
         &self,
         config: Config,
@@ -672,6 +683,7 @@ impl ThreadManagerState {
         session_source: SessionSource,
         persist_extended_history: bool,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -683,6 +695,7 @@ impl ThreadManagerState {
             persist_extended_history,
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
+            inherited_exec_policy,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
@@ -713,6 +726,7 @@ impl ThreadManagerState {
             persist_extended_history,
             metrics_service_name,
             /*inherited_shell_snapshot*/ None,
+            /*inherited_exec_policy*/ None,
             parent_trace,
             user_shell_override,
         ))
@@ -731,6 +745,7 @@ impl ThreadManagerState {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
@@ -754,6 +769,7 @@ impl ThreadManagerState {
             persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,
+            inherited_exec_policy,
             user_shell_override,
             parent_trace,
         })

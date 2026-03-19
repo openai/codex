@@ -39,7 +39,7 @@ use std::time::Instant;
 
 use self::realtime::PendingSteerCompareKey;
 use crate::app_event::RealtimeAudioDeviceKind;
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLinePreviewData;
@@ -1079,7 +1079,7 @@ impl ChatWidget {
     }
 
     fn realtime_audio_device_selection_enabled(&self) -> bool {
-        self.realtime_conversation_enabled() && cfg!(feature = "voice-input")
+        self.realtime_conversation_enabled()
     }
 
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
@@ -5354,7 +5354,6 @@ impl ChatWidget {
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
-            EventMsg::ListRemoteSkillsResponse(_) | EventMsg::RemoteSkillDownloaded(_) => {}
             EventMsg::SkillsUpdateAvailable => {
                 self.submit_op(Op::ListSkills {
                     cwds: Vec::new(),
@@ -6371,7 +6370,7 @@ impl ChatWidget {
         });
     }
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn open_realtime_audio_device_selection(&mut self, kind: RealtimeAudioDeviceKind) {
         match list_realtime_audio_device_names(kind) {
             Ok(device_names) => {
@@ -6386,12 +6385,12 @@ impl ChatWidget {
         }
     }
 
-    #[cfg(any(target_os = "linux", not(feature = "voice-input")))]
+    #[cfg(target_os = "linux")]
     pub(crate) fn open_realtime_audio_device_selection(&mut self, kind: RealtimeAudioDeviceKind) {
         let _ = kind;
     }
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     fn open_realtime_audio_device_selection_with_names(
         &mut self,
         kind: RealtimeAudioDeviceKind,
@@ -7866,7 +7865,6 @@ impl ChatWidget {
                 self.request_realtime_conversation_close(Some(
                     "Realtime voice mode was closed because the feature was disabled.".to_string(),
                 ));
-                self.reset_realtime_conversation_state();
             }
         }
         if feature == Feature::FastMode {
@@ -8053,7 +8051,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn realtime_conversation_is_live(&self) -> bool {
-        self.realtime_conversation.is_active()
+        self.realtime_conversation.is_live()
     }
 
     fn current_realtime_audio_device_name(&self, kind: RealtimeAudioDeviceKind) -> Option<String> {
@@ -8648,10 +8646,20 @@ impl ChatWidget {
     /// pane. If cancellable work is active, Ctrl+C also submits `Op::Interrupt` after the shortcut
     /// is armed; this interrupts the turn but intentionally preserves background terminals.
     ///
+    /// Active realtime conversations take precedence over bottom-pane Ctrl+C handling so the
+    /// first press always stops live voice, even when the composer contains the recording meter.
+    ///
     /// If the same quit shortcut is pressed again before expiry, this requests a shutdown-first
     /// quit.
     fn on_ctrl_c(&mut self) {
         let key = key_hint::ctrl(KeyCode::Char('c'));
+        if self.realtime_conversation.is_live() {
+            self.bottom_pane.clear_quit_shortcut_hint();
+            self.quit_shortcut_expires_at = None;
+            self.quit_shortcut_key = None;
+            self.request_realtime_conversation_close(/*info_message*/ None);
+            return;
+        }
         let modal_or_popup_active = !self.bottom_pane.no_modal_or_popup_active();
         if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
             if DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
@@ -9256,6 +9264,13 @@ impl ChatWidget {
     }
 
     pub(crate) fn remove_transcription_placeholder(&mut self, id: &str) {
+        #[cfg(not(target_os = "linux"))]
+        if self.realtime_conversation.is_live()
+            && self.realtime_conversation.meter_placeholder_id.as_deref() == Some(id)
+        {
+            self.realtime_conversation.meter_placeholder_id = None;
+            self.request_realtime_conversation_close(/*info_message*/ None);
+        }
         self.bottom_pane.remove_transcription_placeholder(id);
         // Ensure the UI redraws to reflect placeholder removal.
         self.request_redraw();
@@ -9466,6 +9481,7 @@ fn extract_first_bold(s: &str) -> Option<String> {
 fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {
     match event_name {
         codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
+        codex_protocol::protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
         codex_protocol::protocol::HookEventName::Stop => "Stop",
     }
 }

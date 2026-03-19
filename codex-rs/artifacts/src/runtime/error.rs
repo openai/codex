@@ -13,8 +13,8 @@ pub enum ArtifactRuntimeError {
         #[source]
         source: std::io::Error,
     },
-    #[error("invalid manifest at {path}")]
-    InvalidManifest {
+    #[error("invalid package metadata at {path}")]
+    InvalidPackageMetadata {
         path: PathBuf,
         #[source]
         source: serde_json::Error,

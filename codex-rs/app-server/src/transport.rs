@@ -5,13 +5,19 @@ use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingError;
 use crate::outgoing_message::OutgoingMessage;
 use axum::Router;
+use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::extract::State;
 use axum::extract::ws::Message as WebSocketMessage;
 use axum::extract::ws::WebSocket;
 use axum::extract::ws::WebSocketUpgrade;
+use axum::http::Request;
 use axum::http::StatusCode;
+use axum::http::header::ORIGIN;
+use axum::middleware;
+use axum::middleware::Next;
 use axum::response::IntoResponse;
+use axum::response::Response;
 use axum::routing::any;
 use axum::routing::get;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -89,6 +95,22 @@ struct WebSocketListenerState {
 
 async fn health_check_handler() -> StatusCode {
     StatusCode::OK
+}
+
+async fn reject_requests_with_origin_header(
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if request.headers().contains_key(ORIGIN) {
+        warn!(
+            method = %request.method(),
+            uri = %request.uri(),
+            "rejecting websocket listener request with Origin header"
+        );
+        Err(StatusCode::FORBIDDEN)
+    } else {
+        Ok(next.run(request).await)
+    }
 }
 
 async fn websocket_upgrade_handler(
@@ -322,6 +344,7 @@ pub(crate) async fn start_websocket_acceptor(
         .route("/readyz", get(health_check_handler))
         .route("/healthz", get(health_check_handler))
         .fallback(any(websocket_upgrade_handler))
+        .layer(middleware::from_fn(reject_requests_with_origin_header))
         .with_state(WebSocketListenerState {
             transport_event_tx,
             connection_counter: Arc::new(AtomicU64::new(1)),

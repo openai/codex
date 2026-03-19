@@ -36,8 +36,10 @@ async fn plugin_read_returns_plugin_details_with_bundle_contents() -> Result<()>
         "source": "local",
         "path": "./plugins/demo-plugin"
       },
-      "installPolicy": "AVAILABLE",
-      "authPolicy": "ON_INSTALL",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
       "category": "Design"
     }
   ]
@@ -230,6 +232,7 @@ async fn plugin_read_accepts_legacy_string_default_prompt() -> Result<()> {
   }
 }"##,
     )?;
+    write_plugins_enabled_config(&codex_home)?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -283,6 +286,7 @@ async fn plugin_read_returns_invalid_request_when_plugin_is_missing() -> Result<
   ]
 }"#,
     )?;
+    write_plugins_enabled_config(&codex_home)?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -334,6 +338,7 @@ async fn plugin_read_returns_invalid_request_when_plugin_manifest_is_missing() -
   ]
 }"#,
     )?;
+    write_plugins_enabled_config(&codex_home)?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -377,6 +382,16 @@ fn write_installed_plugin(
     std::fs::write(
         plugin_root.join("plugin.json"),
         format!(r#"{{"name":"{plugin_name}"}}"#),
+    )?;
+    Ok(())
+}
+
+fn write_plugins_enabled_config(codex_home: &TempDir) -> Result<()> {
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"[features]
+plugins = true
+"#,
     )?;
     Ok(())
 }

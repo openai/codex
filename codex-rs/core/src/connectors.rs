@@ -28,6 +28,7 @@ use crate::SandboxState;
 use crate::config::Config;
 use crate::config::types::AppToolApproval;
 use crate::config::types::AppsConfigToml;
+use crate::config::types::ToolSuggestDiscoverableType;
 use crate::config_loader::AppsRequirementsToml;
 use crate::default_client::create_client;
 use crate::default_client::is_first_party_chat_originator;
@@ -376,13 +377,22 @@ fn filter_tool_suggest_discoverable_connectors(
 }
 
 fn tool_suggest_connector_ids(config: &Config) -> HashSet<String> {
-    PluginsManager::new(config.codex_home.clone())
+    let mut connector_ids = PluginsManager::new(config.codex_home.clone())
         .plugins_for_config(config)
         .capability_summaries()
         .iter()
         .flat_map(|plugin| plugin.app_connector_ids.iter())
         .map(|connector_id| connector_id.0.clone())
-        .collect()
+        .collect::<HashSet<_>>();
+    connector_ids.extend(
+        config
+            .tool_suggest
+            .discoverables
+            .iter()
+            .filter(|discoverable| discoverable.kind == ToolSuggestDiscoverableType::Connector)
+            .map(|discoverable| discoverable.id.clone()),
+    );
+    connector_ids
 }
 
 async fn list_directory_connectors_for_tool_suggest_with_auth(

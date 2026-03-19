@@ -19,8 +19,10 @@ which = { workspace = true }
 workspace = true
 
 [dev-dependencies]
+flate2 = { workspace = true }
 pretty_assertions = { workspace = true }
 sha2 = { workspace = true }
+tar = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "rt-multi-thread", "time"] }
 wiremock = { workspace = true }
 zip = { workspace = true }

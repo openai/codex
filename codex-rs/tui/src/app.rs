@@ -275,6 +275,42 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
     )));
 }
 
+fn emit_missing_system_bwrap_warning(app_event_tx: &AppEventSender) {
+    let Some(message) = codex_core::config::missing_system_bwrap_warning() else {
+        return;
+    };
+
+    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+        history_cell::new_warning_event(message),
+    )));
+}
+
+async fn emit_custom_prompt_deprecation_notice(app_event_tx: &AppEventSender, codex_home: &Path) {
+    let prompts_dir = codex_home.join("prompts");
+    let prompt_count = codex_core::custom_prompts::discover_prompts_in(&prompts_dir)
+        .await
+        .len();
+    if prompt_count == 0 {
+        return;
+    }
+
+    let prompt_label = if prompt_count == 1 {
+        "prompt"
+    } else {
+        "prompts"
+    };
+    let details = format!(
+        "Detected {prompt_count} custom {prompt_label} in `$CODEX_HOME/prompts`. Use the `$skill-creator` skill to convert each custom prompt into a skill."
+    );
+
+    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+        history_cell::new_deprecation_notice(
+            "Custom prompts are deprecated and will soon be removed.".to_string(),
+            Some(details),
+        ),
+    )));
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionSummary {
     usage_line: String,
@@ -1963,6 +1999,8 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_project_config_warnings(&app_event_tx, &config);
+        emit_missing_system_bwrap_warning(&app_event_tx);
+        emit_custom_prompt_deprecation_notice(&app_event_tx, &config.codex_home).await;
         tui.set_notification_method(config.tui_notification_method);
 
         let harness_overrides =
@@ -1980,7 +2018,7 @@ impl App {
         // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
         thread_manager
             .plugins_manager()
-            .maybe_start_curated_repo_sync_for_config(&config);
+            .maybe_start_curated_repo_sync_for_config(&config, auth_manager.clone());
         let mut model = thread_manager
             .get_models_manager()
             .get_default_model(&config.model, RefreshStrategy::Offline)
@@ -4311,6 +4349,62 @@ mod tests {
             App::should_handle_active_thread_events(wait_for_initial_session, true),
             true
         );
+    }
+
+    fn render_history_cell(cell: &dyn HistoryCell, width: u16) -> String {
+        cell.display_lines(width)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[tokio::test]
+    async fn startup_custom_prompt_deprecation_notice_emits_when_prompts_exist() -> Result<()> {
+        let codex_home = tempdir()?;
+        let prompts_dir = codex_home.path().join("prompts");
+        std::fs::create_dir_all(&prompts_dir)?;
+        std::fs::write(prompts_dir.join("review.md"), "# Review\n")?;
+
+        let (tx_raw, mut rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx_raw);
+
+        emit_custom_prompt_deprecation_notice(&app_event_tx, codex_home.path()).await;
+
+        let cell = match rx.try_recv() {
+            Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+            other => panic!("expected InsertHistoryCell event, got {other:?}"),
+        };
+        let rendered = render_history_cell(cell.as_ref(), 120);
+
+        assert_snapshot!("startup_custom_prompt_deprecation_notice", rendered);
+        assert!(rx.try_recv().is_err(), "expected only one startup notice");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn startup_custom_prompt_deprecation_notice_skips_missing_prompts_dir() -> Result<()> {
+        let codex_home = tempdir()?;
+        let (tx_raw, mut rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx_raw);
+
+        emit_custom_prompt_deprecation_notice(&app_event_tx, codex_home.path()).await;
+
+        assert!(rx.try_recv().is_err(), "expected no startup notice");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn startup_custom_prompt_deprecation_notice_skips_empty_prompts_dir() -> Result<()> {
+        let codex_home = tempdir()?;
+        std::fs::create_dir_all(codex_home.path().join("prompts"))?;
+        let (tx_raw, mut rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx_raw);
+
+        emit_custom_prompt_deprecation_notice(&app_event_tx, codex_home.path()).await;
+
+        assert!(rx.try_recv().is_err(), "expected no startup notice");
+        Ok(())
     }
 
     #[test]

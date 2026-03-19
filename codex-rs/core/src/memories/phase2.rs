@@ -272,6 +272,7 @@ mod agent {
         // Consolidation runs as an internal sub-agent and must not recursively delegate.
         let _ = agent_config.features.disable(Feature::SpawnCsv);
         let _ = agent_config.features.disable(Feature::Collab);
+        let _ = agent_config.features.disable(Feature::MemoryTool);
 
         // Sandbox policy
         let mut writable_roots = Vec::new();

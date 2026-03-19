@@ -870,8 +870,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::McpListToolsResponse(_)
             | EventMsg::ListCustomPromptsResponse(_)
             | EventMsg::ListSkillsResponse(_)
-            | EventMsg::ListRemoteSkillsResponse(_)
-            | EventMsg::RemoteSkillDownloaded(_)
             | EventMsg::RawResponseItem(_)
             | EventMsg::UserMessage(_)
             | EventMsg::EnteredReviewMode(_)
@@ -991,6 +989,7 @@ impl EventProcessorWithHumanOutput {
     fn hook_event_name(event_name: HookEventName) -> &'static str {
         match event_name {
             HookEventName::SessionStart => "SessionStart",
+            HookEventName::UserPromptSubmit => "UserPromptSubmit",
             HookEventName::Stop => "Stop",
         }
     }
@@ -1032,8 +1031,6 @@ impl EventProcessorWithHumanOutput {
                     | EventMsg::McpListToolsResponse(_)
                     | EventMsg::ListCustomPromptsResponse(_)
                     | EventMsg::ListSkillsResponse(_)
-                    | EventMsg::ListRemoteSkillsResponse(_)
-                    | EventMsg::RemoteSkillDownloaded(_)
                     | EventMsg::RawResponseItem(_)
                     | EventMsg::UserMessage(_)
                     | EventMsg::EnteredReviewMode(_)
