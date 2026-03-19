@@ -46,6 +46,8 @@ use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
+use crate::mention_codec::LinkedMention;
+use crate::mention_codec::encode_history_mentions;
 use crate::model_catalog::ModelCatalog;
 use crate::multi_agents;
 use crate::status::RateLimitWindowDisplay;
@@ -3474,8 +3476,7 @@ impl ChatWidget {
         }
     }
 
-    #[cfg(test)]
-    fn on_get_history_entry_response(
+    pub(crate) fn handle_history_entry_response(
         &mut self,
         event: codex_protocol::protocol::GetHistoryEntryResponseEvent,
     ) {
@@ -5316,9 +5317,19 @@ impl ChatWidget {
             return;
         }
 
-        // Persist the text to cross-session message history.
+        // Persist the text to cross-session message history. Mentions are
+        // encoded into placeholder syntax so recall can reconstruct the
+        // mention bindings in a future session.
         if !text.is_empty() {
-            warn!("skipping composer history persistence in app-server TUI");
+            let encoded_mentions = mention_bindings
+                .iter()
+                .map(|binding| LinkedMention {
+                    mention: binding.mention.clone(),
+                    path: binding.path.clone(),
+                })
+                .collect::<Vec<_>>();
+            let history_text = encode_history_mentions(&text, &encoded_mentions);
+            self.submit_op(Op::AddToHistory { text: history_text });
         }
 
         if let Some(pending_steer) = pending_steer {
@@ -6440,7 +6451,7 @@ impl ChatWidget {
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
             EventMsg::WebSearchBegin(ev) => self.on_web_search_begin(ev),
             EventMsg::WebSearchEnd(ev) => self.on_web_search_end(ev),
-            EventMsg::GetHistoryEntryResponse(ev) => self.on_get_history_entry_response(ev),
+            EventMsg::GetHistoryEntryResponse(ev) => self.handle_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListCustomPromptsResponse(_) => {
                 tracing::warn!(

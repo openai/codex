@@ -1087,7 +1087,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn view_image_tool_placeholder_for_non_image_files() -> anyhow::Result<()> {
+async fn view_image_tool_errors_for_non_image_files() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1150,20 +1150,19 @@ async fn view_image_tool_placeholder_for_non_image_files() -> anyhow::Result<()>
         request.inputs_of_type("input_image").is_empty(),
         "non-image file should not produce an input_image message"
     );
-    let (placeholder, success) = request
+    let (error_text, success) = request
         .function_call_output_content_and_success(call_id)
         .expect("function_call_output should be present");
     assert_eq!(success, None);
-    let placeholder = placeholder.expect("placeholder text present");
+    let error_text = error_text.expect("error text present");
 
-    assert!(
-        placeholder.contains("Codex could not read the local image at")
-            && placeholder.contains("unsupported MIME type `application/json`"),
-        "placeholder should describe the unsupported file type: {placeholder}"
+    let expected_error = format!(
+        "unable to process image at `{}`: unsupported image `application/json`",
+        abs_path.display()
     );
     assert!(
-        placeholder.contains(&abs_path.display().to_string()),
-        "placeholder should mention path: {placeholder}"
+        error_text.contains(&expected_error),
+        "error should describe unsupported file type: {error_text}"
     );
 
     Ok(())

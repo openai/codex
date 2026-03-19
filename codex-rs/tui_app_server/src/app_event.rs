@@ -15,6 +15,7 @@ use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::protocol::GetHistoryEntryResponseEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_utils_approval_presets::ApprovalPreset;
@@ -79,6 +80,12 @@ pub(crate) enum AppEvent {
     SubmitThreadOp {
         thread_id: ThreadId,
         op: Op,
+    },
+
+    /// Deliver a synthetic history lookup response to a specific thread channel.
+    ThreadHistoryEntryResponse {
+        thread_id: ThreadId,
+        event: GetHistoryEntryResponseEvent,
     },
 
     /// Start a new session.

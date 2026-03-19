@@ -63,7 +63,7 @@ mod mcp_tool_call;
 mod memories;
 pub mod mention_syntax;
 mod mentions;
-mod message_history;
+pub mod message_history;
 mod model_provider_info;
 pub mod path_utils;
 pub mod personality_migration;

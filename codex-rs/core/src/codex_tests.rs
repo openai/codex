@@ -2187,7 +2187,7 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
     let parent_outcome = session
         .services
         .skills_manager
-        .skills_for_cwd(&parent_config.cwd, true)
+        .skills_for_cwd(&parent_config.cwd, &parent_config, true)
         .await;
     let parent_skill = parent_outcome
         .skills
@@ -4557,7 +4557,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         .expect("tool call present");
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let err = router
-        .dispatch_tool_call(
+        .dispatch_tool_call_with_code_mode_result(
             Arc::clone(&session),
             Arc::clone(&turn_context),
             tracker,
@@ -4565,7 +4565,8 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
             ToolCallSource::Direct,
         )
         .await
-        .expect_err("expected fatal error");
+        .err()
+        .expect("expected fatal error");
 
     match err {
         FunctionCallError::Fatal(message) => {

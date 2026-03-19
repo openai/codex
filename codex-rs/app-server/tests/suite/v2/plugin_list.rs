@@ -28,12 +28,22 @@ use wiremock::matchers::path;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
+fn write_plugins_enabled_config(codex_home: &std::path::Path) -> std::io::Result<()> {
+    std::fs::write(
+        codex_home.join("config.toml"),
+        r#"[features]
+plugins = true
+"#,
+    )
+}
+
 #[tokio::test]
-async fn plugin_list_returns_invalid_request_for_invalid_marketplace_file() -> Result<()> {
+async fn plugin_list_skips_invalid_marketplace_file() -> Result<()> {
     let codex_home = TempDir::new()?;
     let repo_root = TempDir::new()?;
     std::fs::create_dir_all(repo_root.path().join(".git"))?;
     std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
+    write_plugins_enabled_config(codex_home.path())?;
     std::fs::write(
         repo_root.path().join(".agents/plugins/marketplace.json"),
         "{not json",
@@ -57,14 +67,23 @@ async fn plugin_list_returns_invalid_request_for_invalid_marketplace_file() -> R
         })
         .await?;
 
-    let err = timeout(
+    let response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
-        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
+    let response: PluginListResponse = to_response(response)?;
 
-    assert_eq!(err.error.code, -32600);
-    assert!(err.error.message.contains("invalid marketplace file"));
+    assert!(
+        response.marketplaces.iter().all(|marketplace| {
+            marketplace.path
+                != AbsolutePathBuf::try_from(
+                    repo_root.path().join(".agents/plugins/marketplace.json"),
+                )
+                .expect("absolute marketplace path")
+        }),
+        "invalid marketplace should be skipped"
+    );
     Ok(())
 }
 
@@ -98,6 +117,7 @@ async fn plugin_list_rejects_relative_cwds() -> Result<()> {
 async fn plugin_list_accepts_omitted_cwds() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::create_dir_all(codex_home.path().join(".agents/plugins"))?;
+    write_plugins_enabled_config(codex_home.path())?;
     std::fs::write(
         codex_home.path().join(".agents/plugins/marketplace.json"),
         r#"{
@@ -378,179 +398,6 @@ enabled = false
 }
 
 #[tokio::test]
-async fn plugin_list_filters_plugins_for_custom_session_source_products() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let repo_root = TempDir::new()?;
-    std::fs::create_dir_all(repo_root.path().join(".git"))?;
-    std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
-    std::fs::write(
-        repo_root.path().join(".agents/plugins/marketplace.json"),
-        r#"{
-  "name": "codex-curated",
-  "plugins": [
-    {
-      "name": "all-products",
-      "source": {
-        "source": "local",
-        "path": "./all-products"
-      }
-    },
-    {
-      "name": "chatgpt-only",
-      "source": {
-        "source": "local",
-        "path": "./chatgpt-only"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL",
-        "products": ["CHATGPT"]
-      }
-    },
-    {
-      "name": "atlas-only",
-      "source": {
-        "source": "local",
-        "path": "./atlas-only"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL",
-        "products": ["ATLAS"]
-      }
-    },
-    {
-      "name": "codex-only",
-      "source": {
-        "source": "local",
-        "path": "./codex-only"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL",
-        "products": ["CODEX"]
-      }
-    }
-  ]
-}"#,
-    )?;
-
-    let mut mcp =
-        McpProcess::new_with_args(codex_home.path(), &["--session-source", "chatgpt"]).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_plugin_list_request(PluginListParams {
-            cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
-            force_remote_sync: false,
-        })
-        .await?;
-
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginListResponse = to_response(response)?;
-
-    let marketplace = response
-        .marketplaces
-        .into_iter()
-        .find(|marketplace| marketplace.name == "codex-curated")
-        .expect("expected marketplace entry");
-
-    assert_eq!(
-        marketplace
-            .plugins
-            .into_iter()
-            .map(|plugin| plugin.name)
-            .collect::<Vec<_>>(),
-        vec!["all-products".to_string(), "chatgpt-only".to_string()]
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn plugin_list_defaults_non_custom_session_source_to_codex_products() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let repo_root = TempDir::new()?;
-    std::fs::create_dir_all(repo_root.path().join(".git"))?;
-    std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
-    std::fs::write(
-        repo_root.path().join(".agents/plugins/marketplace.json"),
-        r#"{
-  "name": "codex-curated",
-  "plugins": [
-    {
-      "name": "all-products",
-      "source": {
-        "source": "local",
-        "path": "./all-products"
-      }
-    },
-    {
-      "name": "chatgpt-only",
-      "source": {
-        "source": "local",
-        "path": "./chatgpt-only"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL",
-        "products": ["CHATGPT"]
-      }
-    },
-    {
-      "name": "codex-only",
-      "source": {
-        "source": "local",
-        "path": "./codex-only"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL",
-        "products": ["CODEX"]
-      }
-    }
-  ]
-}"#,
-    )?;
-
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
-
-    let request_id = mcp
-        .send_plugin_list_request(PluginListParams {
-            cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
-            force_remote_sync: false,
-        })
-        .await?;
-
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let response: PluginListResponse = to_response(response)?;
-
-    let marketplace = response
-        .marketplaces
-        .into_iter()
-        .find(|marketplace| marketplace.name == "codex-curated")
-        .expect("expected marketplace entry");
-
-    assert_eq!(
-        marketplace
-            .plugins
-            .into_iter()
-            .map(|plugin| plugin.name)
-            .collect::<Vec<_>>(),
-        vec!["all-products".to_string(), "codex-only".to_string()]
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn plugin_list_returns_plugin_interface_with_absolute_asset_paths() -> Result<()> {
     let codex_home = TempDir::new()?;
     let repo_root = TempDir::new()?;
@@ -558,6 +405,7 @@ async fn plugin_list_returns_plugin_interface_with_absolute_asset_paths() -> Res
     std::fs::create_dir_all(repo_root.path().join(".git"))?;
     std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
     std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    write_plugins_enabled_config(codex_home.path())?;
     std::fs::write(
         repo_root.path().join(".agents/plugins/marketplace.json"),
         r#"{
@@ -691,6 +539,7 @@ async fn plugin_list_accepts_legacy_string_default_prompt() -> Result<()> {
     std::fs::create_dir_all(repo_root.path().join(".git"))?;
     std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
     std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
+    write_plugins_enabled_config(codex_home.path())?;
     std::fs::write(
         repo_root.path().join(".agents/plugins/marketplace.json"),
         r#"{

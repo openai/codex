@@ -980,7 +980,21 @@ fn create_view_image_tool(can_request_original_image_detail: bool) -> ToolSpec {
             required: Some(vec!["path".to_string()]),
             additional_properties: Some(false.into()),
         },
-        output_schema: None,
+        output_schema: Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "image_url": {
+                    "type": "string",
+                    "description": "Data URL for the loaded image."
+                },
+                "detail": {
+                    "type": ["string", "null"],
+                    "description": "Image detail hint returned by view_image. Returns `original` when original resolution is preserved, otherwise `null`."
+                }
+            },
+            "required": ["image_url", "detail"],
+            "additionalProperties": false
+        })),
     })
 }
 

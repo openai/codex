@@ -941,7 +941,7 @@ fn invalid_image_error_placeholder(
 fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> ContentItem {
     ContentItem::InputText {
         text: format!(
-            "Codex cannot attach image at `{}`: unsupported image format `{}`.",
+            "Codex cannot attach image at `{}`: unsupported image `{}`.",
             path.display(),
             mime
         ),
@@ -972,28 +972,20 @@ pub fn local_image_content_items_with_label_number(
             }
             items
         }
-        Err(err) => {
-            if matches!(&err, ImageProcessingError::Read { .. }) {
+        Err(err) => match &err {
+            ImageProcessingError::Read { .. } | ImageProcessingError::Encode { .. } => {
                 vec![local_image_error_placeholder(path, &err)]
-            } else if err.is_invalid_image() {
-                vec![invalid_image_error_placeholder(path, &err)]
-            } else {
-                let Some(mime_guess) = mime_guess::from_path(path).first() else {
-                    return vec![local_image_error_placeholder(
-                        path,
-                        "unsupported MIME type (unknown)",
-                    )];
-                };
-                let mime = mime_guess.essence_str().to_owned();
-                if !mime.starts_with("image/") {
-                    return vec![local_image_error_placeholder(
-                        path,
-                        format!("unsupported MIME type `{mime}`"),
-                    )];
-                }
-                vec![unsupported_image_error_placeholder(path, &mime)]
             }
-        }
+            ImageProcessingError::Decode { .. } if err.is_invalid_image() => {
+                vec![invalid_image_error_placeholder(path, &err)]
+            }
+            ImageProcessingError::Decode { .. } => {
+                vec![local_image_error_placeholder(path, &err)]
+            }
+            ImageProcessingError::UnsupportedImageFormat { mime } => {
+                vec![unsupported_image_error_placeholder(path, mime)]
+            }
+        },
     }
 }
 
@@ -2908,8 +2900,8 @@ mod tests {
                 match &content[0] {
                     ContentItem::InputText { text } => {
                         assert!(
-                            text.contains("unsupported MIME type `application/json`"),
-                            "placeholder should mention unsupported MIME: {text}"
+                            text.contains("unsupported image `application/json`"),
+                            "placeholder should mention unsupported image MIME: {text}"
                         );
                         assert!(
                             text.contains(&json_path.display().to_string()),
@@ -2943,7 +2935,7 @@ mod tests {
             ResponseInputItem::Message { content, .. } => {
                 assert_eq!(content.len(), 1);
                 let expected = format!(
-                    "Codex cannot attach image at `{}`: unsupported image format `image/svg+xml`.",
+                    "Codex cannot attach image at `{}`: unsupported image `image/svg+xml`.",
                     svg_path.display()
                 );
                 match &content[0] {
