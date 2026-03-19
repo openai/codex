@@ -1,8 +1,6 @@
 use super::*;
 use crate::auth::storage::FileAuthStorage;
 use crate::auth::storage::get_auth_file;
-use crate::config::Config;
-use crate::config::ConfigBuilder;
 use crate::token_data::IdTokenInfo;
 use crate::token_data::KnownPlan as InternalKnownPlan;
 use crate::token_data::PlanType as InternalPlanType;
@@ -260,15 +258,13 @@ async fn build_config(
     codex_home: &Path,
     forced_login_method: Option<ForcedLoginMethod>,
     forced_chatgpt_workspace_id: Option<String>,
-) -> Config {
-    let mut config = ConfigBuilder::default()
-        .codex_home(codex_home.to_path_buf())
-        .build()
-        .await
-        .expect("config should load");
-    config.forced_login_method = forced_login_method;
-    config.forced_chatgpt_workspace_id = forced_chatgpt_workspace_id;
-    config
+) -> AuthConfig {
+    AuthConfig {
+        codex_home: codex_home.to_path_buf(),
+        auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        forced_login_method,
+        forced_chatgpt_workspace_id,
+    }
 }
 
 /// Use sparingly.

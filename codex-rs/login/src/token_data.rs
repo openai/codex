@@ -27,7 +27,7 @@ pub struct IdTokenInfo {
     /// The ChatGPT subscription plan type
     /// (e.g., "free", "plus", "pro", "business", "enterprise", "edu").
     /// (Note: values may vary by backend.)
-    pub(crate) chatgpt_plan_type: Option<PlanType>,
+    pub chatgpt_plan_type: Option<PlanType>,
     /// ChatGPT user identifier associated with the token, if present.
     pub chatgpt_user_id: Option<String>,
     /// Organization/workspace identifier associated with the token, if present.
@@ -55,13 +55,13 @@ impl IdTokenInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub(crate) enum PlanType {
+pub enum PlanType {
     Known(KnownPlan),
     Unknown(String),
 }
 
 impl PlanType {
-    pub(crate) fn from_raw_value(raw: &str) -> Self {
+    pub fn from_raw_value(raw: &str) -> Self {
         match raw.to_ascii_lowercase().as_str() {
             "free" => Self::Known(KnownPlan::Free),
             "go" => Self::Known(KnownPlan::Go),
@@ -78,7 +78,7 @@ impl PlanType {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum KnownPlan {
+pub enum KnownPlan {
     Free,
     Go,
     Plus,

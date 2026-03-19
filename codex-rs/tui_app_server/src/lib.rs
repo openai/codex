@@ -21,6 +21,7 @@ use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
+use codex_core::auth::AuthConfig;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
@@ -777,7 +778,12 @@ pub async fn run_main(
 
     if matches!(app_server_target, AppServerTarget::Embedded) {
         #[allow(clippy::print_stderr)]
-        if let Err(err) = enforce_login_restrictions(&config) {
+        if let Err(err) = enforce_login_restrictions(&AuthConfig {
+            codex_home: config.codex_home.clone(),
+            auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
+            forced_login_method: config.forced_login_method,
+            forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
+        }) {
             eprintln!("{err}");
             std::process::exit(1);
         }
