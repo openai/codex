@@ -5134,13 +5134,7 @@ impl ChatWidget {
                 )));
                 return;
             }
-            // TODO: Restore `!` support in app-server TUI once command execution can
-            // persist transcript-visible output into thread history with parity to the
-            // legacy TUI.
-            self.add_to_history(history_cell::new_error_event(
-                "`!` shell commands are unavailable in app-server TUI because command output is not yet persisted in thread history.".to_string(),
-            ));
-            self.request_redraw();
+            self.submit_op(AppCommand::run_user_shell_command(cmd.to_string()));
             return;
         }
 
@@ -5562,6 +5556,7 @@ impl ChatWidget {
                 command,
                 cwd,
                 process_id,
+                source,
                 status,
                 command_actions,
                 aggregated_output,
@@ -5582,10 +5577,11 @@ impl ChatWidget {
                             .into_iter()
                             .map(codex_app_server_protocol::CommandAction::into_core)
                             .collect(),
-                        source: ExecCommandSource::Agent,
+                        source: source.to_core(),
                         interaction_input: None,
                     });
                 } else {
+                    let aggregated_output = aggregated_output.unwrap_or_default();
                     self.on_exec_command_end(ExecCommandEndEvent {
                         call_id: id,
                         process_id,
@@ -5596,16 +5592,16 @@ impl ChatWidget {
                             .into_iter()
                             .map(codex_app_server_protocol::CommandAction::into_core)
                             .collect(),
-                        source: ExecCommandSource::Agent,
+                        source: source.to_core(),
                         interaction_input: None,
                         stdout: String::new(),
                         stderr: String::new(),
-                        aggregated_output: aggregated_output.unwrap_or_default(),
+                        aggregated_output: aggregated_output.clone(),
                         exit_code: exit_code.unwrap_or_default(),
                         duration: Duration::from_millis(
                             duration_ms.unwrap_or_default().max(0) as u64
                         ),
-                        formatted_output: String::new(),
+                        formatted_output: aggregated_output,
                         status: match status {
                             codex_app_server_protocol::CommandExecutionStatus::Completed => {
                                 codex_protocol::protocol::ExecCommandStatus::Completed
@@ -6145,6 +6141,7 @@ impl ChatWidget {
                 command,
                 cwd,
                 process_id,
+                source,
                 command_actions,
                 ..
             } => {
@@ -6158,7 +6155,7 @@ impl ChatWidget {
                         .into_iter()
                         .map(codex_app_server_protocol::CommandAction::into_core)
                         .collect(),
-                    source: ExecCommandSource::Agent,
+                    source: source.to_core(),
                     interaction_input: None,
                 });
             }

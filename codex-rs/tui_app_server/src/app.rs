@@ -2050,6 +2050,12 @@ impl App {
                 app_server.thread_realtime_stop(thread_id).await?;
                 Ok(true)
             }
+            AppCommandView::RunUserShellCommand { command } => {
+                app_server
+                    .thread_shell_command(thread_id, command.to_string())
+                    .await?;
+                Ok(true)
+            }
             AppCommandView::OverrideTurnContext { .. } => Ok(true),
             _ => Ok(false),
         }

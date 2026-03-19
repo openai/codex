@@ -1033,6 +1033,30 @@
             },
             "method": {
               "enum": [
+                "thread/shellCommand"
+              ],
+              "title": "Thread/shellCommandRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadShellCommandParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/shellCommandRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/rollback"
               ],
               "title": "Thread/rollbackRequestMethod",
@@ -2754,6 +2778,15 @@
       "title": "CommandExecutionOutputDeltaNotification",
       "type": "object"
     },
+    "CommandExecutionSource": {
+      "enum": [
+        "agent",
+        "userShell",
+        "unifiedExecStartup",
+        "unifiedExecInteraction"
+      ],
+      "type": "string"
+    },
     "CommandExecutionStatus": {
       "enum": [
         "inProgress",
@@ -4327,6 +4360,13 @@
         }
       ]
     },
+    "FuzzyFileSearchMatchType": {
+      "enum": [
+        "file",
+        "directory"
+      ],
+      "type": "string"
+    },
     "FuzzyFileSearchParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -4370,6 +4410,9 @@
             "null"
           ]
         },
+        "match_type": {
+          "$ref": "#/definitions/FuzzyFileSearchMatchType"
+        },
         "path": {
           "type": "string"
         },
@@ -4384,6 +4427,7 @@
       },
       "required": [
         "file_name",
+        "match_type",
         "path",
         "root",
         "score"
@@ -9854,6 +9898,14 @@
                 "null"
               ]
             },
+            "source": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/CommandExecutionSource"
+                }
+              ],
+              "default": "agent"
+            },
             "status": {
               "$ref": "#/definitions/CommandExecutionStatus"
             },
@@ -10891,6 +10943,29 @@
     "ThreadSetNameResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "ThreadSetNameResponse",
+      "type": "object"
+    },
+    "ThreadShellCommandParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "command": {
+          "description": "Shell command string evaluated by the thread's configured shell. Unlike `command/exec`, this intentionally preserves shell syntax such as pipes, redirects, and quoting. This runs unsandboxed with full access rather than inheriting the thread sandbox policy.",
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "threadId"
+      ],
+      "title": "ThreadShellCommandParams",
+      "type": "object"
+    },
+    "ThreadShellCommandResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadShellCommandResponse",
       "type": "object"
     },
     "ThreadSortKey": {

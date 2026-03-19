@@ -331,6 +331,9 @@ async fn persist_user_shell_output(
         session
             .record_conversation_items(turn_context, std::slice::from_ref(&output_item))
             .await;
+        // Standalone shell turns can run before any regular user turn, so
+        // explicitly materialize rollout persistence after recording output.
+        session.ensure_rollout_materialized().await;
         return;
     }
 

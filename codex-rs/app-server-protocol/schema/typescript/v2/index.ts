@@ -55,6 +55,7 @@ export type { CommandExecutionOutputDeltaNotification } from "./CommandExecution
 export type { CommandExecutionRequestApprovalParams } from "./CommandExecutionRequestApprovalParams";
 export type { CommandExecutionRequestApprovalResponse } from "./CommandExecutionRequestApprovalResponse";
 export type { CommandExecutionRequestApprovalSkillMetadata } from "./CommandExecutionRequestApprovalSkillMetadata";
+export type { CommandExecutionSource } from "./CommandExecutionSource";
 export type { CommandExecutionStatus } from "./CommandExecutionStatus";
 export type { Config } from "./Config";
 export type { ConfigBatchWriteParams } from "./ConfigBatchWriteParams";
@@ -284,6 +285,8 @@ export type { ThreadRollbackParams } from "./ThreadRollbackParams";
 export type { ThreadRollbackResponse } from "./ThreadRollbackResponse";
 export type { ThreadSetNameParams } from "./ThreadSetNameParams";
 export type { ThreadSetNameResponse } from "./ThreadSetNameResponse";
+export type { ThreadShellCommandParams } from "./ThreadShellCommandParams";
+export type { ThreadShellCommandResponse } from "./ThreadShellCommandResponse";
 export type { ThreadSortKey } from "./ThreadSortKey";
 export type { ThreadSourceKind } from "./ThreadSourceKind";
 export type { ThreadStartParams } from "./ThreadStartParams";

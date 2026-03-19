@@ -27,6 +27,7 @@ use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionRequestApprovalSkillMetadata;
+use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ContextCompactedNotification;
 use codex_app_server_protocol::DeprecationNoticeNotification;
@@ -1572,6 +1573,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 command,
                 cwd,
                 process_id,
+                source: exec_command_begin_event.source.into(),
                 status: CommandExecutionStatus::InProgress,
                 command_actions,
                 aggregated_output: None,
@@ -1589,7 +1591,6 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
             let item_id = exec_command_output_delta_event.call_id.clone();
-            let delta = String::from_utf8_lossy(&exec_command_output_delta_event.chunk).to_string();
             // The underlying EventMsg::ExecCommandOutputDelta is used for shell, unified_exec,
             // and apply_patch tool calls. We represent apply_patch with the FileChange item, and
             // everything else with the CommandExecution item.
@@ -1601,6 +1602,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 state.turn_summary.file_change_started.contains(&item_id)
             };
             if is_file_change {
+                let delta =
+                    String::from_utf8_lossy(&exec_command_output_delta_event.chunk).to_string();
                 let notification = FileChangeOutputDeltaNotification {
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
@@ -1617,7 +1620,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
                     item_id,
-                    delta,
+                    delta: String::from_utf8_lossy(&exec_command_output_delta_event.chunk)
+                        .to_string(),
                 };
                 outgoing
                     .send_server_notification(ServerNotification::CommandExecutionOutputDelta(
@@ -1650,6 +1654,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 aggregated_output,
                 exit_code,
                 duration,
+                source,
                 status,
                 ..
             } = exec_command_end_event;
@@ -1681,6 +1686,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 command: shlex_join(&command),
                 cwd,
                 process_id,
+                source: source.into(),
                 status,
                 command_actions,
                 aggregated_output,
@@ -1944,6 +1950,7 @@ async fn complete_command_execution_item(
     command: String,
     cwd: PathBuf,
     process_id: Option<String>,
+    source: CommandExecutionSource,
     command_actions: Vec<V2ParsedCommand>,
     status: CommandExecutionStatus,
     outgoing: &ThreadScopedOutgoingMessageSender,
@@ -1953,6 +1960,7 @@ async fn complete_command_execution_item(
         command,
         cwd,
         process_id,
+        source,
         status,
         command_actions,
         aggregated_output: None,
@@ -2659,6 +2667,7 @@ async fn on_command_execution_request_approval_response(
             completion_item.command,
             completion_item.cwd,
             /*process_id*/ None,
+            CommandExecutionSource::Agent,
             completion_item.command_actions,
             status,
             &outgoing,
