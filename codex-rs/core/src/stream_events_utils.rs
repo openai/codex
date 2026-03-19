@@ -365,7 +365,7 @@ pub(crate) async fn handle_non_tool_response_item(
                         );
                         let image_output_dir = image_output_path
                             .parent()
-                            .expect("generated image path should have a parent");
+                            .unwrap_or(turn_context.config.codex_home.as_path());
                         let message: ResponseItem = DeveloperInstructions::new(format!(
                             "Generated images are saved to {} as {} by default.",
                             image_output_dir.display(),
@@ -386,7 +386,7 @@ pub(crate) async fn handle_non_tool_response_item(
                         );
                         let output_dir = output_path
                             .parent()
-                            .expect("generated image path should have a parent");
+                            .unwrap_or(turn_context.config.codex_home.as_path());
                         tracing::warn!(
                             call_id = %image_item.id,
                             output_dir = %output_dir.display(),
