@@ -6024,6 +6024,9 @@ impl CodexMessageProcessor {
 
         match turn_id {
             Ok(turn_id) => {
+                self.outgoing
+                    .record_request_turn_id(&request_id, &turn_id)
+                    .await;
                 let turn = Turn {
                     id: turn_id.clone(),
                     items: vec![],
