@@ -2,6 +2,7 @@ use crate::agent::AgentStatus;
 use crate::codex::Codex;
 use crate::codex::SteerInputError;
 use crate::config::ConstraintResult;
+use crate::delegated_model_transport::DelegatedModelTransport;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::features::Feature;
@@ -23,16 +24,19 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
 use crate::state_db::StateDbHandle;
+use codex_app_server_protocol::NetworkDelegationConfig;
 
 #[derive(Clone, Debug)]
 pub struct ThreadConfigSnapshot {
     pub model: String,
     pub model_provider_id: String,
     pub service_tier: Option<ServiceTier>,
+    pub network_delegation: Option<NetworkDelegationConfig>,
     pub approval_policy: AskForApproval,
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox_policy: SandboxPolicy,
@@ -97,6 +101,21 @@ impl CodexThread {
         self.codex
             .set_app_server_client_name(app_server_client_name)
             .await
+    }
+
+    pub async fn set_network_delegation(
+        &self,
+        network_delegation: Option<NetworkDelegationConfig>,
+    ) -> ConstraintResult<()> {
+        self.codex.set_network_delegation(network_delegation).await
+    }
+
+    pub fn set_delegated_model_transport(
+        &self,
+        delegated_model_transport: Option<Arc<dyn DelegatedModelTransport>>,
+    ) {
+        self.codex
+            .set_delegated_model_transport(delegated_model_transport);
     }
 
     /// Use sparingly: this is intended to be removed soon.

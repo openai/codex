@@ -5660,6 +5660,58 @@
       "title": "ModelListResponse",
       "type": "object"
     },
+    "ModelRequestError": {
+      "properties": {
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "param": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "type"
+      ],
+      "type": "object"
+    },
+    "ModelRequestFailedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "error": {
+          "$ref": "#/definitions/ModelRequestError"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "error",
+        "requestId",
+        "threadId",
+        "turnId"
+      ],
+      "title": "ModelRequestFailedNotification",
+      "type": "object"
+    },
     "ModelRerouteReason": {
       "enum": [
         "highRiskCyberActivity"
@@ -5695,6 +5747,57 @@
       "title": "ModelReroutedNotification",
       "type": "object"
     },
+    "ModelStreamEventNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "event": true,
+        "requestId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "requestId",
+        "threadId",
+        "turnId"
+      ],
+      "title": "ModelStreamEventNotification",
+      "type": "object"
+    },
+    "ModelStreamMetadataNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "metadata": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "metadata",
+        "requestId",
+        "threadId",
+        "turnId"
+      ],
+      "title": "ModelStreamMetadataNotification",
+      "type": "object"
+    },
     "ModelUpgradeInfo": {
       "properties": {
         "migrationMarkdown": {
@@ -5728,6 +5831,32 @@
       "enum": [
         "restricted",
         "enabled"
+      ],
+      "type": "string"
+    },
+    "NetworkDelegationConfig": {
+      "properties": {
+        "mode": {
+          "$ref": "#/definitions/NetworkDelegationMode"
+        },
+        "streamIdleTimeoutMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
+    },
+    "NetworkDelegationMode": {
+      "enum": [
+        "enabled",
+        "disabled"
       ],
       "type": "string"
     },

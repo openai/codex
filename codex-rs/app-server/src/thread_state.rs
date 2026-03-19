@@ -133,6 +133,7 @@ impl Default for ThreadEntry {
 #[derive(Default)]
 struct ThreadStateManagerInner {
     live_connections: HashSet<ConnectionId>,
+    experimental_api_enabled_by_connection: HashMap<ConnectionId, bool>,
     threads: HashMap<ThreadId, ThreadEntry>,
     thread_ids_by_connection: HashMap<ConnectionId, HashSet<ThreadId>>,
 }
@@ -147,12 +148,16 @@ impl ThreadStateManager {
         Self::default()
     }
 
-    pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
-        self.state
-            .lock()
-            .await
-            .live_connections
-            .insert(connection_id);
+    pub(crate) async fn connection_initialized(
+        &self,
+        connection_id: ConnectionId,
+        experimental_api_enabled: bool,
+    ) {
+        let mut state = self.state.lock().await;
+        state.live_connections.insert(connection_id);
+        state
+            .experimental_api_enabled_by_connection
+            .insert(connection_id, experimental_api_enabled);
     }
 
     pub(crate) async fn subscribed_connection_ids(&self, thread_id: ThreadId) -> Vec<ConnectionId> {
@@ -161,6 +166,31 @@ impl ThreadStateManager {
             .threads
             .get(&thread_id)
             .map(|thread_entry| thread_entry.connection_ids.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    pub(crate) async fn subscribed_connection_ids_with_experimental_api(
+        &self,
+        thread_id: ThreadId,
+    ) -> Vec<ConnectionId> {
+        let state = self.state.lock().await;
+        state
+            .threads
+            .get(&thread_id)
+            .map(|thread_entry| {
+                thread_entry
+                    .connection_ids
+                    .iter()
+                    .copied()
+                    .filter(|connection_id| {
+                        state
+                            .experimental_api_enabled_by_connection
+                            .get(connection_id)
+                            .copied()
+                            .unwrap_or(false)
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -317,6 +347,9 @@ impl ThreadStateManager {
         let thread_states = {
             let mut state = self.state.lock().await;
             state.live_connections.remove(&connection_id);
+            state
+                .experimental_api_enabled_by_connection
+                .remove(&connection_id);
             let thread_ids = state
                 .thread_ids_by_connection
                 .remove(&connection_id)

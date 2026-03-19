@@ -2447,6 +2447,22 @@ pub enum CommandExecOutputStream {
     Stderr,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct NetworkDelegationConfig {
+    pub mode: NetworkDelegationMode,
+    pub stream_idle_timeout_ms: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum NetworkDelegationMode {
+    Enabled,
+    Disabled,
+}
+
 // === Threads, Turns, and Items ===
 // Thread APIs
 #[derive(
@@ -2490,6 +2506,9 @@ pub struct ThreadStartParams {
     pub personality: Option<Personality>,
     #[ts(optional = nullable)]
     pub ephemeral: Option<bool>,
+    #[experimental("thread/start.networkDelegation")]
+    #[ts(optional = nullable)]
+    pub network_delegation: Option<NetworkDelegationConfig>,
     #[experimental("thread/start.dynamicTools")]
     #[ts(optional = nullable)]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
@@ -2606,6 +2625,9 @@ pub struct ThreadResumeParams {
     pub developer_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
+    #[experimental("thread/resume.networkDelegation")]
+    #[ts(optional = nullable)]
+    pub network_delegation: Option<NetworkDelegationConfig>,
     /// If true, persist additional rollout EventMsg variants required to
     /// reconstruct a richer thread history on subsequent resume/fork/read.
     #[experimental("thread/resume.persistFullHistory")]
@@ -2681,6 +2703,9 @@ pub struct ThreadForkParams {
     pub base_instructions: Option<String>,
     #[ts(optional = nullable)]
     pub developer_instructions: Option<String>,
+    #[experimental("thread/fork.networkDelegation")]
+    #[ts(optional = nullable)]
+    pub network_delegation: Option<NetworkDelegationConfig>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ephemeral: bool,
     /// If true, persist additional rollout EventMsg variants required to
@@ -2705,6 +2730,117 @@ pub struct ThreadForkResponse {
     pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelRequestParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub request_id: String,
+    pub request: ModelRequestEnvelope,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelRequestEnvelope {
+    pub model: String,
+    pub instructions: String,
+    pub input: Vec<ResponseItem>,
+    pub tools: Vec<serde_json::Value>,
+    pub tool_choice: String,
+    pub parallel_tool_calls: bool,
+    pub reasoning: Option<serde_json::Value>,
+    pub store: bool,
+    pub stream: bool,
+    pub include: Vec<String>,
+    pub service_tier: Option<String>,
+    pub prompt_cache_key: Option<String>,
+    pub text: Option<serde_json::Value>,
+    pub request_headers: Option<HashMap<String, String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelRequestResponse {
+    pub accepted: bool,
+    pub rejection_reason: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelCompactParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub request_id: String,
+    pub request: ModelCompactEnvelope,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelCompactEnvelope {
+    pub model: String,
+    pub input: Vec<ResponseItem>,
+    pub instructions: String,
+    pub tools: Vec<serde_json::Value>,
+    pub parallel_tool_calls: bool,
+    pub reasoning: Option<serde_json::Value>,
+    pub text: Option<serde_json::Value>,
+    pub request_headers: Option<HashMap<String, String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelCompactResponse {
+    pub output: Vec<ResponseItem>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelStreamMetadataNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub request_id: String,
+    pub metadata: HashMap<String, String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelStreamEventNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub request_id: String,
+    pub event: serde_json::Value,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelRequestFailedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub request_id: String,
+    pub error: ModelRequestError,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ModelRequestError {
+    #[serde(rename = "type")]
+    #[ts(rename = "type")]
+    pub error_type: String,
+    pub code: Option<String>,
+    pub param: Option<String>,
+    pub message: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

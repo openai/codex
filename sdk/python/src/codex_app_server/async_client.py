@@ -6,7 +6,13 @@ from typing import AsyncIterator, Callable, Iterable, ParamSpec, TypeVar
 
 from pydantic import BaseModel
 
-from .client import AppServerClient, AppServerConfig
+from .client import (
+    AppServerClient,
+    AppServerConfig,
+    ApprovalHandler,
+    ModelCompactHandler,
+    ModelRequestHandler,
+)
 from .generated.v2_all import (
     AgentMessageDeltaNotification,
     ModelListResponse,
@@ -39,8 +45,19 @@ ReturnT = TypeVar("ReturnT")
 class AsyncAppServerClient:
     """Async wrapper around AppServerClient using thread offloading."""
 
-    def __init__(self, config: AppServerConfig | None = None) -> None:
-        self._sync = AppServerClient(config=config)
+    def __init__(
+        self,
+        config: AppServerConfig | None = None,
+        approval_handler: ApprovalHandler | None = None,
+        model_request_handler: ModelRequestHandler | None = None,
+        model_compact_handler: ModelCompactHandler | None = None,
+    ) -> None:
+        self._sync = AppServerClient(
+            config=config,
+            approval_handler=approval_handler,
+            model_request_handler=model_request_handler,
+            model_compact_handler=model_compact_handler,
+        )
         # Single stdio transport cannot be read safely from multiple threads.
         self._transport_lock = asyncio.Lock()
 
@@ -99,7 +116,57 @@ class AsyncAppServerClient:
             response_model=response_model,
         )
 
-    async def thread_start(self, params: V2ThreadStartParams | JsonObject | None = None) -> ThreadStartResponse:
+    async def send_model_stream_metadata(
+        self,
+        *,
+        thread_id: str,
+        turn_id: str,
+        request_id: str,
+        metadata: dict[str, str],
+    ) -> None:
+        await self._call_sync(
+            self._sync.send_model_stream_metadata,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            request_id=request_id,
+            metadata=metadata,
+        )
+
+    async def send_model_stream_event(
+        self,
+        *,
+        thread_id: str,
+        turn_id: str,
+        request_id: str,
+        event: JsonObject,
+    ) -> None:
+        await self._call_sync(
+            self._sync.send_model_stream_event,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            request_id=request_id,
+            event=event,
+        )
+
+    async def send_model_request_failed(
+        self,
+        *,
+        thread_id: str,
+        turn_id: str,
+        request_id: str,
+        error: JsonObject,
+    ) -> None:
+        await self._call_sync(
+            self._sync.send_model_request_failed,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            request_id=request_id,
+            error=error,
+        )
+
+    async def thread_start(
+        self, params: V2ThreadStartParams | JsonObject | None = None
+    ) -> ThreadStartResponse:
         return await self._call_sync(self._sync.thread_start, params)
 
     async def thread_resume(
@@ -109,10 +176,14 @@ class AsyncAppServerClient:
     ) -> ThreadResumeResponse:
         return await self._call_sync(self._sync.thread_resume, thread_id, params)
 
-    async def thread_list(self, params: V2ThreadListParams | JsonObject | None = None) -> ThreadListResponse:
+    async def thread_list(
+        self, params: V2ThreadListParams | JsonObject | None = None
+    ) -> ThreadListResponse:
         return await self._call_sync(self._sync.thread_list, params)
 
-    async def thread_read(self, thread_id: str, include_turns: bool = False) -> ThreadReadResponse:
+    async def thread_read(
+        self, thread_id: str, include_turns: bool = False
+    ) -> ThreadReadResponse:
         return await self._call_sync(self._sync.thread_read, thread_id, include_turns)
 
     async def thread_fork(
@@ -140,9 +211,13 @@ class AsyncAppServerClient:
         input_items: list[JsonObject] | JsonObject | str,
         params: V2TurnStartParams | JsonObject | None = None,
     ) -> TurnStartResponse:
-        return await self._call_sync(self._sync.turn_start, thread_id, input_items, params)
+        return await self._call_sync(
+            self._sync.turn_start, thread_id, input_items, params
+        )
 
-    async def turn_interrupt(self, thread_id: str, turn_id: str) -> TurnInterruptResponse:
+    async def turn_interrupt(
+        self, thread_id: str, turn_id: str
+    ) -> TurnInterruptResponse:
         return await self._call_sync(self._sync.turn_interrupt, thread_id, turn_id)
 
     async def turn_steer(
@@ -187,7 +262,9 @@ class AsyncAppServerClient:
     async def wait_for_turn_completed(self, turn_id: str) -> TurnCompletedNotification:
         return await self._call_sync(self._sync.wait_for_turn_completed, turn_id)
 
-    async def stream_until_methods(self, methods: Iterable[str] | str) -> list[Notification]:
+    async def stream_until_methods(
+        self, methods: Iterable[str] | str
+    ) -> list[Notification]:
         return await self._call_sync(self._sync.stream_until_methods, methods)
 
     async def stream_text(

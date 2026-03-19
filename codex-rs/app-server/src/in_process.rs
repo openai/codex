@@ -453,7 +453,12 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                                 }
                             }
                             Some(ProcessorCommand::Notification(notification)) => {
-                                processor.process_client_notification(notification).await;
+                                processor
+                                    .process_client_notification(
+                                        IN_PROCESS_CONNECTION_ID,
+                                        notification,
+                                    )
+                                    .await;
                             }
                             None => {
                                 break;

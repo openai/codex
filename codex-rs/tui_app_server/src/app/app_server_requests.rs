@@ -90,6 +90,16 @@ impl PendingAppServerRequests {
                         .to_string(),
                 })
             }
+            ServerRequest::ModelRequest { request_id, .. } => Some(UnsupportedAppServerRequest {
+                request_id: request_id.clone(),
+                message: "Delegated model requests are not available in app-server TUI yet."
+                    .to_string(),
+            }),
+            ServerRequest::ModelCompact { request_id, .. } => Some(UnsupportedAppServerRequest {
+                request_id: request_id.clone(),
+                message: "Delegated model compaction is not available in app-server TUI yet."
+                    .to_string(),
+            }),
             ServerRequest::ChatgptAuthTokensRefresh { .. } => None,
             ServerRequest::ApplyPatchApproval { request_id, .. } => {
                 Some(UnsupportedAppServerRequest {
@@ -498,6 +508,76 @@ mod tests {
         assert_eq!(
             unsupported.message,
             "Dynamic tool calls are not available in app-server TUI yet."
+        );
+    }
+
+    #[test]
+    fn rejects_delegated_model_requests_as_unsupported() {
+        let mut pending = PendingAppServerRequests::default();
+
+        let unsupported = pending
+            .note_server_request(&ServerRequest::ModelRequest {
+                request_id: AppServerRequestId::Integer(101),
+                params: codex_app_server_protocol::ModelRequestParams {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    request_id: "request-1".to_string(),
+                    request: codex_app_server_protocol::ModelRequestEnvelope {
+                        model: "gpt-5".to_string(),
+                        instructions: "hi".to_string(),
+                        input: Vec::new(),
+                        tools: Vec::new(),
+                        tool_choice: "auto".to_string(),
+                        parallel_tool_calls: false,
+                        reasoning: None,
+                        store: false,
+                        stream: true,
+                        include: Vec::new(),
+                        service_tier: None,
+                        prompt_cache_key: None,
+                        text: None,
+                        request_headers: None,
+                    },
+                },
+            })
+            .expect("delegated model requests should be rejected");
+
+        assert_eq!(unsupported.request_id, AppServerRequestId::Integer(101));
+        assert_eq!(
+            unsupported.message,
+            "Delegated model requests are not available in app-server TUI yet."
+        );
+    }
+
+    #[test]
+    fn rejects_delegated_model_compaction_as_unsupported() {
+        let mut pending = PendingAppServerRequests::default();
+
+        let unsupported = pending
+            .note_server_request(&ServerRequest::ModelCompact {
+                request_id: AppServerRequestId::Integer(102),
+                params: codex_app_server_protocol::ModelCompactParams {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    request_id: "request-1".to_string(),
+                    request: codex_app_server_protocol::ModelCompactEnvelope {
+                        model: "gpt-5".to_string(),
+                        input: Vec::new(),
+                        instructions: "hi".to_string(),
+                        tools: Vec::new(),
+                        parallel_tool_calls: false,
+                        reasoning: None,
+                        text: None,
+                        request_headers: None,
+                    },
+                },
+            })
+            .expect("delegated model compaction should be rejected");
+
+        assert_eq!(unsupported.request_id, AppServerRequestId::Integer(102));
+        assert_eq!(
+            unsupported.message,
+            "Delegated model compaction is not available in app-server TUI yet."
         );
     }
 

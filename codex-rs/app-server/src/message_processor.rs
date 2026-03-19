@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_message_processor::CodexMessageProcessorArgs;
 use crate::config_api::ConfigApi;
+use crate::delegated_model::AppServerDelegatedModelTransport;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::external_agent_config_api::ExternalAgentConfigApi;
 use crate::fs_api::FsApi;
@@ -145,6 +146,7 @@ impl ExternalAuthRefresher for ExternalAuthRefreshBridge {
 pub(crate) struct MessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     codex_message_processor: CodexMessageProcessor,
+    delegated_model_transport: AppServerDelegatedModelTransport,
     config_api: ConfigApi,
     external_agent_config_api: ExternalAgentConfigApi,
     fs_api: FsApi,
@@ -246,6 +248,12 @@ impl MessageProcessor {
         thread_manager
             .plugins_manager()
             .maybe_start_curated_repo_sync_for_config(&config, auth_manager.clone());
+        let delegated_model_transport = AppServerDelegatedModelTransport::new(
+            Arc::clone(&outgoing),
+            codex_message_processor.thread_state_manager(),
+        );
+        thread_manager
+            .set_delegated_model_transport(Some(Arc::new(delegated_model_transport.clone())));
         let config_api = ConfigApi::new(
             config.codex_home.clone(),
             cli_overrides,
@@ -260,6 +268,7 @@ impl MessageProcessor {
         Self {
             outgoing,
             codex_message_processor,
+            delegated_model_transport,
             config_api,
             external_agent_config_api,
             fs_api,
@@ -270,6 +279,7 @@ impl MessageProcessor {
     }
 
     pub(crate) fn clear_runtime_references(&self) {
+        self.codex_message_processor.clear_runtime_references();
         self.auth_manager.clear_external_auth_refresher();
     }
 
@@ -387,17 +397,35 @@ impl MessageProcessor {
         .await;
     }
 
-    pub(crate) async fn process_notification(&self, notification: JSONRPCNotification) {
-        // Currently, we do not expect to receive any notifications from the
-        // client, so we just log them.
+    pub(crate) async fn process_notification(
+        &self,
+        connection_id: ConnectionId,
+        notification: JSONRPCNotification,
+    ) {
         tracing::info!("<- notification: {:?}", notification);
+        match ClientNotification::try_from(notification) {
+            Ok(notification) => {
+                self.process_client_notification(connection_id, notification)
+                    .await
+            }
+            Err(err) => tracing::warn!("failed to decode typed client notification: {err}"),
+        }
     }
 
     /// Handles typed notifications from in-process clients.
-    pub(crate) async fn process_client_notification(&self, notification: ClientNotification) {
-        // Currently, we do not expect to receive any typed notifications from
-        // in-process clients, so we just log them.
+    pub(crate) async fn process_client_notification(
+        &self,
+        connection_id: ConnectionId,
+        notification: ClientNotification,
+    ) {
         tracing::info!("<- typed notification: {:?}", notification);
+        if let Err(err) = self
+            .delegated_model_transport
+            .handle_client_notification(connection_id, notification)
+            .await
+        {
+            tracing::warn!("failed to process client notification: {err}");
+        }
     }
 
     async fn run_request_with_context<F>(
@@ -431,9 +459,13 @@ impl MessageProcessor {
         }
     }
 
-    pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
+    pub(crate) async fn connection_initialized(
+        &self,
+        connection_id: ConnectionId,
+        experimental_api_enabled: bool,
+    ) {
         self.codex_message_processor
-            .connection_initialized(connection_id)
+            .connection_initialized(connection_id, experimental_api_enabled)
             .await;
     }
 
@@ -596,7 +628,7 @@ impl MessageProcessor {
                     // initialize handling for the specific connection.
                     outbound_initialized.store(true, Ordering::Release);
                     self.codex_message_processor
-                        .connection_initialized(connection_id)
+                        .connection_initialized(connection_id, session.experimental_api_enabled)
                         .await;
                 }
                 return;

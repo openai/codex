@@ -36,6 +36,10 @@ use crate::api_bridge::map_api_error;
 use crate::auth::UnauthorizedRecovery;
 use crate::auth_env_telemetry::AuthEnvTelemetry;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
+use crate::delegated_model_transport::DelegatedModelCompactRequest;
+use crate::delegated_model_transport::DelegatedModelEvent;
+use crate::delegated_model_transport::DelegatedModelRequest;
+use crate::delegated_model_transport::DelegatedModelTransport;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::MemoriesClient as ApiMemoriesClient;
@@ -58,8 +62,15 @@ use codex_api::common::Reasoning;
 use codex_api::common::ResponsesWsRequest;
 use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
+use codex_api::rate_limits::parse_all_rate_limits;
 use codex_api::requests::responses::Compression;
 use codex_api::response_create_client_metadata;
+use codex_api::sse::responses::ResponsesStreamEvent;
+use codex_api::sse::responses::process_responses_event;
+use codex_app_server_protocol::ModelCompactEnvelope;
+use codex_app_server_protocol::ModelRequestEnvelope;
+use codex_app_server_protocol::NetworkDelegationConfig;
+use codex_app_server_protocol::NetworkDelegationMode;
 use codex_otel::SessionTelemetry;
 use codex_otel::current_span_w3c_trace_context;
 
@@ -89,6 +100,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::instrument;
 use tracing::trace;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::AuthManager;
 use crate::auth::AuthMode;
@@ -129,6 +141,16 @@ pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
 ///
 /// This is intentionally kept minimal so `ModelClient` does not need to hold a full `Config`. Most
 /// configuration is per turn and is passed explicitly to streaming/unary methods.
+struct DelegatedModelTransportSlot(StdMutex<Option<Arc<dyn DelegatedModelTransport>>>);
+
+impl std::fmt::Debug for DelegatedModelTransportSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("DelegatedModelTransportSlot")
+            .field(&self.0.lock().map(|slot| slot.is_some()).unwrap_or(false))
+            .finish()
+    }
+}
+
 #[derive(Debug)]
 struct ModelClientState {
     auth_manager: Option<Arc<AuthManager>>,
@@ -142,6 +164,8 @@ struct ModelClientState {
     beta_features_header: Option<String>,
     disable_websockets: AtomicBool,
     cached_websocket_session: StdMutex<WebsocketSession>,
+    delegated_model_transport: DelegatedModelTransportSlot,
+    network_delegation_config: StdMutex<Option<NetworkDelegationConfig>>,
 }
 
 /// Resolved API client setup for a single request attempt.
@@ -197,6 +221,8 @@ pub struct ModelClient {
 pub struct ModelClientSession {
     client: ModelClient,
     websocket_session: WebsocketSession,
+    turn_id: String,
+    next_request_id: u64,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -278,8 +304,47 @@ impl ModelClient {
                 beta_features_header,
                 disable_websockets: AtomicBool::new(false),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
+                delegated_model_transport: DelegatedModelTransportSlot(StdMutex::new(None)),
+                network_delegation_config: StdMutex::new(None),
             }),
         }
+    }
+
+    pub fn set_delegated_model_transport(
+        &self,
+        transport: Option<Arc<dyn DelegatedModelTransport>>,
+    ) {
+        *self
+            .state
+            .delegated_model_transport
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = transport;
+    }
+
+    pub fn set_network_delegation_config(&self, config: Option<NetworkDelegationConfig>) {
+        *self
+            .state
+            .network_delegation_config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
+    }
+
+    fn delegated_model_transport(&self) -> Option<Arc<dyn DelegatedModelTransport>> {
+        self.state
+            .delegated_model_transport
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn network_delegation_config(&self) -> Option<NetworkDelegationConfig> {
+        self.state
+            .network_delegation_config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Creates a fresh turn-scoped streaming session.
@@ -287,9 +352,15 @@ impl ModelClient {
     /// This constructor does not perform network I/O itself; the session opens a websocket lazily
     /// when the first stream request is issued.
     pub fn new_session(&self) -> ModelClientSession {
+        self.new_session_with_turn_id(Uuid::new_v4().to_string())
+    }
+
+    pub fn new_session_with_turn_id(&self, turn_id: String) -> ModelClientSession {
         ModelClientSession {
             client: self.clone(),
             websocket_session: self.take_cached_websocket_session(),
+            turn_id,
+            next_request_id: 0,
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -341,6 +412,7 @@ impl ModelClient {
     /// session-scoped.
     pub async fn compact_conversation_history(
         &self,
+        turn_id: &str,
         prompt: &Prompt,
         model_info: &ModelInfo,
         effort: Option<ReasoningEffortConfig>,
@@ -350,21 +422,6 @@ impl ModelClient {
         if prompt.input.is_empty() {
             return Ok(Vec::new());
         }
-        let client_setup = self.current_client_setup().await?;
-        let transport = ReqwestTransport::new(build_reqwest_client());
-        let request_telemetry = Self::build_request_telemetry(
-            session_telemetry,
-            AuthRequestTelemetryContext::new(
-                client_setup.auth.as_ref().map(CodexAuth::auth_mode),
-                &client_setup.api_auth,
-                PendingUnauthorizedRetry::default(),
-            ),
-            RequestRouteTelemetry::for_endpoint(RESPONSES_COMPACT_ENDPOINT),
-            self.state.auth_env_telemetry.clone(),
-        );
-        let client =
-            ApiCompactClient::new(transport, client_setup.api_provider, client_setup.api_auth)
-                .with_telemetry(Some(request_telemetry));
 
         let instructions = prompt.base_instructions.text.clone();
         let input = prompt.get_formatted_input();
@@ -382,6 +439,55 @@ impl ModelClient {
             None
         };
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
+        let mut extra_headers = self.build_subagent_headers();
+        extra_headers.extend(build_conversation_headers(Some(
+            self.state.conversation_id.to_string(),
+        )));
+
+        if self
+            .network_delegation_config()
+            .is_some_and(|config| config.mode == NetworkDelegationMode::Enabled)
+        {
+            let Some(transport) = self.delegated_model_transport() else {
+                return Err(CodexErr::InvalidRequest(
+                    "network delegation is enabled for this thread, but no delegated model transport is configured".to_string(),
+                ));
+            };
+
+            let request = ModelCompactEnvelope {
+                model: model_info.slug.clone(),
+                input,
+                instructions,
+                tools,
+                parallel_tool_calls: prompt.parallel_tool_calls,
+                reasoning: reasoning.map(serde_json::to_value).transpose()?,
+                text: text.map(serde_json::to_value).transpose()?,
+                request_headers: Some(header_map_to_string_map(&extra_headers)),
+            };
+            let delegated_request = DelegatedModelCompactRequest {
+                thread_id: self.state.conversation_id,
+                turn_id: turn_id.to_string(),
+                request_id: format!("{turn_id}-compact-{}", Uuid::new_v4()),
+                request,
+            };
+            return transport.run_model_compact_request(delegated_request).await;
+        }
+
+        let client_setup = self.current_client_setup().await?;
+        let transport = ReqwestTransport::new(build_reqwest_client());
+        let request_telemetry = Self::build_request_telemetry(
+            session_telemetry,
+            AuthRequestTelemetryContext::new(
+                client_setup.auth.as_ref().map(CodexAuth::auth_mode),
+                &client_setup.api_auth,
+                PendingUnauthorizedRetry::default(),
+            ),
+            RequestRouteTelemetry::for_endpoint(RESPONSES_COMPACT_ENDPOINT),
+            self.state.auth_env_telemetry.clone(),
+        );
+        let client =
+            ApiCompactClient::new(transport, client_setup.api_provider, client_setup.api_auth)
+                .with_telemetry(Some(request_telemetry));
         let payload = ApiCompactionInput {
             model: &model_info.slug,
             input: &input,
@@ -391,11 +497,6 @@ impl ModelClient {
             reasoning,
             text,
         };
-
-        let mut extra_headers = self.build_subagent_headers();
-        extra_headers.extend(build_conversation_headers(Some(
-            self.state.conversation_id.to_string(),
-        )));
         client
             .compact_input(&payload, extra_headers)
             .await
@@ -671,6 +772,11 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
+    pub(crate) fn set_turn_id(&mut self, turn_id: String) {
+        self.turn_id = turn_id;
+        self.next_request_id = 0;
+    }
+
     fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
         self.websocket_session.last_request = None;
@@ -819,6 +925,115 @@ impl ModelClientSession {
                 Ok(last_response) => Some(last_response),
                 Err(TryRecvError::Closed) | Err(TryRecvError::Empty) => None,
             })
+    }
+
+    fn network_delegation_config(&self) -> Option<NetworkDelegationConfig> {
+        self.client.network_delegation_config()
+    }
+
+    fn delegated_transport_enabled(&self) -> bool {
+        self.network_delegation_config()
+            .is_some_and(|config| config.mode == NetworkDelegationMode::Enabled)
+    }
+
+    fn delegated_stream_idle_timeout(&self) -> Duration {
+        self.network_delegation_config()
+            .and_then(|config| config.stream_idle_timeout_ms)
+            .map(Duration::from_millis)
+            .unwrap_or_else(|| self.client.state.provider.stream_idle_timeout())
+    }
+
+    fn next_delegated_request_id(&mut self) -> String {
+        let request_id = format!("{}-{}", self.turn_id, self.next_request_id);
+        self.next_request_id = self.next_request_id.saturating_add(1);
+        request_id
+    }
+
+    fn build_delegated_request_headers(
+        &self,
+        turn_metadata_header: Option<&str>,
+    ) -> HashMap<String, String> {
+        let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
+        let conversation_id = self.client.state.conversation_id.to_string();
+        let mut headers = build_responses_headers(
+            self.client.state.beta_features_header.as_deref(),
+            Some(&self.turn_state),
+            turn_metadata_header.as_ref(),
+        );
+        if let Ok(header_value) = HeaderValue::from_str(&conversation_id) {
+            headers.insert("x-client-request-id", header_value);
+        }
+        headers.extend(build_conversation_headers(Some(conversation_id)));
+        headers.extend(self.client.build_subagent_headers());
+        header_map_to_string_map(&headers)
+    }
+
+    fn build_model_request_envelope(
+        &self,
+        request: ResponsesApiRequest,
+        request_headers: HashMap<String, String>,
+    ) -> Result<ModelRequestEnvelope> {
+        Ok(ModelRequestEnvelope {
+            model: request.model,
+            instructions: request.instructions,
+            input: request.input,
+            tools: request.tools,
+            tool_choice: request.tool_choice,
+            parallel_tool_calls: request.parallel_tool_calls,
+            reasoning: request.reasoning.map(serde_json::to_value).transpose()?,
+            store: request.store,
+            stream: request.stream,
+            include: request.include,
+            service_tier: request.service_tier,
+            prompt_cache_key: request.prompt_cache_key,
+            text: request.text.map(serde_json::to_value).transpose()?,
+            request_headers: Some(request_headers),
+        })
+    }
+
+    async fn stream_delegated(
+        &mut self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        effort: Option<ReasoningEffortConfig>,
+        summary: ReasoningSummaryConfig,
+        service_tier: Option<ServiceTier>,
+        turn_metadata_header: Option<&str>,
+    ) -> Result<ResponseStream> {
+        let Some(transport) = self.client.delegated_model_transport() else {
+            return Err(CodexErr::InvalidRequest(
+                "network delegation is enabled for this thread, but no delegated model transport is configured".to_string(),
+            ));
+        };
+
+        let request = self.build_responses_request(
+            &self
+                .client
+                .state
+                .provider
+                .to_api_provider(/*auth_mode*/ None)?,
+            prompt,
+            model_info,
+            effort,
+            summary,
+            service_tier,
+        )?;
+        let request_headers = self.build_delegated_request_headers(turn_metadata_header);
+        let request_id = self.next_delegated_request_id();
+        let request = self.build_model_request_envelope(request, request_headers)?;
+        let delegated_request = DelegatedModelRequest {
+            thread_id: self.client.state.conversation_id,
+            turn_id: self.turn_id.clone(),
+            request_id,
+            request,
+        };
+        let idle_timeout = self.delegated_stream_idle_timeout();
+        let receiver = transport.start_model_request(delegated_request).await?;
+        Ok(spawn_delegated_response_stream(
+            receiver,
+            idle_timeout,
+            Arc::clone(&self.turn_state),
+        ))
     }
 
     fn prepare_websocket_request(
@@ -1239,6 +1454,9 @@ impl ModelClientSession {
         service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
     ) -> Result<()> {
+        if self.delegated_transport_enabled() {
+            return Ok(());
+        }
         if !self.client.responses_websocket_enabled() {
             return Ok(());
         }
@@ -1299,6 +1517,18 @@ impl ModelClientSession {
         let wire_api = self.client.state.provider.wire_api;
         match wire_api {
             WireApi::Responses => {
+                if self.delegated_transport_enabled() {
+                    return self
+                        .stream_delegated(
+                            prompt,
+                            model_info,
+                            effort,
+                            summary,
+                            service_tier,
+                            turn_metadata_header,
+                        )
+                        .await;
+                }
                 if self.client.responses_websocket_enabled() {
                     let request_trace = current_span_w3c_trace_context();
                     match self
@@ -1400,6 +1630,160 @@ fn build_responses_headers(
         headers.insert(X_CODEX_TURN_METADATA_HEADER, header_value.clone());
     }
     headers
+}
+
+fn header_map_to_string_map(headers: &ApiHeaderMap) -> HashMap<String, String> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+fn string_map_to_header_map(headers: &HashMap<String, String>) -> ApiHeaderMap {
+    let mut header_map = ApiHeaderMap::new();
+    for (name, value) in headers {
+        if let (Ok(header_name), Ok(header_value)) = (
+            name.parse::<http::HeaderName>(),
+            HeaderValue::from_str(value),
+        ) {
+            header_map.insert(header_name, header_value);
+        }
+    }
+    header_map
+}
+
+fn metadata_events(
+    headers: &HashMap<String, String>,
+    turn_state: &Arc<OnceLock<String>>,
+) -> Vec<ResponseEvent> {
+    let header_map = string_map_to_header_map(headers);
+    if let Some(state) = header_map
+        .get(X_CODEX_TURN_STATE_HEADER)
+        .and_then(|value| value.to_str().ok())
+    {
+        let _ = turn_state.set(state.to_string());
+    }
+
+    let mut events = Vec::new();
+    let server_model = header_map
+        .get("openai-model")
+        .or_else(|| header_map.get("x-openai-model"))
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
+    if let Some(server_model) = server_model {
+        events.push(ResponseEvent::ServerModel(server_model));
+    }
+    for snapshot in parse_all_rate_limits(&header_map) {
+        events.push(ResponseEvent::RateLimits(snapshot));
+    }
+    if let Some(etag) = header_map
+        .get("X-Models-Etag")
+        .and_then(|value| value.to_str().ok())
+    {
+        events.push(ResponseEvent::ModelsEtag(etag.to_string()));
+    }
+    if header_map
+        .get("x-reasoning-included")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+    {
+        events.push(ResponseEvent::ServerReasoningIncluded(true));
+    }
+    events
+}
+
+fn delegated_request_failed_error(error: codex_app_server_protocol::ModelRequestError) -> CodexErr {
+    let message = if let Some(code) = error.code {
+        format!(
+            "delegated model request failed: type={} code={} message={}",
+            error.error_type, code, error.message
+        )
+    } else {
+        format!(
+            "delegated model request failed: type={} message={}",
+            error.error_type, error.message
+        )
+    };
+    CodexErr::InvalidRequest(message)
+}
+
+fn spawn_delegated_response_stream(
+    mut receiver: mpsc::Receiver<DelegatedModelEvent>,
+    idle_timeout: Duration,
+    turn_state: Arc<OnceLock<String>>,
+) -> ResponseStream {
+    let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
+    tokio::spawn(async move {
+        loop {
+            let next_event = tokio::time::timeout(idle_timeout, receiver.recv()).await;
+            match next_event {
+                Ok(Some(DelegatedModelEvent::StreamMetadata(metadata))) => {
+                    for event in metadata_events(&metadata, &turn_state) {
+                        if tx_event.send(Ok(event)).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+                Ok(Some(DelegatedModelEvent::StreamEvent(event))) => {
+                    let event = match serde_json::from_value::<ResponsesStreamEvent>(event) {
+                        Ok(event) => event,
+                        Err(err) => {
+                            let _ = tx_event.send(Err(CodexErr::Json(err))).await;
+                            return;
+                        }
+                    };
+                    let response_event = match process_responses_event(event) {
+                        Ok(response_event) => response_event,
+                        Err(err) => {
+                            let _ = tx_event
+                                .send(Err(map_api_error(err.into_api_error())))
+                                .await;
+                            return;
+                        }
+                    };
+                    if let Some(response_event) = response_event {
+                        let completed = matches!(response_event, ResponseEvent::Completed { .. });
+                        if tx_event.send(Ok(response_event)).await.is_err() {
+                            return;
+                        }
+                        if completed {
+                            return;
+                        }
+                    }
+                }
+                Ok(Some(DelegatedModelEvent::RequestFailed(error))) => {
+                    let _ = tx_event
+                        .send(Err(delegated_request_failed_error(error)))
+                        .await;
+                    return;
+                }
+                Ok(None) => {
+                    let _ = tx_event
+                        .send(Err(CodexErr::Stream(
+                            "delegated model stream closed before completion".to_string(),
+                            None,
+                        )))
+                        .await;
+                    return;
+                }
+                Err(_) => {
+                    let _ = tx_event
+                        .send(Err(CodexErr::Stream(
+                            "delegated model stream timed out waiting for events".to_string(),
+                            None,
+                        )))
+                        .await;
+                    return;
+                }
+            }
+        }
+    });
+    ResponseStream { rx_event }
 }
 
 fn map_response_stream<S>(

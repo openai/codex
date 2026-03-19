@@ -26,6 +26,7 @@ use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
 use crate::connectors;
+use crate::delegated_model_transport::DelegatedModelTransport;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::FEATURES;
 use crate::features::Feature;
@@ -59,6 +60,7 @@ use chrono::Local;
 use chrono::Utc;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
+use codex_app_server_protocol::NetworkDelegationConfig;
 use codex_exec_server::Environment;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
@@ -587,6 +589,7 @@ impl Codex {
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name,
             app_server_client_name: None,
+            network_delegation: None,
             session_source,
             dynamic_tools,
             persist_extended_history,
@@ -715,6 +718,35 @@ impl Codex {
                 ..Default::default()
             })
             .await
+    }
+
+    pub(crate) async fn set_network_delegation(
+        &self,
+        network_delegation: Option<NetworkDelegationConfig>,
+    ) -> ConstraintResult<()> {
+        let Some(network_delegation) = network_delegation else {
+            return Ok(());
+        };
+        self.session
+            .services
+            .model_client
+            .set_network_delegation_config(Some(network_delegation.clone()));
+        self.session
+            .update_settings(SessionSettingsUpdate {
+                network_delegation: Some(network_delegation),
+                ..Default::default()
+            })
+            .await
+    }
+
+    pub(crate) fn set_delegated_model_transport(
+        &self,
+        delegated_model_transport: Option<Arc<dyn DelegatedModelTransport>>,
+    ) {
+        self.session
+            .services
+            .model_client
+            .set_delegated_model_transport(delegated_model_transport);
     }
 
     pub(crate) async fn agent_status(&self) -> AgentStatus {
@@ -1051,6 +1083,7 @@ pub(crate) struct SessionConfiguration {
     /// Optional service name tag for session metrics.
     metrics_service_name: Option<String>,
     app_server_client_name: Option<String>,
+    network_delegation: Option<NetworkDelegationConfig>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
     dynamic_tools: Vec<DynamicToolSpec>,
@@ -1069,6 +1102,7 @@ impl SessionConfiguration {
             model: self.collaboration_mode.model().to_string(),
             model_provider_id: self.original_config_do_not_use.model_provider_id.clone(),
             service_tier: self.service_tier,
+            network_delegation: self.network_delegation.clone(),
             approval_policy: self.approval_policy.value(),
             approvals_reviewer: self.approvals_reviewer,
             sandbox_policy: self.sandbox_policy.get().clone(),
@@ -1132,6 +1166,9 @@ impl SessionConfiguration {
         if let Some(app_server_client_name) = updates.app_server_client_name.clone() {
             next_configuration.app_server_client_name = Some(app_server_client_name);
         }
+        if let Some(network_delegation) = updates.network_delegation.clone() {
+            next_configuration.network_delegation = Some(network_delegation);
+        }
         Ok(next_configuration)
     }
 }
@@ -1149,6 +1186,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
+    pub(crate) network_delegation: Option<NetworkDelegationConfig>,
 }
 
 impl Session {
@@ -4531,6 +4569,7 @@ mod handlers {
                         final_output_json_schema: Some(final_output_json_schema),
                         personality,
                         app_server_client_name: None,
+                        network_delegation: None,
                     },
                 )
             }
@@ -5620,8 +5659,12 @@ pub(crate) async fn run_turn(
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
-    let mut client_session =
-        prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    let mut client_session = prewarmed_client_session.unwrap_or_else(|| {
+        sess.services
+            .model_client
+            .new_session_with_turn_id(turn_context.sub_id.clone())
+    });
+    client_session.set_turn_id(turn_context.sub_id.clone());
 
     loop {
         if run_pending_session_start_hooks(&sess, &turn_context).await {

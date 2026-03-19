@@ -250,6 +250,66 @@
           ],
           "title": "InitializedNotification",
           "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "model/streamMetadata"
+              ],
+              "title": "Model/streamMetadataNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ModelStreamMetadataNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Model/streamMetadataNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "model/streamEvent"
+              ],
+              "title": "Model/streamEventNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ModelStreamEventNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Model/streamEventNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "model/requestFailed"
+              ],
+              "title": "Model/requestFailedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ModelRequestFailedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Model/requestFailedNotification",
+          "type": "object"
         }
       ],
       "title": "ClientNotification"
@@ -3071,6 +3131,206 @@
       "title": "McpServerElicitationRequestResponse",
       "type": "object"
     },
+    "ModelCompactEnvelope": {
+      "properties": {
+        "input": {
+          "items": {
+            "$ref": "#/definitions/v2/ResponseItem"
+          },
+          "type": "array"
+        },
+        "instructions": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "parallelToolCalls": {
+          "type": "boolean"
+        },
+        "reasoning": true,
+        "requestHeaders": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "text": true,
+        "tools": {
+          "items": true,
+          "type": "array"
+        }
+      },
+      "required": [
+        "input",
+        "instructions",
+        "model",
+        "parallelToolCalls",
+        "tools"
+      ],
+      "type": "object"
+    },
+    "ModelCompactParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "request": {
+          "$ref": "#/definitions/ModelCompactEnvelope"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "request",
+        "requestId",
+        "threadId",
+        "turnId"
+      ],
+      "title": "ModelCompactParams",
+      "type": "object"
+    },
+    "ModelCompactResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "output": {
+          "items": {
+            "$ref": "#/definitions/v2/ResponseItem"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "output"
+      ],
+      "title": "ModelCompactResponse",
+      "type": "object"
+    },
+    "ModelRequestEnvelope": {
+      "properties": {
+        "include": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "input": {
+          "items": {
+            "$ref": "#/definitions/v2/ResponseItem"
+          },
+          "type": "array"
+        },
+        "instructions": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "parallelToolCalls": {
+          "type": "boolean"
+        },
+        "promptCacheKey": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reasoning": true,
+        "requestHeaders": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "serviceTier": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "store": {
+          "type": "boolean"
+        },
+        "stream": {
+          "type": "boolean"
+        },
+        "text": true,
+        "toolChoice": {
+          "type": "string"
+        },
+        "tools": {
+          "items": true,
+          "type": "array"
+        }
+      },
+      "required": [
+        "include",
+        "input",
+        "instructions",
+        "model",
+        "parallelToolCalls",
+        "store",
+        "stream",
+        "toolChoice",
+        "tools"
+      ],
+      "type": "object"
+    },
+    "ModelRequestParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "request": {
+          "$ref": "#/definitions/ModelRequestEnvelope"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "request",
+        "requestId",
+        "threadId",
+        "turnId"
+      ],
+      "title": "ModelRequestParams",
+      "type": "object"
+    },
+    "ModelRequestResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "rejectionReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "accepted"
+      ],
+      "title": "ModelRequestResponse",
+      "type": "object"
+    },
     "NetworkApprovalContext": {
       "properties": {
         "host": {
@@ -4505,6 +4765,54 @@
             "params"
           ],
           "title": "Item/permissions/requestApprovalRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "model/request"
+              ],
+              "title": "Model/requestRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ModelRequestParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Model/requestRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "model/compact"
+              ],
+              "title": "Model/compactRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ModelCompactParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Model/compactRequest",
           "type": "object"
         },
         {
@@ -8872,6 +9180,58 @@
         "title": "ModelListResponse",
         "type": "object"
       },
+      "ModelRequestError": {
+        "properties": {
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "param": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "type"
+        ],
+        "type": "object"
+      },
+      "ModelRequestFailedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "error": {
+            "$ref": "#/definitions/v2/ModelRequestError"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "requestId",
+          "threadId",
+          "turnId"
+        ],
+        "title": "ModelRequestFailedNotification",
+        "type": "object"
+      },
       "ModelRerouteReason": {
         "enum": [
           "highRiskCyberActivity"
@@ -8907,6 +9267,57 @@
         "title": "ModelReroutedNotification",
         "type": "object"
       },
+      "ModelStreamEventNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "event": true,
+          "requestId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event",
+          "requestId",
+          "threadId",
+          "turnId"
+        ],
+        "title": "ModelStreamEventNotification",
+        "type": "object"
+      },
+      "ModelStreamMetadataNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "metadata": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "metadata",
+          "requestId",
+          "threadId",
+          "turnId"
+        ],
+        "title": "ModelStreamMetadataNotification",
+        "type": "object"
+      },
       "ModelUpgradeInfo": {
         "properties": {
           "migrationMarkdown": {
@@ -8940,6 +9351,32 @@
         "enum": [
           "restricted",
           "enabled"
+        ],
+        "type": "string"
+      },
+      "NetworkDelegationConfig": {
+        "properties": {
+          "mode": {
+            "$ref": "#/definitions/v2/NetworkDelegationMode"
+          },
+          "streamIdleTimeoutMs": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "type": "object"
+      },
+      "NetworkDelegationMode": {
+        "enum": [
+          "enabled",
+          "disabled"
         ],
         "type": "string"
       },

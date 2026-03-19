@@ -1,64 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "ApprovalsReviewer": {
-      "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request.",
-      "enum": [
-        "user",
-        "guardian_subagent"
-      ],
-      "type": "string"
-    },
-    "AskForApproval": {
-      "oneOf": [
-        {
-          "enum": [
-            "untrusted",
-            "on-failure",
-            "on-request",
-            "never"
-          ],
-          "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "granular": {
-              "properties": {
-                "mcp_elicitations": {
-                  "type": "boolean"
-                },
-                "request_permissions": {
-                  "default": false,
-                  "type": "boolean"
-                },
-                "rules": {
-                  "type": "boolean"
-                },
-                "sandbox_approval": {
-                  "type": "boolean"
-                },
-                "skill_approval": {
-                  "default": false,
-                  "type": "boolean"
-                }
-              },
-              "required": [
-                "mcp_elicitations",
-                "rules",
-                "sandbox_approval"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "granular"
-          ],
-          "title": "GranularAskForApproval",
-          "type": "object"
-        }
-      ]
-    },
     "ContentItem": {
       "oneOf": [
         {
@@ -315,39 +257,47 @@
         }
       ]
     },
-    "NetworkDelegationConfig": {
+    "ModelCompactEnvelope": {
       "properties": {
-        "mode": {
-          "$ref": "#/definitions/NetworkDelegationMode"
+        "input": {
+          "items": {
+            "$ref": "#/definitions/ResponseItem"
+          },
+          "type": "array"
         },
-        "streamIdleTimeoutMs": {
-          "format": "uint64",
-          "minimum": 0.0,
+        "instructions": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "parallelToolCalls": {
+          "type": "boolean"
+        },
+        "reasoning": true,
+        "requestHeaders": {
+          "additionalProperties": {
+            "type": "string"
+          },
           "type": [
-            "integer",
+            "object",
             "null"
           ]
+        },
+        "text": true,
+        "tools": {
+          "items": true,
+          "type": "array"
         }
       },
       "required": [
-        "mode"
+        "input",
+        "instructions",
+        "model",
+        "parallelToolCalls",
+        "tools"
       ],
       "type": "object"
-    },
-    "NetworkDelegationMode": {
-      "enum": [
-        "enabled",
-        "disabled"
-      ],
-      "type": "string"
-    },
-    "Personality": {
-      "enum": [
-        "none",
-        "friendly",
-        "pragmatic"
-      ],
-      "type": "string"
     },
     "ReasoningItemContent": {
       "oneOf": [
@@ -990,128 +940,28 @@
           "type": "object"
         }
       ]
-    },
-    "SandboxMode": {
-      "enum": [
-        "read-only",
-        "workspace-write",
-        "danger-full-access"
-      ],
-      "type": "string"
-    },
-    "ServiceTier": {
-      "enum": [
-        "fast",
-        "flex"
-      ],
-      "type": "string"
     }
   },
-  "description": "There are three ways to resume a thread: 1. By thread_id: load the thread from disk by thread_id and resume it. 2. By history: instantiate the thread from memory and resume it. 3. By path: load the thread from disk by path and resume it.\n\nThe precedence is: history > path > thread_id. If using history or path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
   "properties": {
-    "approvalPolicy": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/AskForApproval"
-        },
-        {
-          "type": "null"
-        }
-      ]
+    "request": {
+      "$ref": "#/definitions/ModelCompactEnvelope"
     },
-    "approvalsReviewer": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/ApprovalsReviewer"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "Override where approval requests are routed for review on this thread and subsequent turns."
-    },
-    "baseInstructions": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "config": {
-      "additionalProperties": true,
-      "type": [
-        "object",
-        "null"
-      ]
-    },
-    "cwd": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "developerInstructions": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "model": {
-      "description": "Configuration overrides for the resumed thread, if any.",
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "modelProvider": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "personality": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/Personality"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "sandbox": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/SandboxMode"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "serviceTier": {
-      "anyOf": [
-        {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ServiceTier"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        {
-          "type": "null"
-        }
-      ]
+    "requestId": {
+      "type": "string"
     },
     "threadId": {
+      "type": "string"
+    },
+    "turnId": {
       "type": "string"
     }
   },
   "required": [
-    "threadId"
+    "request",
+    "requestId",
+    "threadId",
+    "turnId"
   ],
-  "title": "ThreadResumeParams",
+  "title": "ModelCompactParams",
   "type": "object"
 }

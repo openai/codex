@@ -9,6 +9,7 @@ use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
+use crate::delegated_model_transport::DelegatedModelTransport;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::file_watcher::FileWatcher;
@@ -38,6 +39,7 @@ use futures::stream::FuturesUnordered;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -157,6 +159,7 @@ pub(crate) struct ThreadManagerState {
     mcp_manager: Arc<McpManager>,
     file_watcher: Arc<FileWatcher>,
     session_source: SessionSource,
+    delegated_model_transport: StdMutex<Option<Arc<dyn DelegatedModelTransport>>>,
     // Captures submitted ops for testing purpose when test mode is enabled.
     ops_log: Option<SharedCapturedOps>,
 }
@@ -205,6 +208,7 @@ impl ThreadManager {
                 file_watcher,
                 auth_manager,
                 session_source,
+                delegated_model_transport: StdMutex::new(None),
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -269,6 +273,7 @@ impl ThreadManager {
                 file_watcher,
                 auth_manager,
                 session_source: SessionSource::Exec,
+                delegated_model_transport: StdMutex::new(None),
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -302,6 +307,17 @@ impl ThreadManager {
 
     pub fn get_models_manager(&self) -> Arc<ModelsManager> {
         self.state.models_manager.clone()
+    }
+
+    pub fn set_delegated_model_transport(
+        &self,
+        transport: Option<Arc<dyn DelegatedModelTransport>>,
+    ) {
+        *self
+            .state
+            .delegated_model_transport
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = transport;
     }
 
     pub async fn list_models(
@@ -762,6 +778,11 @@ impl ThreadManagerState {
         let watch_registration = self
             .file_watcher
             .register_config(&config, self.skills_manager.as_ref());
+        let delegated_model_transport = self
+            .delegated_model_transport
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
@@ -784,6 +805,7 @@ impl ThreadManagerState {
             parent_trace,
         })
         .await?;
+        codex.set_delegated_model_transport(delegated_model_transport);
         self.finalize_thread_spawn(codex, thread_id, watch_registration)
             .await
     }

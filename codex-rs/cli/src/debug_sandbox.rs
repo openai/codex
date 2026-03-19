@@ -251,15 +251,15 @@ async fn run_command_under_sandbox(
                 &config.permissions.file_system_sandbox_policy,
                 config.permissions.network_sandbox_policy,
                 sandbox_policy_cwd.as_path(),
-                false,
+                /*enforce_managed_network*/ false,
                 network.as_ref(),
-                None,
+                /*extensions*/ None,
             );
             let network_policy = config.permissions.network_sandbox_policy;
             spawn_debug_sandbox_child(
                 PathBuf::from("/usr/bin/sandbox-exec"),
                 args,
-                None,
+                /*arg0*/ None,
                 cwd,
                 network_policy,
                 env,

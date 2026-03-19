@@ -555,7 +555,16 @@ macro_rules! server_request_definitions {
         ),* $(,)?
     ) => {
         /// Request initiated from the server and sent to the client.
-        #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+        #[derive(
+            Serialize,
+            Deserialize,
+            Debug,
+            Clone,
+            PartialEq,
+            JsonSchema,
+            TS,
+            ExperimentalApi,
+        )]
         #[allow(clippy::large_enum_variant)]
         #[serde(tag = "method", rename_all = "camelCase")]
         pub enum ServerRequest {
@@ -701,7 +710,16 @@ macro_rules! client_notification_definitions {
             $variant:ident $( ( $payload:ty ) )?
         ),* $(,)?
     ) => {
-        #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS, Display)]
+        #[derive(
+            Serialize,
+            Deserialize,
+            Debug,
+            Clone,
+            JsonSchema,
+            TS,
+            Display,
+            ExperimentalApi,
+        )]
         #[serde(tag = "method", content = "params", rename_all = "camelCase")]
         #[strum(serialize_all = "camelCase")]
         pub enum ClientNotification {
@@ -711,12 +729,20 @@ macro_rules! client_notification_definitions {
             )*
         }
 
+        impl TryFrom<JSONRPCNotification> for ClientNotification {
+            type Error = serde_json::Error;
+
+            fn try_from(value: JSONRPCNotification) -> Result<Self, serde_json::Error> {
+                serde_json::from_value(serde_json::to_value(value)?)
+            }
+        }
+
         pub fn export_client_notification_schemas(
             _out_dir: &::std::path::Path,
         ) -> ::anyhow::Result<Vec<GeneratedSchema>> {
-            let schemas = Vec::new();
-            $( $(schemas.push(crate::export::write_json_schema::<$payload>(_out_dir, stringify!($payload))?);)? )*
-            Ok(schemas)
+            Ok(vec![
+                $( $(crate::export::write_json_schema::<$payload>(_out_dir, stringify!($payload))?,)? )*
+            ])
         }
     };
 }
@@ -761,6 +787,18 @@ server_request_definitions! {
     PermissionsRequestApproval => "item/permissions/requestApproval" {
         params: v2::PermissionsRequestApprovalParams,
         response: v2::PermissionsRequestApprovalResponse,
+    },
+
+    #[experimental("thread/start.networkDelegation")]
+    ModelRequest => "model/request" {
+        params: v2::ModelRequestParams,
+        response: v2::ModelRequestResponse,
+    },
+
+    #[experimental("thread/start.networkDelegation")]
+    ModelCompact => "model/compact" {
+        params: v2::ModelCompactParams,
+        response: v2::ModelCompactResponse,
     },
 
     /// Execute a dynamic tool call on the client.
@@ -942,6 +980,21 @@ server_notification_definitions! {
 
 client_notification_definitions! {
     Initialized,
+    #[experimental("thread/start.networkDelegation")]
+    #[serde(rename = "model/streamMetadata")]
+    #[ts(rename = "model/streamMetadata")]
+    #[strum(serialize = "model/streamMetadata")]
+    ModelStreamMetadata(v2::ModelStreamMetadataNotification),
+    #[experimental("thread/start.networkDelegation")]
+    #[serde(rename = "model/streamEvent")]
+    #[ts(rename = "model/streamEvent")]
+    #[strum(serialize = "model/streamEvent")]
+    ModelStreamEvent(v2::ModelStreamEventNotification),
+    #[experimental("thread/start.networkDelegation")]
+    #[serde(rename = "model/requestFailed")]
+    #[ts(rename = "model/requestFailed")]
+    #[strum(serialize = "model/requestFailed")]
+    ModelRequestFailed(v2::ModelRequestFailedNotification),
 }
 
 #[cfg(test)]

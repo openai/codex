@@ -1501,6 +1501,26 @@ class ModelListParams(BaseModel):
     ] = None
 
 
+class ModelRequestError(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    code: str | None = None
+    message: str
+    param: str | None = None
+    type: str
+
+
+class ModelRequestFailedNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    error: ModelRequestError
+    request_id: Annotated[str, Field(alias="requestId")]
+    thread_id: Annotated[str, Field(alias="threadId")]
+    turn_id: Annotated[str, Field(alias="turnId")]
+
+
 class ModelRerouteReason(RootModel[Literal["highRiskCyberActivity"]]):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -1519,6 +1539,26 @@ class ModelReroutedNotification(BaseModel):
     turn_id: Annotated[str, Field(alias="turnId")]
 
 
+class ModelStreamEventNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    event: Any
+    request_id: Annotated[str, Field(alias="requestId")]
+    thread_id: Annotated[str, Field(alias="threadId")]
+    turn_id: Annotated[str, Field(alias="turnId")]
+
+
+class ModelStreamMetadataNotification(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    metadata: dict[str, str]
+    request_id: Annotated[str, Field(alias="requestId")]
+    thread_id: Annotated[str, Field(alias="threadId")]
+    turn_id: Annotated[str, Field(alias="turnId")]
+
+
 class ModelUpgradeInfo(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -1532,6 +1572,11 @@ class ModelUpgradeInfo(BaseModel):
 class NetworkAccess(Enum):
     restricted = "restricted"
     enabled = "enabled"
+
+
+class NetworkDelegationMode(Enum):
+    enabled = "enabled"
+    disabled = "disabled"
 
 
 class NetworkRequirements(BaseModel):
@@ -1797,6 +1842,11 @@ class ReadOnlyAccess(RootModel[RestrictedReadOnlyAccess | FullAccessReadOnlyAcce
         populate_by_name=True,
     )
     root: RestrictedReadOnlyAccess | FullAccessReadOnlyAccess
+
+
+class RealtimeConversationVersion(Enum):
+    v1 = "v1"
+    v2 = "v2"
 
 
 class ReasoningEffort(Enum):
@@ -3058,6 +3108,7 @@ class ThreadRealtimeStartedNotification(BaseModel):
     )
     session_id: Annotated[str | None, Field(alias="sessionId")] = None
     thread_id: Annotated[str, Field(alias="threadId")]
+    version: RealtimeConversationVersion
 
 
 class ThreadResumeParams(BaseModel):
@@ -4590,6 +4641,16 @@ class ModelListResponse(BaseModel):
             alias="nextCursor",
             description="Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
         ),
+    ] = None
+
+
+class NetworkDelegationConfig(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    mode: NetworkDelegationMode
+    stream_idle_timeout_ms: Annotated[
+        int | None, Field(alias="streamIdleTimeoutMs", ge=0)
     ] = None
 
 

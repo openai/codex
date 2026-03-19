@@ -1,5 +1,104 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ModelRequestError": {
+      "properties": {
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "param": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "message",
+        "type"
+      ],
+      "type": "object"
+    },
+    "ModelRequestFailedNotification": {
+      "properties": {
+        "error": {
+          "$ref": "#/definitions/ModelRequestError"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "error",
+        "requestId",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
+    "ModelStreamEventNotification": {
+      "properties": {
+        "event": true,
+        "requestId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "requestId",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
+    "ModelStreamMetadataNotification": {
+      "properties": {
+        "metadata": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "metadata",
+        "requestId",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    }
+  },
   "oneOf": [
     {
       "properties": {
@@ -15,6 +114,66 @@
         "method"
       ],
       "title": "InitializedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "model/streamMetadata"
+          ],
+          "title": "Model/streamMetadataNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ModelStreamMetadataNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Model/streamMetadataNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "model/streamEvent"
+          ],
+          "title": "Model/streamEventNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ModelStreamEventNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Model/streamEventNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "model/requestFailed"
+          ],
+          "title": "Model/requestFailedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ModelRequestFailedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Model/requestFailedNotification",
       "type": "object"
     }
   ],

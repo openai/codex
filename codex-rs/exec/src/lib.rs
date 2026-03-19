@@ -1314,6 +1314,30 @@ async fn handle_server_request(
             )
             .await
         }
+        ServerRequest::ModelRequest { request_id, params } => {
+            reject_server_request(
+                client,
+                request_id,
+                &method,
+                format!(
+                    "delegated model requests are not supported in exec mode for thread `{}`",
+                    params.thread_id
+                ),
+            )
+            .await
+        }
+        ServerRequest::ModelCompact { request_id, params } => {
+            reject_server_request(
+                client,
+                request_id,
+                &method,
+                format!(
+                    "delegated model compaction is not supported in exec mode for thread `{}`",
+                    params.thread_id
+                ),
+            )
+            .await
+        }
         ServerRequest::ApplyPatchApproval { request_id, params } => {
             reject_server_request(
                 client,

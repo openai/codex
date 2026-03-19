@@ -59,6 +59,32 @@
         }
       ]
     },
+    "NetworkDelegationConfig": {
+      "properties": {
+        "mode": {
+          "$ref": "#/definitions/NetworkDelegationMode"
+        },
+        "streamIdleTimeoutMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
+    },
+    "NetworkDelegationMode": {
+      "enum": [
+        "enabled",
+        "disabled"
+      ],
+      "type": "string"
+    },
     "SandboxMode": {
       "enum": [
         "read-only",

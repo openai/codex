@@ -744,11 +744,14 @@ async fn command_exec_process_ids_are_connection_scoped_and_disconnect_terminate
     )
     .await?;
 
-    let delta = read_command_exec_delta_ws(&mut ws1).await?;
-    assert_eq!(delta.process_id, "shared-process");
-    assert_eq!(delta.stream, CommandExecOutputStream::Stdout);
-    let delta_text = String::from_utf8(STANDARD.decode(&delta.delta_base64)?)?;
-    assert!(delta_text.contains("ready"));
+    let stdout = read_command_exec_output_ws_until_contains(
+        &mut ws1,
+        "shared-process",
+        CommandExecOutputStream::Stdout,
+        "ready",
+    )
+    .await?;
+    assert!(stdout.contains("ready"));
     wait_for_process_marker(&marker, true).await?;
 
     send_request(
@@ -835,6 +838,37 @@ async fn read_command_exec_delta_ws(
         };
         if notification.method == "command/exec/outputDelta" {
             return decode_delta_notification(notification);
+        }
+    }
+}
+
+async fn read_command_exec_output_ws_until_contains(
+    stream: &mut super::connection_handling_websocket::WsClient,
+    process_id: &str,
+    expected_stream: CommandExecOutputStream,
+    expected: &str,
+) -> Result<String> {
+    let deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
+    let mut collected = String::new();
+
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let delta = timeout(remaining, read_command_exec_delta_ws(stream))
+            .await
+            .with_context(|| {
+                format!(
+                    "timed out waiting for {expected:?} in websocket command/exec output for {process_id}; collected {collected:?}"
+                )
+            })??;
+        assert_eq!(delta.process_id, process_id);
+        if delta.stream != expected_stream {
+            continue;
+        }
+
+        let delta_text = String::from_utf8(STANDARD.decode(&delta.delta_base64)?)?;
+        collected.push_str(&delta_text.replace('\r', ""));
+        if collected.contains(expected) {
+            return Ok(collected);
         }
     }
 }
