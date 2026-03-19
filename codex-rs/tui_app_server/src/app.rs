@@ -4917,6 +4917,9 @@ impl App {
                     .handle_server_notification(notification, /*replay_kind*/ None);
             }
             ThreadBufferedEvent::Request(request) => {
+                if self.should_drop_stale_exec_approval_request(&request) {
+                    return;
+                }
                 self.chat_widget
                     .handle_server_request(request, /*replay_kind*/ None);
             }
@@ -4941,9 +4944,13 @@ impl App {
             ThreadBufferedEvent::Notification(notification) => self
                 .chat_widget
                 .handle_server_notification(notification, Some(ReplayKind::ThreadSnapshot)),
-            ThreadBufferedEvent::Request(request) => self
-                .chat_widget
-                .handle_server_request(request, Some(ReplayKind::ThreadSnapshot)),
+            ThreadBufferedEvent::Request(request) => {
+                if self.should_drop_stale_exec_approval_request(&request) {
+                    return;
+                }
+                self.chat_widget
+                    .handle_server_request(request, Some(ReplayKind::ThreadSnapshot));
+            }
             ThreadBufferedEvent::HistoryEntryResponse(event) => {
                 self.chat_widget.handle_history_entry_response(event)
             }
@@ -4955,6 +4962,19 @@ impl App {
                 self.chat_widget.handle_thread_rolled_back();
             }
         }
+    }
+
+    fn should_drop_stale_exec_approval_request(&self, request: &ServerRequest) -> bool {
+        let ServerRequest::CommandExecutionRequestApproval { params, .. } = request else {
+            return false;
+        };
+        let approval_id = params
+            .approval_id
+            .clone()
+            .unwrap_or_else(|| params.item_id.clone());
+        !self
+            .pending_app_server_requests
+            .has_pending_exec_approval(&approval_id)
     }
 
     /// Handles an event emitted by the currently active thread.
@@ -5647,6 +5667,11 @@ mod tests {
         let thread_id = ThreadId::new();
         let approval_request = exec_approval_request(thread_id, "turn-1", "call-1", None);
 
+        assert_eq!(
+            app.pending_app_server_requests
+                .note_server_request(&approval_request),
+            None
+        );
         app.enqueue_primary_thread_request(approval_request).await?;
         app.enqueue_primary_thread_session(
             test_thread_session(thread_id, PathBuf::from("/tmp/project")),
@@ -5755,6 +5780,20 @@ mod tests {
             "resolved active approval should be removed from the live queue"
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stale_exec_approval_request_is_dropped_at_consume_time() -> Result<()> {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let request = exec_approval_request(thread_id, "", "call-1", Some("approval-1"));
+
+        assert_eq!(app.chat_widget.has_active_view(), false);
+
+        app.handle_thread_event_now(ThreadBufferedEvent::Request(request));
+
+        assert_eq!(app.chat_widget.has_active_view(), false);
         Ok(())
     }
 

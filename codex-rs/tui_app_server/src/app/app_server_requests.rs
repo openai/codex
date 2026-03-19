@@ -309,6 +309,10 @@ impl PendingAppServerRequests {
         self.mcp_requests.retain(|_, value| value != request_id);
         ResolvedAppServerRequest { exec_approval_ids }
     }
+
+    pub(super) fn has_pending_exec_approval(&self, approval_id: &str) -> bool {
+        self.exec_approvals.contains_key(approval_id)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
