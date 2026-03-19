@@ -279,16 +279,16 @@ impl FileSystemSandboxPolicy {
                 }
             });
 
-            let cwd_root = AbsolutePathBuf::from_absolute_path(cwd)
-                .expect("workspace-write cwd should already be absolute");
-            for protected_path in default_read_only_subpaths_for_writable_root(
-                &cwd_root, /*protect_missing_dot_codex*/ true,
-            ) {
-                append_path_entry_if_missing(
-                    &mut file_system_policy.entries,
-                    protected_path,
-                    FileSystemAccessMode::Read,
-                );
+            if let Ok(cwd_root) = AbsolutePathBuf::from_absolute_path(cwd) {
+                for protected_path in default_read_only_subpaths_for_writable_root(
+                    &cwd_root, /*protect_missing_dot_codex*/ true,
+                ) {
+                    append_path_entry_if_missing(
+                        &mut file_system_policy.entries,
+                        protected_path,
+                        FileSystemAccessMode::Read,
+                    );
+                }
             }
             for writable_root in writable_roots {
                 for protected_path in default_read_only_subpaths_for_writable_root(
@@ -1271,6 +1271,31 @@ mod tests {
             FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, cwd.path());
 
         assert!(!file_system_policy.can_write_path_with_cwd(&dot_codex_config, cwd.path()));
+    }
+
+    #[test]
+    fn legacy_workspace_write_projection_accepts_relative_cwd() {
+        let relative_cwd = Path::new("workspace");
+        let regular_file = relative_cwd.join("notes.txt");
+        let dot_codex_config = relative_cwd.join(".codex/config.toml");
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            read_only_access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: vec![],
+            },
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let file_system_policy =
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, relative_cwd);
+
+        assert!(file_system_policy.can_write_path_with_cwd(regular_file.as_path(), relative_cwd));
+        assert!(
+            !file_system_policy.can_write_path_with_cwd(dot_codex_config.as_path(), relative_cwd)
+        );
     }
 
     #[cfg(unix)]
