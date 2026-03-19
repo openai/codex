@@ -495,7 +495,7 @@ impl ThreadManager {
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
-        self.fork_thread_with_history_suffix(
+        self.fork_thread_and_append_items(
             nth_user_message,
             config,
             path,
@@ -521,7 +521,7 @@ impl ThreadManager {
     ) -> CodexResult<NewThread> {
         // BTW side questions use this when the parent turn is still running so the child sees the
         // same `<turn_aborted>` marker a real interrupt would have recorded before the new task.
-        self.fork_thread_with_history_suffix(
+        self.fork_thread_and_append_items(
             nth_user_message,
             config,
             path,
@@ -532,19 +532,19 @@ impl ThreadManager {
         .await
     }
 
-    async fn fork_thread_with_history_suffix(
+    async fn fork_thread_and_append_items(
         &self,
         nth_user_message: usize,
         config: Config,
         path: PathBuf,
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
-        history_suffix: Vec<RolloutItem>,
+        appended_items: Vec<RolloutItem>,
     ) -> CodexResult<NewThread> {
         let history = RolloutRecorder::get_rollout_history(&path).await?;
         let mut items =
             truncate_before_nth_user_message(history, nth_user_message).get_rollout_items();
-        items.extend(history_suffix);
+        items.extend(appended_items);
         let history = if items.is_empty() {
             InitialHistory::New
         } else {
