@@ -1,11 +1,11 @@
-use super::PluginManifestInterfaceSummary;
+use super::PluginManifestInterface;
 use super::load_plugin_manifest;
-use super::plugin_manifest_interface;
 use super::store::PluginId;
 use super::store::PluginIdError;
 use crate::git_info::get_git_repo_root;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
+use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dirs::home_dir;
 use serde::Deserialize;
@@ -14,6 +14,7 @@ use std::io;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
+use tracing::warn;
 
 const MARKETPLACE_RELATIVE_PATH: &str = ".agents/plugins/marketplace.json";
 
@@ -25,24 +26,38 @@ pub struct ResolvedMarketplacePlugin {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MarketplaceSummary {
+pub struct Marketplace {
     pub name: String,
     pub path: AbsolutePathBuf,
-    pub plugins: Vec<MarketplacePluginSummary>,
+    pub interface: Option<MarketplaceInterface>,
+    pub plugins: Vec<MarketplacePlugin>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MarketplacePluginSummary {
+pub struct MarketplaceInterface {
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketplacePlugin {
     pub name: String,
-    pub source: MarketplacePluginSourceSummary,
-    pub install_policy: MarketplacePluginInstallPolicy,
-    pub auth_policy: MarketplacePluginAuthPolicy,
-    pub interface: Option<PluginManifestInterfaceSummary>,
+    pub source: MarketplacePluginSource,
+    pub policy: MarketplacePluginPolicy,
+    pub interface: Option<PluginManifestInterface>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MarketplacePluginSourceSummary {
+pub enum MarketplacePluginSource {
     Local { path: AbsolutePathBuf },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketplacePluginPolicy {
+    pub installation: MarketplacePluginInstallPolicy,
+    pub authentication: MarketplacePluginAuthPolicy,
+    // TODO: Surface or enforce product gating at the Codex/plugin consumer boundary instead of
+    // only carrying it through core marketplace metadata.
+    pub products: Vec<Product>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -113,6 +128,9 @@ pub enum MarketplaceError {
         marketplace_name: String,
     },
 
+    #[error("plugins feature is disabled")]
+    PluginsDisabled,
+
     #[error("{0}")]
     InvalidPlugin(String),
 }
@@ -128,8 +146,9 @@ impl MarketplaceError {
 pub fn resolve_marketplace_plugin(
     marketplace_path: &AbsolutePathBuf,
     plugin_name: &str,
+    restriction_product: Option<Product>,
 ) -> Result<ResolvedMarketplacePlugin, MarketplaceError> {
-    let marketplace = load_marketplace(marketplace_path)?;
+    let marketplace = load_raw_marketplace_manifest(marketplace_path)?;
     let marketplace_name = marketplace.name;
     let plugin = marketplace
         .plugins
@@ -143,14 +162,17 @@ pub fn resolve_marketplace_plugin(
         });
     };
 
-    let MarketplacePlugin {
+    let RawMarketplaceManifestPlugin {
         name,
         source,
-        install_policy,
-        auth_policy,
+        policy,
         ..
     } = plugin;
-    if install_policy == MarketplacePluginInstallPolicy::NotAvailable {
+    let install_policy = policy.installation;
+    let product_allowed = policy.products.is_empty()
+        || restriction_product
+            .is_some_and(|product| product.matches_product_restriction(&policy.products));
+    if install_policy == MarketplacePluginInstallPolicy::NotAvailable || !product_allowed {
         return Err(MarketplaceError::PluginNotAvailable {
             plugin_name: name,
             marketplace_name,
@@ -163,55 +185,56 @@ pub fn resolve_marketplace_plugin(
     Ok(ResolvedMarketplacePlugin {
         plugin_id,
         source_path: resolve_plugin_source_path(marketplace_path, source)?,
-        auth_policy,
+        auth_policy: policy.authentication,
     })
 }
 
 pub fn list_marketplaces(
     additional_roots: &[AbsolutePathBuf],
-) -> Result<Vec<MarketplaceSummary>, MarketplaceError> {
+) -> Result<Vec<Marketplace>, MarketplaceError> {
     list_marketplaces_with_home(additional_roots, home_dir().as_deref())
 }
 
-pub(crate) fn load_marketplace_summary(
-    path: &AbsolutePathBuf,
-) -> Result<MarketplaceSummary, MarketplaceError> {
-    let marketplace = load_marketplace(path)?;
+pub(crate) fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, MarketplaceError> {
+    let marketplace = load_raw_marketplace_manifest(path)?;
     let mut plugins = Vec::new();
 
     for plugin in marketplace.plugins {
-        let MarketplacePlugin {
+        let RawMarketplaceManifestPlugin {
             name,
             source,
-            install_policy,
-            auth_policy,
+            policy,
             category,
         } = plugin;
         let source_path = resolve_plugin_source_path(path, source)?;
-        let source = MarketplacePluginSourceSummary::Local {
+        let source = MarketplacePluginSource::Local {
             path: source_path.clone(),
         };
-        let mut interface = load_plugin_manifest(source_path.as_path())
-            .and_then(|manifest| plugin_manifest_interface(&manifest, source_path.as_path()));
+        let mut interface =
+            load_plugin_manifest(source_path.as_path()).and_then(|manifest| manifest.interface);
         if let Some(category) = category {
             // Marketplace taxonomy wins when both sources provide a category.
             interface
-                .get_or_insert_with(PluginManifestInterfaceSummary::default)
+                .get_or_insert_with(PluginManifestInterface::default)
                 .category = Some(category);
         }
 
-        plugins.push(MarketplacePluginSummary {
+        plugins.push(MarketplacePlugin {
             name,
             source,
-            install_policy,
-            auth_policy,
+            policy: MarketplacePluginPolicy {
+                installation: policy.installation,
+                authentication: policy.authentication,
+                products: policy.products,
+            },
             interface,
         });
     }
 
-    Ok(MarketplaceSummary {
+    Ok(Marketplace {
         name: marketplace.name,
         path: path.clone(),
+        interface: resolve_marketplace_interface(marketplace.interface),
         plugins,
     })
 }
@@ -219,11 +242,20 @@ pub(crate) fn load_marketplace_summary(
 fn list_marketplaces_with_home(
     additional_roots: &[AbsolutePathBuf],
     home_dir: Option<&Path>,
-) -> Result<Vec<MarketplaceSummary>, MarketplaceError> {
+) -> Result<Vec<Marketplace>, MarketplaceError> {
     let mut marketplaces = Vec::new();
 
     for marketplace_path in discover_marketplace_paths_from_roots(additional_roots, home_dir) {
-        marketplaces.push(load_marketplace_summary(&marketplace_path)?);
+        match load_marketplace(&marketplace_path) {
+            Ok(marketplace) => marketplaces.push(marketplace),
+            Err(err) => {
+                warn!(
+                    path = %marketplace_path.display(),
+                    error = %err,
+                    "skipping marketplace that failed to load"
+                );
+            }
+        }
     }
 
     Ok(marketplaces)
@@ -267,7 +299,9 @@ fn discover_marketplace_paths_from_roots(
     paths
 }
 
-fn load_marketplace(path: &AbsolutePathBuf) -> Result<MarketplaceFile, MarketplaceError> {
+fn load_raw_marketplace_manifest(
+    path: &AbsolutePathBuf,
+) -> Result<RawMarketplaceManifest, MarketplaceError> {
     let contents = fs::read_to_string(path.as_path()).map_err(|err| {
         if err.kind() == io::ErrorKind::NotFound {
             MarketplaceError::MarketplaceNotFound {
@@ -285,10 +319,10 @@ fn load_marketplace(path: &AbsolutePathBuf) -> Result<MarketplaceFile, Marketpla
 
 fn resolve_plugin_source_path(
     marketplace_path: &AbsolutePathBuf,
-    source: MarketplacePluginSource,
+    source: RawMarketplaceManifestPluginSource,
 ) -> Result<AbsolutePathBuf, MarketplaceError> {
     match source {
-        MarketplacePluginSource::Local { path } => {
+        RawMarketplaceManifestPluginSource::Local { path } => {
             let Some(path) = path.strip_prefix("./") else {
                 return Err(MarketplaceError::InvalidMarketplaceFile {
                     path: marketplace_path.to_path_buf(),
@@ -365,28 +399,60 @@ fn marketplace_root_dir(
 }
 
 #[derive(Debug, Deserialize)]
-struct MarketplaceFile {
+#[serde(rename_all = "camelCase")]
+struct RawMarketplaceManifest {
     name: String,
-    plugins: Vec<MarketplacePlugin>,
+    #[serde(default)]
+    interface: Option<RawMarketplaceManifestInterface>,
+    plugins: Vec<RawMarketplaceManifestPlugin>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawMarketplaceManifestInterface {
+    #[serde(default)]
+    display_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct MarketplacePlugin {
+struct RawMarketplaceManifestPlugin {
     name: String,
-    source: MarketplacePluginSource,
+    source: RawMarketplaceManifestPluginSource,
     #[serde(default)]
-    install_policy: MarketplacePluginInstallPolicy,
-    #[serde(default)]
-    auth_policy: MarketplacePluginAuthPolicy,
+    policy: RawMarketplaceManifestPluginPolicy,
     #[serde(default)]
     category: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawMarketplaceManifestPluginPolicy {
+    #[serde(default)]
+    installation: MarketplacePluginInstallPolicy,
+    #[serde(default)]
+    authentication: MarketplacePluginAuthPolicy,
+    #[serde(default)]
+    products: Vec<Product>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "source", rename_all = "lowercase")]
-enum MarketplacePluginSource {
+enum RawMarketplaceManifestPluginSource {
     Local { path: String },
+}
+
+fn resolve_marketplace_interface(
+    interface: Option<RawMarketplaceManifestInterface>,
+) -> Option<MarketplaceInterface> {
+    let interface = interface?;
+    if interface.display_name.is_some() {
+        Some(MarketplaceInterface {
+            display_name: interface.display_name,
+        })
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

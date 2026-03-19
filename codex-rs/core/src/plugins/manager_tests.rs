@@ -7,6 +7,11 @@ use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
+use crate::plugins::MarketplacePluginInstallPolicy;
+use crate::plugins::test_support::TEST_CURATED_PLUGIN_SHA;
+use crate::plugins::test_support::write_curated_plugin_sha_with as write_curated_plugin_sha;
+use crate::plugins::test_support::write_file;
+use crate::plugins::test_support::write_openai_curated_marketplace;
 use codex_app_server_protocol::ConfigLayerSource;
 use pretty_assertions::assert_eq;
 use std::fs;
@@ -19,13 +24,6 @@ use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
-
-fn write_file(path: &Path, contents: &str) {
-    fs::create_dir_all(path.parent().expect("file should have a parent")).unwrap();
-    fs::write(path, contents).unwrap();
-}
-
 fn write_plugin(root: &Path, dir_name: &str, manifest_name: &str) {
     let plugin_root = root.join(dir_name);
     fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
@@ -37,44 +35,6 @@ fn write_plugin(root: &Path, dir_name: &str, manifest_name: &str) {
     .unwrap();
     fs::write(plugin_root.join("skills/SKILL.md"), "skill").unwrap();
     fs::write(plugin_root.join(".mcp.json"), r#"{"mcpServers":{}}"#).unwrap();
-}
-
-fn write_openai_curated_marketplace(root: &Path, plugin_names: &[&str]) {
-    fs::create_dir_all(root.join(".agents/plugins")).unwrap();
-    let plugins = plugin_names
-        .iter()
-        .map(|plugin_name| {
-            format!(
-                r#"{{
-      "name": "{plugin_name}",
-      "source": {{
-        "source": "local",
-        "path": "./plugins/{plugin_name}"
-      }}
-    }}"#
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",\n");
-    fs::write(
-        root.join(".agents/plugins/marketplace.json"),
-        format!(
-            r#"{{
-  "name": "{OPENAI_CURATED_MARKETPLACE_NAME}",
-  "plugins": [
-{plugins}
-  ]
-}}"#
-        ),
-    )
-    .unwrap();
-    for plugin_name in plugin_names {
-        write_plugin(root, &format!("plugins/{plugin_name}"), plugin_name);
-    }
-}
-
-fn write_curated_plugin_sha(codex_home: &Path, sha: &str) {
-    write_file(&codex_home.join(".tmp/plugins.sha"), &format!("{sha}\n"));
 }
 
 fn plugin_config_toml(enabled: bool, plugins_feature_enabled: bool) -> String {
@@ -99,18 +59,8 @@ fn plugin_config_toml(enabled: bool, plugins_feature_enabled: bool) -> String {
 
 fn load_plugins_from_config(config_toml: &str, codex_home: &Path) -> PluginLoadOutcome {
     write_file(&codex_home.join(CONFIG_TOML_FILE), config_toml);
-    let stack = ConfigLayerStack::new(
-        vec![ConfigLayerEntry::new(
-            ConfigLayerSource::User {
-                file: AbsolutePathBuf::try_from(codex_home.join(CONFIG_TOML_FILE)).unwrap(),
-            },
-            toml::from_str(config_toml).expect("plugin test config should parse"),
-        )],
-        ConfigRequirements::default(),
-        ConfigRequirementsToml::default(),
-    )
-    .expect("config layer stack should build");
-    PluginsManager::new(codex_home.to_path_buf()).plugins_for_layer_stack(codex_home, &stack, false)
+    let config = load_config_blocking(codex_home, codex_home);
+    PluginsManager::new(codex_home.to_path_buf()).plugins_for_config(&config)
 }
 
 async fn load_config(codex_home: &Path, cwd: &Path) -> crate::config::Config {
@@ -120,6 +70,14 @@ async fn load_config(codex_home: &Path, cwd: &Path) -> crate::config::Config {
         .build()
         .await
         .expect("config should load")
+}
+
+fn load_config_blocking(codex_home: &Path, cwd: &Path) -> crate::config::Config {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime should build")
+        .block_on(load_config(codex_home, cwd))
 }
 
 #[test]
@@ -789,8 +747,13 @@ fn load_plugins_returns_empty_when_feature_disabled() {
         &plugin_root.join("skills/sample-search/SKILL.md"),
         "---\nname: sample-search\ndescription: search sample data\n---\n",
     );
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        &plugin_config_toml(true, false),
+    );
 
-    let outcome = load_plugins_from_config(&plugin_config_toml(true, false), codex_home.path());
+    let config = load_config_blocking(codex_home.path(), codex_home.path());
+    let outcome = PluginsManager::new(codex_home.path().to_path_buf()).plugins_for_config(&config);
 
     assert_eq!(outcome, PluginLoadOutcome::default());
 }
@@ -852,7 +815,9 @@ async fn install_plugin_updates_config_with_relative_path_and_plugin_key() {
         "source": "local",
         "path": "./sample-plugin"
       },
-      "authPolicy": "ON_USE"
+      "policy": {
+        "authentication": "ON_USE"
+      }
     }
   ]
 }"#,
@@ -993,35 +958,42 @@ enabled = false
 
     assert_eq!(
         marketplace,
-        ConfiguredMarketplaceSummary {
+        ConfiguredMarketplace {
             name: "debug".to_string(),
             path: AbsolutePathBuf::try_from(
                 tmp.path().join("repo/.agents/plugins/marketplace.json"),
             )
             .unwrap(),
+            interface: None,
             plugins: vec![
-                ConfiguredMarketplacePluginSummary {
+                ConfiguredMarketplacePlugin {
                     id: "enabled-plugin@debug".to_string(),
                     name: "enabled-plugin".to_string(),
-                    source: MarketplacePluginSourceSummary::Local {
+                    source: MarketplacePluginSource::Local {
                         path: AbsolutePathBuf::try_from(tmp.path().join("repo/enabled-plugin"))
                             .unwrap(),
                     },
-                    install_policy: MarketplacePluginInstallPolicy::Available,
-                    auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+                    policy: MarketplacePluginPolicy {
+                        installation: MarketplacePluginInstallPolicy::Available,
+                        authentication: MarketplacePluginAuthPolicy::OnInstall,
+                        products: vec![],
+                    },
                     interface: None,
                     installed: true,
                     enabled: true,
                 },
-                ConfiguredMarketplacePluginSummary {
+                ConfiguredMarketplacePlugin {
                     id: "disabled-plugin@debug".to_string(),
                     name: "disabled-plugin".to_string(),
-                    source: MarketplacePluginSourceSummary::Local {
+                    source: MarketplacePluginSource::Local {
                         path: AbsolutePathBuf::try_from(tmp.path().join("repo/disabled-plugin"),)
                             .unwrap(),
                     },
-                    install_policy: MarketplacePluginInstallPolicy::Available,
-                    auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+                    policy: MarketplacePluginPolicy {
+                        installation: MarketplacePluginInstallPolicy::Available,
+                        authentication: MarketplacePluginAuthPolicy::OnInstall,
+                        products: vec![],
+                    },
                     interface: None,
                     installed: true,
                     enabled: false,
@@ -1032,17 +1004,133 @@ enabled = false
 }
 
 #[tokio::test]
+async fn list_marketplaces_returns_empty_when_feature_disabled() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "enabled-plugin",
+      "source": {
+        "source": "local",
+        "path": "./enabled-plugin"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = false
+
+[plugins."enabled-plugin@debug"]
+enabled = true
+"#,
+    );
+
+    let config = load_config(tmp.path(), &repo_root).await;
+    let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
+        .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
+        .unwrap();
+
+    assert_eq!(marketplaces, Vec::new());
+}
+
+#[tokio::test]
+async fn read_plugin_for_config_returns_plugins_disabled_when_feature_disabled() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap();
+    fs::write(
+        marketplace_path.as_path(),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "enabled-plugin",
+      "source": {
+        "source": "local",
+        "path": "./enabled-plugin"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = false
+
+[plugins."enabled-plugin@debug"]
+enabled = true
+"#,
+    );
+
+    let config = load_config(tmp.path(), &repo_root).await;
+    let err = PluginsManager::new(tmp.path().to_path_buf())
+        .read_plugin_for_config(
+            &config,
+            &PluginReadRequest {
+                plugin_name: "enabled-plugin".to_string(),
+                marketplace_path,
+            },
+        )
+        .unwrap_err();
+
+    assert!(matches!(err, MarketplaceError::PluginsDisabled));
+}
+
+#[tokio::test]
+async fn sync_plugins_from_remote_returns_default_when_feature_disabled() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = false
+"#,
+    );
+
+    let config = load_config(tmp.path(), tmp.path()).await;
+    let outcome = PluginsManager::new(tmp.path().to_path_buf())
+        .sync_plugins_from_remote(&config, None)
+        .await
+        .unwrap();
+
+    assert_eq!(outcome, RemotePluginSyncResult::default());
+}
+
+#[tokio::test]
 async fn list_marketplaces_includes_curated_repo_marketplace() {
     let tmp = tempfile::tempdir().unwrap();
     let curated_root = curated_plugins_repo_path(tmp.path());
     let plugin_root = curated_root.join("plugins/linear");
 
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
     fs::create_dir_all(curated_root.join(".agents/plugins")).unwrap();
     fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
     fs::write(
         curated_root.join(".agents/plugins/marketplace.json"),
         r#"{
   "name": "openai-curated",
+  "interface": {
+    "displayName": "ChatGPT Official"
+  },
   "plugins": [
     {
       "name": "linear",
@@ -1073,18 +1161,24 @@ async fn list_marketplaces_includes_curated_repo_marketplace() {
 
     assert_eq!(
         curated_marketplace,
-        ConfiguredMarketplaceSummary {
+        ConfiguredMarketplace {
             name: "openai-curated".to_string(),
             path: AbsolutePathBuf::try_from(curated_root.join(".agents/plugins/marketplace.json"))
                 .unwrap(),
-            plugins: vec![ConfiguredMarketplacePluginSummary {
+            interface: Some(MarketplaceInterface {
+                display_name: Some("ChatGPT Official".to_string()),
+            }),
+            plugins: vec![ConfiguredMarketplacePlugin {
                 id: "linear@openai-curated".to_string(),
                 name: "linear".to_string(),
-                source: MarketplacePluginSourceSummary::Local {
+                source: MarketplacePluginSource::Local {
                     path: AbsolutePathBuf::try_from(curated_root.join("plugins/linear")).unwrap(),
                 },
-                install_policy: MarketplacePluginInstallPolicy::Available,
-                auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+                policy: MarketplacePluginPolicy {
+                    installation: MarketplacePluginInstallPolicy::Available,
+                    authentication: MarketplacePluginAuthPolicy::OnInstall,
+                    products: vec![],
+                },
                 interface: None,
                 installed: false,
                 enabled: false,
@@ -1177,14 +1271,17 @@ enabled = false
         .expect("repo-a marketplace should be listed");
     assert_eq!(
         repo_a_marketplace.plugins,
-        vec![ConfiguredMarketplacePluginSummary {
+        vec![ConfiguredMarketplacePlugin {
             id: "dup-plugin@debug".to_string(),
             name: "dup-plugin".to_string(),
-            source: MarketplacePluginSourceSummary::Local {
+            source: MarketplacePluginSource::Local {
                 path: AbsolutePathBuf::try_from(tmp.path().join("repo-a/from-a")).unwrap(),
             },
-            install_policy: MarketplacePluginInstallPolicy::Available,
-            auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+            policy: MarketplacePluginPolicy {
+                installation: MarketplacePluginInstallPolicy::Available,
+                authentication: MarketplacePluginAuthPolicy::OnInstall,
+                products: vec![],
+            },
             interface: None,
             installed: false,
             enabled: true,
@@ -1203,14 +1300,17 @@ enabled = false
         .expect("repo-b marketplace should be listed");
     assert_eq!(
         repo_b_marketplace.plugins,
-        vec![ConfiguredMarketplacePluginSummary {
+        vec![ConfiguredMarketplacePlugin {
             id: "b-only-plugin@debug".to_string(),
             name: "b-only-plugin".to_string(),
-            source: MarketplacePluginSourceSummary::Local {
+            source: MarketplacePluginSource::Local {
                 path: AbsolutePathBuf::try_from(tmp.path().join("repo-b/from-b-only")).unwrap(),
             },
-            install_policy: MarketplacePluginInstallPolicy::Available,
-            auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+            policy: MarketplacePluginPolicy {
+                installation: MarketplacePluginInstallPolicy::Available,
+                authentication: MarketplacePluginAuthPolicy::OnInstall,
+                products: vec![],
+            },
             interface: None,
             installed: false,
             enabled: false,
@@ -1275,20 +1375,24 @@ enabled = true
 
     assert_eq!(
         marketplace,
-        ConfiguredMarketplaceSummary {
+        ConfiguredMarketplace {
             name: "debug".to_string(),
             path: AbsolutePathBuf::try_from(
                 tmp.path().join("repo/.agents/plugins/marketplace.json"),
             )
             .unwrap(),
-            plugins: vec![ConfiguredMarketplacePluginSummary {
+            interface: None,
+            plugins: vec![ConfiguredMarketplacePlugin {
                 id: "sample-plugin@debug".to_string(),
                 name: "sample-plugin".to_string(),
-                source: MarketplacePluginSourceSummary::Local {
+                source: MarketplacePluginSource::Local {
                     path: AbsolutePathBuf::try_from(tmp.path().join("repo/sample-plugin")).unwrap(),
                 },
-                install_policy: MarketplacePluginInstallPolicy::Available,
-                auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+                policy: MarketplacePluginPolicy {
+                    installation: MarketplacePluginInstallPolicy::Available,
+                    authentication: MarketplacePluginAuthPolicy::OnInstall,
+                    products: vec![],
+                },
                 interface: None,
                 installed: false,
                 enabled: true,
@@ -1310,6 +1414,11 @@ async fn sync_plugins_from_remote_reconciles_cache_and_config() {
     );
     write_plugin(
         &tmp.path().join("plugins/cache/openai-curated"),
+        "gmail/local",
+        "gmail",
+    );
+    write_plugin(
+        &tmp.path().join("plugins/cache/openai-curated"),
         "calendar/local",
         "calendar",
     );
@@ -1319,6 +1428,9 @@ async fn sync_plugins_from_remote_reconciles_cache_and_config() {
 plugins = true
 
 [plugins."linear@openai-curated"]
+enabled = false
+
+[plugins."gmail@openai-curated"]
 enabled = false
 
 [plugins."calendar@openai-curated"]
@@ -1354,10 +1466,13 @@ enabled = true
     assert_eq!(
         result,
         RemotePluginSyncResult {
-            installed_plugin_ids: vec!["gmail@openai-curated".to_string()],
+            installed_plugin_ids: Vec::new(),
             enabled_plugin_ids: vec!["linear@openai-curated".to_string()],
-            disabled_plugin_ids: vec!["gmail@openai-curated".to_string()],
-            uninstalled_plugin_ids: vec!["calendar@openai-curated".to_string()],
+            disabled_plugin_ids: Vec::new(),
+            uninstalled_plugin_ids: vec![
+                "gmail@openai-curated".to_string(),
+                "calendar@openai-curated".to_string(),
+            ],
         }
     );
 
@@ -1367,11 +1482,9 @@ enabled = true
             .is_dir()
     );
     assert!(
-        tmp.path()
-            .join(format!(
-                "plugins/cache/openai-curated/gmail/{TEST_CURATED_PLUGIN_SHA}"
-            ))
-            .is_dir()
+        !tmp.path()
+            .join("plugins/cache/openai-curated/gmail")
+            .exists()
     );
     assert!(
         !tmp.path()
@@ -1381,9 +1494,8 @@ enabled = true
 
     let config = fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).unwrap();
     assert!(config.contains(r#"[plugins."linear@openai-curated"]"#));
-    assert!(config.contains(r#"[plugins."gmail@openai-curated"]"#));
     assert!(config.contains("enabled = true"));
-    assert!(config.contains("enabled = false"));
+    assert!(!config.contains(r#"[plugins."gmail@openai-curated"]"#));
     assert!(!config.contains(r#"[plugins."calendar@openai-curated"]"#));
 
     let synced_config = load_config(tmp.path(), tmp.path()).await;
@@ -1401,7 +1513,7 @@ enabled = true
             .collect::<Vec<_>>(),
         vec![
             ("linear@openai-curated".to_string(), true, true),
-            ("gmail@openai-curated".to_string(), true, false),
+            ("gmail@openai-curated".to_string(), false, false),
             ("calendar@openai-curated".to_string(), false, false),
         ]
     );
@@ -1727,11 +1839,8 @@ fn load_plugins_ignores_project_config_files() {
     )
     .expect("config layer stack should build");
 
-    let outcome = PluginsManager::new(codex_home.path().to_path_buf()).plugins_for_layer_stack(
-        &project_root,
-        &stack,
-        false,
-    );
+    let outcome =
+        load_plugins_from_layer_stack(&stack, &PluginStore::new(codex_home.path().to_path_buf()));
 
     assert_eq!(outcome, PluginLoadOutcome::default());
 }

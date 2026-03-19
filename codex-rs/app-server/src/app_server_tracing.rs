@@ -78,7 +78,7 @@ pub(crate) fn typed_request_span(
             .or(session.client_version.as_deref()),
     );
 
-    attach_parent_context(&span, &method, request.id(), None);
+    attach_parent_context(&span, &method, request.id(), /*parent_trace*/ None);
     span
 }
 
@@ -107,6 +107,7 @@ fn app_server_request_span_template(
         app_server.api_version = "v2",
         app_server.client_name = field::Empty,
         app_server.client_version = field::Empty,
+        turn.id = field::Empty,
     )
 }
 

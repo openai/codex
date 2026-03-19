@@ -339,6 +339,7 @@ class CodexErrorInfo(
 class CollabAgentStatus(Enum):
     pending_init = "pendingInit"
     running = "running"
+    interrupted = "interrupted"
     completed = "completed"
     errored = "errored"
     shutdown = "shutdown"
@@ -746,6 +747,7 @@ class DynamicToolSpec(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    defer_loading: Annotated[bool | None, Field(alias="deferLoading")] = None
     description: str
     input_schema: Annotated[Any, Field(alias="inputSchema")]
     name: str
@@ -1131,13 +1133,6 @@ class GuardianRiskLevel(Enum):
     high = "high"
 
 
-class HazelnutScope(Enum):
-    example = "example"
-    workspace_shared = "workspace-shared"
-    all_shared = "all-shared"
-    personal = "personal"
-
-
 class HookEventName(Enum):
     session_start = "sessionStart"
     stop = "stop"
@@ -1381,6 +1376,13 @@ class LogoutAccountResponse(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+
+
+class MarketplaceInterface(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    display_name: Annotated[str | None, Field(alias="displayName")] = None
 
 
 class McpAuthStatus(Enum):
@@ -1631,6 +1633,13 @@ class PluginInstallParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    force_remote_sync: Annotated[
+        bool | None,
+        Field(
+            alias="forceRemoteSync",
+            description="When true, apply the remote plugin change before the local install flow.",
+        ),
+    ] = None
     marketplace_path: Annotated[AbsolutePathBuf, Field(alias="marketplacePath")]
     plugin_name: Annotated[str, Field(alias="pluginName")]
 
@@ -1657,7 +1666,13 @@ class PluginInterface(BaseModel):
     capabilities: list[str]
     category: str | None = None
     composer_icon: Annotated[AbsolutePathBuf | None, Field(alias="composerIcon")] = None
-    default_prompt: Annotated[str | None, Field(alias="defaultPrompt")] = None
+    default_prompt: Annotated[
+        list[str] | None,
+        Field(
+            alias="defaultPrompt",
+            description="Starter prompts for the plugin. Capped at 3 entries with a maximum of 128 characters per entry.",
+        ),
+    ] = None
     developer_name: Annotated[str | None, Field(alias="developerName")] = None
     display_name: Annotated[str | None, Field(alias="displayName")] = None
     logo: AbsolutePathBuf | None = None
@@ -1729,6 +1744,13 @@ class PluginUninstallParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    force_remote_sync: Annotated[
+        bool | None,
+        Field(
+            alias="forceRemoteSync",
+            description="When true, apply the remote plugin change before the local uninstall flow.",
+        ),
+    ] = None
     plugin_id: Annotated[str, Field(alias="pluginId")]
 
 
@@ -1737,13 +1759,6 @@ class PluginUninstallResponse(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
-
-
-class ProductSurface(Enum):
-    chatgpt = "chatgpt"
-    codex = "codex"
-    api = "api"
-    atlas = "atlas"
 
 
 class RateLimitWindow(BaseModel):
@@ -1898,15 +1913,6 @@ class ReasoningTextDeltaNotification(BaseModel):
     turn_id: Annotated[str, Field(alias="turnId")]
 
 
-class RemoteSkillSummary(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    description: str
-    id: str
-    name: str
-
-
 class RequestId(RootModel[str | int]):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -1966,7 +1972,6 @@ class ReasoningResponseItem(BaseModel):
     )
     content: list[ReasoningItemContent] | None = None
     encrypted_content: str | None = None
-    id: str
     summary: list[ReasoningItemReasoningSummary]
     type: Annotated[Literal["reasoning"], Field(title="ReasoningResponseItemType")]
 
@@ -2591,41 +2596,6 @@ class SkillsListParams(BaseModel):
     ] = None
 
 
-class SkillsRemoteReadParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    enabled: bool | None = False
-    hazelnut_scope: Annotated[HazelnutScope | None, Field(alias="hazelnutScope")] = (
-        "example"
-    )
-    product_surface: Annotated[ProductSurface | None, Field(alias="productSurface")] = (
-        "codex"
-    )
-
-
-class SkillsRemoteReadResponse(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    data: list[RemoteSkillSummary]
-
-
-class SkillsRemoteWriteParams(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    hazelnut_id: Annotated[str, Field(alias="hazelnutId")]
-
-
-class SkillsRemoteWriteResponse(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: str
-    path: str
-
-
 class SubAgentSourceValue(Enum):
     review = "review"
     compact = "compact"
@@ -3042,6 +3012,7 @@ class ThreadRealtimeAudioChunk(BaseModel):
         populate_by_name=True,
     )
     data: str
+    item_id: Annotated[str | None, Field(alias="itemId")] = None
     num_channels: Annotated[int, Field(alias="numChannels", ge=0)]
     sample_rate: Annotated[int, Field(alias="sampleRate", ge=0)]
     samples_per_channel: Annotated[
@@ -3788,29 +3759,6 @@ class PluginReadRequest(BaseModel):
     id: RequestId
     method: Annotated[Literal["plugin/read"], Field(title="Plugin/readRequestMethod")]
     params: PluginReadParams
-
-
-class SkillsRemoteListRequest(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: RequestId
-    method: Annotated[
-        Literal["skills/remote/list"], Field(title="Skills/remote/listRequestMethod")
-    ]
-    params: SkillsRemoteReadParams
-
-
-class SkillsRemoteExportRequest(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    id: RequestId
-    method: Annotated[
-        Literal["skills/remote/export"],
-        Field(title="Skills/remote/exportRequestMethod"),
-    ]
-    params: SkillsRemoteWriteParams
 
 
 class AppListRequest(BaseModel):
@@ -4671,6 +4619,7 @@ class PluginMarketplaceEntry(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    interface: MarketplaceInterface | None = None
     name: str
     path: AbsolutePathBuf
     plugins: list[PluginSummary]
@@ -5581,14 +5530,6 @@ class FunctionCallOutputBody(RootModel[str | list[FunctionCallOutputContentItem]
     root: str | list[FunctionCallOutputContentItem]
 
 
-class FunctionCallOutputPayload(BaseModel):
-    model_config = ConfigDict(
-        populate_by_name=True,
-    )
-    body: FunctionCallOutputBody
-    success: bool | None = None
-
-
 class GetAccountRateLimitsResponse(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -5686,7 +5627,7 @@ class FunctionCallOutputResponseItem(BaseModel):
         populate_by_name=True,
     )
     call_id: str
-    output: FunctionCallOutputPayload
+    output: FunctionCallOutputBody
     type: Annotated[
         Literal["function_call_output"],
         Field(title="FunctionCallOutputResponseItemType"),
@@ -5698,7 +5639,7 @@ class CustomToolCallOutputResponseItem(BaseModel):
         populate_by_name=True,
     )
     call_id: str
-    output: FunctionCallOutputPayload
+    output: FunctionCallOutputBody
     type: Annotated[
         Literal["custom_tool_call_output"],
         Field(title="CustomToolCallOutputResponseItemType"),
@@ -6131,8 +6072,6 @@ class ClientRequest(
         | SkillsListRequest
         | PluginListRequest
         | PluginReadRequest
-        | SkillsRemoteListRequest
-        | SkillsRemoteExportRequest
         | AppListRequest
         | FsReadFileRequest
         | FsWriteFileRequest
@@ -6194,8 +6133,6 @@ class ClientRequest(
         | SkillsListRequest
         | PluginListRequest
         | PluginReadRequest
-        | SkillsRemoteListRequest
-        | SkillsRemoteExportRequest
         | AppListRequest
         | FsReadFileRequest
         | FsWriteFileRequest

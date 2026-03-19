@@ -38,7 +38,7 @@ fn derive_for_struct(input: &DeriveInput, data: &DataStruct) -> TokenStream {
             let mut registrations = Vec::new();
             for field in &named.named {
                 if let Some(reason) = experimental_reason(&field.attrs) {
-                    let expr = experimental_presence_expr(field, false);
+                    let expr = experimental_presence_expr(field, /*tuple_struct*/ false);
                     checks.push(quote! {
                         if #expr {
                             return Some(#reason);

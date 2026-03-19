@@ -32,6 +32,7 @@ axum = { workspace = true, default-features = false, features = [
 codex-arg0 = { workspace = true }
 codex-cloud-requirements = { workspace = true }
 codex-core = { workspace = true }
+codex-exec-server = { workspace = true }
 codex-otel = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-utils-cli = { workspace = true }
@@ -68,7 +69,6 @@ tokio-tungstenite = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }
 uuid = { workspace = true, features = ["serde", "v7"] }
-walkdir = { workspace = true }
 
 [dev-dependencies]
 app_test_support = { workspace = true }

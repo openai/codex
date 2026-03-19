@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use codex_app_server_protocol::McpElicitationEnumSchema;
 use codex_app_server_protocol::McpElicitationPrimitiveSchema;
 use codex_app_server_protocol::McpElicitationSingleSelectEnumSchema;
+use codex_app_server_protocol::McpServerElicitationRequest;
+use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::approvals::ElicitationRequest;
@@ -149,7 +151,7 @@ pub(crate) struct ToolSuggestionRequest {
     pub(crate) suggest_reason: String,
     pub(crate) tool_id: String,
     pub(crate) tool_name: String,
-    pub(crate) install_url: String,
+    pub(crate) install_url: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -201,6 +203,36 @@ impl FooterTip {
 }
 
 impl McpServerElicitationFormRequest {
+    pub(crate) fn from_app_server_request(
+        thread_id: ThreadId,
+        request_id: McpRequestId,
+        request: McpServerElicitationRequestParams,
+    ) -> Option<Self> {
+        let McpServerElicitationRequestParams {
+            server_name,
+            request,
+            ..
+        } = request;
+        let McpServerElicitationRequest::Form {
+            meta,
+            message,
+            requested_schema,
+        } = request
+        else {
+            return None;
+        };
+
+        let requested_schema = serde_json::to_value(requested_schema).ok()?;
+        Self::from_parts(
+            thread_id,
+            server_name,
+            request_id,
+            meta,
+            message,
+            requested_schema,
+        )
+    }
+
     pub(crate) fn from_event(
         thread_id: ThreadId,
         request: ElicitationRequestEvent,
@@ -214,6 +246,24 @@ impl McpServerElicitationFormRequest {
             return None;
         };
 
+        Self::from_parts(
+            thread_id,
+            request.server_name,
+            request.id,
+            meta,
+            message,
+            requested_schema,
+        )
+    }
+
+    fn from_parts(
+        thread_id: ThreadId,
+        server_name: String,
+        request_id: McpRequestId,
+        meta: Option<Value>,
+        message: String,
+        requested_schema: Value,
+    ) -> Option<Self> {
         let tool_suggestion = parse_tool_suggestion_request(meta.as_ref());
         let is_tool_approval = meta
             .as_ref()
@@ -313,8 +363,8 @@ impl McpServerElicitationFormRequest {
 
         Some(Self {
             thread_id,
-            server_name: request.server_name,
-            request_id: request.id,
+            server_name,
+            request_id,
             message,
             approval_display_params,
             response_mode,
@@ -373,8 +423,8 @@ fn parse_tool_suggestion_request(meta: Option<&Value>) -> Option<ToolSuggestionR
         tool_name: meta.get(TOOL_NAME_KEY).and_then(Value::as_str)?.to_string(),
         install_url: meta
             .get(TOOL_SUGGEST_INSTALL_URL_KEY)
-            .and_then(Value::as_str)?
-            .to_string(),
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
     })
 }
 
@@ -1088,8 +1138,8 @@ impl McpServerElicitationOverlay {
             self.request.server_name.clone(),
             self.request.request_id.clone(),
             ElicitationAction::Cancel,
-            None,
-            None,
+            /*content*/ None,
+            /*meta*/ None,
         );
     }
 
@@ -1102,30 +1152,31 @@ impl McpServerElicitationOverlay {
         }
         self.validation_error = None;
         if self.request.response_mode == McpServerElicitationResponseMode::ApprovalAction {
-            let (decision, meta) = match self.field_value(0).as_ref().and_then(Value::as_str) {
-                Some(APPROVAL_ACCEPT_ONCE_VALUE) => (ElicitationAction::Accept, None),
-                Some(APPROVAL_ACCEPT_SESSION_VALUE) => (
-                    ElicitationAction::Accept,
-                    Some(serde_json::json!({
-                        APPROVAL_PERSIST_KEY: APPROVAL_PERSIST_SESSION_VALUE,
-                    })),
-                ),
-                Some(APPROVAL_ACCEPT_ALWAYS_VALUE) => (
-                    ElicitationAction::Accept,
-                    Some(serde_json::json!({
-                        APPROVAL_PERSIST_KEY: APPROVAL_PERSIST_ALWAYS_VALUE,
-                    })),
-                ),
-                Some(APPROVAL_DECLINE_VALUE) => (ElicitationAction::Decline, None),
-                Some(APPROVAL_CANCEL_VALUE) => (ElicitationAction::Cancel, None),
-                _ => (ElicitationAction::Cancel, None),
-            };
+            let (decision, meta) =
+                match self.field_value(/*idx*/ 0).as_ref().and_then(Value::as_str) {
+                    Some(APPROVAL_ACCEPT_ONCE_VALUE) => (ElicitationAction::Accept, None),
+                    Some(APPROVAL_ACCEPT_SESSION_VALUE) => (
+                        ElicitationAction::Accept,
+                        Some(serde_json::json!({
+                            APPROVAL_PERSIST_KEY: APPROVAL_PERSIST_SESSION_VALUE,
+                        })),
+                    ),
+                    Some(APPROVAL_ACCEPT_ALWAYS_VALUE) => (
+                        ElicitationAction::Accept,
+                        Some(serde_json::json!({
+                            APPROVAL_PERSIST_KEY: APPROVAL_PERSIST_ALWAYS_VALUE,
+                        })),
+                    ),
+                    Some(APPROVAL_DECLINE_VALUE) => (ElicitationAction::Decline, None),
+                    Some(APPROVAL_CANCEL_VALUE) => (ElicitationAction::Cancel, None),
+                    _ => (ElicitationAction::Cancel, None),
+                };
             self.app_event_tx.resolve_elicitation(
                 self.request.thread_id,
                 self.request.server_name.clone(),
                 self.request.request_id.clone(),
                 decision,
-                None,
+                /*content*/ None,
                 meta,
             );
             if let Some(next) = self.queue.pop_front() {
@@ -1150,7 +1201,7 @@ impl McpServerElicitationOverlay {
             self.request.request_id.clone(),
             ElicitationAction::Accept,
             Some(Value::Object(content)),
-            None,
+            /*meta*/ None,
         );
         if let Some(next) = self.queue.pop_front() {
             self.request = next;
@@ -1165,7 +1216,7 @@ impl McpServerElicitationOverlay {
         if self.current_index() + 1 >= self.field_count() {
             self.submit_answers();
         } else {
-            self.move_field(true);
+            self.move_field(/*next*/ true);
         }
     }
 
@@ -1460,7 +1511,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.move_field(false);
+                self.move_field(/*next*/ false);
                 return;
             }
             KeyEvent {
@@ -1473,7 +1524,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.move_field(true);
+                self.move_field(/*next*/ true);
                 return;
             }
             KeyEvent {
@@ -1481,7 +1532,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } if self.current_field_is_select() => {
-                self.move_field(false);
+                self.move_field(/*next*/ false);
                 return;
             }
             KeyEvent {
@@ -1489,7 +1540,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } if self.current_field_is_select() => {
-                self.move_field(true);
+                self.move_field(/*next*/ true);
                 return;
             }
             _ => {}
@@ -1512,10 +1563,10 @@ impl BottomPaneView for McpServerElicitationOverlay {
                     }
                 }
                 KeyCode::Backspace | KeyCode::Delete => self.clear_selection(),
-                KeyCode::Char(' ') => self.select_current_option(true),
+                KeyCode::Char(' ') => self.select_current_option(/*committed*/ true),
                 KeyCode::Enter => {
                     if self.selected_option_index().is_some() {
-                        self.select_current_option(true);
+                        self.select_current_option(/*committed*/ true);
                     }
                     self.go_next_or_submit();
                 }
@@ -1524,7 +1575,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                         if let Some(answer) = self.current_answer_mut() {
                             answer.selection.selected_idx = Some(option_idx);
                         }
-                        self.select_current_option(true);
+                        self.select_current_option(/*committed*/ true);
                         self.go_next_or_submit();
                     }
                 }
@@ -1938,7 +1989,39 @@ mod tests {
                 suggest_reason: "Plan and reference events from your calendar".to_string(),
                 tool_id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
                 tool_name: "Google Calendar".to_string(),
-                install_url: "https://example.test/google-calendar".to_string(),
+                install_url: Some("https://example.test/google-calendar".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn plugin_tool_suggestion_meta_without_install_url_is_parsed_into_request_payload() {
+        let request = McpServerElicitationFormRequest::from_event(
+            ThreadId::default(),
+            form_request(
+                "Suggest Slack",
+                empty_object_schema(),
+                Some(serde_json::json!({
+                    "codex_approval_kind": "tool_suggestion",
+                    "tool_type": "plugin",
+                    "suggest_type": "install",
+                    "suggest_reason": "Install the Slack plugin to search messages",
+                    "tool_id": "slack@openai-curated",
+                    "tool_name": "Slack",
+                })),
+            ),
+        )
+        .expect("expected tool suggestion form");
+
+        assert_eq!(
+            request.tool_suggestion(),
+            Some(&ToolSuggestionRequest {
+                tool_type: ToolSuggestionToolType::Plugin,
+                suggest_type: ToolSuggestionType::Install,
+                suggest_reason: "Install the Slack plugin to search messages".to_string(),
+                tool_id: "slack@openai-curated".to_string(),
+                tool_name: "Slack".to_string(),
+                install_url: None,
             })
         );
     }

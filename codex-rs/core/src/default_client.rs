@@ -4,6 +4,7 @@ use codex_client::BuildCustomCaTransportError;
 use codex_client::CodexHttpClient;
 pub use codex_client::CodexRequestBuilder;
 use codex_client::build_reqwest_client_with_custom_ca;
+use codex_terminal_detection::user_agent;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderValue;
 use std::sync::LazyLock;
@@ -97,7 +98,7 @@ pub fn originator() -> Originator {
     }
 
     if std::env::var(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR).is_ok() {
-        let originator = get_originator_value(None);
+        let originator = get_originator_value(/*provided*/ None);
         if let Ok(mut guard) = ORIGINATOR.write() {
             match guard.as_ref() {
                 Some(originator) => return originator.clone(),
@@ -107,7 +108,7 @@ pub fn originator() -> Originator {
         return originator;
     }
 
-    get_originator_value(None)
+    get_originator_value(/*provided*/ None)
 }
 
 pub fn is_first_party_originator(originator_value: &str) -> bool {
@@ -130,7 +131,7 @@ pub fn get_codex_user_agent() -> String {
         os_info.os_type(),
         os_info.version(),
         os_info.architecture().unwrap_or("unknown"),
-        crate::terminal::user_agent()
+        user_agent()
     );
     let suffix = USER_AGENT_SUFFIX
         .lock()

@@ -35,6 +35,9 @@ pub(crate) enum AppCommandView<'a> {
     RealtimeConversationAudio(&'a ConversationAudioParams),
     RealtimeConversationText(&'a ConversationTextParams),
     RealtimeConversationClose,
+    RunUserShellCommand {
+        command: &'a str,
+    },
     UserTurn {
         items: &'a [UserInput],
         cwd: &'a PathBuf,
@@ -132,6 +135,10 @@ impl AppCommand {
 
     pub(crate) fn realtime_conversation_close() -> Self {
         Self(Op::RealtimeConversationClose)
+    }
+
+    pub(crate) fn run_user_shell_command(command: String) -> Self {
+        Self(Op::RunUserShellCommand { command })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -291,6 +298,7 @@ impl AppCommand {
                 AppCommandView::RealtimeConversationText(params)
             }
             Op::RealtimeConversationClose => AppCommandView::RealtimeConversationClose,
+            Op::RunUserShellCommand { command } => AppCommandView::RunUserShellCommand { command },
             Op::UserTurn {
                 items,
                 cwd,

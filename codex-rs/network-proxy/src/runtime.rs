@@ -253,7 +253,7 @@ impl NetworkProxyState {
             state,
             reloader,
             audit_metadata,
-            None,
+            /*blocked_request_observer*/ None,
         )
     }
 

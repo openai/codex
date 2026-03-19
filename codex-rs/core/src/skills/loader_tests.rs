@@ -15,6 +15,7 @@ use codex_protocol::models::MacOsContactsPermission;
 use codex_protocol::models::MacOsPreferencesPermission;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -482,6 +483,7 @@ policy:
         outcome.skills[0].policy,
         Some(SkillPolicy {
             allow_implicit_invocation: Some(false),
+            products: vec![],
         })
     );
     assert!(outcome.allowed_skills_for_implicit_invocation().is_empty());
@@ -513,11 +515,47 @@ policy: {}
         outcome.skills[0].policy,
         Some(SkillPolicy {
             allow_implicit_invocation: None,
+            products: vec![],
         })
     );
     assert_eq!(
         outcome.allowed_skills_for_implicit_invocation(),
         outcome.skills
+    );
+}
+
+#[tokio::test]
+async fn loads_skill_policy_products_from_yaml() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let skill_path = write_skill(&codex_home, "demo", "policy-products", "from yaml");
+    let skill_dir = skill_path.parent().expect("skill dir");
+
+    write_skill_metadata_at(
+        skill_dir,
+        r#"
+policy:
+  products:
+    - codex
+    - CHATGPT
+    - atlas
+"#,
+    );
+
+    let cfg = make_config(&codex_home).await;
+    let outcome = load_skills_for_test(&cfg);
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(outcome.skills.len(), 1);
+    assert_eq!(
+        outcome.skills[0].policy,
+        Some(SkillPolicy {
+            allow_implicit_invocation: None,
+            products: vec![Product::Codex, Product::Chatgpt, Product::Atlas],
+        })
     );
 }
 

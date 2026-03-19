@@ -533,7 +533,7 @@ impl Renderable for MultiSelectPicker {
             Constraint::Length(2),
             Constraint::Length(rows_height),
         ])
-        .areas(content_area.inset(Insets::vh(1, 2)));
+        .areas(content_area.inset(Insets::vh(/*v*/ 1, /*h*/ 2)));
 
         self.header.render(header_area, buf);
 

@@ -2,7 +2,7 @@
 //!
 //! `ModelClient` is intended to live for the lifetime of a Codex session and holds the stable
 //! configuration and state needed to talk to a provider (auth, provider selection, conversation id,
-//! and feature-gated request behavior).
+//! and transport fallback state).
 //!
 //! Per-turn settings (model selection, reasoning controls, telemetry context, and turn metadata)
 //! are passed explicitly to streaming and unary methods so that the turn lifetime is visible at the
@@ -34,6 +34,8 @@ use crate::api_bridge::CoreAuthProvider;
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
 use crate::auth::UnauthorizedRecovery;
+use crate::auth_env_telemetry::AuthEnvTelemetry;
+use crate::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_api::CompactClient as ApiCompactClient;
 use codex_api::CompactionInput as ApiCompactionInput;
 use codex_api::MemoriesClient as ApiMemoriesClient;
@@ -57,7 +59,9 @@ use codex_api::common::ResponsesWsRequest;
 use codex_api::create_text_param_for_request;
 use codex_api::error::ApiError;
 use codex_api::requests::responses::Compression;
+use codex_api::response_create_client_metadata;
 use codex_otel::SessionTelemetry;
+use codex_otel::current_span_w3c_trace_context;
 
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -67,6 +71,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::W3cTraceContext;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
 use futures::StreamExt;
@@ -92,7 +97,6 @@ use crate::auth::RefreshTokenError;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
-use crate::config::Config;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
@@ -106,7 +110,7 @@ use crate::response_debug_context::telemetry_transport_error_message;
 use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::util::FeedbackRequestTags;
 use crate::util::emit_feedback_auth_recovery_tags;
-use crate::util::emit_feedback_request_tags;
+use crate::util::emit_feedback_request_tags_with_auth_env;
 
 pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
@@ -117,14 +121,9 @@ const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=20
 const RESPONSES_ENDPOINT: &str = "/responses";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
-pub fn ws_version_from_features(config: &Config) -> bool {
-    config
-        .features
-        .enabled(crate::features::Feature::ResponsesWebsockets)
-        || config
-            .features
-            .enabled(crate::features::Feature::ResponsesWebsocketsV2)
-}
+#[cfg(test)]
+pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
+    Duration::from_millis(crate::model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
 
 /// Session-scoped state shared by all [`ModelClient`] clones.
 ///
@@ -135,9 +134,9 @@ struct ModelClientState {
     auth_manager: Option<Arc<AuthManager>>,
     conversation_id: ThreadId,
     provider: ModelProviderInfo,
+    auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
     model_verbosity: Option<VerbosityConfig>,
-    responses_websockets_enabled_by_feature: bool,
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
@@ -169,8 +168,7 @@ impl RequestRouteTelemetry {
 /// A session-scoped client for model-provider API calls.
 ///
 /// This holds configuration and state that should be shared across turns within a Codex session
-/// (auth, provider selection, conversation id, feature-gated request behavior, and transport
-/// fallback state).
+/// (auth, provider selection, conversation id, and transport fallback state).
 ///
 /// WebSocket fallback is session-scoped: once a turn activates the HTTP fallback, subsequent turns
 /// will also use HTTP for the remainder of the session.
@@ -259,19 +257,22 @@ impl ModelClient {
         provider: ModelProviderInfo,
         session_source: SessionSource,
         model_verbosity: Option<VerbosityConfig>,
-        responses_websockets_enabled_by_feature: bool,
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
     ) -> Self {
+        let codex_api_key_env_enabled = auth_manager
+            .as_ref()
+            .is_some_and(|manager| manager.codex_api_key_env_enabled());
+        let auth_env_telemetry = collect_auth_env_telemetry(&provider, codex_api_key_env_enabled);
         Self {
             state: Arc::new(ModelClientState {
                 auth_manager,
                 conversation_id,
                 provider,
+                auth_env_telemetry,
                 session_source,
                 model_verbosity,
-                responses_websockets_enabled_by_feature,
                 enable_request_compression,
                 include_timing_metrics,
                 beta_features_header,
@@ -310,6 +311,27 @@ impl ModelClient {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = websocket_session;
     }
 
+    pub(crate) fn force_http_fallback(
+        &self,
+        session_telemetry: &SessionTelemetry,
+        _model_info: &ModelInfo,
+    ) -> bool {
+        let websocket_enabled = self.responses_websocket_enabled();
+        let activated =
+            websocket_enabled && !self.state.disable_websockets.swap(true, Ordering::Relaxed);
+        if activated {
+            warn!("falling back to HTTP");
+            session_telemetry.counter(
+                "codex.transport.fallback_to_http",
+                /*inc*/ 1,
+                &[("from_wire_api", "responses_websocket")],
+            );
+        }
+
+        self.store_cached_websocket_session(WebsocketSession::default());
+        activated
+    }
+
     /// Compacts the current conversation history using the Compact endpoint.
     ///
     /// This is a unary call (no streaming) that returns a new list of
@@ -338,6 +360,7 @@ impl ModelClient {
                 PendingUnauthorizedRetry::default(),
             ),
             RequestRouteTelemetry::for_endpoint(RESPONSES_COMPACT_ENDPOINT),
+            self.state.auth_env_telemetry.clone(),
         );
         let client =
             ApiCompactClient::new(transport, client_setup.api_provider, client_setup.api_auth)
@@ -406,6 +429,7 @@ impl ModelClient {
                 PendingUnauthorizedRetry::default(),
             ),
             RequestRouteTelemetry::for_endpoint(MEMORIES_SUMMARIZE_ENDPOINT),
+            self.state.auth_env_telemetry.clone(),
         );
         let client =
             ApiMemoriesClient::new(transport, client_setup.api_provider, client_setup.api_auth)
@@ -450,11 +474,13 @@ impl ModelClient {
         session_telemetry: &SessionTelemetry,
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
+        auth_env_telemetry: AuthEnvTelemetry,
     ) -> Arc<dyn RequestTelemetry> {
         let telemetry = Arc::new(ApiTelemetry::new(
             session_telemetry.clone(),
             auth_context,
             request_route_telemetry,
+            auth_env_telemetry,
         ));
         let request_telemetry: Arc<dyn RequestTelemetry> = telemetry;
         request_telemetry
@@ -481,19 +507,16 @@ impl ModelClient {
 
     /// Returns whether the Responses-over-WebSocket transport is active for this session.
     ///
-    /// This combines provider capability and feature gating; both must be true for websocket paths
-    /// to be eligible.
-    ///
-    /// If websockets are only enabled via model preference (no explicit feature flag), prefer the
-    /// current v2 behavior.
-    pub fn responses_websocket_enabled(&self, model_info: &ModelInfo) -> bool {
+    /// WebSocket use is controlled by provider capability and session-scoped fallback state.
+    pub fn responses_websocket_enabled(&self) -> bool {
         if !self.state.provider.supports_websockets
             || self.state.disable_websockets.load(Ordering::Relaxed)
+            || (*CODEX_RS_SSE_FIXTURE).is_some()
         {
             return false;
         }
 
-        self.state.responses_websockets_enabled_by_feature || model_info.prefer_websockets
+        true
     }
 
     /// Returns auth + provider configuration resolved from the current session auth state.
@@ -537,16 +560,24 @@ impl ModelClient {
             session_telemetry,
             auth_context,
             request_route_telemetry,
+            self.state.auth_env_telemetry.clone(),
         );
+        let websocket_connect_timeout = self.state.provider.websocket_connect_timeout();
         let start = Instant::now();
-        let result = ApiWebSocketResponsesClient::new(api_provider, api_auth)
-            .connect(
+        let result = match tokio::time::timeout(
+            websocket_connect_timeout,
+            ApiWebSocketResponsesClient::new(api_provider, api_auth).connect(
                 headers,
                 crate::default_client::default_headers(),
                 turn_state,
                 Some(websocket_telemetry),
-            )
-            .await;
+            ),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(ApiError::Transport(TransportError::Timeout)),
+        };
         let error_message = result.as_ref().err().map(telemetry_api_error_message);
         let response_debug = result
             .as_ref()
@@ -564,33 +595,36 @@ impl ModelClient {
             auth_context.recovery_mode,
             auth_context.recovery_phase,
             request_route_telemetry.endpoint,
-            false,
+            /*connection_reused*/ false,
             response_debug.request_id.as_deref(),
             response_debug.cf_ray.as_deref(),
             response_debug.auth_error.as_deref(),
             response_debug.auth_error_code.as_deref(),
         );
-        emit_feedback_request_tags(&FeedbackRequestTags {
-            endpoint: request_route_telemetry.endpoint,
-            auth_header_attached: auth_context.auth_header_attached,
-            auth_header_name: auth_context.auth_header_name,
-            auth_mode: auth_context.auth_mode,
-            auth_retry_after_unauthorized: Some(auth_context.retry_after_unauthorized),
-            auth_recovery_mode: auth_context.recovery_mode,
-            auth_recovery_phase: auth_context.recovery_phase,
-            auth_connection_reused: Some(false),
-            auth_request_id: response_debug.request_id.as_deref(),
-            auth_cf_ray: response_debug.cf_ray.as_deref(),
-            auth_error: response_debug.auth_error.as_deref(),
-            auth_error_code: response_debug.auth_error_code.as_deref(),
-            auth_recovery_followup_success: auth_context
-                .retry_after_unauthorized
-                .then_some(result.is_ok()),
-            auth_recovery_followup_status: auth_context
-                .retry_after_unauthorized
-                .then_some(status)
-                .flatten(),
-        });
+        emit_feedback_request_tags_with_auth_env(
+            &FeedbackRequestTags {
+                endpoint: request_route_telemetry.endpoint,
+                auth_header_attached: auth_context.auth_header_attached,
+                auth_header_name: auth_context.auth_header_name,
+                auth_mode: auth_context.auth_mode,
+                auth_retry_after_unauthorized: Some(auth_context.retry_after_unauthorized),
+                auth_recovery_mode: auth_context.recovery_mode,
+                auth_recovery_phase: auth_context.recovery_phase,
+                auth_connection_reused: Some(false),
+                auth_request_id: response_debug.request_id.as_deref(),
+                auth_cf_ray: response_debug.cf_ray.as_deref(),
+                auth_error: response_debug.auth_error.as_deref(),
+                auth_error_code: response_debug.auth_error_code.as_deref(),
+                auth_recovery_followup_success: auth_context
+                    .retry_after_unauthorized
+                    .then_some(result.is_ok()),
+                auth_recovery_followup_status: auth_context
+                    .retry_after_unauthorized
+                    .then_some(status)
+                    .flatten(),
+            },
+            &self.state.auth_env_telemetry,
+        );
         result
     }
 
@@ -637,13 +671,12 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
-    fn activate_http_fallback(&self, websocket_enabled: bool) -> bool {
-        websocket_enabled
-            && !self
-                .client
-                .state
-                .disable_websockets
-                .swap(true, Ordering::Relaxed)
+    fn reset_websocket_session(&mut self) {
+        self.websocket_session.connection = None;
+        self.websocket_session.last_request = None;
+        self.websocket_session.last_response_rx = None;
+        self.websocket_session
+            .set_connection_reused(/*connection_reused*/ false);
     }
 
     fn build_responses_request(
@@ -796,9 +829,11 @@ impl ModelClientSession {
         let Some(last_response) = self.get_last_response() else {
             return ResponsesWsRequest::ResponseCreate(payload);
         };
-        let Some(incremental_items) =
-            self.get_incremental_items(request, Some(&last_response), true)
-        else {
+        let Some(incremental_items) = self.get_incremental_items(
+            request,
+            Some(&last_response),
+            /*allow_empty_delta*/ true,
+        ) else {
             return ResponsesWsRequest::ResponseCreate(payload);
         };
 
@@ -820,9 +855,9 @@ impl ModelClientSession {
     pub async fn preconnect_websocket(
         &mut self,
         session_telemetry: &SessionTelemetry,
-        model_info: &ModelInfo,
+        _model_info: &ModelInfo,
     ) -> std::result::Result<(), ApiError> {
-        if !self.client.responses_websocket_enabled(model_info) {
+        if !self.client.responses_websocket_enabled() {
             return Ok(());
         }
         if self.websocket_session.connection.is_some() {
@@ -846,13 +881,14 @@ impl ModelClientSession {
                 client_setup.api_provider,
                 client_setup.api_auth,
                 Some(Arc::clone(&self.turn_state)),
-                None,
+                /*turn_metadata_header*/ None,
                 auth_context,
                 RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
             )
             .await?;
         self.websocket_session.connection = Some(connection);
-        self.websocket_session.set_connection_reused(false);
+        self.websocket_session
+            .set_connection_reused(/*connection_reused*/ false);
         Ok(())
     }
     /// Returns a websocket connection for this turn.
@@ -893,7 +929,7 @@ impl ModelClientSession {
                 .turn_state
                 .clone()
                 .unwrap_or_else(|| Arc::clone(&self.turn_state));
-            let new_conn = self
+            let new_conn = match self
                 .client
                 .connect_websocket(
                     session_telemetry,
@@ -904,11 +940,22 @@ impl ModelClientSession {
                     auth_context,
                     request_route_telemetry,
                 )
-                .await?;
+                .await
+            {
+                Ok(new_conn) => new_conn,
+                Err(err) => {
+                    if matches!(err, ApiError::Transport(TransportError::Timeout)) {
+                        self.reset_websocket_session();
+                    }
+                    return Err(err);
+                }
+            };
             self.websocket_session.connection = Some(new_conn);
-            self.websocket_session.set_connection_reused(false);
+            self.websocket_session
+                .set_connection_reused(/*connection_reused*/ false);
         } else {
-            self.websocket_session.set_connection_reused(true);
+            self.websocket_session
+                .set_connection_reused(/*connection_reused*/ true);
         }
 
         self.websocket_session
@@ -986,6 +1033,7 @@ impl ModelClientSession {
                 session_telemetry,
                 request_auth_context,
                 RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
+                self.client.state.auth_env_telemetry.clone(),
             );
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
             let options = self.build_responses_options(turn_metadata_header, compression);
@@ -1054,6 +1102,7 @@ impl ModelClientSession {
         service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
         warmup: bool,
+        request_trace: Option<W3cTraceContext>,
     ) -> Result<WebsocketStreamOutcome> {
         let auth_manager = self.client.state.auth_manager.clone();
 
@@ -1080,7 +1129,10 @@ impl ModelClientSession {
                 service_tier,
             )?;
             let mut ws_payload = ResponseCreateWsRequest {
-                client_metadata: build_ws_client_metadata(turn_metadata_header),
+                client_metadata: response_create_client_metadata(
+                    build_ws_client_metadata(turn_metadata_header),
+                    request_trace.as_ref(),
+                ),
                 ..ResponseCreateWsRequest::from(&request)
             };
             if warmup {
@@ -1125,15 +1177,12 @@ impl ModelClientSession {
 
             let ws_request = self.prepare_websocket_request(ws_payload, &request);
             self.websocket_session.last_request = Some(request);
-            let stream_result = self
-                .websocket_session
-                .connection
-                .as_ref()
-                .ok_or_else(|| {
-                    map_api_error(ApiError::Stream(
-                        "websocket connection is unavailable".to_string(),
-                    ))
-                })?
+            let stream_result = self.websocket_session.connection.as_ref().ok_or_else(|| {
+                map_api_error(ApiError::Stream(
+                    "websocket connection is unavailable".to_string(),
+                ))
+            })?;
+            let stream_result = stream_result
                 .stream_request(ws_request, self.websocket_session.connection_reused())
                 .await
                 .map_err(map_api_error)?;
@@ -1149,11 +1198,13 @@ impl ModelClientSession {
         session_telemetry: &SessionTelemetry,
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
+        auth_env_telemetry: AuthEnvTelemetry,
     ) -> (Arc<dyn RequestTelemetry>, Arc<dyn SseTelemetry>) {
         let telemetry = Arc::new(ApiTelemetry::new(
             session_telemetry.clone(),
             auth_context,
             request_route_telemetry,
+            auth_env_telemetry,
         ));
         let request_telemetry: Arc<dyn RequestTelemetry> = telemetry.clone();
         let sse_telemetry: Arc<dyn SseTelemetry> = telemetry;
@@ -1165,11 +1216,13 @@ impl ModelClientSession {
         session_telemetry: &SessionTelemetry,
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
+        auth_env_telemetry: AuthEnvTelemetry,
     ) -> Arc<dyn WebsocketTelemetry> {
         let telemetry = Arc::new(ApiTelemetry::new(
             session_telemetry.clone(),
             auth_context,
             request_route_telemetry,
+            auth_env_telemetry,
         ));
         let websocket_telemetry: Arc<dyn WebsocketTelemetry> = telemetry;
         websocket_telemetry
@@ -1186,7 +1239,7 @@ impl ModelClientSession {
         service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
     ) -> Result<()> {
-        if !self.client.responses_websocket_enabled(model_info) {
+        if !self.client.responses_websocket_enabled() {
             return Ok(());
         }
         if self.websocket_session.last_request.is_some() {
@@ -1202,7 +1255,8 @@ impl ModelClientSession {
                 summary,
                 service_tier,
                 turn_metadata_header,
-                true,
+                /*warmup*/ true,
+                current_span_w3c_trace_context(),
             )
             .await
         {
@@ -1230,8 +1284,8 @@ impl ModelClientSession {
     ///
     /// The caller is responsible for passing per-turn settings explicitly (model selection,
     /// reasoning settings, telemetry context, and turn metadata). This method will prefer the
-    /// Responses WebSocket transport when enabled and healthy, and will fall back to the HTTP
-    /// Responses API transport otherwise.
+    /// Responses WebSocket transport when the provider supports it and it remains healthy, and will
+    /// fall back to the HTTP Responses API transport otherwise.
     pub async fn stream(
         &mut self,
         prompt: &Prompt,
@@ -1245,7 +1299,8 @@ impl ModelClientSession {
         let wire_api = self.client.state.provider.wire_api;
         match wire_api {
             WireApi::Responses => {
-                if self.client.responses_websocket_enabled(model_info) {
+                if self.client.responses_websocket_enabled() {
+                    let request_trace = current_span_w3c_trace_context();
                     match self
                         .stream_responses_websocket(
                             prompt,
@@ -1255,7 +1310,8 @@ impl ModelClientSession {
                             summary,
                             service_tier,
                             turn_metadata_header,
-                            false,
+                            /*warmup*/ false,
+                            request_trace,
                         )
                         .await?
                     {
@@ -1291,21 +1347,10 @@ impl ModelClientSession {
         session_telemetry: &SessionTelemetry,
         model_info: &ModelInfo,
     ) -> bool {
-        let websocket_enabled = self.client.responses_websocket_enabled(model_info);
-        let activated = self.activate_http_fallback(websocket_enabled);
-        if activated {
-            warn!("falling back to HTTP");
-            session_telemetry.counter(
-                "codex.transport.fallback_to_http",
-                1,
-                &[("from_wire_api", "responses_websocket")],
-            );
-
-            self.websocket_session.connection = None;
-            self.websocket_session.last_request = None;
-            self.websocket_session.last_response_rx = None;
-            self.websocket_session.set_connection_reused(false);
-        }
+        let activated = self
+            .client
+            .force_http_fallback(session_telemetry, model_info);
+        self.websocket_session = WebsocketSession::default();
         activated
     }
 }
@@ -1527,7 +1572,7 @@ async fn handle_unauthorized(
                     debug.cf_ray.as_deref(),
                     debug.auth_error.as_deref(),
                     debug.auth_error_code.as_deref(),
-                    None,
+                    /*recovery_reason*/ None,
                     step_result.auth_state_changed(),
                 );
                 emit_feedback_auth_recovery_tags(
@@ -1550,8 +1595,8 @@ async fn handle_unauthorized(
                     debug.cf_ray.as_deref(),
                     debug.auth_error.as_deref(),
                     debug.auth_error_code.as_deref(),
-                    None,
-                    None,
+                    /*recovery_reason*/ None,
+                    /*auth_state_changed*/ None,
                 );
                 emit_feedback_auth_recovery_tags(
                     mode,
@@ -1573,8 +1618,8 @@ async fn handle_unauthorized(
                     debug.cf_ray.as_deref(),
                     debug.auth_error.as_deref(),
                     debug.auth_error_code.as_deref(),
-                    None,
-                    None,
+                    /*recovery_reason*/ None,
+                    /*auth_state_changed*/ None,
                 );
                 emit_feedback_auth_recovery_tags(
                     mode,
@@ -1607,7 +1652,7 @@ async fn handle_unauthorized(
         debug.auth_error.as_deref(),
         debug.auth_error_code.as_deref(),
         recovery_reason,
-        None,
+        /*auth_state_changed*/ None,
     );
     emit_feedback_auth_recovery_tags(
         mode,
@@ -1633,6 +1678,7 @@ struct ApiTelemetry {
     session_telemetry: SessionTelemetry,
     auth_context: AuthRequestTelemetryContext,
     request_route_telemetry: RequestRouteTelemetry,
+    auth_env_telemetry: AuthEnvTelemetry,
 }
 
 impl ApiTelemetry {
@@ -1640,11 +1686,13 @@ impl ApiTelemetry {
         session_telemetry: SessionTelemetry,
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
+        auth_env_telemetry: AuthEnvTelemetry,
     ) -> Self {
         Self {
             session_telemetry,
             auth_context,
             request_route_telemetry,
+            auth_env_telemetry,
         }
     }
 }
@@ -1678,29 +1726,32 @@ impl RequestTelemetry for ApiTelemetry {
             debug.auth_error.as_deref(),
             debug.auth_error_code.as_deref(),
         );
-        emit_feedback_request_tags(&FeedbackRequestTags {
-            endpoint: self.request_route_telemetry.endpoint,
-            auth_header_attached: self.auth_context.auth_header_attached,
-            auth_header_name: self.auth_context.auth_header_name,
-            auth_mode: self.auth_context.auth_mode,
-            auth_retry_after_unauthorized: Some(self.auth_context.retry_after_unauthorized),
-            auth_recovery_mode: self.auth_context.recovery_mode,
-            auth_recovery_phase: self.auth_context.recovery_phase,
-            auth_connection_reused: None,
-            auth_request_id: debug.request_id.as_deref(),
-            auth_cf_ray: debug.cf_ray.as_deref(),
-            auth_error: debug.auth_error.as_deref(),
-            auth_error_code: debug.auth_error_code.as_deref(),
-            auth_recovery_followup_success: self
-                .auth_context
-                .retry_after_unauthorized
-                .then_some(error.is_none()),
-            auth_recovery_followup_status: self
-                .auth_context
-                .retry_after_unauthorized
-                .then_some(status)
-                .flatten(),
-        });
+        emit_feedback_request_tags_with_auth_env(
+            &FeedbackRequestTags {
+                endpoint: self.request_route_telemetry.endpoint,
+                auth_header_attached: self.auth_context.auth_header_attached,
+                auth_header_name: self.auth_context.auth_header_name,
+                auth_mode: self.auth_context.auth_mode,
+                auth_retry_after_unauthorized: Some(self.auth_context.retry_after_unauthorized),
+                auth_recovery_mode: self.auth_context.recovery_mode,
+                auth_recovery_phase: self.auth_context.recovery_phase,
+                auth_connection_reused: None,
+                auth_request_id: debug.request_id.as_deref(),
+                auth_cf_ray: debug.cf_ray.as_deref(),
+                auth_error: debug.auth_error.as_deref(),
+                auth_error_code: debug.auth_error_code.as_deref(),
+                auth_recovery_followup_success: self
+                    .auth_context
+                    .retry_after_unauthorized
+                    .then_some(error.is_none()),
+                auth_recovery_followup_status: self
+                    .auth_context
+                    .retry_after_unauthorized
+                    .then_some(status)
+                    .flatten(),
+            },
+            &self.auth_env_telemetry,
+        );
     }
 }
 
@@ -1729,29 +1780,32 @@ impl WebsocketTelemetry for ApiTelemetry {
             error_message.as_deref(),
             connection_reused,
         );
-        emit_feedback_request_tags(&FeedbackRequestTags {
-            endpoint: self.request_route_telemetry.endpoint,
-            auth_header_attached: self.auth_context.auth_header_attached,
-            auth_header_name: self.auth_context.auth_header_name,
-            auth_mode: self.auth_context.auth_mode,
-            auth_retry_after_unauthorized: Some(self.auth_context.retry_after_unauthorized),
-            auth_recovery_mode: self.auth_context.recovery_mode,
-            auth_recovery_phase: self.auth_context.recovery_phase,
-            auth_connection_reused: Some(connection_reused),
-            auth_request_id: debug.request_id.as_deref(),
-            auth_cf_ray: debug.cf_ray.as_deref(),
-            auth_error: debug.auth_error.as_deref(),
-            auth_error_code: debug.auth_error_code.as_deref(),
-            auth_recovery_followup_success: self
-                .auth_context
-                .retry_after_unauthorized
-                .then_some(error.is_none()),
-            auth_recovery_followup_status: self
-                .auth_context
-                .retry_after_unauthorized
-                .then_some(status)
-                .flatten(),
-        });
+        emit_feedback_request_tags_with_auth_env(
+            &FeedbackRequestTags {
+                endpoint: self.request_route_telemetry.endpoint,
+                auth_header_attached: self.auth_context.auth_header_attached,
+                auth_header_name: self.auth_context.auth_header_name,
+                auth_mode: self.auth_context.auth_mode,
+                auth_retry_after_unauthorized: Some(self.auth_context.retry_after_unauthorized),
+                auth_recovery_mode: self.auth_context.recovery_mode,
+                auth_recovery_phase: self.auth_context.recovery_phase,
+                auth_connection_reused: Some(connection_reused),
+                auth_request_id: debug.request_id.as_deref(),
+                auth_cf_ray: debug.cf_ray.as_deref(),
+                auth_error: debug.auth_error.as_deref(),
+                auth_error_code: debug.auth_error_code.as_deref(),
+                auth_recovery_followup_success: self
+                    .auth_context
+                    .retry_after_unauthorized
+                    .then_some(error.is_none()),
+                auth_recovery_followup_status: self
+                    .auth_context
+                    .retry_after_unauthorized
+                    .then_some(status)
+                    .flatten(),
+            },
+            &self.auth_env_telemetry,
+        );
     }
 
     fn on_ws_event(

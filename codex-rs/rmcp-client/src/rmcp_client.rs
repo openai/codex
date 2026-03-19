@@ -723,7 +723,7 @@ impl RmcpClient {
             None => None,
         };
         let rmcp_params = CallToolRequestParams {
-            meta,
+            meta: None,
             name: name.into(),
             arguments,
             task: None,
@@ -731,7 +731,30 @@ impl RmcpClient {
         let result = self
             .run_service_operation("tools/call", timeout, move |service| {
                 let rmcp_params = rmcp_params.clone();
-                async move { service.call_tool(rmcp_params).await }.boxed()
+                let meta = meta.clone();
+                async move {
+                    let result = service
+                        .peer()
+                        .send_request_with_option(
+                            ClientRequest::CallToolRequest(rmcp::model::CallToolRequest {
+                                method: Default::default(),
+                                params: rmcp_params,
+                                extensions: Default::default(),
+                            }),
+                            rmcp::service::PeerRequestOptions {
+                                timeout: None,
+                                meta,
+                            },
+                        )
+                        .await?
+                        .await_response()
+                        .await?;
+                    match result {
+                        ServerResult::CallToolResult(result) => Ok(result),
+                        _ => Err(rmcp::service::ServiceError::UnexpectedResponse),
+                    }
+                }
+                .boxed()
             })
             .await?;
         self.persist_oauth_tokens().await;
@@ -744,19 +767,25 @@ impl RmcpClient {
         params: Option<serde_json::Value>,
     ) -> Result<()> {
         self.refresh_oauth_if_needed().await;
-        self.run_service_operation("notifications/custom", None, move |service| {
-            let params = params.clone();
-            async move {
-                service
-                    .send_notification(ClientNotification::CustomNotification(CustomNotification {
-                        method: method.to_string(),
-                        params,
-                        extensions: Extensions::new(),
-                    }))
-                    .await
-            }
-            .boxed()
-        })
+        self.run_service_operation(
+            "notifications/custom",
+            /*timeout*/ None,
+            move |service| {
+                let params = params.clone();
+                async move {
+                    service
+                        .send_notification(ClientNotification::CustomNotification(
+                            CustomNotification {
+                                method: method.to_string(),
+                                params,
+                                extensions: Extensions::new(),
+                            },
+                        ))
+                        .await
+                }
+                .boxed()
+            },
+        )
         .await?;
         self.persist_oauth_tokens().await;
         Ok(())
@@ -769,7 +798,7 @@ impl RmcpClient {
     ) -> Result<ServerResult> {
         self.refresh_oauth_if_needed().await;
         let response = self
-            .run_service_operation("requests/custom", None, move |service| {
+            .run_service_operation("requests/custom", /*timeout*/ None, move |service| {
                 let params = params.clone();
                 async move {
                     service

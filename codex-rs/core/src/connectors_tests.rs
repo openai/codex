@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
 use crate::config::types::AppConfig;
 use crate::config::types::AppToolConfig;
@@ -13,13 +14,13 @@ use crate::config_loader::ConfigRequirementsToml;
 use crate::features::Feature;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
-use codex_config::CONFIG_TOML_FILE;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
 use rmcp::model::Tool;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -957,6 +958,7 @@ fn filter_disallowed_connectors_filters_openai_prefix() {
 fn filter_disallowed_connectors_filters_disallowed_connector_ids() {
     let filtered = filter_disallowed_connectors(vec![
         app("asdk_app_6938a94a61d881918ef32cb999ff937c"),
+        app("connector_3f8d1a79f27c4c7ba1a897ab13bf37dc"),
         app("delta"),
     ]);
     assert_eq!(filtered, vec![app("delta")]);
@@ -978,9 +980,36 @@ fn first_party_chat_originator_filters_target_and_openai_prefixed_connectors() {
     );
 }
 
+#[tokio::test]
+async fn tool_suggest_connector_ids_include_configured_tool_suggest_discoverables() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[tool_suggest]
+discoverables = [
+  { type = "connector", id = "connector_2128aebfecb84f64a069897515042a44" },
+  { type = "plugin", id = "slack@openai-curated" },
+  { type = "connector", id = "   " }
+]
+"#,
+    )
+    .expect("write config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should load");
+
+    assert_eq!(
+        tool_suggest_connector_ids(&config),
+        HashSet::from(["connector_2128aebfecb84f64a069897515042a44".to_string()])
+    );
+}
+
 #[test]
-fn filter_tool_suggest_discoverable_tools_keeps_only_allowlisted_uninstalled_apps() {
-    let filtered = filter_tool_suggest_discoverable_tools(
+fn filter_tool_suggest_discoverable_connectors_keeps_only_plugin_backed_uninstalled_apps() {
+    let filtered = filter_tool_suggest_discoverable_connectors(
         vec![
             named_app(
                 "connector_2128aebfecb84f64a069897515042a44",
@@ -996,6 +1025,10 @@ fn filter_tool_suggest_discoverable_tools_keeps_only_allowlisted_uninstalled_app
                 "Google Calendar",
             )
         }],
+        &HashSet::from([
+            "connector_2128aebfecb84f64a069897515042a44".to_string(),
+            "connector_68df038e0ba48191908c8434991bbac2".to_string(),
+        ]),
     );
 
     assert_eq!(
@@ -1008,8 +1041,8 @@ fn filter_tool_suggest_discoverable_tools_keeps_only_allowlisted_uninstalled_app
 }
 
 #[test]
-fn filter_tool_suggest_discoverable_tools_keeps_disabled_accessible_apps() {
-    let filtered = filter_tool_suggest_discoverable_tools(
+fn filter_tool_suggest_discoverable_connectors_excludes_accessible_apps_even_when_disabled() {
+    let filtered = filter_tool_suggest_discoverable_connectors(
         vec![
             named_app(
                 "connector_2128aebfecb84f64a069897515042a44",
@@ -1031,13 +1064,11 @@ fn filter_tool_suggest_discoverable_tools_keeps_disabled_accessible_apps() {
                 ..named_app("connector_68df038e0ba48191908c8434991bbac2", "Gmail")
             },
         ],
+        &HashSet::from([
+            "connector_2128aebfecb84f64a069897515042a44".to_string(),
+            "connector_68df038e0ba48191908c8434991bbac2".to_string(),
+        ]),
     );
 
-    assert_eq!(
-        filtered,
-        vec![named_app(
-            "connector_68df038e0ba48191908c8434991bbac2",
-            "Gmail"
-        )]
-    );
+    assert_eq!(filtered, Vec::<AppInfo>::new());
 }

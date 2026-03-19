@@ -108,16 +108,19 @@ pub(crate) async fn handle_mcp_tool_call(
             &call_id,
             invocation,
             "MCP tool call blocked by app configuration".to_string(),
-            false,
+            /*already_started*/ false,
         )
         .await;
         let status = if result.is_ok() { "ok" } else { "error" };
-        turn_context
-            .session_telemetry
-            .counter("codex.mcp.call", 1, &[("status", status)]);
+        turn_context.session_telemetry.counter(
+            "codex.mcp.call",
+            /*inc*/ 1,
+            &[("status", status)],
+        );
         return CallToolResult::from_result(result);
     }
-    let request_meta = build_mcp_tool_call_request_meta(&server, metadata.as_ref());
+    let request_meta =
+        build_mcp_tool_call_request_meta(turn_context.as_ref(), &server, metadata.as_ref());
 
     let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
         call_id: call_id.clone(),
@@ -190,7 +193,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     &call_id,
                     invocation,
                     message,
-                    true,
+                    /*already_started*/ true,
                 )
                 .await
             }
@@ -202,7 +205,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     &call_id,
                     invocation,
                     message,
-                    true,
+                    /*already_started*/ true,
                 )
                 .await
             }
@@ -213,16 +216,18 @@ pub(crate) async fn handle_mcp_tool_call(
                     &call_id,
                     invocation,
                     message,
-                    true,
+                    /*already_started*/ true,
                 )
                 .await
             }
         };
 
         let status = if result.is_ok() { "ok" } else { "error" };
-        turn_context
-            .session_telemetry
-            .counter("codex.mcp.call", 1, &[("status", status)]);
+        turn_context.session_telemetry.counter(
+            "codex.mcp.call",
+            /*inc*/ 1,
+            &[("status", status)],
+        );
 
         return CallToolResult::from_result(result);
     }
@@ -263,7 +268,7 @@ pub(crate) async fn handle_mcp_tool_call(
     let status = if result.is_ok() { "ok" } else { "error" };
     turn_context
         .session_telemetry
-        .counter("codex.mcp.call", 1, &[("status", status)]);
+        .counter("codex.mcp.call", /*inc*/ 1, &[("status", status)]);
 
     CallToolResult::from_result(result)
 }
@@ -386,18 +391,30 @@ pub(crate) struct McpToolApprovalMetadata {
 const MCP_TOOL_CODEX_APPS_META_KEY: &str = "_codex_apps";
 
 fn build_mcp_tool_call_request_meta(
+    turn_context: &TurnContext,
     server: &str,
     metadata: Option<&McpToolApprovalMetadata>,
 ) -> Option<serde_json::Value> {
-    if server != CODEX_APPS_MCP_SERVER_NAME {
-        return None;
+    let mut request_meta = serde_json::Map::new();
+
+    if let Some(turn_metadata) = turn_context.turn_metadata_state.current_meta_value() {
+        request_meta.insert(
+            crate::X_CODEX_TURN_METADATA_HEADER.to_string(),
+            turn_metadata,
+        );
     }
 
-    let codex_apps_meta = metadata.and_then(|metadata| metadata.codex_apps_meta.as_ref())?;
+    if server == CODEX_APPS_MCP_SERVER_NAME
+        && let Some(codex_apps_meta) =
+            metadata.and_then(|metadata| metadata.codex_apps_meta.clone())
+    {
+        request_meta.insert(
+            MCP_TOOL_CODEX_APPS_META_KEY.to_string(),
+            serde_json::Value::Object(codex_apps_meta),
+        );
+    }
 
-    Some(serde_json::json!({
-        MCP_TOOL_CODEX_APPS_META_KEY: codex_apps_meta,
-    }))
+    (!request_meta.is_empty()).then_some(serde_json::Value::Object(request_meta))
 }
 
 #[derive(Clone, Copy)]

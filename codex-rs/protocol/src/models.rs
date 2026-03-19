@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use codex_utils_image::PromptImageMode;
-use codex_utils_image::load_for_prompt;
+use codex_utils_image::load_for_prompt_bytes;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -231,6 +231,8 @@ pub enum ResponseInputItem {
     },
     FunctionCallOutput {
         call_id: String,
+        #[ts(as = "FunctionCallOutputBody")]
+        #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
     },
     McpToolCallOutput {
@@ -239,6 +241,11 @@ pub enum ResponseInputItem {
     },
     CustomToolCallOutput {
         call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        name: Option<String>,
+        #[ts(as = "FunctionCallOutputBody")]
+        #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
     },
     ToolSearchOutput {
@@ -306,6 +313,7 @@ pub enum ResponseItem {
     Reasoning {
         #[serde(default, skip_serializing)]
         #[ts(skip)]
+        #[schemars(skip)]
         id: String,
         summary: Vec<ReasoningItemReasoningSummary>,
         #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
@@ -356,6 +364,8 @@ pub enum ResponseItem {
     // We keep this behavior centralized in `FunctionCallOutputPayload`.
     FunctionCallOutput {
         call_id: String,
+        #[ts(as = "FunctionCallOutputBody")]
+        #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
     },
     CustomToolCall {
@@ -375,6 +385,11 @@ pub enum ResponseItem {
     // text or structured content items.
     CustomToolCallOutput {
         call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        name: Option<String>,
+        #[ts(as = "FunctionCallOutputBody")]
+        #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
     },
     ToolSearchOutput {
@@ -926,7 +941,7 @@ fn invalid_image_error_placeholder(
 fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> ContentItem {
     ContentItem::InputText {
         text: format!(
-            "Codex cannot attach image at `{}`: unsupported image format `{}`.",
+            "Codex cannot attach image at `{}`: unsupported image `{}`.",
             path.display(),
             mime
         ),
@@ -935,10 +950,11 @@ fn unsupported_image_error_placeholder(path: &std::path::Path, mime: &str) -> Co
 
 pub fn local_image_content_items_with_label_number(
     path: &std::path::Path,
+    file_bytes: Vec<u8>,
     label_number: Option<usize>,
     mode: PromptImageMode,
 ) -> Vec<ContentItem> {
-    match load_for_prompt(path, mode) {
+    match load_for_prompt_bytes(path, file_bytes, mode) {
         Ok(image) => {
             let mut items = Vec::with_capacity(3);
             if let Some(label_number) = label_number {
@@ -956,28 +972,20 @@ pub fn local_image_content_items_with_label_number(
             }
             items
         }
-        Err(err) => {
-            if matches!(&err, ImageProcessingError::Read { .. }) {
+        Err(err) => match &err {
+            ImageProcessingError::Read { .. } | ImageProcessingError::Encode { .. } => {
                 vec![local_image_error_placeholder(path, &err)]
-            } else if err.is_invalid_image() {
-                vec![invalid_image_error_placeholder(path, &err)]
-            } else {
-                let Some(mime_guess) = mime_guess::from_path(path).first() else {
-                    return vec![local_image_error_placeholder(
-                        path,
-                        "unsupported MIME type (unknown)",
-                    )];
-                };
-                let mime = mime_guess.essence_str().to_owned();
-                if !mime.starts_with("image/") {
-                    return vec![local_image_error_placeholder(
-                        path,
-                        format!("unsupported MIME type `{mime}`"),
-                    )];
-                }
-                vec![unsupported_image_error_placeholder(path, &mime)]
             }
-        }
+            ImageProcessingError::Decode { .. } if err.is_invalid_image() => {
+                vec![invalid_image_error_placeholder(path, &err)]
+            }
+            ImageProcessingError::Decode { .. } => {
+                vec![local_image_error_placeholder(path, &err)]
+            }
+            ImageProcessingError::UnsupportedImageFormat { mime } => {
+                vec![unsupported_image_error_placeholder(path, mime)]
+            }
+        },
     }
 }
 
@@ -998,9 +1006,15 @@ impl From<ResponseInputItem> for ResponseItem {
                 let output = output.into_function_call_output_payload();
                 Self::FunctionCallOutput { call_id, output }
             }
-            ResponseInputItem::CustomToolCallOutput { call_id, output } => {
-                Self::CustomToolCallOutput { call_id, output }
-            }
+            ResponseInputItem::CustomToolCallOutput {
+                call_id,
+                name,
+                output,
+            } => Self::CustomToolCallOutput {
+                call_id,
+                name,
+                output,
+            },
             ResponseInputItem::ToolSearchOutput {
                 call_id,
                 status,
@@ -1105,11 +1119,15 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                     }
                     UserInput::LocalImage { path } => {
                         image_index += 1;
-                        local_image_content_items_with_label_number(
-                            &path,
-                            Some(image_index),
-                            PromptImageMode::ResizeToFit,
-                        )
+                        match std::fs::read(&path) {
+                            Ok(file_bytes) => local_image_content_items_with_label_number(
+                                &path,
+                                file_bytes,
+                                Some(image_index),
+                                PromptImageMode::ResizeToFit,
+                            ),
+                            Err(err) => vec![local_image_error_placeholder(&path, err)],
+                        }
                     }
                     UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(), // Tool bodies are injected later in core
                 })
@@ -2378,6 +2396,7 @@ mod tests {
     fn serializes_custom_tool_image_outputs_as_array() -> Result<()> {
         let item = ResponseInputItem::CustomToolCallOutput {
             call_id: "call1".into(),
+            name: None,
             output: FunctionCallOutputPayload::from_content_items(vec![
                 FunctionCallOutputContentItem::InputImage {
                     image_url: "data:image/png;base64,BASE64".into(),
@@ -2881,8 +2900,8 @@ mod tests {
                 match &content[0] {
                     ContentItem::InputText { text } => {
                         assert!(
-                            text.contains("unsupported MIME type `application/json`"),
-                            "placeholder should mention unsupported MIME: {text}"
+                            text.contains("unsupported image `application/json`"),
+                            "placeholder should mention unsupported image MIME: {text}"
                         );
                         assert!(
                             text.contains(&json_path.display().to_string()),
@@ -2916,7 +2935,7 @@ mod tests {
             ResponseInputItem::Message { content, .. } => {
                 assert_eq!(content.len(), 1);
                 let expected = format!(
-                    "Codex cannot attach image at `{}`: unsupported image format `image/svg+xml`.",
+                    "Codex cannot attach image at `{}`: unsupported image `image/svg+xml`.",
                     svg_path.display()
                 );
                 match &content[0] {

@@ -161,6 +161,7 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
         },
         ResponseItem::CustomToolCallOutput {
             call_id: "call-2".to_string(),
+            name: None,
             output: FunctionCallOutputPayload::from_text(raw_output.to_string()),
         },
     ];
@@ -190,6 +191,7 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
             },
             ResponseItem::CustomToolCallOutput {
                 call_id: "call-2".to_string(),
+                name: None,
                 output: FunctionCallOutputPayload::from_text(expected_output.to_string()),
             },
         ]

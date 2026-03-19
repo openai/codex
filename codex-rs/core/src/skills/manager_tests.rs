@@ -93,6 +93,7 @@ async fn skills_for_cwd_reuses_cached_entry_even_when_entry_has_extra_roots() {
     let outcome_with_extra = skills_manager
         .skills_for_cwd_with_extra_user_roots(
             cwd.path(),
+            &config,
             true,
             std::slice::from_ref(&extra_root_path),
         )
@@ -112,7 +113,9 @@ async fn skills_for_cwd_reuses_cached_entry_even_when_entry_has_extra_roots() {
 
     // The cwd-only API returns the current cached entry for this cwd, even when that entry
     // was produced with extra roots.
-    let outcome_without_extra = skills_manager.skills_for_cwd(cwd.path(), false).await;
+    let outcome_without_extra = skills_manager
+        .skills_for_cwd(cwd.path(), &config, false)
+        .await;
     assert_eq!(outcome_without_extra.skills, outcome_with_extra.skills);
     assert_eq!(outcome_without_extra.errors, outcome_with_extra.errors);
 }
@@ -204,6 +207,7 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
     let outcome_a = skills_manager
         .skills_for_cwd_with_extra_user_roots(
             cwd.path(),
+            &config,
             true,
             std::slice::from_ref(&extra_root_a_path),
         )
@@ -225,6 +229,7 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
     let outcome_b = skills_manager
         .skills_for_cwd_with_extra_user_roots(
             cwd.path(),
+            &config,
             false,
             std::slice::from_ref(&extra_root_b_path),
         )
@@ -245,6 +250,7 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
     let outcome_reloaded = skills_manager
         .skills_for_cwd_with_extra_user_roots(
             cwd.path(),
+            &config,
             true,
             std::slice::from_ref(&extra_root_b_path),
         )
@@ -417,7 +423,9 @@ enabled = true
     let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
     let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager, true);
 
-    let parent_outcome = skills_manager.skills_for_cwd(cwd.path(), true).await;
+    let parent_outcome = skills_manager
+        .skills_for_cwd(cwd.path(), &parent_config, true)
+        .await;
     let parent_skill = parent_outcome
         .skills
         .iter()

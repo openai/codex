@@ -68,6 +68,11 @@ cd tools/argument-comment-lint
 cargo test
 ```
 
+GitHub releases also publish a DotSlash file named
+`argument-comment-lint` for macOS arm64, Linux arm64, Linux x64, and Windows
+x64. The published package contains a small runner executable, a bundled
+`cargo-dylint`, and the prebuilt lint library.
+
 Run the lint against `codex-rs` from the repo root:
 
 ```bash
@@ -92,7 +97,7 @@ rustc incremental compilation ICE locally. To override that behavior for an ad
 hoc run:
 
 ```bash
-DYLINT_RUSTFLAGS="-A uncommented_anonymous_literal_argument" \
+DYLINT_RUSTFLAGS="-A uncommented-anonymous-literal-argument" \
 CARGO_INCREMENTAL=1 \
   ./tools/argument-comment-lint/run.sh -p codex-core
 ```

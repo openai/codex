@@ -266,7 +266,7 @@ impl GuardianReviewSessionManager {
                             params.spawn_config.clone(),
                             next_reuse_key.clone(),
                             spawn_cancel_token.clone(),
-                            None,
+                            /*initial_history*/ None,
                         )),
                     )
                     .await
@@ -297,7 +297,12 @@ impl GuardianReviewSessionManager {
 
         if trunk.reuse_key != next_reuse_key {
             return self
-                .run_ephemeral_review(params, next_reuse_key, deadline, None)
+                .run_ephemeral_review(
+                    params,
+                    next_reuse_key,
+                    deadline,
+                    /*initial_history*/ None,
+                )
                 .await;
         }
 
@@ -587,9 +592,12 @@ pub(crate) fn build_guardian_review_session_config(
     let mut guardian_config = parent_config.clone();
     guardian_config.model = Some(active_model.to_string());
     guardian_config.model_reasoning_effort = reasoning_effort;
-    // Guardian policy must come from the built-in prompt, not from any
-    // user-writable or legacy managed config layer.
-    guardian_config.developer_instructions = Some(guardian_policy_prompt());
+    guardian_config.developer_instructions = Some(
+        parent_config
+            .guardian_developer_instructions
+            .clone()
+            .unwrap_or_else(guardian_policy_prompt),
+    );
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     guardian_config.permissions.sandbox_policy =
         Constrained::allow_only(SandboxPolicy::new_read_only_policy());

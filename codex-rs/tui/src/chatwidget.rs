@@ -37,17 +37,24 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use url::Url;
+
 use self::realtime::PendingSteerCompareKey;
 use crate::app_event::RealtimeAudioDeviceKind;
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
+use crate::bottom_pane::TerminalTitleItem;
+use crate::bottom_pane::TerminalTitleSetupView;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
 use crate::status::rate_limit_snapshot_display_for_limit;
+use crate::terminal_title::SetTerminalTitleResult;
+use crate::terminal_title::clear_terminal_title;
+use crate::terminal_title::set_terminal_title;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::ConfigLayerSource;
@@ -71,8 +78,6 @@ use codex_core::models_manager::manager::ModelsManager;
 use codex_core::plugins::PluginsManager;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::skills::model::SkillMetadata;
-use codex_core::terminal::TerminalName;
-use codex_core::terminal::terminal_info;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::RuntimeMetricsSummary;
@@ -150,6 +155,8 @@ use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
+use codex_terminal_detection::TerminalName;
+use codex_terminal_detection::terminal_info;
 use codex_utils_sleep_inhibitor::SleepInhibitor;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -169,6 +176,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tracing::debug;
 use tracing::warn;
+use unicode_segmentation::UnicodeSegmentation;
 
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
@@ -284,6 +292,11 @@ use self::skills::find_skill_mentions_with_tool_mentions;
 mod realtime;
 use self::realtime::RealtimeConversationUiState;
 use self::realtime::RenderedUserMessageEvent;
+mod status_surfaces;
+use self::status_surfaces::CachedProjectRootName;
+#[cfg(test)]
+use self::status_surfaces::TERMINAL_TITLE_SPINNER_INTERVAL;
+use self::status_surfaces::TerminalTitleStatusKind;
 use crate::mention_codec::LinkedMention;
 use crate::mention_codec::encode_history_mentions;
 use crate::streaming::chunking::AdaptiveChunkingPolicy;
@@ -300,6 +313,7 @@ use codex_file_search::FileMatch;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
@@ -484,6 +498,8 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) startup_tooltip_override: Option<String>,
     // Shared latch so we only warn once about invalid status-line item IDs.
     pub(crate) status_line_invalid_items_warned: Arc<AtomicBool>,
+    // Shared latch so we only warn once about invalid terminal-title item IDs.
+    pub(crate) terminal_title_invalid_items_warned: Arc<AtomicBool>,
     pub(crate) session_telemetry: SessionTelemetry,
 }
 
@@ -709,6 +725,8 @@ pub(crate) struct ChatWidget {
     // Guardian review keeps its own pending set so it can derive a single
     // footer summary from one or more in-flight review events.
     pending_guardian_review_status: PendingGuardianReviewStatus,
+    // Semantic status used for terminal-title status rendering (avoid string matching on headers).
+    terminal_title_status_kind: TerminalTitleStatusKind,
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
     // Set when commentary output completes; once stream queues go idle we restore the status row.
@@ -771,6 +789,8 @@ pub(crate) struct ChatWidget {
     // later steer. This is cleared when the user submits a steer so the plan popup only appears
     // if a newer proposed plan arrives afterward.
     saw_plan_item_this_turn: bool,
+    // Latest `update_plan` checklist task counts for terminal-title rendering.
+    last_plan_progress: Option<(usize, usize)>,
     // Incremental buffer for streamed plan content.
     plan_delta_buffer: String,
     // True while a plan item is streaming.
@@ -794,6 +814,21 @@ pub(crate) struct ChatWidget {
     session_network_proxy: Option<codex_protocol::protocol::SessionNetworkProxyRuntime>,
     // Shared latch so we only warn once about invalid status-line item IDs.
     status_line_invalid_items_warned: Arc<AtomicBool>,
+    // Shared latch so we only warn once about invalid terminal-title item IDs.
+    terminal_title_invalid_items_warned: Arc<AtomicBool>,
+    // Last terminal title emitted, to avoid writing duplicate OSC updates.
+    //
+    // App carries this cache across ChatWidget replacement so the next widget can
+    // clear a stale title when its own configuration renders no title content.
+    pub(crate) last_terminal_title: Option<String>,
+    // Original terminal-title config captured when opening the setup UI so live preview can be
+    // rolled back on cancel.
+    terminal_title_setup_original_items: Option<Option<Vec<String>>>,
+    // Baseline instant used to animate spinner-prefixed title statuses.
+    terminal_title_animation_origin: Instant,
+    // Cached project root display name for the current cwd; avoids walking parent directories on
+    // frequent title/status refreshes.
+    status_line_project_root_name_cache: Option<CachedProjectRootName>,
     // Cached git branch name for the status line (None if unknown).
     status_line_branch: Option<String>,
     // CWD used to resolve the cached branch; change resets branch state.
@@ -1079,7 +1114,7 @@ impl ChatWidget {
     }
 
     fn realtime_audio_device_selection_enabled(&self) -> bool {
-        self.realtime_conversation_enabled() && cfg!(feature = "voice-input")
+        self.realtime_conversation_enabled()
     }
 
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
@@ -1089,12 +1124,15 @@ impl ChatWidget {
     fn update_task_running_state(&mut self) {
         self.bottom_pane
             .set_task_running(self.agent_turn_running || self.mcp_startup_status.is_some());
+        self.refresh_terminal_title();
     }
 
     fn restore_reasoning_status_header(&mut self) {
         if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
+            self.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
             self.set_status_header(header);
         } else if self.bottom_pane.is_task_running() {
+            self.terminal_title_status_kind = TerminalTitleStatusKind::Working;
             self.set_status_header(String::from("Working"));
         }
     }
@@ -1187,6 +1225,22 @@ impl ChatWidget {
             StatusDetailsCapitalization::Preserve,
             details_max_lines,
         );
+        let title_uses_status = self
+            .config
+            .tui_terminal_title
+            .as_ref()
+            .is_some_and(|items| items.iter().any(|item| item == "status"));
+        let title_uses_spinner = self
+            .config
+            .tui_terminal_title
+            .as_ref()
+            .is_none_or(|items| items.iter().any(|item| item == "spinner"));
+        if title_uses_status
+            || (title_uses_spinner
+                && self.terminal_title_status_kind == TerminalTitleStatusKind::Undoing)
+        {
+            self.refresh_terminal_title();
+        }
     }
 
     /// Convenience wrapper around [`Self::set_status`];
@@ -1194,7 +1248,7 @@ impl ChatWidget {
     fn set_status_header(&mut self, header: String) {
         self.set_status(
             header,
-            None,
+            /*details*/ None,
             StatusDetailsCapitalization::CapitalizeFirst,
             STATUS_DETAILS_DEFAULT_MAX_LINES,
         );
@@ -1213,70 +1267,6 @@ impl ChatWidget {
         self.bottom_pane.set_active_agent_label(active_agent_label);
     }
 
-    /// Recomputes footer status-line content from config and current runtime state.
-    ///
-    /// This method is the status-line orchestrator: it parses configured item identifiers,
-    /// warns once per session about invalid items, updates whether status-line mode is enabled,
-    /// schedules async git-branch lookup when needed, and renders only values that are currently
-    /// available.
-    ///
-    /// The omission behavior is intentional. If selected items are unavailable (for example before
-    /// a session id exists or before branch lookup completes), those items are skipped without
-    /// placeholders so the line remains compact and stable.
-    pub(crate) fn refresh_status_line(&mut self) {
-        let (items, invalid_items) = self.status_line_items_with_invalids();
-        if self.thread_id.is_some()
-            && !invalid_items.is_empty()
-            && self
-                .status_line_invalid_items_warned
-                .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
-                .is_ok()
-        {
-            let label = if invalid_items.len() == 1 {
-                "item"
-            } else {
-                "items"
-            };
-            let message = format!(
-                "Ignored invalid status line {label}: {}.",
-                proper_join(invalid_items.as_slice())
-            );
-            self.on_warning(message);
-        }
-        if !items.contains(&StatusLineItem::GitBranch) {
-            self.status_line_branch = None;
-            self.status_line_branch_pending = false;
-            self.status_line_branch_lookup_complete = false;
-        }
-        let enabled = !items.is_empty();
-        self.bottom_pane.set_status_line_enabled(enabled);
-        if !enabled {
-            self.set_status_line(None);
-            return;
-        }
-
-        let cwd = self.status_line_cwd().to_path_buf();
-        self.sync_status_line_branch_state(&cwd);
-
-        if items.contains(&StatusLineItem::GitBranch) && !self.status_line_branch_lookup_complete {
-            self.request_status_line_branch(cwd);
-        }
-
-        let mut parts = Vec::new();
-        for item in items {
-            if let Some(value) = self.status_line_value_for_item(&item) {
-                parts.push(value);
-            }
-        }
-
-        let line = if parts.is_empty() {
-            None
-        } else {
-            Some(Line::from(parts.join(" · ")))
-        };
-        self.set_status_line(line);
-    }
-
     /// Records that status-line setup was canceled.
     ///
     /// Cancellation is intentionally side-effect free for config state; the existing configuration
@@ -1292,7 +1282,45 @@ impl ChatWidget {
         tracing::info!("status line setup confirmed with items: {items:#?}");
         let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
         self.config.tui_status_line = Some(ids);
-        self.refresh_status_line();
+        self.refresh_status_surfaces();
+    }
+
+    /// Applies a temporary terminal-title selection while the setup UI is open.
+    pub(crate) fn preview_terminal_title(&mut self, items: Vec<TerminalTitleItem>) {
+        if self.terminal_title_setup_original_items.is_none() {
+            self.terminal_title_setup_original_items = Some(self.config.tui_terminal_title.clone());
+        }
+
+        let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
+        self.config.tui_terminal_title = Some(ids);
+        self.refresh_terminal_title();
+    }
+
+    /// Restores the terminal title selection captured before opening the setup UI.
+    pub(crate) fn revert_terminal_title_setup_preview(&mut self) {
+        let Some(original_items) = self.terminal_title_setup_original_items.take() else {
+            return;
+        };
+
+        self.config.tui_terminal_title = original_items;
+        self.refresh_terminal_title();
+    }
+
+    /// Records that terminal-title setup was canceled and rolls back live preview changes.
+    pub(crate) fn cancel_terminal_title_setup(&mut self) {
+        tracing::info!("Terminal title setup canceled by user");
+        self.revert_terminal_title_setup_preview();
+    }
+
+    /// Applies terminal-title item selection from the setup view to in-memory config.
+    ///
+    /// An empty selection persists as an explicit empty list (disables title updates).
+    pub(crate) fn setup_terminal_title(&mut self, items: Vec<TerminalTitleItem>) {
+        tracing::info!("terminal title setup confirmed with items: {items:#?}");
+        let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
+        self.terminal_title_setup_original_items = None;
+        self.config.tui_terminal_title = Some(ids);
+        self.refresh_terminal_title();
     }
 
     /// Stores async git-branch lookup results for the current status-line cwd.
@@ -1307,17 +1335,6 @@ impl ChatWidget {
         self.status_line_branch = branch;
         self.status_line_branch_pending = false;
         self.status_line_branch_lookup_complete = true;
-    }
-
-    /// Forces a new git-branch lookup when `GitBranch` is part of the configured status line.
-    fn request_status_line_branch_refresh(&mut self) {
-        let (items, _) = self.status_line_items_with_invalids();
-        if items.is_empty() || !items.contains(&StatusLineItem::GitBranch) {
-            return;
-        }
-        let cwd = self.status_line_cwd().to_path_buf();
-        self.sync_status_line_branch_state(&cwd);
-        self.request_status_line_branch(cwd);
     }
 
     fn collect_runtime_metrics_delta(&mut self) {
@@ -1356,7 +1373,7 @@ impl ChatWidget {
     fn on_session_configured(&mut self, event: codex_protocol::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
-        self.set_skills(None);
+        self.set_skills(/*skills*/ None);
         self.session_network_proxy = event.network_proxy.clone();
         self.thread_id = Some(event.session_id);
         self.thread_name = event.thread_name.clone();
@@ -1385,6 +1402,7 @@ impl ChatWidget {
                 Constrained::allow_only(event.sandbox_policy.clone());
         }
         self.config.approvals_reviewer = event.approvals_reviewer;
+        self.status_line_project_root_name_cache = None;
         let initial_messages = event.initial_messages.clone();
         self.last_copyable_output = None;
         let forked_from_id = event.forked_from_id;
@@ -1393,7 +1411,7 @@ impl ChatWidget {
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
             Some(model_for_header.clone()),
             Some(event.reasoning_effort),
-            None,
+            /*developer_instructions*/ None,
         );
         if let Some(mask) = self.active_collaboration_mask.as_mut() {
             mask.model = Some(model_for_header.clone());
@@ -1488,6 +1506,7 @@ impl ChatWidget {
     fn on_thread_name_updated(&mut self, event: codex_protocol::protocol::ThreadNameUpdatedEvent) {
         if self.thread_id == Some(event.thread_id) {
             self.thread_name = event.thread_name;
+            self.refresh_terminal_title();
             self.request_redraw();
         }
     }
@@ -1659,6 +1678,7 @@ impl ChatWidget {
 
         if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
             // Update the shimmer header to the extracted reasoning chunk header.
+            self.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
             self.set_status_header(header);
         } else {
             // Fallback while we don't yet have a bold header: leave existing header as-is.
@@ -1692,9 +1712,11 @@ impl ChatWidget {
 
     fn on_task_started(&mut self) {
         self.agent_turn_running = true;
-        self.turn_sleep_inhibitor.set_turn_running(true);
+        self.turn_sleep_inhibitor
+            .set_turn_running(/*turn_running*/ true);
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
+        self.last_plan_progress = None;
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.adaptive_chunking.reset();
@@ -1707,7 +1729,9 @@ impl ChatWidget {
         self.update_task_running_state();
         self.retry_status_header = None;
         self.pending_status_indicator_restore = false;
-        self.bottom_pane.set_interrupt_hint_visible(true);
+        self.bottom_pane
+            .set_interrupt_hint_visible(/*visible*/ true);
+        self.terminal_title_status_kind = TerminalTitleStatusKind::Working;
         self.set_status_header(String::from("Working"));
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
@@ -1756,7 +1780,8 @@ impl ChatWidget {
         // Mark task stopped and request redraw now that all content is in history.
         self.pending_status_indicator_restore = false;
         self.agent_turn_running = false;
-        self.turn_sleep_inhibitor.set_turn_running(false);
+        self.turn_sleep_inhibitor
+            .set_turn_running(/*turn_running*/ false);
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
@@ -1900,7 +1925,8 @@ impl ChatWidget {
         match info {
             Some(info) => self.apply_token_info(info),
             None => {
-                self.bottom_pane.set_context_window(None, None);
+                self.bottom_pane
+                    .set_context_window(/*percent*/ None, /*used_tokens*/ None);
                 self.token_info = None;
             }
         }
@@ -1954,7 +1980,8 @@ impl ChatWidget {
             match saved {
                 Some(info) => self.apply_token_info(info),
                 None => {
-                    self.bottom_pane.set_context_window(None, None);
+                    self.bottom_pane
+                        .set_context_window(/*percent*/ None, /*used_tokens*/ None);
                     self.token_info = None;
                 }
             }
@@ -2043,7 +2070,7 @@ impl ChatWidget {
         } else {
             self.rate_limit_snapshots_by_limit_id.clear();
         }
-        self.refresh_status_line();
+        self.refresh_status_surfaces();
     }
     /// Finalize any active exec as failed and stop/clear agent-turn UI state.
     ///
@@ -2054,7 +2081,8 @@ impl ChatWidget {
         self.finalize_active_cell_as_failed();
         // Reset running state and clear streaming buffers.
         self.agent_turn_running = false;
-        self.turn_sleep_inhibitor.set_turn_running(false);
+        self.turn_sleep_inhibitor
+            .set_turn_running(/*turn_running*/ false);
         self.update_task_running_state();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
@@ -2178,7 +2206,7 @@ impl ChatWidget {
             if send_pending_steers_immediately {
                 self.add_to_history(history_cell::new_info_event(
                     "Model interrupted to submit steer instructions.".to_owned(),
-                    None,
+                    /*hint*/ None,
                 ));
             } else {
                 self.add_to_history(history_cell::new_error_event(
@@ -2347,6 +2375,17 @@ impl ChatWidget {
 
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
         self.saw_plan_update_this_turn = true;
+        let total = update.plan.len();
+        let completed = update
+            .plan
+            .iter()
+            .filter(|item| match &item.status {
+                StepStatus::Completed => true,
+                StepStatus::Pending | StepStatus::InProgress => false,
+            })
+            .count();
+        self.last_plan_progress = (total > 0).then_some((completed, total));
+        self.refresh_terminal_title();
         self.add_to_history(history_cell::new_plan_update(update));
     }
 
@@ -2458,7 +2497,8 @@ impl ChatWidget {
             // review is pending. Parallel reviews are aggregated into one
             // footer summary by `PendingGuardianReviewStatus`.
             self.bottom_pane.ensure_status_indicator();
-            self.bottom_pane.set_interrupt_hint_visible(true);
+            self.bottom_pane
+                .set_interrupt_hint_visible(/*visible*/ true);
             self.pending_guardian_review_status
                 .start_or_update(ev.id.clone(), detail);
             if let Some(status) = self.pending_guardian_review_status.status_indicator_state() {
@@ -2662,12 +2702,14 @@ impl ChatWidget {
             // Surface this in the status indicator (single "waiting" surface) instead of
             // the transcript. Keep the header short so the interrupt hint remains visible.
             self.bottom_pane.ensure_status_indicator();
-            self.bottom_pane.set_interrupt_hint_visible(true);
+            self.bottom_pane
+                .set_interrupt_hint_visible(/*visible*/ true);
+            self.terminal_title_status_kind = TerminalTitleStatusKind::WaitingForBackgroundTerminal;
             self.set_status(
                 "Waiting for background terminal".to_string(),
                 command_display.clone(),
                 StatusDetailsCapitalization::Preserve,
-                1,
+                /*details_max_lines*/ 1,
             );
             match &mut self.unified_exec_wait_streak {
                 Some(wait) if wait.process_id == ev.process_id => {
@@ -2721,15 +2763,15 @@ impl ChatWidget {
 
     fn on_image_generation_end(&mut self, event: ImageGenerationEndEvent) {
         self.flush_answer_stream_with_separator();
-        let saved_to = event.saved_path.as_deref().and_then(|saved_path| {
-            std::path::Path::new(saved_path)
-                .parent()
-                .map(|parent| parent.display().to_string())
+        let saved_path = event.saved_path.map(|saved_path| {
+            Url::from_file_path(Path::new(&saved_path))
+                .map(|url| url.to_string())
+                .unwrap_or(saved_path)
         });
         self.add_to_history(history_cell::new_image_generation_call(
             event.call_id,
             event.revised_prompt,
-            saved_to,
+            saved_path,
         ));
         self.request_redraw();
     }
@@ -2905,7 +2947,7 @@ impl ChatWidget {
 
     fn on_turn_diff(&mut self, unified_diff: String) {
         debug!("TurnDiffEvent: {unified_diff}");
-        self.refresh_status_line();
+        self.refresh_status_surfaces();
     }
 
     fn on_deprecation_notice(&mut self, event: DeprecationNoticeEvent) {
@@ -2917,7 +2959,9 @@ impl ChatWidget {
     fn on_background_event(&mut self, message: String) {
         debug!("BackgroundEvent: {message}");
         self.bottom_pane.ensure_status_indicator();
-        self.bottom_pane.set_interrupt_hint_visible(true);
+        self.bottom_pane
+            .set_interrupt_hint_visible(/*visible*/ true);
+        self.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
         self.set_status_header(message);
     }
 
@@ -2930,7 +2974,7 @@ impl ChatWidget {
             message.push_str(": ");
             message.push_str(&status_message);
         }
-        self.add_to_history(history_cell::new_info_event(message, None));
+        self.add_to_history(history_cell::new_info_event(message, /*hint*/ None));
         self.request_redraw();
     }
 
@@ -2954,16 +2998,20 @@ impl ChatWidget {
 
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
         self.bottom_pane.ensure_status_indicator();
-        self.bottom_pane.set_interrupt_hint_visible(false);
+        self.bottom_pane
+            .set_interrupt_hint_visible(/*visible*/ false);
         let message = event
             .message
             .unwrap_or_else(|| "Undo in progress...".to_string());
+        self.terminal_title_status_kind = TerminalTitleStatusKind::Undoing;
         self.set_status_header(message);
     }
 
     fn on_undo_completed(&mut self, event: UndoCompletedEvent) {
         let UndoCompletedEvent { success, message } = event;
         self.bottom_pane.hide_status_indicator();
+        self.terminal_title_status_kind = TerminalTitleStatusKind::Working;
+        self.refresh_terminal_title();
         let message = message.unwrap_or_else(|| {
             if success {
                 "Undo completed successfully.".to_string()
@@ -2972,7 +3020,7 @@ impl ChatWidget {
             }
         });
         if success {
-            self.add_info_message(message, None);
+            self.add_info_message(message, /*hint*/ None);
         } else {
             self.add_error_message(message);
         }
@@ -2983,6 +3031,7 @@ impl ChatWidget {
             self.retry_status_header = Some(self.current_status.header.clone());
         }
         self.bottom_pane.ensure_status_indicator();
+        self.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
         self.set_status(
             message,
             additional_details,
@@ -2993,6 +3042,9 @@ impl ChatWidget {
 
     pub(crate) fn pre_draw_tick(&mut self) {
         self.bottom_pane.pre_draw_tick();
+        if self.should_animate_terminal_title_spinner() {
+            self.refresh_terminal_title();
+        }
     }
 
     /// Handle completion of an `AgentMessage` turn item.
@@ -3112,7 +3164,7 @@ impl ChatWidget {
                     .map(|current| self.worked_elapsed_from(current));
                 self.add_to_history(history_cell::FinalMessageSeparator::new(
                     elapsed_seconds,
-                    None,
+                    /*runtime_metrics*/ None,
                 ));
                 self.needs_final_message_separator = false;
                 self.had_work_activity = false;
@@ -3515,6 +3567,7 @@ impl ChatWidget {
             model,
             startup_tooltip_override,
             status_line_invalid_items_warned,
+            terminal_title_invalid_items_warned,
             session_telemetry,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
@@ -3606,6 +3659,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             current_status: StatusIndicatorState::working(),
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
+            terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
@@ -3628,6 +3682,7 @@ impl ChatWidget {
             had_work_activity: false,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
+            last_plan_progress: None,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             last_separator_elapsed_secs: None,
@@ -3639,6 +3694,11 @@ impl ChatWidget {
             current_cwd,
             session_network_proxy: None,
             status_line_invalid_items_warned,
+            terminal_title_invalid_items_warned,
+            last_terminal_title: None,
+            terminal_title_setup_original_items: None,
+            terminal_title_animation_origin: Instant::now(),
+            status_line_project_root_name_cache: None,
             status_line_branch: None,
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
@@ -3661,7 +3721,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
-        widget.bottom_pane.set_collaboration_modes_enabled(true);
+        widget
+            .bottom_pane
+            .set_collaboration_modes_enabled(/*enabled*/ true);
         widget.sync_fast_command_enabled();
         widget.sync_personality_command_enabled();
         widget
@@ -3680,6 +3742,8 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_connectors_enabled(widget.connectors_enabled());
+
+        widget.refresh_terminal_title();
 
         widget
     }
@@ -3702,6 +3766,7 @@ impl ChatWidget {
             model,
             startup_tooltip_override,
             status_line_invalid_items_warned,
+            terminal_title_invalid_items_warned,
             session_telemetry,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
@@ -3792,6 +3857,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             current_status: StatusIndicatorState::working(),
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
+            terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
@@ -3800,6 +3866,7 @@ impl ChatWidget {
             forked_from: None,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
+            last_plan_progress: None,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
@@ -3825,6 +3892,11 @@ impl ChatWidget {
             current_cwd,
             session_network_proxy: None,
             status_line_invalid_items_warned,
+            terminal_title_invalid_items_warned,
+            last_terminal_title: None,
+            terminal_title_setup_original_items: None,
+            terminal_title_animation_origin: Instant::now(),
+            status_line_project_root_name_cache: None,
             status_line_branch: None,
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
@@ -3847,7 +3919,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
-        widget.bottom_pane.set_collaboration_modes_enabled(true);
+        widget
+            .bottom_pane
+            .set_collaboration_modes_enabled(/*enabled*/ true);
         widget.sync_fast_command_enabled();
         widget.sync_personality_command_enabled();
         widget
@@ -3856,6 +3930,8 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_connectors_enabled(widget.connectors_enabled());
+        widget.refresh_terminal_title();
+        widget.refresh_terminal_title();
 
         widget
     }
@@ -3880,6 +3956,7 @@ impl ChatWidget {
             model,
             startup_tooltip_override: _,
             status_line_invalid_items_warned,
+            terminal_title_invalid_items_warned,
             session_telemetry,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
@@ -3970,6 +4047,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             current_status: StatusIndicatorState::working(),
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
+            terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
@@ -3992,6 +4070,7 @@ impl ChatWidget {
             had_work_activity: false,
             saw_plan_update_this_turn: false,
             saw_plan_item_this_turn: false,
+            last_plan_progress: None,
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             last_separator_elapsed_secs: None,
@@ -4003,6 +4082,11 @@ impl ChatWidget {
             current_cwd,
             session_network_proxy: None,
             status_line_invalid_items_warned,
+            terminal_title_invalid_items_warned,
+            last_terminal_title: None,
+            terminal_title_setup_original_items: None,
+            terminal_title_animation_origin: Instant::now(),
+            status_line_project_root_name_cache: None,
             status_line_branch: None,
             status_line_branch_cwd: None,
             status_line_branch_pending: false,
@@ -4025,7 +4109,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
-        widget.bottom_pane.set_collaboration_modes_enabled(true);
+        widget
+            .bottom_pane
+            .set_collaboration_modes_enabled(/*enabled*/ true);
         widget.sync_fast_command_enabled();
         widget.sync_personality_command_enabled();
         widget
@@ -4043,6 +4129,8 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_connectors_enabled(widget.connectors_enabled());
+        widget.refresh_terminal_title();
+        widget.refresh_terminal_title();
 
         widget
     }
@@ -4326,7 +4414,7 @@ impl ChatWidget {
                     let message = format!(
                         "{DEFAULT_PROJECT_DOC_FILENAME} already exists here. Skipping /init to avoid overwriting it."
                     );
-                    self.add_info_message(message, None);
+                    self.add_info_message(message, /*hint*/ None);
                     return;
                 }
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
@@ -4341,7 +4429,7 @@ impl ChatWidget {
             }
             SlashCommand::Rename => {
                 self.session_telemetry
-                    .counter("codex.thread.rename", 1, &[]);
+                    .counter("codex.thread.rename", /*inc*/ 1, &[]);
                 self.show_rename_prompt();
             }
             SlashCommand::Model => {
@@ -4360,7 +4448,7 @@ impl ChatWidget {
                     return;
                 }
                 if self.realtime_conversation.is_live() {
-                    self.request_realtime_conversation_close(None);
+                    self.request_realtime_conversation_close(/*info_message*/ None);
                 } else {
                     self.start_realtime_conversation();
                 }
@@ -4385,7 +4473,10 @@ impl ChatWidget {
                 if let Some(mask) = collaboration_modes::plan_mask(self.models_manager.as_ref()) {
                     self.set_collaboration_mask(mask);
                 } else {
-                    self.add_info_message("Plan mode unavailable right now.".to_string(), None);
+                    self.add_info_message(
+                        "Plan mode unavailable right now.".to_string(),
+                        /*hint*/ None,
+                    );
                 }
             }
             SlashCommand::Collab => {
@@ -4502,7 +4593,7 @@ impl ChatWidget {
                     self.add_info_message(
                         "`/copy` is unavailable before the first Codex output or right after a rollback."
                             .to_string(),
-                        None,
+                        /*hint*/ None,
                     );
                     return;
                 };
@@ -4537,6 +4628,9 @@ impl ChatWidget {
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
             }
+            SlashCommand::Title => {
+                self.open_terminal_title_setup();
+            }
             SlashCommand::Statusline => {
                 self.open_status_line_setup();
             }
@@ -4565,10 +4659,13 @@ impl ChatWidget {
                 if let Some(path) = self.rollout_path() {
                     self.add_info_message(
                         format!("Current rollout path: {}", path.display()),
-                        None,
+                        /*hint*/ None,
                     );
                 } else {
-                    self.add_info_message("Rollout path is not available yet.".to_string(), None);
+                    self.add_info_message(
+                        "Rollout path is not available yet.".to_string(),
+                        /*hint*/ None,
+                    );
                 }
             }
             SlashCommand::TestApproval => {
@@ -4641,7 +4738,7 @@ impl ChatWidget {
                 }
                 match trimmed.to_ascii_lowercase().as_str() {
                     "on" => self.set_service_tier_selection(Some(ServiceTier::Fast)),
-                    "off" => self.set_service_tier_selection(None),
+                    "off" => self.set_service_tier_selection(/*service_tier*/ None),
                     "status" => {
                         let status = if matches!(self.config.service_tier, Some(ServiceTier::Fast))
                         {
@@ -4649,7 +4746,10 @@ impl ChatWidget {
                         } else {
                             "off"
                         };
-                        self.add_info_message(format!("Fast mode is {status}."), None);
+                        self.add_info_message(
+                            format!("Fast mode is {status}."),
+                            /*hint*/ None,
+                        );
                     }
                     _ => {
                         self.add_error_message("Usage: /fast [on|off|status]".to_string());
@@ -4658,9 +4758,10 @@ impl ChatWidget {
             }
             SlashCommand::Rename if !trimmed.is_empty() => {
                 self.session_telemetry
-                    .counter("codex.thread.rename", 1, &[]);
-                let Some((prepared_args, _prepared_elements)) =
-                    self.bottom_pane.prepare_inline_args_submission(false)
+                    .counter("codex.thread.rename", /*inc*/ 1, &[]);
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
                 else {
                     return;
                 };
@@ -4680,8 +4781,9 @@ impl ChatWidget {
                 if self.active_mode_kind() != ModeKind::Plan {
                     return;
                 }
-                let Some((prepared_args, prepared_elements)) =
-                    self.bottom_pane.prepare_inline_args_submission(true)
+                let Some((prepared_args, prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ true)
                 else {
                     return;
                 };
@@ -4706,8 +4808,9 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Review if !trimmed.is_empty() => {
-                let Some((prepared_args, _prepared_elements)) =
-                    self.bottom_pane.prepare_inline_args_submission(false)
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
                 else {
                     return;
                 };
@@ -4722,8 +4825,9 @@ impl ChatWidget {
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
-                let Some((prepared_args, _prepared_elements)) =
-                    self.bottom_pane.prepare_inline_args_submission(false)
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
                 else {
                     return;
                 };
@@ -4752,7 +4856,7 @@ impl ChatWidget {
         let view = CustomPromptView::new(
             title.to_string(),
             "Type a name and press Enter".to_string(),
-            None,
+            /*context_label*/ None,
             Box::new(move |name: String| {
                 let Some(name) = codex_core::util::normalize_thread_name(&name) else {
                     tx.send(AppEvent::InsertHistoryCell(Box::new(
@@ -5160,13 +5264,17 @@ impl ChatWidget {
                 continue;
             }
             // `id: None` indicates a synthetic/fake id coming from replay.
-            self.dispatch_event_msg(None, msg, Some(ReplayKind::ResumeInitialMessages));
+            self.dispatch_event_msg(
+                /*id*/ None,
+                msg,
+                Some(ReplayKind::ResumeInitialMessages),
+            );
         }
     }
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
-        self.dispatch_event_msg(Some(id), msg, None);
+        self.dispatch_event_msg(Some(id), msg, /*replay_kind*/ None);
     }
 
     pub(crate) fn handle_codex_event_replay(&mut self, event: Event) {
@@ -5174,7 +5282,7 @@ impl ChatWidget {
         if matches!(msg, EventMsg::ShutdownComplete) {
             return;
         }
-        self.dispatch_event_msg(None, msg, Some(ReplayKind::ThreadSnapshot));
+        self.dispatch_event_msg(/*id*/ None, msg, Some(ReplayKind::ThreadSnapshot));
     }
 
     /// Dispatch a protocol `EventMsg` to the appropriate handler.
@@ -5321,7 +5429,6 @@ impl ChatWidget {
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
-            EventMsg::ListRemoteSkillsResponse(_) | EventMsg::RemoteSkillDownloaded(_) => {}
             EventMsg::SkillsUpdateAvailable => {
                 self.submit_op(Op::ListSkills {
                     cwds: Vec::new(),
@@ -5479,7 +5586,7 @@ impl ChatWidget {
         }
         // Avoid toggling running state for replayed history events on resume.
         if !from_replay && !self.bottom_pane.is_task_running() {
-            self.bottom_pane.set_task_running(true);
+            self.bottom_pane.set_task_running(/*running*/ true);
         }
         self.is_review_mode = true;
         let hint = review
@@ -5509,11 +5616,11 @@ impl ChatWidget {
                     let mut rendered: Vec<ratatui::text::Line<'static>> = vec!["".into()];
                     append_markdown(
                         &explanation,
-                        None,
+                        /*width*/ None,
                         Some(self.config.cwd.as_path()),
                         &mut rendered,
                     );
-                    let body_cell = AgentMessageCell::new(rendered, false);
+                    let body_cell = AgentMessageCell::new(rendered, /*is_first_line*/ false);
                     self.app_event_tx
                         .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
                 }
@@ -5716,182 +5823,14 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(params);
     }
 
-    /// Parses configured status-line ids into known items and collects unknown ids.
-    ///
-    /// Unknown ids are deduplicated in insertion order for warning messages.
-    fn status_line_items_with_invalids(&self) -> (Vec<StatusLineItem>, Vec<String>) {
-        let mut invalid = Vec::new();
-        let mut invalid_seen = HashSet::new();
-        let mut items = Vec::new();
-        for id in self.configured_status_line_items() {
-            match id.parse::<StatusLineItem>() {
-                Ok(item) => items.push(item),
-                Err(_) => {
-                    if invalid_seen.insert(id.clone()) {
-                        invalid.push(format!(r#""{id}""#));
-                    }
-                }
-            }
-        }
-        (items, invalid)
-    }
-
-    fn configured_status_line_items(&self) -> Vec<String> {
-        self.config.tui_status_line.clone().unwrap_or_else(|| {
-            DEFAULT_STATUS_LINE_ITEMS
-                .iter()
-                .map(ToString::to_string)
-                .collect()
-        })
-    }
-
-    fn status_line_cwd(&self) -> &Path {
-        self.current_cwd.as_ref().unwrap_or(&self.config.cwd)
-    }
-
-    fn status_line_project_root(&self) -> Option<PathBuf> {
-        let cwd = self.status_line_cwd();
-        if let Some(repo_root) = get_git_repo_root(cwd) {
-            return Some(repo_root);
-        }
-
-        self.config
-            .config_layer_stack
-            .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
-            .iter()
-            .find_map(|layer| match &layer.name {
-                ConfigLayerSource::Project { dot_codex_folder } => {
-                    dot_codex_folder.as_path().parent().map(Path::to_path_buf)
-                }
-                _ => None,
-            })
-    }
-
-    fn status_line_project_root_name(&self) -> Option<String> {
-        self.status_line_project_root().map(|root| {
-            root.file_name()
-                .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| format_directory_display(&root, None))
-        })
-    }
-
-    /// Resets git-branch cache state when the status-line cwd changes.
-    ///
-    /// The branch cache is keyed by cwd because branch lookup is performed relative to that path.
-    /// Keeping stale branch values across cwd changes would surface incorrect repository context.
-    fn sync_status_line_branch_state(&mut self, cwd: &Path) {
-        if self
-            .status_line_branch_cwd
-            .as_ref()
-            .is_some_and(|path| path == cwd)
-        {
-            return;
-        }
-        self.status_line_branch_cwd = Some(cwd.to_path_buf());
-        self.status_line_branch = None;
-        self.status_line_branch_pending = false;
-        self.status_line_branch_lookup_complete = false;
-    }
-
-    /// Starts an async git-branch lookup unless one is already running.
-    ///
-    /// The resulting `StatusLineBranchUpdated` event carries the lookup cwd so callers can reject
-    /// stale completions after directory changes.
-    fn request_status_line_branch(&mut self, cwd: PathBuf) {
-        if self.status_line_branch_pending {
-            return;
-        }
-        self.status_line_branch_pending = true;
-        let tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let branch = current_branch_name(&cwd).await;
-            tx.send(AppEvent::StatusLineBranchUpdated { cwd, branch });
-        });
-    }
-
-    /// Resolves a display string for one configured status-line item.
-    ///
-    /// Returning `None` means "omit this item for now", not "configuration error". Callers rely on
-    /// this to keep partially available status lines readable while waiting for session, token, or
-    /// git metadata.
-    fn status_line_value_for_item(&self, item: &StatusLineItem) -> Option<String> {
-        match item {
-            StatusLineItem::ModelName => Some(self.model_display_name().to_string()),
-            StatusLineItem::ModelWithReasoning => {
-                let label =
-                    Self::status_line_reasoning_effort_label(self.effective_reasoning_effort());
-                let fast_label = if self
-                    .should_show_fast_status(self.current_model(), self.config.service_tier)
-                {
-                    " fast"
-                } else {
-                    ""
-                };
-                Some(format!("{} {label}{fast_label}", self.model_display_name()))
-            }
-            StatusLineItem::CurrentDir => {
-                Some(format_directory_display(self.status_line_cwd(), None))
-            }
-            StatusLineItem::ProjectRoot => self.status_line_project_root_name(),
-            StatusLineItem::GitBranch => self.status_line_branch.clone(),
-            StatusLineItem::UsedTokens => {
-                let usage = self.status_line_total_usage();
-                let total = usage.tokens_in_context_window();
-                if total <= 0 {
-                    None
-                } else {
-                    Some(format!("{} used", format_tokens_compact(total)))
-                }
-            }
-            StatusLineItem::ContextRemaining => self
-                .status_line_context_remaining_percent()
-                .map(|remaining| format!("{remaining}% left")),
-            StatusLineItem::ContextUsed => self
-                .status_line_context_used_percent()
-                .map(|used| format!("{used}% used")),
-            StatusLineItem::FiveHourLimit => {
-                let window = self
-                    .rate_limit_snapshots_by_limit_id
-                    .get("codex")
-                    .and_then(|s| s.primary.as_ref());
-                let label = window
-                    .and_then(|window| window.window_minutes)
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| "5h".to_string());
-                self.status_line_limit_display(window, &label)
-            }
-            StatusLineItem::WeeklyLimit => {
-                let window = self
-                    .rate_limit_snapshots_by_limit_id
-                    .get("codex")
-                    .and_then(|s| s.secondary.as_ref());
-                let label = window
-                    .and_then(|window| window.window_minutes)
-                    .map(get_limits_duration)
-                    .unwrap_or_else(|| "weekly".to_string());
-                self.status_line_limit_display(window, &label)
-            }
-            StatusLineItem::CodexVersion => Some(CODEX_CLI_VERSION.to_string()),
-            StatusLineItem::ContextWindowSize => self
-                .status_line_context_window_size()
-                .map(|cws| format!("{} window", format_tokens_compact(cws))),
-            StatusLineItem::TotalInputTokens => Some(format!(
-                "{} in",
-                format_tokens_compact(self.status_line_total_usage().input_tokens)
-            )),
-            StatusLineItem::TotalOutputTokens => Some(format!(
-                "{} out",
-                format_tokens_compact(self.status_line_total_usage().output_tokens)
-            )),
-            StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
-            StatusLineItem::FastMode => Some(
-                if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
-                    "Fast on".to_string()
-                } else {
-                    "Fast off".to_string()
-                },
-            ),
-        }
+    fn open_terminal_title_setup(&mut self) {
+        let configured_terminal_title_items = self.configured_terminal_title_items();
+        self.terminal_title_setup_original_items = Some(self.config.tui_terminal_title.clone());
+        let view = TerminalTitleSetupView::new(
+            Some(configured_terminal_title_items.as_slice()),
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane.show_view(Box::new(view));
     }
 
     fn status_line_context_window_size(&self) -> Option<i64> {
@@ -5965,7 +5904,10 @@ impl ChatWidget {
 
     fn clean_background_terminals(&mut self) {
         self.submit_op(Op::CleanBackgroundTerminals);
-        self.add_info_message("Stopping all background terminals.".to_string(), None);
+        self.add_info_message(
+            "Stopping all background terminals.".to_string(),
+            /*hint*/ None,
+        );
     }
 
     fn stop_rate_limit_poller(&mut self) {
@@ -5979,7 +5921,7 @@ impl ChatWidget {
     }
 
     fn prefetch_connectors(&mut self) {
-        self.prefetch_connectors_with_options(false);
+        self.prefetch_connectors_with_options(/*force_refetch*/ false);
     }
 
     fn prefetch_connectors_with_options(&mut self, force_refetch: bool) {
@@ -6034,7 +5976,7 @@ impl ChatWidget {
                 let connectors = connectors::merge_connectors_with_accessible(
                     all_connectors,
                     accessible_connectors,
-                    true,
+                    /*all_connectors_loaded*/ true,
                 );
                 Ok(ConnectorsSnapshot { connectors })
             }
@@ -6209,7 +6151,7 @@ impl ChatWidget {
         if !self.is_session_configured() {
             self.add_info_message(
                 "Model selection is disabled until startup completes.".to_string(),
-                None,
+                /*hint*/ None,
             );
             return;
         }
@@ -6219,7 +6161,7 @@ impl ChatWidget {
             Err(_) => {
                 self.add_info_message(
                     "Models are being updated; please try /model again in a moment.".to_string(),
-                    None,
+                    /*hint*/ None,
                 );
                 return;
             }
@@ -6231,7 +6173,7 @@ impl ChatWidget {
         if !self.is_session_configured() {
             self.add_info_message(
                 "Personality selection is disabled until startup completes.".to_string(),
-                None,
+                /*hint*/ None,
             );
             return;
         }
@@ -6329,7 +6271,7 @@ impl ChatWidget {
         });
     }
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn open_realtime_audio_device_selection(&mut self, kind: RealtimeAudioDeviceKind) {
         match list_realtime_audio_device_names(kind) {
             Ok(device_names) => {
@@ -6344,12 +6286,12 @@ impl ChatWidget {
         }
     }
 
-    #[cfg(any(target_os = "linux", not(feature = "voice-input")))]
+    #[cfg(target_os = "linux")]
     pub(crate) fn open_realtime_audio_device_selection(&mut self, kind: RealtimeAudioDeviceKind) {
         let _ = kind;
     }
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     fn open_realtime_audio_device_selection_with_names(
         &mut self,
         kind: RealtimeAudioDeviceKind,
@@ -6592,7 +6534,7 @@ impl ChatWidget {
         if presets.is_empty() {
             self.add_info_message(
                 "No additional models are available right now.".to_string(),
-                None,
+                /*hint*/ None,
             );
             return;
         }
@@ -6638,7 +6580,7 @@ impl ChatWidget {
         if presets.is_empty() {
             self.add_info_message(
                 "No collaboration modes are available right now.".to_string(),
-                None,
+                /*hint*/ None,
             );
             return;
         }
@@ -7255,7 +7197,10 @@ impl ChatWidget {
             tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone));
             tx.send(AppEvent::UpdateApprovalsReviewer(approvals_reviewer));
             tx.send(AppEvent::InsertHistoryCell(Box::new(
-                history_cell::new_info_event(format!("Permissions updated to {label}"), None),
+                history_cell::new_info_event(
+                    format!("Permissions updated to {label}"),
+                    /*hint*/ None,
+                ),
             )));
         })]
     }
@@ -7821,7 +7766,6 @@ impl ChatWidget {
                 self.request_realtime_conversation_close(Some(
                     "Realtime voice mode was closed because the feature was disabled.".to_string(),
                 ));
-                self.reset_realtime_conversation_state();
             }
         }
         if feature == Feature::FastMode {
@@ -7899,9 +7843,11 @@ impl ChatWidget {
 
     /// Set the reasoning effort in the stored collaboration mode.
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
-        self.current_collaboration_mode =
-            self.current_collaboration_mode
-                .with_updates(None, Some(effort), None);
+        self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
+            /*model*/ None,
+            Some(effort),
+            /*developer_instructions*/ None,
+        );
         if self.collaboration_modes_enabled()
             && let Some(mask) = self.active_collaboration_mask.as_mut()
             && mask.mode != Some(ModeKind::Plan)
@@ -7962,9 +7908,11 @@ impl ChatWidget {
 
     /// Set the model in the widget's config copy and stored collaboration mode.
     pub(crate) fn set_model(&mut self, model: &str) {
-        self.current_collaboration_mode =
-            self.current_collaboration_mode
-                .with_updates(Some(model.to_string()), None, None);
+        self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
+            Some(model.to_string()),
+            /*effort*/ None,
+            /*developer_instructions*/ None,
+        );
         if self.collaboration_modes_enabled()
             && let Some(mask) = self.active_collaboration_mask.as_mut()
         {
@@ -8004,7 +7952,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn realtime_conversation_is_live(&self) -> bool {
-        self.realtime_conversation.is_active()
+        self.realtime_conversation.is_live()
     }
 
     fn current_realtime_audio_device_name(&self, kind: RealtimeAudioDeviceKind) -> Option<String> {
@@ -8140,6 +8088,7 @@ impl ChatWidget {
         self.session_header.set_model(effective.model());
         // Keep composer paste affordances aligned with the currently effective model.
         self.sync_image_paste_enabled();
+        self.refresh_terminal_title();
     }
 
     fn model_display_name(&self) -> &str {
@@ -8248,7 +8197,7 @@ impl ChatWidget {
             message.push_str(" for ");
             message.push_str(next_mode.display_name());
             message.push_str(" mode.");
-            self.add_info_message(message, None);
+            self.add_info_message(message, /*hint*/ None);
         }
         self.request_redraw();
     }
@@ -8288,8 +8237,8 @@ impl ChatWidget {
         Box::new(history_cell::SessionHeaderHistoryCell::new_with_style(
             DEFAULT_MODEL_DISPLAY_NAME.to_string(),
             placeholder_style,
-            None,
-            false,
+            /*reasoning_effort*/ None,
+            /*show_fast_status*/ false,
             config.cwd.clone(),
             CODEX_CLI_VERSION,
         ))
@@ -8356,7 +8305,10 @@ impl ChatWidget {
         let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(
             self.config.codex_home.clone(),
         )));
-        if mcp_manager.effective_servers(&self.config, None).is_empty() {
+        if mcp_manager
+            .effective_servers(&self.config, /*auth*/ None)
+            .is_empty()
+        {
             self.add_to_history(history_cell::empty_mcp_output());
         } else {
             self.submit_op(Op::ListMcpTools);
@@ -8380,7 +8332,7 @@ impl ChatWidget {
         match connectors_cache {
             ConnectorsCacheState::Ready(snapshot) => {
                 if snapshot.connectors.is_empty() {
-                    self.add_info_message("No apps available.".to_string(), None);
+                    self.add_info_message("No apps available.".to_string(), /*hint*/ None);
                 } else {
                     self.open_connectors_popup(&snapshot.connectors);
                 }
@@ -8406,8 +8358,9 @@ impl ChatWidget {
     }
 
     fn open_connectors_popup(&mut self, connectors: &[connectors::AppInfo]) {
-        self.bottom_pane
-            .show_selection_view(self.connectors_popup_params(connectors, None));
+        self.bottom_pane.show_selection_view(
+            self.connectors_popup_params(connectors, /*selected_connector_id*/ None),
+        );
     }
 
     fn connectors_loading_popup_params(&self) -> SelectionViewParams {
@@ -8502,7 +8455,10 @@ impl ChatWidget {
                 let missing_label_for_action = missing_label.clone();
                 item.actions = vec![Box::new(move |tx| {
                     tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_info_event(missing_label_for_action.clone(), None),
+                        history_cell::new_info_event(
+                            missing_label_for_action.clone(),
+                            /*hint*/ None,
+                        ),
                     )));
                 })];
                 item.dismiss_on_select = true;
@@ -8592,10 +8548,20 @@ impl ChatWidget {
     /// pane. If cancellable work is active, Ctrl+C also submits `Op::Interrupt` after the shortcut
     /// is armed; this interrupts the turn but intentionally preserves background terminals.
     ///
+    /// Active realtime conversations take precedence over bottom-pane Ctrl+C handling so the
+    /// first press always stops live voice, even when the composer contains the recording meter.
+    ///
     /// If the same quit shortcut is pressed again before expiry, this requests a shutdown-first
     /// quit.
     fn on_ctrl_c(&mut self) {
         let key = key_hint::ctrl(KeyCode::Char('c'));
+        if self.realtime_conversation.is_live() {
+            self.bottom_pane.clear_quit_shortcut_hint();
+            self.quit_shortcut_expires_at = None;
+            self.quit_shortcut_key = None;
+            self.request_realtime_conversation_close(/*info_message*/ None);
+            return;
+        }
         let modal_or_popup_active = !self.bottom_pane.no_modal_or_popup_active();
         if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
             if DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED {
@@ -8797,7 +8763,7 @@ impl ChatWidget {
         // Record outbound operation for session replay fidelity.
         crate::session_log::log_outbound_op(&op);
         if matches!(&op, Op::Review { .. }) && !self.bottom_pane.is_task_running() {
-            self.bottom_pane.set_task_running(true);
+            self.bottom_pane.set_task_running(/*running*/ true);
         }
         if let Err(e) = self.codex_op_tx.send(op) {
             tracing::error!("failed to submit op: {e}");
@@ -8848,7 +8814,7 @@ impl ChatWidget {
                     snapshot.connectors = connectors::merge_connectors_with_accessible(
                         Vec::new(),
                         snapshot.connectors,
-                        false,
+                        /*all_connectors_loaded*/ false,
                     );
                 }
                 snapshot.connectors =
@@ -8889,13 +8855,13 @@ impl ChatWidget {
                     self.bottom_pane.set_connectors_snapshot(Some(snapshot));
                 } else {
                     self.connectors_cache = ConnectorsCacheState::Failed(err);
-                    self.bottom_pane.set_connectors_snapshot(None);
+                    self.bottom_pane.set_connectors_snapshot(/*snapshot*/ None);
                 }
             }
         }
 
         if trigger_pending_force_refetch {
-            self.prefetch_connectors_with_options(true);
+            self.prefetch_connectors_with_options(/*force_refetch*/ true);
         }
     }
 
@@ -8924,7 +8890,7 @@ impl ChatWidget {
 
     fn refresh_plugin_mentions(&mut self) {
         if !self.config.features.enabled(Feature::Plugins) {
-            self.bottom_pane.set_plugin_mentions(None);
+            self.bottom_pane.set_plugin_mentions(/*plugins*/ None);
             return;
         }
 
@@ -9033,7 +8999,7 @@ impl ChatWidget {
     }
 
     pub(crate) async fn show_review_commit_picker(&mut self, cwd: &Path) {
-        let commits = codex_core::git_info::recent_commits(cwd, 100).await;
+        let commits = codex_core::git_info::recent_commits(cwd, /*limit*/ 100).await;
 
         let mut items: Vec<SelectionItem> = Vec::with_capacity(commits.len());
         for entry in commits {
@@ -9075,7 +9041,7 @@ impl ChatWidget {
         let view = CustomPromptView::new(
             "Custom review instructions".to_string(),
             "Type instructions and press Enter".to_string(),
-            None,
+            /*context_label*/ None,
             Box::new(move |prompt: String| {
                 let trimmed = prompt.trim().to_string();
                 if trimmed.is_empty() {
@@ -9166,14 +9132,18 @@ impl ChatWidget {
 
     fn as_renderable(&self) -> RenderableItem<'_> {
         let active_cell_renderable = match &self.active_cell {
-            Some(cell) => RenderableItem::Borrowed(cell).inset(Insets::tlbr(1, 0, 0, 0)),
+            Some(cell) => RenderableItem::Borrowed(cell).inset(Insets::tlbr(
+                /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
+            )),
             None => RenderableItem::Owned(Box::new(())),
         };
         let mut flex = FlexRenderable::new();
-        flex.push(1, active_cell_renderable);
+        flex.push(/*flex*/ 1, active_cell_renderable);
         flex.push(
-            0,
-            RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(1, 0, 0, 0)),
+            /*flex*/ 0,
+            RenderableItem::Borrowed(&self.bottom_pane).inset(Insets::tlbr(
+                /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
+            )),
         );
         RenderableItem::Owned(Box::new(flex))
     }
@@ -9196,6 +9166,13 @@ impl ChatWidget {
     }
 
     pub(crate) fn remove_transcription_placeholder(&mut self, id: &str) {
+        #[cfg(not(target_os = "linux"))]
+        if self.realtime_conversation.is_live()
+            && self.realtime_conversation.meter_placeholder_id.as_deref() == Some(id)
+        {
+            self.realtime_conversation.meter_placeholder_id = None;
+            self.request_realtime_conversation_close(/*info_message*/ None);
+        }
         self.bottom_pane.remove_transcription_placeholder(id);
         // Ensure the UI redraws to reflect placeholder removal.
         self.request_redraw();
@@ -9213,8 +9190,8 @@ fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
 
 impl Drop for ChatWidget {
     fn drop(&mut self) {
-        self.reset_realtime_conversation_state();
         self.stop_rate_limit_poller();
+        self.reset_realtime_conversation_state();
     }
 }
 
@@ -9265,7 +9242,10 @@ impl Notification {
                     .unwrap_or_else(|| "Agent turn complete".to_string())
             }
             Notification::ExecApprovalRequested { command } => {
-                format!("Approval requested: {}", truncate_text(command, 30))
+                format!(
+                    "Approval requested: {}",
+                    truncate_text(command, /*max_graphemes*/ 30)
+                )
             }
             Notification::EditApprovalRequested { cwd, changes } => {
                 format!(
@@ -9352,7 +9332,7 @@ impl Notification {
         if summary.is_empty() {
             None
         } else {
-            Some(truncate_text(summary, 30))
+            Some(truncate_text(summary, /*max_graphemes*/ 30))
         }
     }
 }
@@ -9403,6 +9383,7 @@ fn extract_first_bold(s: &str) -> Option<String> {
 fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {
     match event_name {
         codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
+        codex_protocol::protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
         codex_protocol::protocol::HookEventName::Stop => "Stop",
     }
 }

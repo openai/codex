@@ -25,6 +25,7 @@ members = [
     "hooks",
     "secrets",
     "exec",
+    "exec-server",
     "execpolicy",
     "execpolicy-legacy",
     "keyring-store",
@@ -65,6 +66,7 @@ members = [
     "codex-client",
     "codex-api",
     "state",
+    "terminal-detection",
     "codex-experimental-api-macros",
     "test-macros",
     "package-manager",
@@ -104,6 +106,7 @@ codex-connectors = { path = "connectors" }
 codex-config = { path = "config" }
 codex-core = { path = "core" }
 codex-exec = { path = "exec" }
+codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
 codex-feedback = { path = "feedback" }
@@ -129,6 +132,7 @@ codex-skills = { path = "skills" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-test-macros = { path = "test-macros" }
+codex-terminal-detection = { path = "terminal-detection" }
 codex-tui = { path = "tui" }
 codex-tui-app-server = { path = "tui_app_server" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
@@ -230,6 +234,7 @@ portable-pty = "0.9.0"
 predicates = "3"
 pretty_assertions = "1.4.1"
 pulldown-cmark = "0.10"
+quick-xml = "0.38.4"
 rand = "0.9"
 ratatui = "0.29.0"
 ratatui-macros = "0.6.0"

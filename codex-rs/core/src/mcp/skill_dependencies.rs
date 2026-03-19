@@ -239,7 +239,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
         .await;
 
         let resolved_scopes = resolve_oauth_scopes(
-            None,
+            /*explicit_scopes*/ None,
             server_config.scopes.clone(),
             oauth_config.discovered_scopes.clone(),
         );

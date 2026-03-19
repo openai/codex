@@ -7,12 +7,13 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 use crate::app_event::RealtimeAudioDeviceKind;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::MentionBinding;
+use crate::chatwidget::realtime::RealtimeConversationPhase;
 use crate::history_cell::UserHistoryCell;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
@@ -37,7 +38,6 @@ use codex_core::features::Feature;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::skills::model::SkillMetadata;
-use codex_core::terminal::TerminalName;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
@@ -95,6 +95,9 @@ use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess;
+use codex_protocol::protocol::RealtimeConversationClosedEvent;
+use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
+use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SessionConfiguredEvent;
@@ -117,6 +120,7 @@ use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
+use codex_terminal_detection::TerminalName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::builtin_approval_presets;
 use crossterm::event::KeyCode;
@@ -199,6 +203,7 @@ async fn resumed_initial_messages_render_history() {
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "assistant reply".to_string(),
                 phase: None,
+                memory_citation: None,
             }),
         ]),
         network_proxy: None,
@@ -247,6 +252,7 @@ async fn thread_snapshot_replay_does_not_duplicate_agent_message_history() {
                     text: "assistant reply".to_string(),
                 }],
                 phase: None,
+                memory_citation: None,
             }),
         }),
     });
@@ -255,6 +261,7 @@ async fn thread_snapshot_replay_does_not_duplicate_agent_message_history() {
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "assistant reply".to_string(),
             phase: None,
+            memory_citation: None,
         }),
     });
 
@@ -1543,6 +1550,7 @@ async fn live_agent_message_renders_during_review_mode() {
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Review progress update".to_string(),
             phase: None,
+            memory_citation: None,
         }),
     });
 
@@ -1569,6 +1577,7 @@ async fn thread_snapshot_replay_preserves_agent_message_during_review_mode() {
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Review progress update".to_string(),
             phase: None,
+            memory_citation: None,
         }),
     });
 
@@ -1768,6 +1777,7 @@ async fn helpers_are_available_and_do_not_panic() {
         model: Some(resolved_model),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
     };
     let mut w = ChatWidget::new(init, thread_manager);
@@ -1887,6 +1897,7 @@ async fn make_chatwidget_manual(
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
         current_status: StatusIndicatorState::working(),
+        terminal_title_status_kind: TerminalTitleStatusKind::Working,
         retry_status_header: None,
         pending_status_indicator_restore: false,
         suppress_queue_autosend: false,
@@ -1910,6 +1921,7 @@ async fn make_chatwidget_manual(
         had_work_activity: false,
         saw_plan_update_this_turn: false,
         saw_plan_item_this_turn: false,
+        last_plan_progress: None,
         plan_delta_buffer: String::new(),
         plan_item_active: false,
         last_separator_elapsed_secs: None,
@@ -1921,6 +1933,11 @@ async fn make_chatwidget_manual(
         current_cwd: None,
         session_network_proxy: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        last_terminal_title: None,
+        terminal_title_setup_original_items: None,
+        terminal_title_animation_origin: Instant::now(),
+        status_line_project_root_name_cache: None,
         status_line_branch: None,
         status_line_branch_cwd: None,
         status_line_branch_pending: false,
@@ -1953,6 +1970,21 @@ fn next_interrupt_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
             Ok(_) => continue,
             Err(TryRecvError::Empty) => panic!("expected interrupt op but queue was empty"),
             Err(TryRecvError::Disconnected) => panic!("expected interrupt op but channel closed"),
+        }
+    }
+}
+
+fn next_realtime_close_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::RealtimeConversationClose) => return,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => {
+                panic!("expected realtime close op but queue was empty")
+            }
+            Err(TryRecvError::Disconnected) => {
+                panic!("expected realtime close op but channel closed")
+            }
         }
     }
 }
@@ -3532,6 +3564,7 @@ fn complete_assistant_message(
                     text: text.to_string(),
                 }],
                 phase,
+                memory_citation: None,
             }),
         }),
     });
@@ -4127,6 +4160,7 @@ async fn live_legacy_agent_message_after_item_completed_does_not_duplicate_assis
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "hello".into(),
             phase: Some(MessagePhase::FinalAnswer),
+            memory_citation: None,
         }),
     });
 
@@ -4745,6 +4779,25 @@ async fn ctrl_c_shutdown_works_with_caps_lock() {
 }
 
 #[tokio::test]
+async fn ctrl_c_closes_realtime_conversation_before_interrupt_or_quit() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
+    chat.bottom_pane
+        .set_composer_text("recording meter".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+
+    next_realtime_close_op(&mut op_rx);
+    assert_eq!(
+        chat.realtime_conversation.phase,
+        RealtimeConversationPhase::Stopping
+    );
+    assert_eq!(chat.bottom_pane.composer_text(), "recording meter");
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
 async fn ctrl_d_quits_without_prompt() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
@@ -4791,6 +4844,45 @@ async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
 
     let images = chat.bottom_pane.take_recent_submission_images();
     assert_eq!(vec![PathBuf::from("/tmp/preview.png")], images);
+}
+
+#[tokio::test]
+async fn realtime_error_closes_without_followup_closed_info() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
+
+    chat.on_realtime_conversation_realtime(RealtimeConversationRealtimeEvent {
+        payload: RealtimeEvent::Error("boom".to_string()),
+    });
+    next_realtime_close_op(&mut op_rx);
+
+    chat.on_realtime_conversation_closed(RealtimeConversationClosedEvent {
+        reason: Some("error".to_string()),
+    });
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>();
+    assert_snapshot!(rendered.join("\n\n"), @"■ Realtime voice error: boom");
+}
+
+#[cfg(not(target_os = "linux"))]
+#[tokio::test]
+async fn removing_active_realtime_placeholder_closes_realtime_conversation() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.realtime_conversation.phase = RealtimeConversationPhase::Active;
+    let placeholder_id = chat.bottom_pane.insert_transcription_placeholder("⠤⠤⠤⠤");
+    chat.realtime_conversation.meter_placeholder_id = Some(placeholder_id.clone());
+
+    chat.remove_transcription_placeholder(&placeholder_id);
+
+    next_realtime_close_op(&mut op_rx);
+    assert_eq!(chat.realtime_conversation.meter_placeholder_id, None);
+    assert_eq!(
+        chat.realtime_conversation.phase,
+        RealtimeConversationPhase::Stopping
+    );
 }
 
 #[tokio::test]
@@ -5632,6 +5724,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
     };
 
@@ -5682,6 +5775,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         model: Some(resolved_model.clone()),
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+        terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
     };
 
@@ -5933,6 +6027,7 @@ async fn slash_copy_is_unavailable_when_legacy_agent_message_is_not_repeated_on_
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Legacy final message".into(),
             phase: None,
+            memory_citation: None,
         }),
     });
     let _ = drain_insert_history(&mut rx);
@@ -6237,6 +6332,50 @@ async fn undo_started_hides_interrupt_hint() {
     );
 }
 
+#[tokio::test]
+async fn undo_completed_clears_terminal_title_undo_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.animations = true;
+    chat.config.tui_terminal_title = Some(vec!["spinner".to_string(), "status".to_string()]);
+    chat.terminal_title_animation_origin = Instant::now() + Duration::from_secs(1);
+
+    chat.handle_codex_event(Event {
+        id: "turn-undo".to_string(),
+        msg: EventMsg::UndoStarted(UndoStartedEvent { message: None }),
+    });
+
+    assert_eq!(chat.last_terminal_title, Some("⠋ Undoing".to_string()));
+
+    chat.handle_codex_event(Event {
+        id: "turn-undo".to_string(),
+        msg: EventMsg::UndoCompleted(UndoCompletedEvent {
+            success: true,
+            message: None,
+        }),
+    });
+
+    assert_eq!(chat.last_terminal_title, Some("Ready".to_string()));
+}
+
+#[tokio::test]
+async fn undo_started_refreshes_default_spinner_project_title() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.animations = true;
+    chat.refresh_terminal_title();
+    let project = chat
+        .last_terminal_title
+        .clone()
+        .expect("default title should include a project name");
+    chat.terminal_title_animation_origin = Instant::now() + Duration::from_secs(1);
+
+    chat.handle_codex_event(Event {
+        id: "turn-undo".to_string(),
+        msg: EventMsg::UndoStarted(UndoStartedEvent { message: None }),
+    });
+
+    assert_eq!(chat.last_terminal_title, Some(format!("⠋ {project}")));
+}
+
 /// The commit picker shows only commit subjects (no timestamps).
 #[tokio::test]
 async fn review_commit_picker_shows_subjects_without_timestamps() {
@@ -6370,7 +6509,7 @@ async fn image_generation_call_adds_history_cell() {
             status: "completed".into(),
             revised_prompt: Some("A tiny blue square".into()),
             result: "Zm9v".into(),
-            saved_path: Some("/tmp/ig-1.png".into()),
+            saved_path: Some("file:///tmp/ig-1.png".into()),
         }),
     });
 
@@ -6602,6 +6741,50 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     }
 
     lines.join("\n")
+}
+
+fn selected_permissions_popup_line(popup: &str) -> &str {
+    popup
+        .lines()
+        .find(|line| {
+            line.contains('›')
+                && (line.contains("Default")
+                    || line.contains("Read Only")
+                    || line.contains("Guardian Approvals")
+                    || line.contains("Full Access"))
+        })
+        .unwrap_or_else(|| {
+            panic!("expected permissions popup to have a selected preset row: {popup}")
+        })
+}
+
+fn selected_permissions_popup_name(popup: &str) -> &'static str {
+    selected_permissions_popup_line(popup)
+        .trim_start()
+        .strip_prefix('›')
+        .map(str::trim_start)
+        .and_then(|line| line.split_once(". ").map(|(_, rest)| rest))
+        .and_then(|line| {
+            ["Read Only", "Default", "Guardian Approvals", "Full Access"]
+                .into_iter()
+                .find(|label| line.starts_with(label))
+        })
+        .unwrap_or_else(|| {
+            panic!("expected permissions popup row to start with a preset label: {popup}")
+        })
+}
+
+fn move_permissions_popup_selection_to(chat: &mut ChatWidget, label: &str, direction: KeyCode) {
+    for _ in 0..4 {
+        let popup = render_bottom_popup(chat, 120);
+        if selected_permissions_popup_name(&popup) == label {
+            return;
+        }
+        chat.handle_key_event(KeyEvent::from(direction));
+    }
+
+    let popup = render_bottom_popup(chat, 120);
+    panic!("expected permissions popup to select {label}: {popup}");
 }
 
 #[tokio::test]
@@ -7621,7 +7804,7 @@ async fn personality_selection_popup_snapshot() {
     assert_snapshot!("personality_selection_popup", popup);
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 #[tokio::test]
 async fn realtime_audio_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
@@ -7631,7 +7814,7 @@ async fn realtime_audio_selection_popup_snapshot() {
     assert_snapshot!("realtime_audio_selection_popup", popup);
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 #[tokio::test]
 async fn realtime_audio_selection_popup_narrow_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
@@ -7641,7 +7824,7 @@ async fn realtime_audio_selection_popup_narrow_snapshot() {
     assert_snapshot!("realtime_audio_selection_popup_narrow", popup);
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 #[tokio::test]
 async fn realtime_microphone_picker_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
@@ -7655,7 +7838,7 @@ async fn realtime_microphone_picker_popup_snapshot() {
     assert_snapshot!("realtime_microphone_picker_popup", popup);
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 #[tokio::test]
 async fn realtime_audio_picker_emits_persist_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
@@ -8333,7 +8516,25 @@ async fn permissions_selection_emits_history_cell_when_selection_changes() {
     chat.config.notices.hide_full_access_warning = Some(true);
 
     chat.open_permissions_popup();
+    let popup = render_bottom_popup(&chat, 120);
+    #[cfg(target_os = "windows")]
+    let expected_initial = "Read Only";
+    #[cfg(not(target_os = "windows"))]
+    let expected_initial = "Default";
+    assert!(
+        selected_permissions_popup_name(&popup) == expected_initial,
+        "expected permissions popup to open with {expected_initial} selected: {popup}"
+    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    let popup = render_bottom_popup(&chat, 120);
+    #[cfg(target_os = "windows")]
+    let expected_after_one_down = "Default";
+    #[cfg(not(target_os = "windows"))]
+    let expected_after_one_down = "Full Access";
+    assert!(
+        selected_permissions_popup_name(&popup) == expected_after_one_down,
+        "expected moving down to select {expected_after_one_down} before confirmation: {popup}"
+    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let cells = drain_insert_history(&mut rx);
@@ -8360,9 +8561,21 @@ async fn permissions_selection_history_snapshot_after_mode_switch() {
     chat.config.notices.hide_full_access_warning = Some(true);
 
     chat.open_permissions_popup();
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    let popup = render_bottom_popup(&chat, 120);
     #[cfg(target_os = "windows")]
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    let expected_initial = "Read Only";
+    #[cfg(not(target_os = "windows"))]
+    let expected_initial = "Default";
+    assert!(
+        selected_permissions_popup_name(&popup) == expected_initial,
+        "expected permissions popup to open with {expected_initial} selected: {popup}"
+    );
+    move_permissions_popup_selection_to(&mut chat, "Full Access", KeyCode::Down);
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        selected_permissions_popup_name(&popup) == "Full Access",
+        "expected navigation to land on Full Access before confirmation: {popup}"
+    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let cells = drain_insert_history(&mut rx);
@@ -8395,10 +8608,16 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
 
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, 120);
-    chat.handle_key_event(KeyEvent::from(KeyCode::Up));
-    if popup.contains("Guardian Approvals") {
-        chat.handle_key_event(KeyEvent::from(KeyCode::Up));
-    }
+    assert!(
+        selected_permissions_popup_name(&popup) == "Full Access",
+        "expected permissions popup to open with Full Access selected: {popup}"
+    );
+    move_permissions_popup_selection_to(&mut chat, "Default", KeyCode::Up);
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        selected_permissions_popup_name(&popup) == "Default",
+        "expected navigation to land on Default before confirmation: {popup}"
+    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let cells = drain_insert_history(&mut rx);
@@ -8437,6 +8656,11 @@ async fn permissions_selection_emits_history_cell_when_current_is_selected() {
         .expect("set sandbox policy");
 
     chat.open_permissions_popup();
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        selected_permissions_popup_name(&popup) == "Default",
+        "expected permissions popup to open with Default selected: {popup}"
+    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let cells = drain_insert_history(&mut rx);
@@ -8542,7 +8766,8 @@ async fn permissions_selection_marks_guardian_approvals_current_after_session_co
     let popup = render_bottom_popup(&chat, 120);
 
     assert!(
-        popup.contains("Guardian Approvals (current)"),
+        selected_permissions_popup_name(&popup) == "Guardian Approvals"
+            && selected_permissions_popup_line(&popup).contains("(current)"),
         "expected Guardian Approvals to be current after SessionConfigured sync: {popup}"
     );
 }
@@ -8597,7 +8822,8 @@ async fn permissions_selection_marks_guardian_approvals_current_with_custom_work
     let popup = render_bottom_popup(&chat, 120);
 
     assert!(
-        popup.contains("Guardian Approvals (current)"),
+        selected_permissions_popup_name(&popup) == "Guardian Approvals"
+            && selected_permissions_popup_line(&popup).contains("(current)"),
         "expected Guardian Approvals to be current even with custom workspace-write details: {popup}"
     );
 }
@@ -8622,9 +8848,22 @@ async fn permissions_selection_can_disable_guardian_approvals() {
         .sandbox_policy
         .set(SandboxPolicy::new_workspace_write_policy())
         .expect("set sandbox policy");
+    chat.set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
 
     chat.open_permissions_popup();
-    chat.handle_key_event(KeyEvent::from(KeyCode::Up));
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        selected_permissions_popup_name(&popup) == "Guardian Approvals"
+            && selected_permissions_popup_line(&popup).contains("(current)"),
+        "expected permissions popup to open with Guardian Approvals selected: {popup}"
+    );
+
+    move_permissions_popup_selection_to(&mut chat, "Default", KeyCode::Up);
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        selected_permissions_popup_name(&popup) == "Default",
+        "expected one Up from Guardian Approvals to select Default: {popup}"
+    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
@@ -8668,18 +8907,14 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup
-            .lines()
-            .any(|line| line.contains("(current)") && line.contains('›')),
+        selected_permissions_popup_line(&popup).contains("(current)"),
         "expected permissions popup to open with the current preset selected: {popup}"
     );
 
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    move_permissions_popup_selection_to(&mut chat, "Guardian Approvals", KeyCode::Down);
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup
-            .lines()
-            .any(|line| line.contains("Guardian Approvals") && line.contains('›')),
+        selected_permissions_popup_name(&popup) == "Guardian Approvals",
         "expected one Down from Default to select Guardian Approvals: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -8720,9 +8955,7 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
     chat.config.notices.hide_full_access_warning = None;
 
     chat.open_permissions_popup();
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-    #[cfg(target_os = "windows")]
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    move_permissions_popup_selection_to(&mut chat, "Full Access", KeyCode::Down);
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let mut open_confirmation_event = None;
@@ -10326,21 +10559,276 @@ async fn status_line_invalid_items_warn_once() {
     ]);
     chat.thread_id = Some(ThreadId::new());
 
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1, "expected one warning history cell");
     let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        rendered.contains("bogus_item"),
+        rendered.contains(r#""bogus_item""#),
         "warning cell missing invalid item content: {rendered}"
     );
+    assert!(
+        !rendered.contains(r#"\"bogus_item\""#),
+        "warning cell should render plain quotes, not escaped quotes: {rendered}"
+    );
 
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
     let cells = drain_insert_history(&mut rx);
     assert!(
         cells.is_empty(),
         "expected invalid status line warning to emit only once"
     );
+}
+
+#[tokio::test]
+async fn terminal_title_invalid_items_warn_once() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.tui_terminal_title = Some(vec![
+        "status".to_string(),
+        "bogus_item".to_string(),
+        "bogus_item".to_string(),
+    ]);
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.refresh_status_surfaces();
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one warning history cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains(r#""bogus_item""#),
+        "warning cell missing invalid item content: {rendered}"
+    );
+    assert!(
+        !rendered.contains(r#"\"bogus_item\""#),
+        "warning cell should render plain quotes, not escaped quotes: {rendered}"
+    );
+
+    chat.refresh_status_surfaces();
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "expected invalid terminal title warning to emit only once"
+    );
+}
+
+#[tokio::test]
+async fn terminal_title_setup_cancel_reverts_live_preview() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let original = chat.config.tui_terminal_title.clone();
+
+    chat.open_terminal_title_setup();
+    chat.preview_terminal_title(vec![TerminalTitleItem::Thread, TerminalTitleItem::Status]);
+
+    assert_eq!(
+        chat.config.tui_terminal_title,
+        Some(vec!["thread".to_string(), "status".to_string()])
+    );
+    assert_eq!(
+        chat.terminal_title_setup_original_items,
+        Some(original.clone())
+    );
+
+    chat.cancel_terminal_title_setup();
+
+    assert_eq!(chat.config.tui_terminal_title, original);
+    assert_eq!(chat.terminal_title_setup_original_items, None);
+}
+
+#[tokio::test]
+async fn terminal_title_status_uses_waiting_label_for_background_terminal_when_animations_disabled()
+{
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.animations = false;
+    chat.on_task_started();
+    terminal_interaction(&mut chat, "call-1", "proc-1", "");
+
+    assert_eq!(chat.terminal_title_status_text(), "Waiting");
+}
+
+#[tokio::test]
+async fn terminal_title_status_uses_plain_labels_for_transient_states_when_animations_disabled() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.animations = false;
+
+    chat.mcp_startup_status = Some(std::collections::HashMap::new());
+    assert_eq!(chat.terminal_title_status_text(), "Starting");
+
+    chat.mcp_startup_status = None;
+    chat.on_task_started();
+    assert_eq!(chat.terminal_title_status_text(), "Working");
+
+    chat.handle_codex_event(Event {
+        id: "undo-1".to_string(),
+        msg: EventMsg::UndoStarted(UndoStartedEvent {
+            message: Some("Undoing changes".to_string()),
+        }),
+    });
+    assert_eq!(chat.terminal_title_status_text(), "Undoing");
+
+    chat.on_agent_reasoning_delta("**Planning**\nmore".to_string());
+    assert_eq!(chat.terminal_title_status_text(), "Thinking");
+}
+
+#[tokio::test]
+async fn default_terminal_title_items_are_spinner_then_project() {
+    let (chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    assert_eq!(
+        chat.configured_terminal_title_items(),
+        vec!["spinner".to_string(), "project".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn terminal_title_can_render_app_name_item() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.tui_terminal_title = Some(vec!["app-name".to_string()]);
+
+    chat.refresh_terminal_title();
+
+    assert_eq!(chat.last_terminal_title, Some("codex".to_string()));
+}
+
+#[tokio::test]
+async fn default_terminal_title_refreshes_when_spinner_state_changes() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.animations = true;
+
+    chat.config.tui_terminal_title = None;
+    let cwd = chat
+        .current_cwd
+        .clone()
+        .unwrap_or_else(|| chat.config.cwd.clone());
+    let project = get_git_repo_root(&cwd)
+        .map(|root| {
+            root.file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| format_directory_display(&root, None))
+        })
+        .or_else(|| {
+            chat.config
+                .config_layer_stack
+                .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+                .iter()
+                .find_map(|layer| match &layer.name {
+                    ConfigLayerSource::Project { dot_codex_folder } => {
+                        dot_codex_folder.as_path().parent().map(|path| {
+                            path.file_name()
+                                .map(|name| name.to_string_lossy().to_string())
+                                .unwrap_or_else(|| format_directory_display(path, None))
+                        })
+                    }
+                    _ => None,
+                })
+        })
+        .unwrap_or_else(|| {
+            cwd.file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| format_directory_display(&cwd, None))
+        });
+    chat.last_terminal_title = Some(project.clone());
+    chat.bottom_pane.set_task_running(true);
+    chat.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
+    chat.terminal_title_animation_origin = Instant::now() + Duration::from_secs(1);
+
+    chat.refresh_terminal_title();
+
+    assert_eq!(chat.last_terminal_title, Some(format!("⠋ {project}")));
+}
+
+#[tokio::test]
+async fn terminal_title_spinner_item_renders_when_animations_enabled() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.bottom_pane.set_task_running(true);
+    chat.terminal_title_status_kind = TerminalTitleStatusKind::Working;
+    chat.terminal_title_animation_origin = Instant::now();
+
+    assert_eq!(
+        chat.terminal_title_spinner_text_at(chat.terminal_title_animation_origin),
+        Some("⠋".to_string())
+    );
+    assert_eq!(
+        chat.terminal_title_spinner_text_at(
+            chat.terminal_title_animation_origin + TERMINAL_TITLE_SPINNER_INTERVAL,
+        ),
+        Some("⠙".to_string())
+    );
+}
+
+#[tokio::test]
+async fn terminal_title_uses_spaces_around_spinner_item() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.animations = true;
+    chat.config.tui_terminal_title = Some(vec![
+        "project".to_string(),
+        "spinner".to_string(),
+        "status".to_string(),
+        "thread".to_string(),
+    ]);
+    chat.thread_name = Some("Investigate flaky test".to_string());
+    chat.bottom_pane.set_task_running(true);
+    chat.terminal_title_status_kind = TerminalTitleStatusKind::Working;
+    chat.terminal_title_animation_origin = Instant::now() + Duration::from_secs(1);
+
+    chat.refresh_terminal_title();
+
+    let title = chat
+        .last_terminal_title
+        .clone()
+        .expect("expected terminal title");
+    assert!(title.contains(" ⠋ Working | "));
+    assert!(!title.contains("| ⠋"));
+    assert!(!title.contains("⠋ |"));
+}
+
+#[tokio::test]
+async fn terminal_title_shows_spinner_and_undoing_without_task_running() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.animations = true;
+    chat.config.tui_terminal_title = Some(vec!["spinner".to_string(), "status".to_string()]);
+    chat.terminal_title_status_kind = TerminalTitleStatusKind::Undoing;
+    chat.terminal_title_animation_origin = Instant::now() + Duration::from_secs(1);
+
+    assert!(!chat.bottom_pane.is_task_running());
+
+    chat.refresh_terminal_title();
+
+    assert_eq!(chat.last_terminal_title, Some("⠋ Undoing".to_string()));
+}
+
+#[tokio::test]
+async fn terminal_title_reschedules_spinner_when_title_text_is_unchanged() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let (frame_requester, mut frame_schedule_rx) = FrameRequester::test_observable();
+    chat.frame_requester = frame_requester;
+    chat.config.animations = true;
+    chat.config.tui_terminal_title = Some(vec!["spinner".to_string()]);
+    chat.bottom_pane.set_task_running(true);
+    chat.terminal_title_status_kind = TerminalTitleStatusKind::Working;
+    chat.terminal_title_animation_origin = Instant::now() + Duration::from_secs(1);
+    chat.last_terminal_title = Some("⠋".to_string());
+
+    chat.refresh_terminal_title();
+
+    assert!(frame_schedule_rx.try_recv().is_ok());
+}
+
+#[tokio::test]
+async fn on_task_started_resets_terminal_title_task_progress() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.last_plan_progress = Some((2, 5));
+
+    chat.on_task_started();
+
+    assert_eq!(chat.last_plan_progress, None);
+    assert_eq!(chat.terminal_title_task_progress(), None);
+}
+
+#[test]
+fn terminal_title_part_truncation_preserves_grapheme_clusters() {
+    let value = "ab👩‍💻cdefg".to_string();
+    let truncated = ChatWidget::truncate_terminal_title_part(value, 7);
+    assert_eq!(truncated, "ab👩‍💻c...");
 }
 
 #[tokio::test]
@@ -10351,7 +10839,7 @@ async fn status_line_branch_state_resets_when_git_branch_disabled() {
     chat.status_line_branch_lookup_complete = true;
     chat.config.tui_status_line = Some(vec!["model_name".to_string()]);
 
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
 
     assert_eq!(chat.status_line_branch, None);
     assert!(!chat.status_line_branch_pending);
@@ -10362,6 +10850,25 @@ async fn status_line_branch_state_resets_when_git_branch_disabled() {
 async fn status_line_branch_refreshes_after_turn_complete() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config.tui_status_line = Some(vec!["git-branch".to_string()]);
+    chat.status_line_branch_lookup_complete = true;
+    chat.status_line_branch_pending = false;
+
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+        }),
+    });
+
+    assert!(chat.status_line_branch_pending);
+}
+
+#[tokio::test]
+async fn status_line_branch_refreshes_after_turn_complete_when_terminal_title_uses_git_branch() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.tui_status_line = Some(Vec::new());
+    chat.config.tui_terminal_title = Some(vec!["git-branch".to_string()]);
     chat.status_line_branch_lookup_complete = true;
     chat.status_line_branch_pending = false;
 
@@ -10399,11 +10906,11 @@ async fn status_line_fast_mode_renders_on_and_off() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.config.tui_status_line = Some(vec!["fast-mode".to_string()]);
 
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
     assert_eq!(status_line_text(&chat), Some("Fast off".to_string()));
 
     chat.set_service_tier(Some(ServiceTier::Fast));
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
     assert_eq!(status_line_text(&chat), Some("Fast on".to_string()));
 }
 
@@ -10416,7 +10923,7 @@ async fn status_line_fast_mode_footer_snapshot() {
     chat.show_welcome_banner = false;
     chat.config.tui_status_line = Some(vec!["fast-mode".to_string()]);
     chat.set_service_tier(Some(ServiceTier::Fast));
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
 
     let width = 80;
     let height = chat.desired_height(width);
@@ -10439,7 +10946,7 @@ async fn status_line_model_with_reasoning_includes_fast_for_gpt54_only() {
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
     chat.set_service_tier(Some(ServiceTier::Fast));
     set_chatgpt_auth(&mut chat);
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
 
     assert_eq!(
         status_line_text(&chat),
@@ -10447,7 +10954,7 @@ async fn status_line_model_with_reasoning_includes_fast_for_gpt54_only() {
     );
 
     chat.set_model("gpt-5.3-codex");
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
 
     assert_eq!(
         status_line_text(&chat),
@@ -10471,7 +10978,7 @@ async fn status_line_model_with_reasoning_fast_footer_snapshot() {
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
     chat.set_service_tier(Some(ServiceTier::Fast));
     set_chatgpt_auth(&mut chat);
-    chat.refresh_status_line();
+    chat.refresh_status_surfaces();
 
     let width = 80;
     let height = chat.desired_height(width);
@@ -10684,6 +11191,7 @@ async fn deltas_then_same_final_message_are_rendered_snapshot() {
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Here is the result.".into(),
             phase: None,
+            memory_citation: None,
         }),
     });
 

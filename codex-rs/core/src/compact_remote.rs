@@ -101,7 +101,7 @@ async fn run_remote_compact_task_inner_impl(
         turn_context.as_ref(),
         &prompt_input,
         &HashSet::new(),
-        None,
+        /*skills_outcome*/ None,
         &CancellationToken::new(),
     )
     .await?;
@@ -196,7 +196,7 @@ pub(crate) async fn process_compacted_history(
 /// - `developer` messages because remote output can include stale/duplicated
 ///   instruction content.
 /// - non-user-content `user` messages (session prefix/instruction wrappers),
-///   keeping only real user messages as parsed by `parse_turn_item`.
+///   while preserving real user messages and persisted hook prompts.
 ///
 /// This intentionally keeps:
 /// - `assistant` messages (future remote compaction models may emit them)
@@ -208,7 +208,7 @@ fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
         ResponseItem::Message { role, .. } if role == "user" => {
             matches!(
                 crate::event_mapping::parse_turn_item(item),
-                Some(TurnItem::UserMessage(_))
+                Some(TurnItem::UserMessage(_) | TurnItem::HookPrompt(_))
             )
         }
         ResponseItem::Message { role, .. } if role == "assistant" => true,

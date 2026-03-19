@@ -102,7 +102,7 @@ impl ShellSnapshot {
                 if let Some(failure_reason) = snapshot.as_ref().err() {
                     counter_tags.push(("failure_reason", *failure_reason));
                 }
-                session_telemetry.counter("codex.shell_snapshot", 1, &counter_tags);
+                session_telemetry.counter("codex.shell_snapshot", /*inc*/ 1, &counter_tags);
                 let _ = shell_snapshot_tx.send(snapshot.ok());
             }
             .instrument(snapshot_span),
@@ -120,13 +120,13 @@ impl ShellSnapshot {
             ShellType::PowerShell => "ps1",
             _ => "sh",
         };
-        let path = codex_home
-            .join(SNAPSHOT_DIR)
-            .join(format!("{session_id}.{extension}"));
         let nonce = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
+        let path = codex_home
+            .join(SNAPSHOT_DIR)
+            .join(format!("{session_id}.{nonce}.{extension}"));
         let temp_path = codex_home
             .join(SNAPSHOT_DIR)
             .join(format!("{session_id}.tmp-{nonce}"));
@@ -199,7 +199,7 @@ async fn write_shell_snapshot(
     if shell_type == ShellType::PowerShell || shell_type == ShellType::Cmd {
         bail!("Shell snapshot not supported yet for {shell_type:?}");
     }
-    let shell = get_shell(shell_type.clone(), None)
+    let shell = get_shell(shell_type.clone(), /*path*/ None)
         .with_context(|| format!("No available shell for {shell_type:?}"))?;
 
     let raw_snapshot = capture_snapshot(&shell, cwd).await?;
@@ -243,13 +243,26 @@ fn strip_snapshot_preamble(snapshot: &str) -> Result<String> {
 async fn validate_snapshot(shell: &Shell, snapshot_path: &Path, cwd: &Path) -> Result<()> {
     let snapshot_path_display = snapshot_path.display();
     let script = format!("set -e; . \"{snapshot_path_display}\"");
-    run_script_with_timeout(shell, &script, SNAPSHOT_TIMEOUT, false, cwd)
-        .await
-        .map(|_| ())
+    run_script_with_timeout(
+        shell,
+        &script,
+        SNAPSHOT_TIMEOUT,
+        /*use_login_shell*/ false,
+        cwd,
+    )
+    .await
+    .map(|_| ())
 }
 
 async fn run_shell_script(shell: &Shell, script: &str, cwd: &Path) -> Result<String> {
-    run_script_with_timeout(shell, script, SNAPSHOT_TIMEOUT, true, cwd).await
+    run_script_with_timeout(
+        shell,
+        script,
+        SNAPSHOT_TIMEOUT,
+        /*use_login_shell*/ true,
+        cwd,
+    )
+    .await
 }
 
 async fn run_script_with_timeout(
@@ -497,12 +510,9 @@ pub async fn cleanup_stale_snapshots(codex_home: &Path, active_session_id: Threa
 
         let file_name = entry.file_name();
         let file_name = file_name.to_string_lossy();
-        let (session_id, _) = match file_name.rsplit_once('.') {
-            Some((stem, ext)) => (stem, ext),
-            None => {
-                remove_snapshot_file(&path).await;
-                continue;
-            }
+        let Some(session_id) = snapshot_session_id_from_file_name(&file_name) else {
+            remove_snapshot_file(&path).await;
+            continue;
         };
         if session_id == active_session_id {
             continue;
@@ -540,6 +550,18 @@ pub async fn cleanup_stale_snapshots(codex_home: &Path, active_session_id: Threa
 async fn remove_snapshot_file(path: &Path) {
     if let Err(err) = fs::remove_file(path).await {
         tracing::warn!("Failed to delete shell snapshot at {:?}: {err:?}", path);
+    }
+}
+
+fn snapshot_session_id_from_file_name(file_name: &str) -> Option<&str> {
+    let (stem, extension) = file_name.rsplit_once('.')?;
+    match extension {
+        "sh" | "ps1" => Some(
+            stem.split_once('.')
+                .map_or(stem, |(session_id, _generation)| session_id),
+        ),
+        _ if extension.starts_with("tmp-") => Some(stem),
+        _ => None,
     }
 }
 

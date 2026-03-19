@@ -19,6 +19,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::contextual_user_message::is_contextual_user_fragment;
+use crate::contextual_user_message::parse_visible_hook_prompt_message;
 use crate::web_search::web_search_action_detail;
 
 pub(crate) fn is_contextual_user_message_content(message: &[ContentItem]) -> bool {
@@ -83,7 +84,12 @@ fn parse_agent_message(
         }
     }
     let id = id.cloned().unwrap_or_else(|| Uuid::new_v4().to_string());
-    AgentMessageItem { id, content, phase }
+    AgentMessageItem {
+        id,
+        content,
+        phase,
+        memory_citation: None,
+    }
 }
 
 pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
@@ -95,7 +101,9 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
             phase,
             ..
         } => match role.as_str() {
-            "user" => parse_user_message(content).map(TurnItem::UserMessage),
+            "user" => parse_visible_hook_prompt_message(id.as_ref(), content)
+                .map(TurnItem::HookPrompt)
+                .or_else(|| parse_user_message(content).map(TurnItem::UserMessage)),
             "assistant" => Some(TurnItem::AgentMessage(parse_agent_message(
                 id.as_ref(),
                 content,

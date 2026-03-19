@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::protocol::Product;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
 
@@ -29,6 +30,7 @@ fn resolve_marketplace_plugin_finds_repo_marketplace_plugin() {
     let resolved = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
         "local-plugin",
+        Some(Product::Codex),
     )
     .unwrap();
 
@@ -58,6 +60,7 @@ fn resolve_marketplace_plugin_reports_missing_plugin() {
     let err = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
         "missing",
+        Some(Product::Codex),
     )
     .unwrap_err();
 
@@ -132,54 +135,68 @@ fn list_marketplaces_returns_home_and_repo_marketplaces() {
     assert_eq!(
         marketplaces,
         vec![
-            MarketplaceSummary {
+            Marketplace {
                 name: "codex-curated".to_string(),
                 path:
                     AbsolutePathBuf::try_from(home_root.join(".agents/plugins/marketplace.json"),)
                         .unwrap(),
+                interface: None,
                 plugins: vec![
-                    MarketplacePluginSummary {
+                    MarketplacePlugin {
                         name: "shared-plugin".to_string(),
-                        source: MarketplacePluginSourceSummary::Local {
+                        source: MarketplacePluginSource::Local {
                             path: AbsolutePathBuf::try_from(home_root.join("home-shared")).unwrap(),
                         },
-                        install_policy: MarketplacePluginInstallPolicy::Available,
-                        auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+                        policy: MarketplacePluginPolicy {
+                            installation: MarketplacePluginInstallPolicy::Available,
+                            authentication: MarketplacePluginAuthPolicy::OnInstall,
+                            products: vec![],
+                        },
                         interface: None,
                     },
-                    MarketplacePluginSummary {
+                    MarketplacePlugin {
                         name: "home-only".to_string(),
-                        source: MarketplacePluginSourceSummary::Local {
+                        source: MarketplacePluginSource::Local {
                             path: AbsolutePathBuf::try_from(home_root.join("home-only")).unwrap(),
                         },
-                        install_policy: MarketplacePluginInstallPolicy::Available,
-                        auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+                        policy: MarketplacePluginPolicy {
+                            installation: MarketplacePluginInstallPolicy::Available,
+                            authentication: MarketplacePluginAuthPolicy::OnInstall,
+                            products: vec![],
+                        },
                         interface: None,
                     },
                 ],
             },
-            MarketplaceSummary {
+            Marketplace {
                 name: "codex-curated".to_string(),
                 path:
                     AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json"),)
                         .unwrap(),
+                interface: None,
                 plugins: vec![
-                    MarketplacePluginSummary {
+                    MarketplacePlugin {
                         name: "shared-plugin".to_string(),
-                        source: MarketplacePluginSourceSummary::Local {
+                        source: MarketplacePluginSource::Local {
                             path: AbsolutePathBuf::try_from(repo_root.join("repo-shared")).unwrap(),
                         },
-                        install_policy: MarketplacePluginInstallPolicy::Available,
-                        auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+                        policy: MarketplacePluginPolicy {
+                            installation: MarketplacePluginInstallPolicy::Available,
+                            authentication: MarketplacePluginAuthPolicy::OnInstall,
+                            products: vec![],
+                        },
                         interface: None,
                     },
-                    MarketplacePluginSummary {
+                    MarketplacePlugin {
                         name: "repo-only".to_string(),
-                        source: MarketplacePluginSourceSummary::Local {
+                        source: MarketplacePluginSource::Local {
                             path: AbsolutePathBuf::try_from(repo_root.join("repo-only")).unwrap(),
                         },
-                        install_policy: MarketplacePluginInstallPolicy::Available,
-                        auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+                        policy: MarketplacePluginPolicy {
+                            installation: MarketplacePluginInstallPolicy::Available,
+                            authentication: MarketplacePluginAuthPolicy::OnInstall,
+                            products: vec![],
+                        },
                         interface: None,
                     },
                 ],
@@ -242,29 +259,37 @@ fn list_marketplaces_keeps_distinct_entries_for_same_name() {
     assert_eq!(
         marketplaces,
         vec![
-            MarketplaceSummary {
+            Marketplace {
                 name: "codex-curated".to_string(),
                 path: AbsolutePathBuf::try_from(home_marketplace).unwrap(),
-                plugins: vec![MarketplacePluginSummary {
+                interface: None,
+                plugins: vec![MarketplacePlugin {
                     name: "local-plugin".to_string(),
-                    source: MarketplacePluginSourceSummary::Local {
+                    source: MarketplacePluginSource::Local {
                         path: AbsolutePathBuf::try_from(home_root.join("home-plugin")).unwrap(),
                     },
-                    install_policy: MarketplacePluginInstallPolicy::Available,
-                    auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+                    policy: MarketplacePluginPolicy {
+                        installation: MarketplacePluginInstallPolicy::Available,
+                        authentication: MarketplacePluginAuthPolicy::OnInstall,
+                        products: vec![],
+                    },
                     interface: None,
                 }],
             },
-            MarketplaceSummary {
+            Marketplace {
                 name: "codex-curated".to_string(),
                 path: AbsolutePathBuf::try_from(repo_marketplace.clone()).unwrap(),
-                plugins: vec![MarketplacePluginSummary {
+                interface: None,
+                plugins: vec![MarketplacePlugin {
                     name: "local-plugin".to_string(),
-                    source: MarketplacePluginSourceSummary::Local {
+                    source: MarketplacePluginSource::Local {
                         path: AbsolutePathBuf::try_from(repo_root.join("repo-plugin")).unwrap(),
                     },
-                    install_policy: MarketplacePluginInstallPolicy::Available,
-                    auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+                    policy: MarketplacePluginPolicy {
+                        installation: MarketplacePluginInstallPolicy::Available,
+                        authentication: MarketplacePluginAuthPolicy::OnInstall,
+                        products: vec![],
+                    },
                     interface: None,
                 }],
             },
@@ -274,6 +299,7 @@ fn list_marketplaces_keeps_distinct_entries_for_same_name() {
     let resolved = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_marketplace).unwrap(),
         "local-plugin",
+        Some(Product::Codex),
     )
     .unwrap();
 
@@ -320,21 +346,120 @@ fn list_marketplaces_dedupes_multiple_roots_in_same_repo() {
 
     assert_eq!(
         marketplaces,
-        vec![MarketplaceSummary {
+        vec![Marketplace {
             name: "codex-curated".to_string(),
             path: AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json"))
                 .unwrap(),
-            plugins: vec![MarketplacePluginSummary {
+            interface: None,
+            plugins: vec![MarketplacePlugin {
                 name: "local-plugin".to_string(),
-                source: MarketplacePluginSourceSummary::Local {
+                source: MarketplacePluginSource::Local {
                     path: AbsolutePathBuf::try_from(repo_root.join("plugin")).unwrap(),
                 },
-                install_policy: MarketplacePluginInstallPolicy::Available,
-                auth_policy: MarketplacePluginAuthPolicy::OnInstall,
+                policy: MarketplacePluginPolicy {
+                    installation: MarketplacePluginInstallPolicy::Available,
+                    authentication: MarketplacePluginAuthPolicy::OnInstall,
+                    products: vec![],
+                },
                 interface: None,
             }],
         }]
     );
+}
+
+#[test]
+fn list_marketplaces_reads_marketplace_display_name() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "openai-curated",
+  "interface": {
+    "displayName": "ChatGPT Official"
+  },
+  "plugins": [
+    {
+      "name": "local-plugin",
+      "source": {
+        "source": "local",
+        "path": "./plugin"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let marketplaces =
+        list_marketplaces_with_home(&[AbsolutePathBuf::try_from(repo_root).unwrap()], None)
+            .unwrap();
+
+    assert_eq!(
+        marketplaces[0].interface,
+        Some(MarketplaceInterface {
+            display_name: Some("ChatGPT Official".to_string()),
+        })
+    );
+}
+
+#[test]
+fn list_marketplaces_skips_marketplaces_that_fail_to_load() {
+    let tmp = tempdir().unwrap();
+    let valid_repo_root = tmp.path().join("valid-repo");
+    let invalid_repo_root = tmp.path().join("invalid-repo");
+
+    fs::create_dir_all(valid_repo_root.join(".git")).unwrap();
+    fs::create_dir_all(valid_repo_root.join(".agents/plugins")).unwrap();
+    fs::create_dir_all(invalid_repo_root.join(".git")).unwrap();
+    fs::create_dir_all(invalid_repo_root.join(".agents/plugins")).unwrap();
+    fs::write(
+        valid_repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "valid-marketplace",
+  "plugins": [
+    {
+      "name": "valid-plugin",
+      "source": {
+        "source": "local",
+        "path": "./plugin"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    fs::write(
+        invalid_repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "invalid-marketplace",
+  "plugins": [
+    {
+      "name": "broken-plugin",
+      "source": {
+        "source": "local",
+        "path": "plugin-without-dot-slash"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let marketplaces = list_marketplaces_with_home(
+        &[
+            AbsolutePathBuf::try_from(valid_repo_root).unwrap(),
+            AbsolutePathBuf::try_from(invalid_repo_root).unwrap(),
+        ],
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(marketplaces.len(), 1);
+    assert_eq!(marketplaces[0].name, "valid-marketplace");
 }
 
 #[test]
@@ -356,8 +481,11 @@ fn list_marketplaces_resolves_plugin_interface_paths_to_absolute() {
         "source": "local",
         "path": "./plugins/demo-plugin"
       },
-      "installPolicy": "AVAILABLE",
-      "authPolicy": "ON_INSTALL",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL",
+        "products": ["CODEX", "CHATGPT", "ATLAS"]
+      },
       "category": "Design"
     }
   ]
@@ -385,16 +513,20 @@ fn list_marketplaces_resolves_plugin_interface_paths_to_absolute() {
             .unwrap();
 
     assert_eq!(
-        marketplaces[0].plugins[0].install_policy,
+        marketplaces[0].plugins[0].policy.installation,
         MarketplacePluginInstallPolicy::Available
     );
     assert_eq!(
-        marketplaces[0].plugins[0].auth_policy,
+        marketplaces[0].plugins[0].policy.authentication,
         MarketplacePluginAuthPolicy::OnInstall
     );
     assert_eq!(
+        marketplaces[0].plugins[0].policy.products,
+        vec![Product::Codex, Product::Chatgpt, Product::Atlas]
+    );
+    assert_eq!(
         marketplaces[0].plugins[0].interface,
-        Some(PluginManifestInterfaceSummary {
+        Some(PluginManifestInterface {
             display_name: Some("Demo".to_string()),
             short_description: None,
             long_description: None,
@@ -415,6 +547,47 @@ fn list_marketplaces_resolves_plugin_interface_paths_to_absolute() {
             ],
         })
     );
+}
+
+#[test]
+fn list_marketplaces_ignores_legacy_top_level_policy_fields() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "demo-plugin",
+      "source": {
+        "source": "local",
+        "path": "./plugins/demo-plugin"
+      },
+      "installPolicy": "NOT_AVAILABLE",
+      "authPolicy": "ON_USE"
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let marketplaces =
+        list_marketplaces_with_home(&[AbsolutePathBuf::try_from(repo_root).unwrap()], None)
+            .unwrap();
+
+    assert_eq!(
+        marketplaces[0].plugins[0].policy.installation,
+        MarketplacePluginInstallPolicy::Available
+    );
+    assert_eq!(
+        marketplaces[0].plugins[0].policy.authentication,
+        MarketplacePluginAuthPolicy::OnInstall
+    );
+    assert_eq!(marketplaces[0].plugins[0].policy.products, Vec::new());
 }
 
 #[test]
@@ -463,7 +636,7 @@ fn list_marketplaces_ignores_plugin_interface_assets_without_dot_slash() {
 
     assert_eq!(
         marketplaces[0].plugins[0].interface,
-        Some(PluginManifestInterfaceSummary {
+        Some(PluginManifestInterface {
             display_name: Some("Demo".to_string()),
             short_description: None,
             long_description: None,
@@ -481,13 +654,14 @@ fn list_marketplaces_ignores_plugin_interface_assets_without_dot_slash() {
         })
     );
     assert_eq!(
-        marketplaces[0].plugins[0].install_policy,
+        marketplaces[0].plugins[0].policy.installation,
         MarketplacePluginInstallPolicy::Available
     );
     assert_eq!(
-        marketplaces[0].plugins[0].auth_policy,
+        marketplaces[0].plugins[0].policy.authentication,
         MarketplacePluginAuthPolicy::OnInstall
     );
+    assert_eq!(marketplaces[0].plugins[0].policy.products, Vec::new());
 }
 
 #[test]
@@ -516,6 +690,7 @@ fn resolve_marketplace_plugin_rejects_non_relative_local_paths() {
     let err = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
         "local-plugin",
+        Some(Product::Codex),
     )
     .unwrap_err();
 
@@ -561,11 +736,51 @@ fn resolve_marketplace_plugin_uses_first_duplicate_entry() {
     let resolved = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
         "local-plugin",
+        Some(Product::Codex),
     )
     .unwrap();
 
     assert_eq!(
         resolved.source_path,
         AbsolutePathBuf::try_from(repo_root.join("first")).unwrap()
+    );
+}
+
+#[test]
+fn resolve_marketplace_plugin_rejects_disallowed_product() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "chatgpt-plugin",
+      "source": {
+        "source": "local",
+        "path": "./plugin"
+      },
+      "policy": {
+        "products": ["CHATGPT"]
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let err = resolve_marketplace_plugin(
+        &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
+        "chatgpt-plugin",
+        Some(Product::Atlas),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "plugin `chatgpt-plugin` is not available for install in marketplace `codex-curated`"
     );
 }

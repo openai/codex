@@ -92,20 +92,23 @@ impl Default for ConfigRequirements {
         Self {
             approval_policy: ConstrainedWithSource::new(
                 Constrained::allow_any_from_default(),
-                None,
+                /*source*/ None,
             ),
             sandbox_policy: ConstrainedWithSource::new(
                 Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
-                None,
+                /*source*/ None,
             ),
             web_search_mode: ConstrainedWithSource::new(
                 Constrained::allow_any(WebSearchMode::Cached),
-                None,
+                /*source*/ None,
             ),
             feature_requirements: None,
             mcp_servers: None,
             exec_policy: None,
-            enforce_residency: ConstrainedWithSource::new(Constrained::allow_any(None), None),
+            enforce_residency: ConstrainedWithSource::new(
+                Constrained::allow_any(/*initial_value*/ None),
+                /*source*/ None,
+            ),
             network: None,
         }
     }
@@ -296,6 +299,7 @@ pub struct ConfigRequirementsToml {
     pub enforce_residency: Option<ResidencyRequirement>,
     #[serde(rename = "experimental_network")]
     pub network: Option<NetworkRequirementsToml>,
+    pub guardian_developer_instructions: Option<String>,
 }
 
 /// Value paired with the requirement source it came from, for better error
@@ -331,6 +335,7 @@ pub struct ConfigRequirementsWithSources {
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
     pub network: Option<Sourced<NetworkRequirementsToml>>,
+    pub guardian_developer_instructions: Option<Sourced<String>>,
 }
 
 impl ConfigRequirementsWithSources {
@@ -361,9 +366,17 @@ impl ConfigRequirementsWithSources {
             rules: _,
             enforce_residency: _,
             network: _,
+            guardian_developer_instructions: _,
         } = &other;
 
         let mut other = other;
+        if other
+            .guardian_developer_instructions
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            other.guardian_developer_instructions = None;
+        }
         fill_missing_take!(
             self,
             other,
@@ -377,6 +390,7 @@ impl ConfigRequirementsWithSources {
                 rules,
                 enforce_residency,
                 network,
+                guardian_developer_instructions,
             }
         );
 
@@ -400,6 +414,7 @@ impl ConfigRequirementsWithSources {
             rules,
             enforce_residency,
             network,
+            guardian_developer_instructions,
         } = self;
         ConfigRequirementsToml {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
@@ -411,6 +426,8 @@ impl ConfigRequirementsWithSources {
             rules: rules.map(|sourced| sourced.value),
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
             network: network.map(|sourced| sourced.value),
+            guardian_developer_instructions: guardian_developer_instructions
+                .map(|sourced| sourced.value),
         }
     }
 }
@@ -465,6 +482,10 @@ impl ConfigRequirementsToml {
             && self.rules.is_none()
             && self.enforce_residency.is_none()
             && self.network.is_none()
+            && self
+                .guardian_developer_instructions
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
     }
 }
 
@@ -482,6 +503,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             rules,
             enforce_residency,
             network,
+            guardian_developer_instructions: _guardian_developer_instructions,
         } = toml;
 
         let approval_policy = match allowed_approval_policies {
@@ -508,7 +530,10 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 })?;
                 ConstrainedWithSource::new(constrained, Some(requirement_source))
             }
-            None => ConstrainedWithSource::new(Constrained::allow_any_from_default(), None),
+            None => ConstrainedWithSource::new(
+                Constrained::allow_any_from_default(),
+                /*source*/ None,
+            ),
         };
 
         // TODO(gt): `ConfigRequirementsToml` should let the author specify the
@@ -559,7 +584,10 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 ConstrainedWithSource::new(constrained, Some(requirement_source))
             }
             None => {
-                ConstrainedWithSource::new(Constrained::allow_any(default_sandbox_policy), None)
+                ConstrainedWithSource::new(
+                    Constrained::allow_any(default_sandbox_policy),
+                    /*source*/ None,
+                )
             }
         };
         let exec_policy = match rules {
@@ -612,7 +640,10 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 })?;
                 ConstrainedWithSource::new(constrained, Some(requirement_source))
             }
-            None => ConstrainedWithSource::new(Constrained::allow_any(WebSearchMode::Cached), None),
+            None => ConstrainedWithSource::new(
+                Constrained::allow_any(WebSearchMode::Cached),
+                /*source*/ None,
+            ),
         };
         let feature_requirements =
             feature_requirements.filter(|requirements| !requirements.value.is_empty());
@@ -638,7 +669,10 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 })?;
                 ConstrainedWithSource::new(constrained, Some(requirement_source))
             }
-            None => ConstrainedWithSource::new(Constrained::allow_any(None), None),
+            None => ConstrainedWithSource::new(
+                Constrained::allow_any(/*initial_value*/ None),
+                /*source*/ None,
+            ),
         };
         let network = network.map(|sourced_network| {
             let Sourced { value, source } = sourced_network;
@@ -690,6 +724,7 @@ mod tests {
             rules,
             enforce_residency,
             network,
+            guardian_developer_instructions,
         } = toml;
         ConfigRequirementsWithSources {
             allowed_approval_policies: allowed_approval_policies
@@ -706,6 +741,8 @@ mod tests {
             enforce_residency: enforce_residency
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             network: network.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            guardian_developer_instructions: guardian_developer_instructions
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
         }
     }
 
@@ -728,6 +765,8 @@ mod tests {
         };
         let enforce_residency = ResidencyRequirement::Us;
         let enforce_source = source.clone();
+        let guardian_developer_instructions =
+            "Use the company-managed guardian policy.".to_string();
 
         // Intentionally constructed without `..Default::default()` so adding a new field to
         // `ConfigRequirementsToml` forces this test to be updated.
@@ -741,6 +780,7 @@ mod tests {
             rules: None,
             enforce_residency: Some(enforce_residency),
             network: None,
+            guardian_developer_instructions: Some(guardian_developer_instructions.clone()),
         };
 
         target.merge_unset_fields(source.clone(), other);
@@ -752,7 +792,7 @@ mod tests {
                     allowed_approval_policies,
                     source.clone()
                 )),
-                allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source)),
+                allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source.clone(),)),
                 allowed_web_search_modes: Some(Sourced::new(
                     allowed_web_search_modes,
                     enforce_source.clone(),
@@ -766,6 +806,10 @@ mod tests {
                 rules: None,
                 enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),
                 network: None,
+                guardian_developer_instructions: Some(Sourced::new(
+                    guardian_developer_instructions,
+                    source,
+                )),
             }
         );
     }
@@ -800,6 +844,7 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                guardian_developer_instructions: None,
             }
         );
         Ok(())
@@ -842,8 +887,75 @@ mod tests {
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                guardian_developer_instructions: None,
             }
         );
+        Ok(())
+    }
+
+    #[test]
+    fn merge_unset_fields_ignores_blank_guardian_override() {
+        let mut target = ConfigRequirementsWithSources::default();
+        target.merge_unset_fields(
+            RequirementSource::CloudRequirements,
+            ConfigRequirementsToml {
+                guardian_developer_instructions: Some("   \n\t".to_string()),
+                ..Default::default()
+            },
+        );
+        target.merge_unset_fields(
+            RequirementSource::SystemRequirementsToml {
+                file: system_requirements_toml_file_for_test()
+                    .expect("system requirements.toml path"),
+            },
+            ConfigRequirementsToml {
+                guardian_developer_instructions: Some(
+                    "Use the system guardian policy.".to_string(),
+                ),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            target.guardian_developer_instructions,
+            Some(Sourced::new(
+                "Use the system guardian policy.".to_string(),
+                RequirementSource::SystemRequirementsToml {
+                    file: system_requirements_toml_file_for_test()
+                        .expect("system requirements.toml path"),
+                },
+            )),
+        );
+    }
+
+    #[test]
+    fn deserialize_guardian_developer_instructions() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+guardian_developer_instructions = """
+Use the cloud-managed guardian policy.
+"""
+"#,
+        )?;
+
+        assert_eq!(
+            requirements.guardian_developer_instructions.as_deref(),
+            Some("Use the cloud-managed guardian policy.\n")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn blank_guardian_developer_instructions_is_empty() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+guardian_developer_instructions = """
+
+"""
+"#,
+        )?;
+
+        assert!(requirements.is_empty());
         Ok(())
     }
 

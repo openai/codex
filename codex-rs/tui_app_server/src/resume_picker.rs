@@ -322,10 +322,10 @@ fn spawn_rollout_page_loader(
                 PAGE_SIZE,
                 cursor,
                 request.sort_key,
-                INTERACTIVE_SESSION_SOURCES,
+                INTERACTIVE_SESSION_SOURCES.as_slice(),
                 default_provider.as_ref().map(std::slice::from_ref),
                 default_provider.as_deref().unwrap_or_default(),
-                None,
+                /*search_term*/ None,
             )
             .await
             .map(picker_page_from_rollout_page);
@@ -603,7 +603,11 @@ impl PickerState {
                         Some(thread_id) => Some(thread_id),
                         None => match path.as_ref() {
                             Some(path) => {
-                                crate::resolve_session_thread_id(path.as_path(), None).await
+                                crate::resolve_session_thread_id(
+                                    path.as_path(),
+                                    /*id_str_if_uuid*/ None,
+                                )
+                                .await
                             }
                             None => None,
                         },
@@ -1518,14 +1522,14 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
         let created = format_created_label(row);
         let updated = format_updated_label(row);
         let branch_raw = row.git_branch.clone().unwrap_or_default();
-        let branch = right_elide(&branch_raw, 24);
+        let branch = right_elide(&branch_raw, /*max*/ 24);
         let cwd = if include_cwd {
             let cwd_raw = row
                 .cwd
                 .as_ref()
                 .map(|p| display_path_for(p, std::path::Path::new("/")))
                 .unwrap_or_default();
-            right_elide(&cwd_raw, 24)
+            right_elide(&cwd_raw, /*max*/ 24)
         } else {
             String::new()
         };

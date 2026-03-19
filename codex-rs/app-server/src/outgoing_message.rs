@@ -75,6 +75,10 @@ impl RequestContext {
     pub(crate) fn span(&self) -> Span {
         self.span.clone()
     }
+
+    fn record_turn_id(&self, turn_id: &str) {
+        self.span.record("turn.id", turn_id);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -217,6 +221,17 @@ impl OutgoingMessageSender {
             .and_then(RequestContext::request_trace)
     }
 
+    pub(crate) async fn record_request_turn_id(
+        &self,
+        request_id: &ConnectionRequestId,
+        turn_id: &str,
+    ) {
+        let request_contexts = self.request_contexts.lock().await;
+        if let Some(request_context) = request_contexts.get(request_id) {
+            request_context.record_turn_id(turn_id);
+        }
+    }
+
     async fn take_request_context(
         &self,
         request_id: &ConnectionRequestId,
@@ -234,7 +249,10 @@ impl OutgoingMessageSender {
         &self,
         request: ServerRequestPayload,
     ) -> (RequestId, oneshot::Receiver<ClientRequestResult>) {
-        self.send_request_to_connections(None, request, None).await
+        self.send_request_to_connections(
+            /*connection_ids*/ None, request, /*thread_id*/ None,
+        )
+        .await
     }
 
     fn next_request_id(&self) -> RequestId {

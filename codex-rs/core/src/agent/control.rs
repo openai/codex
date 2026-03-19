@@ -3,8 +3,11 @@ use crate::agent::guards::Guards;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
+use crate::codex_thread::ThreadConfigSnapshot;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::features::Feature;
+use crate::find_archived_thread_path_by_id_str;
 use crate::find_thread_path_by_id_str;
 use crate::rollout::RolloutRecorder;
 use crate::session_prefix::format_subagent_context_line;
@@ -22,9 +25,13 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
+use codex_state::DirectionalThreadSpawnEdgeStatus;
+use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::watch;
+use tracing::warn;
 
 const AGENT_NAMES: &str = include_str!("agent_names.txt");
 const FORKED_SPAWN_AGENT_OUTPUT_MESSAGE: &str = "You are the newly spawned agent. The prior conversation history was forked from your parent agent. Treat the next user message as your new task, and use the forked history only as background context.";
@@ -106,6 +113,9 @@ impl AgentControl {
         let inherited_shell_snapshot = self
             .inherited_shell_snapshot_for_source(&state, session_source.as_ref())
             .await;
+        let inherited_exec_policy = self
+            .inherited_exec_policy_for_source(&state, session_source.as_ref(), &config)
+            .await;
         let session_source = match session_source {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -165,7 +175,7 @@ impl AgentControl {
                                 "parent thread rollout unavailable for fork: {parent_thread_id}"
                             ))
                         })?;
-                    let mut forked_rollout_items =
+                    let mut forked_rollout_items: Vec<RolloutItem> =
                         RolloutRecorder::get_rollout_history(&rollout_path)
                             .await?
                             .get_rollout_items();
@@ -186,8 +196,9 @@ impl AgentControl {
                             initial_history,
                             self.clone(),
                             session_source,
-                            false,
+                            /*persist_extended_history*/ false,
                             inherited_shell_snapshot,
+                            inherited_exec_policy,
                         )
                         .await?
                 } else {
@@ -196,9 +207,10 @@ impl AgentControl {
                             config,
                             self.clone(),
                             session_source,
-                            false,
-                            None,
+                            /*persist_extended_history*/ false,
+                            /*metrics_service_name*/ None,
                             inherited_shell_snapshot,
+                            inherited_exec_policy,
                         )
                         .await?
                 }
@@ -211,6 +223,13 @@ impl AgentControl {
         // to subscribe or drain this newly created thread.
         // TODO(jif) add helper for drain
         state.notify_thread_created(new_thread.thread_id);
+
+        self.persist_thread_spawn_edge_for_source(
+            new_thread.thread.as_ref(),
+            new_thread.thread_id,
+            notification_source.as_ref(),
+        )
+        .await;
 
         self.send_input(new_thread.thread_id, items).await?;
         self.maybe_start_completion_watcher(new_thread.thread_id, notification_source);
@@ -225,6 +244,84 @@ impl AgentControl {
         thread_id: ThreadId,
         session_source: SessionSource,
     ) -> CodexResult<ThreadId> {
+        let root_depth = thread_spawn_depth(&session_source).unwrap_or(0);
+        let resumed_thread_id = self
+            .resume_single_agent_from_rollout(config.clone(), thread_id, session_source)
+            .await?;
+        let state = self.upgrade()?;
+        let Ok(resumed_thread) = state.get_thread(resumed_thread_id).await else {
+            return Ok(resumed_thread_id);
+        };
+        let Some(state_db_ctx) = resumed_thread.state_db() else {
+            return Ok(resumed_thread_id);
+        };
+
+        let mut resume_queue = VecDeque::from([(thread_id, root_depth)]);
+        while let Some((parent_thread_id, parent_depth)) = resume_queue.pop_front() {
+            let child_ids = match state_db_ctx
+                .list_thread_spawn_children_with_status(
+                    parent_thread_id,
+                    DirectionalThreadSpawnEdgeStatus::Open,
+                )
+                .await
+            {
+                Ok(child_ids) => child_ids,
+                Err(err) => {
+                    warn!(
+                        "failed to load persisted thread-spawn children for {parent_thread_id}: {err}"
+                    );
+                    continue;
+                }
+            };
+
+            for child_thread_id in child_ids {
+                let child_depth = parent_depth + 1;
+                let child_resumed = if state.get_thread(child_thread_id).await.is_ok() {
+                    true
+                } else {
+                    let child_session_source =
+                        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                            parent_thread_id,
+                            depth: child_depth,
+                            agent_nickname: None,
+                            agent_role: None,
+                        });
+                    match self
+                        .resume_single_agent_from_rollout(
+                            config.clone(),
+                            child_thread_id,
+                            child_session_source,
+                        )
+                        .await
+                    {
+                        Ok(_) => true,
+                        Err(err) => {
+                            warn!("failed to resume descendant thread {child_thread_id}: {err}");
+                            false
+                        }
+                    }
+                };
+                if child_resumed {
+                    resume_queue.push_back((child_thread_id, child_depth));
+                }
+            }
+        }
+
+        Ok(resumed_thread_id)
+    }
+
+    async fn resume_single_agent_from_rollout(
+        &self,
+        mut config: crate::config::Config,
+        thread_id: ThreadId,
+        session_source: SessionSource,
+    ) -> CodexResult<ThreadId> {
+        if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = &session_source
+            && *depth >= config.agent_max_depth
+        {
+            let _ = config.features.disable(Feature::SpawnCsv);
+            let _ = config.features.disable(Feature::Collab);
+        }
         let state = self.upgrade()?;
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
         let session_source = match session_source {
@@ -270,10 +367,21 @@ impl AgentControl {
         let inherited_shell_snapshot = self
             .inherited_shell_snapshot_for_source(&state, Some(&session_source))
             .await;
+        let inherited_exec_policy = self
+            .inherited_exec_policy_for_source(&state, Some(&session_source), &config)
+            .await;
         let rollout_path =
-            find_thread_path_by_id_str(config.codex_home.as_path(), &thread_id.to_string())
+            match find_thread_path_by_id_str(config.codex_home.as_path(), &thread_id.to_string())
                 .await?
-                .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))?;
+            {
+                Some(rollout_path) => rollout_path,
+                None => find_archived_thread_path_by_id_str(
+                    config.codex_home.as_path(),
+                    &thread_id.to_string(),
+                )
+                .await?
+                .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))?,
+            };
 
         let resumed_thread = state
             .resume_thread_from_rollout_with_source(
@@ -282,13 +390,23 @@ impl AgentControl {
                 self.clone(),
                 session_source,
                 inherited_shell_snapshot,
+                inherited_exec_policy,
             )
             .await?;
         reservation.commit(resumed_thread.thread_id);
         // Resumed threads are re-registered in-memory and need the same listener
         // attachment path as freshly spawned threads.
         state.notify_thread_created(resumed_thread.thread_id);
-        self.maybe_start_completion_watcher(resumed_thread.thread_id, Some(notification_source));
+        self.maybe_start_completion_watcher(
+            resumed_thread.thread_id,
+            Some(notification_source.clone()),
+        );
+        self.persist_thread_spawn_edge_for_source(
+            resumed_thread.thread.as_ref(),
+            resumed_thread.thread_id,
+            Some(&notification_source),
+        )
+        .await;
 
         Ok(resumed_thread.thread_id)
     }
@@ -322,12 +440,51 @@ impl AgentControl {
         state.send_op(agent_id, Op::Interrupt).await
     }
 
-    /// Submit a shutdown request to an existing agent thread.
-    pub(crate) async fn shutdown_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
+    /// Submit a shutdown request for a live agent without marking it explicitly closed in
+    /// persisted spawn-edge state.
+    pub(crate) async fn shutdown_live_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
-        let result = state.send_op(agent_id, Op::Shutdown {}).await;
+        let result = if let Ok(thread) = state.get_thread(agent_id).await {
+            thread.codex.session.ensure_rollout_materialized().await;
+            thread.codex.session.flush_rollout().await;
+            if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
+                Ok(String::new())
+            } else {
+                state.send_op(agent_id, Op::Shutdown {}).await
+            }
+        } else {
+            state.send_op(agent_id, Op::Shutdown {}).await
+        };
         let _ = state.remove_thread(&agent_id).await;
         self.state.release_spawned_thread(agent_id);
+        result
+    }
+
+    /// Mark `agent_id` as explicitly closed in persisted spawn-edge state, then shut down the
+    /// agent and any live descendants reached from the in-memory tree.
+    pub(crate) async fn close_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
+        let state = self.upgrade()?;
+        if let Ok(thread) = state.get_thread(agent_id).await
+            && let Some(state_db_ctx) = thread.state_db()
+            && let Err(err) = state_db_ctx
+                .set_thread_spawn_edge_status(agent_id, DirectionalThreadSpawnEdgeStatus::Closed)
+                .await
+        {
+            warn!("failed to persist thread-spawn edge status for {agent_id}: {err}");
+        }
+        self.shutdown_agent_tree(agent_id).await
+    }
+
+    /// Shut down `agent_id` and any live descendants reachable from the in-memory spawn tree.
+    async fn shutdown_agent_tree(&self, agent_id: ThreadId) -> CodexResult<String> {
+        let descendant_ids = self.live_thread_spawn_descendants(agent_id).await?;
+        let result = self.shutdown_live_agent(agent_id).await;
+        for descendant_id in descendant_ids {
+            match self.shutdown_live_agent(descendant_id).await {
+                Ok(_) | Err(CodexErr::ThreadNotFound(_)) | Err(CodexErr::InternalAgentDied) => {}
+                Err(err) => return Err(err),
+            }
+        }
         result
     }
 
@@ -360,6 +517,19 @@ impl AgentControl {
         ))
     }
 
+    pub(crate) async fn get_agent_config_snapshot(
+        &self,
+        agent_id: ThreadId,
+    ) -> Option<ThreadConfigSnapshot> {
+        let Ok(state) = self.upgrade() else {
+            return None;
+        };
+        let Ok(thread) = state.get_thread(agent_id).await else {
+            return None;
+        };
+        Some(thread.config_snapshot().await)
+    }
+
     /// Subscribe to status updates for `agent_id`, yielding the latest value and changes.
     pub(crate) async fn subscribe_status(
         &self,
@@ -384,34 +554,17 @@ impl AgentControl {
         &self,
         parent_thread_id: ThreadId,
     ) -> String {
-        let Ok(state) = self.upgrade() else {
+        let Ok(agents) = self.open_thread_spawn_children(parent_thread_id).await else {
             return String::new();
         };
 
-        let mut agents = Vec::new();
-        for thread_id in state.list_thread_ids().await {
-            let Ok(thread) = state.get_thread(thread_id).await else {
-                continue;
-            };
-            let snapshot = thread.config_snapshot().await;
-            let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: agent_parent_thread_id,
-                agent_nickname,
-                ..
-            }) = snapshot.session_source
-            else {
-                continue;
-            };
-            if agent_parent_thread_id != parent_thread_id {
-                continue;
-            }
-            agents.push(format_subagent_context_line(
-                &thread_id.to_string(),
-                agent_nickname.as_deref(),
-            ));
-        }
-        agents.sort();
-        agents.join("\n")
+        agents
+            .into_iter()
+            .map(|(thread_id, nickname)| {
+                format_subagent_context_line(&thread_id.to_string(), nickname.as_deref())
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// Starts a detached watcher for sub-agents spawned from another thread.
@@ -484,6 +637,134 @@ impl AgentControl {
 
         let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
         parent_thread.codex.session.user_shell().shell_snapshot()
+    }
+
+    async fn inherited_exec_policy_for_source(
+        &self,
+        state: &Arc<ThreadManagerState>,
+        session_source: Option<&SessionSource>,
+        child_config: &crate::config::Config,
+    ) -> Option<Arc<crate::exec_policy::ExecPolicyManager>> {
+        let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        })) = session_source
+        else {
+            return None;
+        };
+
+        let parent_thread = state.get_thread(*parent_thread_id).await.ok()?;
+        let parent_config = parent_thread.codex.session.get_config().await;
+        if !crate::exec_policy::child_uses_parent_exec_policy(&parent_config, child_config) {
+            return None;
+        }
+
+        Some(Arc::clone(
+            &parent_thread.codex.session.services.exec_policy,
+        ))
+    }
+
+    async fn open_thread_spawn_children(
+        &self,
+        parent_thread_id: ThreadId,
+    ) -> CodexResult<Vec<(ThreadId, Option<String>)>> {
+        let mut children_by_parent = self.live_thread_spawn_children().await?;
+        Ok(children_by_parent
+            .remove(&parent_thread_id)
+            .unwrap_or_default())
+    }
+
+    async fn live_thread_spawn_children(
+        &self,
+    ) -> CodexResult<HashMap<ThreadId, Vec<(ThreadId, Option<String>)>>> {
+        let state = self.upgrade()?;
+        let mut children_by_parent = HashMap::<ThreadId, Vec<(ThreadId, Option<String>)>>::new();
+
+        for thread_id in state.list_thread_ids().await {
+            let Ok(thread) = state.get_thread(thread_id).await else {
+                continue;
+            };
+            let snapshot = thread.config_snapshot().await;
+            let Some(parent_thread_id) = thread_spawn_parent_thread_id(&snapshot.session_source)
+            else {
+                continue;
+            };
+            children_by_parent
+                .entry(parent_thread_id)
+                .or_default()
+                .push((thread_id, snapshot.session_source.get_nickname()));
+        }
+
+        for children in children_by_parent.values_mut() {
+            children.sort_by(|left, right| left.0.to_string().cmp(&right.0.to_string()));
+        }
+
+        Ok(children_by_parent)
+    }
+
+    async fn persist_thread_spawn_edge_for_source(
+        &self,
+        thread: &crate::CodexThread,
+        child_thread_id: ThreadId,
+        session_source: Option<&SessionSource>,
+    ) {
+        let Some(parent_thread_id) = session_source.and_then(thread_spawn_parent_thread_id) else {
+            return;
+        };
+        let Some(state_db_ctx) = thread.state_db() else {
+            return;
+        };
+        if let Err(err) = state_db_ctx
+            .upsert_thread_spawn_edge(
+                parent_thread_id,
+                child_thread_id,
+                DirectionalThreadSpawnEdgeStatus::Open,
+            )
+            .await
+        {
+            warn!("failed to persist thread-spawn edge: {err}");
+        }
+    }
+
+    async fn live_thread_spawn_descendants(
+        &self,
+        root_thread_id: ThreadId,
+    ) -> CodexResult<Vec<ThreadId>> {
+        let mut children_by_parent = self.live_thread_spawn_children().await?;
+        let mut descendants = Vec::new();
+        let mut stack = children_by_parent
+            .remove(&root_thread_id)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(child_thread_id, _)| child_thread_id)
+            .rev()
+            .collect::<Vec<_>>();
+
+        while let Some(thread_id) = stack.pop() {
+            descendants.push(thread_id);
+            if let Some(children) = children_by_parent.remove(&thread_id) {
+                for (child_thread_id, _) in children.into_iter().rev() {
+                    stack.push(child_thread_id);
+                }
+            }
+        }
+
+        Ok(descendants)
+    }
+}
+
+fn thread_spawn_parent_thread_id(session_source: &SessionSource) -> Option<ThreadId> {
+    match session_source {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        }) => Some(*parent_thread_id),
+        _ => None,
+    }
+}
+
+fn thread_spawn_depth(session_source: &SessionSource) -> Option<i32> {
+    match session_source {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) => Some(*depth),
+        _ => None,
     }
 }
 #[cfg(test)]

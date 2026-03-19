@@ -41,7 +41,7 @@ pub(crate) async fn emit_metric_for_tool_read(invocation: &ToolInvocation, succe
     for kind in kinds {
         invocation.turn.session_telemetry.counter(
             MEMORIES_USAGE_METRIC,
-            1,
+            /*inc*/ 1,
             &[
                 ("kind", kind.as_tag()),
                 ("tool", invocation.tool_name.as_str()),

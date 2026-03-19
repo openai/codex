@@ -21,12 +21,13 @@ pub mod responses;
 pub mod streaming_sse;
 pub mod test_codex;
 pub mod test_codex_exec;
+pub mod tracing;
 pub mod zsh_fork;
 
 #[ctor]
 fn enable_deterministic_unified_exec_process_ids_for_tests() {
-    codex_core::test_support::set_thread_manager_test_mode(true);
-    codex_core::test_support::set_deterministic_process_ids(true);
+    codex_core::test_support::set_thread_manager_test_mode(/*enabled*/ true);
+    codex_core::test_support::set_deterministic_process_ids(/*enabled*/ true);
 }
 
 #[ctor]
@@ -79,7 +80,7 @@ pub fn test_path_buf_with_windows(unix_path: &str, windows_path: Option<&str>) -
 }
 
 pub fn test_path_buf(unix_path: &str) -> PathBuf {
-    test_path_buf_with_windows(unix_path, None)
+    test_path_buf_with_windows(unix_path, /*windows_path*/ None)
 }
 
 pub fn test_absolute_path_with_windows(
@@ -91,7 +92,7 @@ pub fn test_absolute_path_with_windows(
 }
 
 pub fn test_absolute_path(unix_path: &str) -> AbsolutePathBuf {
-    test_absolute_path_with_windows(unix_path, None)
+    test_absolute_path_with_windows(unix_path, /*windows_path*/ None)
 }
 
 pub fn test_tmp_path() -> AbsolutePathBuf {
@@ -287,7 +288,7 @@ pub fn requires_remote_env() -> Option<RemoteEnvConfig> {
 }
 
 pub fn format_with_current_shell(command: &str) -> Vec<String> {
-    codex_core::shell::default_user_shell().derive_exec_args(command, true)
+    codex_core::shell::default_user_shell().derive_exec_args(command, /*use_login_shell*/ true)
 }
 
 pub fn format_with_current_shell_display(command: &str) -> String {
@@ -296,7 +297,8 @@ pub fn format_with_current_shell_display(command: &str) -> String {
 }
 
 pub fn format_with_current_shell_non_login(command: &str) -> Vec<String> {
-    codex_core::shell::default_user_shell().derive_exec_args(command, false)
+    codex_core::shell::default_user_shell()
+        .derive_exec_args(command, /*use_login_shell*/ false)
 }
 
 pub fn format_with_current_shell_display_non_login(command: &str) -> String {

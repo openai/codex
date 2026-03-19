@@ -289,7 +289,6 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         visibility: ModelVisibility::List,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
-        prefer_websockets: false,
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         priority: 1,
@@ -533,7 +532,6 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         visibility: ModelVisibility::List,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
-        prefer_websockets: false,
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         priority: 1,
@@ -685,6 +683,8 @@ async fn remote_models_do_not_append_removed_builtin_presets() -> Result<()> {
         1,
         "expected a single /models request"
     );
+    // Keep the mock server alive until after async assertions complete.
+    drop(server);
 
     Ok(())
 }
@@ -1001,7 +1001,6 @@ fn test_remote_model_with_policy(
         visibility,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
-        prefer_websockets: false,
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         priority,

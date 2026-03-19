@@ -34,6 +34,7 @@ codex-async-utils = { workspace = true }
 codex-client = { workspace = true }
 codex-connectors = { workspace = true }
 codex-config = { workspace = true }
+codex-exec-server = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-skills = { workspace = true }
 codex-execpolicy = { workspace = true }
@@ -47,6 +48,7 @@ codex-artifacts = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-state = { workspace = true }
+codex-terminal-detection = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-cache = { workspace = true }
 codex-utils-image = { workspace = true }

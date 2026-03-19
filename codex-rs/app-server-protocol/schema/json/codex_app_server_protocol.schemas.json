@@ -506,6 +506,30 @@
             },
             "method": {
               "enum": [
+                "thread/shellCommand"
+              ],
+              "title": "Thread/shellCommandRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadShellCommandParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/shellCommandRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/rollback"
               ],
               "title": "Thread/rollbackRequestMethod",
@@ -665,54 +689,6 @@
             "params"
           ],
           "title": "Plugin/readRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
-                "skills/remote/list"
-              ],
-              "title": "Skills/remote/listRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/SkillsRemoteReadParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Skills/remote/listRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/v2/RequestId"
-            },
-            "method": {
-              "enum": [
-                "skills/remote/export"
-              ],
-              "title": "Skills/remote/exportRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/v2/SkillsRemoteWriteParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "Skills/remote/exportRequest",
           "type": "object"
         },
         {
@@ -2082,6 +2058,13 @@
       "title": "FileChangeRequestApprovalResponse",
       "type": "object"
     },
+    "FuzzyFileSearchMatchType": {
+      "enum": [
+        "file",
+        "directory"
+      ],
+      "type": "string"
+    },
     "FuzzyFileSearchParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -2141,6 +2124,9 @@
             "null"
           ]
         },
+        "match_type": {
+          "$ref": "#/definitions/FuzzyFileSearchMatchType"
+        },
         "path": {
           "type": "string"
         },
@@ -2155,6 +2141,7 @@
       },
       "required": [
         "file_name",
+        "match_type",
         "path",
         "root",
         "score"
@@ -3990,6 +3977,26 @@
           "properties": {
             "method": {
               "enum": [
+                "mcpServer/startupStatus/updated"
+              ],
+              "title": "McpServer/startupStatus/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/McpServerStatusUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "McpServer/startupStatus/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "account/updated"
               ],
               "title": "Account/updatedNotificationMethod",
@@ -5245,11 +5252,15 @@
           },
           "name": {
             "type": "string"
+          },
+          "needsAuth": {
+            "type": "boolean"
           }
         },
         "required": [
           "id",
-          "name"
+          "name",
+          "needsAuth"
         ],
         "type": "object"
       },
@@ -6157,6 +6168,15 @@
         ],
         "title": "CommandExecutionOutputDeltaNotification",
         "type": "object"
+      },
+      "CommandExecutionSource": {
+        "enum": [
+          "agent",
+          "userShell",
+          "unifiedExecStartup",
+          "unifiedExecInteraction"
+        ],
+        "type": "string"
       },
       "CommandExecutionStatus": {
         "enum": [
@@ -7731,24 +7751,6 @@
           }
         ]
       },
-      "FunctionCallOutputPayload": {
-        "description": "The payload we send back to OpenAI when reporting a tool call result.\n\n`body` serializes directly as the wire value for `function_call_output.output`. `success` remains internal metadata for downstream handling.",
-        "properties": {
-          "body": {
-            "$ref": "#/definitions/v2/FunctionCallOutputBody"
-          },
-          "success": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "body"
-        ],
-        "type": "object"
-      },
       "GetAccountParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -7922,15 +7924,6 @@
         ],
         "type": "string"
       },
-      "HazelnutScope": {
-        "enum": [
-          "example",
-          "workspace-shared",
-          "all-shared",
-          "personal"
-        ],
-        "type": "string"
-      },
       "HookCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -7957,6 +7950,7 @@
       "HookEventName": {
         "enum": [
           "sessionStart",
+          "userPromptSubmit",
           "stop"
         ],
         "type": "string"
@@ -8000,6 +7994,21 @@
           "error"
         ],
         "type": "string"
+      },
+      "HookPromptFragment": {
+        "properties": {
+          "hookRunId": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "hookRunId",
+          "text"
+        ],
+        "type": "object"
       },
       "HookRunStatus": {
         "enum": [
@@ -8491,6 +8500,17 @@
         "title": "LogoutAccountResponse",
         "type": "object"
       },
+      "MarketplaceInterface": {
+        "properties": {
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "McpAuthStatus": {
         "enum": [
           "unsupported",
@@ -8570,6 +8590,15 @@
         "title": "McpServerRefreshResponse",
         "type": "object"
       },
+      "McpServerStartupState": {
+        "enum": [
+          "starting",
+          "ready",
+          "failed",
+          "cancelled"
+        ],
+        "type": "string"
+      },
       "McpServerStatus": {
         "properties": {
           "authStatus": {
@@ -8604,6 +8633,29 @@
           "resources",
           "tools"
         ],
+        "type": "object"
+      },
+      "McpServerStatusUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/definitions/v2/McpServerStartupState"
+          }
+        },
+        "required": [
+          "name",
+          "status"
+        ],
+        "title": "McpServerStatusUpdatedNotification",
         "type": "object"
       },
       "McpToolCallError": {
@@ -8662,6 +8714,54 @@
           "failed"
         ],
         "type": "string"
+      },
+      "MemoryCitation": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/definitions/v2/MemoryCitationEntry"
+            },
+            "type": "array"
+          },
+          "threadIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "entries",
+          "threadIds"
+        ],
+        "type": "object"
+      },
+      "MemoryCitationEntry": {
+        "properties": {
+          "lineEnd": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "lineStart": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "note": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "lineEnd",
+          "lineStart",
+          "note",
+          "path"
+        ],
+        "type": "object"
       },
       "MergeStrategy": {
         "enum": [
@@ -9180,6 +9280,10 @@
       "PluginInstallParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "forceRemoteSync": {
+            "description": "When true, apply the remote plugin change before the local install flow.",
+            "type": "boolean"
+          },
           "marketplacePath": {
             "$ref": "#/definitions/v2/AbsolutePathBuf"
           },
@@ -9351,6 +9455,13 @@
       "PluginListResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "featuredPluginIds": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "marketplaces": {
             "items": {
               "$ref": "#/definitions/v2/PluginMarketplaceEntry"
@@ -9372,6 +9483,16 @@
       },
       "PluginMarketplaceEntry": {
         "properties": {
+          "interface": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/MarketplaceInterface"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "name": {
             "type": "string"
           },
@@ -9494,6 +9615,10 @@
       "PluginUninstallParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "forceRemoteSync": {
+            "description": "When true, apply the remote plugin change before the local uninstall flow.",
+            "type": "boolean"
+          },
           "pluginId": {
             "type": "string"
           }
@@ -9508,15 +9633,6 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "PluginUninstallResponse",
         "type": "object"
-      },
-      "ProductSurface": {
-        "enum": [
-          "chatgpt",
-          "codex",
-          "api",
-          "atlas"
-        ],
-        "type": "string"
       },
       "ProfileV2": {
         "additionalProperties": true,
@@ -9774,6 +9890,13 @@
           }
         ]
       },
+      "RealtimeConversationVersion": {
+        "enum": [
+          "v1",
+          "v2"
+        ],
+        "type": "string"
+      },
       "ReasoningEffort": {
         "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
         "enum": [
@@ -9975,25 +10098,6 @@
         "title": "ReasoningTextDeltaNotification",
         "type": "object"
       },
-      "RemoteSkillSummary": {
-        "properties": {
-          "description": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "description",
-          "id",
-          "name"
-        ],
-        "type": "object"
-      },
       "RequestId": {
         "anyOf": [
           {
@@ -10166,10 +10270,6 @@
                   "null"
                 ]
               },
-              "id": {
-                "type": "string",
-                "writeOnly": true
-              },
               "summary": {
                 "items": {
                   "$ref": "#/definitions/v2/ReasoningItemReasoningSummary"
@@ -10185,7 +10285,6 @@
               }
             },
             "required": [
-              "id",
               "summary",
               "type"
             ],
@@ -10319,7 +10418,7 @@
                 "type": "string"
               },
               "output": {
-                "$ref": "#/definitions/v2/FunctionCallOutputPayload"
+                "$ref": "#/definitions/v2/FunctionCallOutputBody"
               },
               "type": {
                 "enum": [
@@ -10383,8 +10482,14 @@
               "call_id": {
                 "type": "string"
               },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "output": {
-                "$ref": "#/definitions/v2/FunctionCallOutputPayload"
+                "$ref": "#/definitions/v2/FunctionCallOutputBody"
               },
               "type": {
                 "enum": [
@@ -11004,6 +11109,19 @@
           {
             "additionalProperties": false,
             "properties": {
+              "custom": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "custom"
+            ],
+            "title": "CustomSessionSource",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
               "subAgent": {
                 "$ref": "#/definitions/v2/SubAgentSource"
               }
@@ -11373,79 +11491,6 @@
           "data"
         ],
         "title": "SkillsListResponse",
-        "type": "object"
-      },
-      "SkillsRemoteReadParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "enabled": {
-            "default": false,
-            "type": "boolean"
-          },
-          "hazelnutScope": {
-            "allOf": [
-              {
-                "$ref": "#/definitions/v2/HazelnutScope"
-              }
-            ],
-            "default": "example"
-          },
-          "productSurface": {
-            "allOf": [
-              {
-                "$ref": "#/definitions/v2/ProductSurface"
-              }
-            ],
-            "default": "codex"
-          }
-        },
-        "title": "SkillsRemoteReadParams",
-        "type": "object"
-      },
-      "SkillsRemoteReadResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "data": {
-            "items": {
-              "$ref": "#/definitions/v2/RemoteSkillSummary"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "data"
-        ],
-        "title": "SkillsRemoteReadResponse",
-        "type": "object"
-      },
-      "SkillsRemoteWriteParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "hazelnutId": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "hazelnutId"
-        ],
-        "title": "SkillsRemoteWriteParams",
-        "type": "object"
-      },
-      "SkillsRemoteWriteResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "path"
-        ],
-        "title": "SkillsRemoteWriteResponse",
         "type": "object"
       },
       "SubAgentSource": {
@@ -11982,8 +12027,46 @@
           },
           {
             "properties": {
+              "fragments": {
+                "items": {
+                  "$ref": "#/definitions/v2/HookPromptFragment"
+                },
+                "type": "array"
+              },
               "id": {
                 "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "hookPrompt"
+                ],
+                "title": "HookPromptThreadItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "fragments",
+              "id",
+              "type"
+            ],
+            "title": "HookPromptThreadItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "memoryCitation": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/MemoryCitation"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
               },
               "phase": {
                 "anyOf": [
@@ -12123,6 +12206,14 @@
                   "string",
                   "null"
                 ]
+              },
+              "source": {
+                "allOf": [
+                  {
+                    "$ref": "#/definitions/v2/CommandExecutionSource"
+                  }
+                ],
+                "default": "agent"
               },
               "status": {
                 "$ref": "#/definitions/v2/CommandExecutionStatus"
@@ -12803,6 +12894,12 @@
           "data": {
             "type": "string"
           },
+          "itemId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "numChannels": {
             "format": "uint16",
             "minimum": 0.0,
@@ -12913,10 +13010,14 @@
           },
           "threadId": {
             "type": "string"
+          },
+          "version": {
+            "$ref": "#/definitions/v2/RealtimeConversationVersion"
           }
         },
         "required": [
-          "threadId"
+          "threadId",
+          "version"
         ],
         "title": "ThreadRealtimeStartedNotification",
         "type": "object"
@@ -13151,6 +13252,29 @@
       "ThreadSetNameResponse": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "ThreadSetNameResponse",
+        "type": "object"
+      },
+      "ThreadShellCommandParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "command": {
+            "description": "Shell command string evaluated by the thread's configured shell. Unlike `command/exec`, this intentionally preserves shell syntax such as pipes, redirects, and quoting. This runs unsandboxed with full access rather than inheriting the thread sandbox policy.",
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "command",
+          "threadId"
+        ],
+        "title": "ThreadShellCommandParams",
+        "type": "object"
+      },
+      "ThreadShellCommandResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadShellCommandResponse",
         "type": "object"
       },
       "ThreadSortKey": {

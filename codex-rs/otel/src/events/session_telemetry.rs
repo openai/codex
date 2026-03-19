@@ -9,6 +9,7 @@ use crate::metrics::MetricsError;
 use crate::metrics::Result as MetricsResult;
 use crate::metrics::names::API_CALL_COUNT_METRIC;
 use crate::metrics::names::API_CALL_DURATION_METRIC;
+use crate::metrics::names::PROFILE_USAGE_METRIC;
 use crate::metrics::names::RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC;
 use crate::metrics::names::RESPONSES_API_ENGINE_IAPI_TTFT_DURATION_METRIC;
 use crate::metrics::names::RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC;
@@ -62,10 +63,21 @@ const RESPONSES_API_ENGINE_SERVICE_TTFT_FIELD: &str = "engine_service_ttft_total
 const RESPONSES_API_ENGINE_IAPI_TBT_FIELD: &str = "engine_iapi_tbt_across_engine_calls_ms";
 const RESPONSES_API_ENGINE_SERVICE_TBT_FIELD: &str = "engine_service_tbt_across_engine_calls_ms";
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AuthEnvTelemetryMetadata {
+    pub openai_api_key_env_present: bool,
+    pub codex_api_key_env_present: bool,
+    pub codex_api_key_env_enabled: bool,
+    pub provider_env_key_name: Option<String>,
+    pub provider_env_key_present: Option<bool>,
+    pub refresh_token_url_override_present: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionTelemetryMetadata {
     pub(crate) conversation_id: ThreadId,
     pub(crate) auth_mode: Option<String>,
+    pub(crate) auth_env: AuthEnvTelemetryMetadata,
     pub(crate) account_id: Option<String>,
     pub(crate) account_email: Option<String>,
     pub(crate) originator: String,
@@ -86,6 +98,11 @@ pub struct SessionTelemetry {
 }
 
 impl SessionTelemetry {
+    pub fn with_auth_env(mut self, auth_env: AuthEnvTelemetryMetadata) -> Self {
+        self.metadata.auth_env = auth_env;
+        self
+    }
+
     pub fn with_model(mut self, model: &str, slug: &str) -> Self {
         self.metadata.model = model.to_owned();
         self.metadata.slug = slug.to_owned();
@@ -255,6 +272,7 @@ impl SessionTelemetry {
             metadata: SessionTelemetryMetadata {
                 conversation_id,
                 auth_mode: auth_mode.map(|m| m.to_string()),
+                auth_env: AuthEnvTelemetryMetadata::default(),
                 account_id,
                 account_email,
                 originator: sanitize_metric_tag_value(originator.as_str()),
@@ -304,11 +322,20 @@ impl SessionTelemetry {
         mcp_servers: Vec<&str>,
         active_profile: Option<String>,
     ) {
+        if active_profile.is_some() {
+            self.counter(PROFILE_USAGE_METRIC, /*inc*/ 1, &[]);
+        }
         log_and_trace_event!(
             self,
             common: {
                 event.name = "codex.conversation_starts",
                 provider_name = %provider_name,
+                auth.env_openai_api_key_present = self.metadata.auth_env.openai_api_key_env_present,
+                auth.env_codex_api_key_present = self.metadata.auth_env.codex_api_key_env_present,
+                auth.env_codex_api_key_enabled = self.metadata.auth_env.codex_api_key_env_enabled,
+                auth.env_provider_key_name = self.metadata.auth_env.provider_env_key_name.as_deref(),
+                auth.env_provider_key_present = self.metadata.auth_env.provider_env_key_present,
+                auth.env_refresh_token_url_override_present = self.metadata.auth_env.refresh_token_url_override_present,
                 reasoning_effort = reasoning_effort.map(|e| e.to_string()),
                 reasoning_summary = %reasoning_summary,
                 context_window = context_window,
@@ -345,16 +372,16 @@ impl SessionTelemetry {
             status,
             error.as_deref(),
             duration,
-            false,
-            None,
-            false,
-            None,
-            None,
+            /*auth_header_attached*/ false,
+            /*auth_header_name*/ None,
+            /*retry_after_unauthorized*/ false,
+            /*recovery_mode*/ None,
+            /*recovery_phase*/ None,
             "unknown",
-            None,
-            None,
-            None,
-            None,
+            /*request_id*/ None,
+            /*cf_ray*/ None,
+            /*auth_error*/ None,
+            /*auth_error_code*/ None,
         );
 
         response
@@ -385,7 +412,7 @@ impl SessionTelemetry {
             .unwrap_or_else(|| "none".to_string());
         self.counter(
             API_CALL_COUNT_METRIC,
-            1,
+            /*inc*/ 1,
             &[("status", status_str.as_str()), ("success", success_str)],
         );
         self.record_duration(
@@ -407,6 +434,12 @@ impl SessionTelemetry {
                 auth.recovery_mode = recovery_mode,
                 auth.recovery_phase = recovery_phase,
                 endpoint = endpoint,
+                auth.env_openai_api_key_present = self.metadata.auth_env.openai_api_key_env_present,
+                auth.env_codex_api_key_present = self.metadata.auth_env.codex_api_key_env_present,
+                auth.env_codex_api_key_enabled = self.metadata.auth_env.codex_api_key_env_enabled,
+                auth.env_provider_key_name = self.metadata.auth_env.provider_env_key_name.as_deref(),
+                auth.env_provider_key_present = self.metadata.auth_env.provider_env_key_present,
+                auth.env_refresh_token_url_override_present = self.metadata.auth_env.refresh_token_url_override_present,
                 auth.request_id = request_id,
                 auth.cf_ray = cf_ray,
                 auth.error = auth_error,
@@ -454,6 +487,12 @@ impl SessionTelemetry {
                 auth.recovery_mode = recovery_mode,
                 auth.recovery_phase = recovery_phase,
                 endpoint = endpoint,
+                auth.env_openai_api_key_present = self.metadata.auth_env.openai_api_key_env_present,
+                auth.env_codex_api_key_present = self.metadata.auth_env.codex_api_key_env_present,
+                auth.env_codex_api_key_enabled = self.metadata.auth_env.codex_api_key_env_enabled,
+                auth.env_provider_key_name = self.metadata.auth_env.provider_env_key_name.as_deref(),
+                auth.env_provider_key_present = self.metadata.auth_env.provider_env_key_present,
+                auth.env_refresh_token_url_override_present = self.metadata.auth_env.refresh_token_url_override_present,
                 auth.connection_reused = connection_reused,
                 auth.request_id = request_id,
                 auth.cf_ray = cf_ray,
@@ -474,7 +513,7 @@ impl SessionTelemetry {
         let success_str = if error.is_none() { "true" } else { "false" };
         self.counter(
             WEBSOCKET_REQUEST_COUNT_METRIC,
-            1,
+            /*inc*/ 1,
             &[("success", success_str)],
         );
         self.record_duration(
@@ -489,6 +528,12 @@ impl SessionTelemetry {
                 duration_ms = %duration.as_millis(),
                 success = success_str,
                 error.message = error,
+                auth.env_openai_api_key_present = self.metadata.auth_env.openai_api_key_env_present,
+                auth.env_codex_api_key_present = self.metadata.auth_env.codex_api_key_env_present,
+                auth.env_codex_api_key_enabled = self.metadata.auth_env.codex_api_key_env_enabled,
+                auth.env_provider_key_name = self.metadata.auth_env.provider_env_key_name.as_deref(),
+                auth.env_provider_key_present = self.metadata.auth_env.provider_env_key_present,
+                auth.env_refresh_token_url_override_present = self.metadata.auth_env.refresh_token_url_override_present,
                 auth.connection_reused = connection_reused,
             },
             log: {},
@@ -608,7 +653,7 @@ impl SessionTelemetry {
         let kind_str = kind.as_deref().unwrap_or(WEBSOCKET_UNKNOWN_KIND);
         let success_str = if success { "true" } else { "false" };
         let tags = [("kind", kind_str), ("success", success_str)];
-        self.counter(WEBSOCKET_EVENT_COUNT_METRIC, 1, &tags);
+        self.counter(WEBSOCKET_EVENT_COUNT_METRIC, /*inc*/ 1, &tags);
         self.record_duration(WEBSOCKET_EVENT_DURATION_METRIC, duration, &tags);
         log_and_trace_event!(
             self,
@@ -662,11 +707,15 @@ impl SessionTelemetry {
                 }
             }
             Ok(Some(Err(error))) => {
-                self.sse_event_failed(None, duration, error);
+                self.sse_event_failed(/*kind*/ None, duration, error);
             }
             Ok(None) => {}
             Err(_) => {
-                self.sse_event_failed(None, duration, &"idle timeout waiting for SSE");
+                self.sse_event_failed(
+                    /*kind*/ None,
+                    duration,
+                    &"idle timeout waiting for SSE",
+                );
             }
         }
     }
@@ -674,7 +723,7 @@ impl SessionTelemetry {
     fn sse_event(&self, kind: &str, duration: Duration) {
         self.counter(
             SSE_EVENT_COUNT_METRIC,
-            1,
+            /*inc*/ 1,
             &[("kind", kind), ("success", "true")],
         );
         self.record_duration(
@@ -697,7 +746,7 @@ impl SessionTelemetry {
         let kind_str = kind.map_or(SSE_UNKNOWN_KIND, String::as_str);
         self.counter(
             SSE_EVENT_COUNT_METRIC,
-            1,
+            /*inc*/ 1,
             &[("kind", kind_str), ("success", "false")],
         );
         self.record_duration(
@@ -911,7 +960,7 @@ impl SessionTelemetry {
         tags.push(("tool", tool_name));
         tags.push(("success", success_str));
         tags.extend_from_slice(extra_tags);
-        self.counter(TOOL_CALL_COUNT_METRIC, 1, &tags);
+        self.counter(TOOL_CALL_COUNT_METRIC, /*inc*/ 1, &tags);
         self.record_duration(TOOL_CALL_DURATION_METRIC, duration, &tags);
         let mcp_server = mcp_server.unwrap_or("");
         let mcp_server_origin = mcp_server_origin.unwrap_or("");

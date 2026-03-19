@@ -54,6 +54,8 @@ impl From<WorkspaceGitMetadata> for TurnMetadataWorkspace {
 #[derive(Clone, Debug, Serialize, Default)]
 pub(crate) struct TurnMetadataBag {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     turn_id: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     workspaces: BTreeMap<String, TurnMetadataWorkspace>,
@@ -68,6 +70,7 @@ impl TurnMetadataBag {
 }
 
 fn build_turn_metadata_bag(
+    session_id: Option<String>,
     turn_id: Option<String>,
     sandbox: Option<String>,
     repo_root: Option<String>,
@@ -81,6 +84,7 @@ fn build_turn_metadata_bag(
     }
 
     TurnMetadataBag {
+        session_id,
         turn_id,
         workspaces,
         sandbox,
@@ -104,7 +108,8 @@ pub async fn build_turn_metadata_header(cwd: &Path, sandbox: Option<&str>) -> Op
     }
 
     build_turn_metadata_bag(
-        None,
+        /*session_id*/ None,
+        /*turn_id*/ None,
         sandbox.map(ToString::to_string),
         repo_root,
         Some(WorkspaceGitMetadata {
@@ -128,6 +133,7 @@ pub(crate) struct TurnMetadataState {
 
 impl TurnMetadataState {
     pub(crate) fn new(
+        session_id: String,
         turn_id: String,
         cwd: PathBuf,
         sandbox_policy: &SandboxPolicy,
@@ -135,7 +141,13 @@ impl TurnMetadataState {
     ) -> Self {
         let repo_root = get_git_repo_root(&cwd).map(|root| root.to_string_lossy().into_owned());
         let sandbox = Some(sandbox_tag(sandbox_policy, windows_sandbox_level).to_string());
-        let base_metadata = build_turn_metadata_bag(Some(turn_id), sandbox, None, None);
+        let base_metadata = build_turn_metadata_bag(
+            Some(session_id),
+            Some(turn_id),
+            sandbox,
+            /*repo_root*/ None,
+            /*workspace_git_metadata*/ None,
+        );
         let base_header = base_metadata
             .to_header_value()
             .unwrap_or_else(|| "{}".to_string());
@@ -163,6 +175,11 @@ impl TurnMetadataState {
         Some(self.base_header.clone())
     }
 
+    pub(crate) fn current_meta_value(&self) -> Option<serde_json::Value> {
+        self.current_header_value()
+            .and_then(|header| serde_json::from_str(&header).ok())
+    }
+
     pub(crate) fn spawn_git_enrichment_task(&self) {
         if self.repo_root.is_none() {
             return;
@@ -184,6 +201,7 @@ impl TurnMetadataState {
             };
 
             let enriched_metadata = build_turn_metadata_bag(
+                state.base_metadata.session_id.clone(),
                 state.base_metadata.turn_id.clone(),
                 state.base_metadata.sandbox.clone(),
                 Some(repo_root),

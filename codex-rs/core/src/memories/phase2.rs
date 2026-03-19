@@ -61,7 +61,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
         Err(e) => {
             session.services.session_telemetry.counter(
                 metrics::MEMORY_PHASE_TWO_JOBS,
-                1,
+                /*inc*/ 1,
                 &[("status", e)],
             );
             return;
@@ -198,7 +198,7 @@ mod job {
             } => {
                 session_telemetry.counter(
                     metrics::MEMORY_PHASE_TWO_JOBS,
-                    1,
+                    /*inc*/ 1,
                     &[("status", "claimed")],
                 );
                 (ownership_token, input_watermark)
@@ -218,7 +218,7 @@ mod job {
     ) {
         session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_TWO_JOBS,
-            1,
+            /*inc*/ 1,
             &[("status", reason)],
         );
         if matches!(
@@ -250,7 +250,7 @@ mod job {
     ) {
         session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_TWO_JOBS,
-            1,
+            /*inc*/ 1,
             &[("status", reason)],
         );
         let _ = db
@@ -267,11 +267,14 @@ mod agent {
         let mut agent_config = config.as_ref().clone();
 
         agent_config.cwd = root;
+        // Consolidation threads must never feed back into phase-1 memory generation.
+        agent_config.memories.generate_memories = false;
         // Approval policy
         agent_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
         // Consolidation runs as an internal sub-agent and must not recursively delegate.
         let _ = agent_config.features.disable(Feature::SpawnCsv);
         let _ = agent_config.features.disable(Feature::Collab);
+        let _ = agent_config.features.disable(Feature::MemoryTool);
 
         // Sandbox policy
         let mut writable_roots = Vec::new();
@@ -378,7 +381,7 @@ mod agent {
             // Fire and forget close of the agent.
             if !matches!(final_status, AgentStatus::Shutdown | AgentStatus::NotFound) {
                 tokio::spawn(async move {
-                    if let Err(err) = agent_control.shutdown_agent(thread_id).await {
+                    if let Err(err) = agent_control.shutdown_live_agent(thread_id).await {
                         warn!(
                             "failed to auto-close global memory consolidation agent {thread_id}: {err}"
                         );
@@ -462,7 +465,7 @@ fn emit_metrics(session: &Arc<Session>, counters: Counters) {
 
     otel.counter(
         metrics::MEMORY_PHASE_TWO_JOBS,
-        1,
+        /*inc*/ 1,
         &[("status", "agent_spawned")],
     );
 }

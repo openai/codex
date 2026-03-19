@@ -142,7 +142,7 @@ jobs:
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install Zig
-        uses: mlugg/setup-zig@v2
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: 0.14.0
 
@@ -380,11 +380,19 @@ jobs:
       publish: true
     secrets: inherit
 
+  argument-comment-lint-release-assets:
+    name: argument-comment-lint release assets
+    needs: tag-check
+    uses: ./.github/workflows/rust-release-argument-comment-lint.yml
+    with:
+      publish: true
+
   release:
     needs:
       - build
       - build-windows
       - shell-tool-mcp
+      - argument-comment-lint-release-assets
     name: release
     runs-on: ubuntu-latest
     permissions:
@@ -490,9 +498,10 @@ jobs:
       - name: Stage npm packages
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.release_name.outputs.name }}
         run: |
           ./scripts/stage_npm_packages.py \
-            --release-version "${{ steps.release_name.outputs.name }}" \
+            --release-version "$RELEASE_VERSION" \
             --package codex \
             --package codex-responses-api-proxy \
             --package codex-sdk
@@ -519,6 +528,13 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-config.json
+
+      - uses: facebook/dotslash-publish-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag: ${{ github.ref_name }}
+          config: .github/dotslash-argument-comment-lint-config.json
 
       - name: Trigger developers.openai.com deploy
         # Only trigger the deploy if the release is not a pre-release.
@@ -561,10 +577,12 @@ jobs:
       - name: Download npm tarballs from release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
         run: |
           set -euo pipefail
-          version="${{ needs.release.outputs.version }}"
-          tag="${{ needs.release.outputs.tag }}"
+          version="$RELEASE_VERSION"
+          tag="$RELEASE_TAG"
           mkdir -p dist/npm
           patterns=(
             "codex-npm-${version}.tgz"

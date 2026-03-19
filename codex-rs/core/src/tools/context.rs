@@ -199,6 +199,41 @@ impl ToolOutput for FunctionToolOutput {
     }
 }
 
+pub struct ApplyPatchToolOutput {
+    pub text: String,
+}
+
+impl ApplyPatchToolOutput {
+    pub fn from_text(text: String) -> Self {
+        Self { text }
+    }
+}
+
+impl ToolOutput for ApplyPatchToolOutput {
+    fn log_preview(&self) -> String {
+        telemetry_preview(&self.text)
+    }
+
+    fn success_for_logging(&self) -> bool {
+        true
+    }
+
+    fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
+        function_tool_response(
+            call_id,
+            payload,
+            vec![FunctionCallOutputContentItem::InputText {
+                text: self.text.clone(),
+            }],
+            Some(true),
+        )
+    }
+
+    fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
+        JsonValue::Object(serde_json::Map::new())
+    }
+}
+
 pub struct AbortedToolOutput {
     pub message: String,
 }
@@ -230,7 +265,7 @@ impl ToolOutput for AbortedToolOutput {
                 vec![FunctionCallOutputContentItem::InputText {
                     text: self.message.clone(),
                 }],
-                None,
+                /*success*/ None,
             ),
         }
     }
@@ -417,6 +452,7 @@ fn function_tool_response(
     if matches!(payload, ToolPayload::Custom { .. }) {
         return ResponseInputItem::CustomToolCallOutput {
             call_id: call_id.to_string(),
+            name: None,
             output: FunctionCallOutputPayload { body, success },
         };
     }

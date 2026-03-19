@@ -102,7 +102,7 @@ fn find_test_zsh_path() -> Result<Option<PathBuf>> {
         return Ok(None);
     }
 
-    match crate::fetch_dotslash_file(&dotslash_zsh, None) {
+    match crate::fetch_dotslash_file(&dotslash_zsh, /*dotslash_cache*/ None) {
         Ok(path) => Ok(Some(path)),
         Err(error) => {
             eprintln!("skipping zsh-fork test: failed to fetch zsh via dotslash: {error:#}");

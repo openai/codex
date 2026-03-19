@@ -34,21 +34,23 @@ pub fn write_mock_responses_config_toml(
         Some(true) => "requires_openai_auth = true\n".to_string(),
         Some(false) | None => String::new(),
     };
-    let provider_block = if model_provider_id == "openai" {
-        String::new()
+    let provider_name = if matches!(requires_openai_auth, Some(true)) {
+        "OpenAI"
     } else {
-        format!(
-            r#"
-[model_providers.mock_provider]
-name = "Mock provider for test"
+        "Mock provider for test"
+    };
+    let provider_block = format!(
+        r#"
+[model_providers.{model_provider_id}]
+name = "{provider_name}"
 base_url = "{server_uri}/v1"
 wire_api = "responses"
 request_max_retries = 0
 stream_max_retries = 0
+supports_websockets = false
 {requires_line}
 "#
-        )
-    };
+    );
     let openai_base_url_line = if model_provider_id == "openai" {
         format!("openai_base_url = \"{server_uri}/v1\"\n")
     } else {

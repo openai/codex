@@ -435,7 +435,7 @@ impl CoreShellActionProvider {
                             cwd: workdir,
                             additional_permissions,
                         },
-                        None,
+                        /*retry_reason*/ None,
                     )
                     .await;
                 }
@@ -468,9 +468,9 @@ impl CoreShellActionProvider {
                         approval_id,
                         command,
                         workdir,
-                        None,
-                        None,
-                        None,
+                        /*reason*/ None,
+                        /*network_approval_context*/ None,
+                        /*proposed_execpolicy_amendment*/ None,
                         additional_permissions,
                         skill_metadata,
                         Some(available_decisions),
@@ -489,7 +489,7 @@ impl CoreShellActionProvider {
             .session
             .services
             .skills_manager
-            .skills_for_cwd(&self.turn.cwd, force_reload)
+            .skills_for_cwd(&self.turn.cwd, self.turn.config.as_ref(), force_reload)
             .await;
 
         let program_path = program.as_path();
@@ -913,7 +913,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 justification: self.justification.clone(),
                 arg0: self.arg0.clone(),
             },
-            None,
+            /*stdout_stream*/ None,
             after_spawn,
         )
         .await?;
