@@ -41,3 +41,4 @@ tracing = { workspace = true }
 anyhow = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
