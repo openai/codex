@@ -416,8 +416,12 @@ pub struct MemoriesToml {
     pub min_rollout_idle_hours: Option<i64>,
     /// Model used for thread summarisation.
     pub extract_model: Option<String>,
+    /// Reasoning effort used for thread summarisation.
+    pub extract_reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     /// Model used for memory consolidation.
     pub consolidation_model: Option<String>,
+    /// Reasoning effort used for memory consolidation.
+    pub consolidation_reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 }
 
 /// Effective memories settings after defaults are applied.
@@ -432,7 +436,9 @@ pub struct MemoriesConfig {
     pub max_rollouts_per_startup: usize,
     pub min_rollout_idle_hours: i64,
     pub extract_model: Option<String>,
+    pub extract_reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
     pub consolidation_model: Option<String>,
+    pub consolidation_reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
 }
 
 impl Default for MemoriesConfig {
@@ -447,7 +453,9 @@ impl Default for MemoriesConfig {
             max_rollouts_per_startup: DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP,
             min_rollout_idle_hours: DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS,
             extract_model: None,
+            extract_reasoning_effort: None,
             consolidation_model: None,
+            consolidation_reasoning_effort: None,
         }
     }
 }
@@ -482,7 +490,9 @@ impl From<MemoriesToml> for MemoriesConfig {
                 .unwrap_or(defaults.min_rollout_idle_hours)
                 .clamp(1, 48),
             extract_model: toml.extract_model,
+            extract_reasoning_effort: toml.extract_reasoning_effort,
             consolidation_model: toml.consolidation_model,
+            consolidation_reasoning_effort: toml.consolidation_reasoning_effort,
         }
     }
 }

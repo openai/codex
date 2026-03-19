@@ -170,7 +170,11 @@ impl RequestContext {
             model_info,
             turn_metadata_header,
             session_telemetry: turn_context.session_telemetry.clone(),
-            reasoning_effort: Some(phase_one::REASONING_EFFORT),
+            reasoning_effort: turn_context
+                .config
+                .memories
+                .extract_reasoning_effort
+                .or(Some(phase_one::REASONING_EFFORT)),
             reasoning_summary: turn_context.reasoning_summary,
             service_tier: turn_context.config.service_tier,
         }

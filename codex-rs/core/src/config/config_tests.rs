@@ -16,6 +16,7 @@ use crate::config_loader::RequirementSource;
 use crate::features::Feature;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -118,7 +119,9 @@ max_rollout_age_days = 42
 max_rollouts_per_startup = 9
 min_rollout_idle_hours = 24
 extract_model = "gpt-5-mini"
+extract_reasoning_effort = "low"
 consolidation_model = "gpt-5"
+consolidation_reasoning_effort = "medium"
 "#;
     let memories_cfg =
         toml::from_str::<ConfigToml>(memories).expect("TOML deserialization should succeed");
@@ -133,7 +136,9 @@ consolidation_model = "gpt-5"
             max_rollouts_per_startup: Some(9),
             min_rollout_idle_hours: Some(24),
             extract_model: Some("gpt-5-mini".to_string()),
+            extract_reasoning_effort: Some(ReasoningEffort::Low),
             consolidation_model: Some("gpt-5".to_string()),
+            consolidation_reasoning_effort: Some(ReasoningEffort::Medium),
         }),
         memories_cfg.memories
     );
@@ -156,7 +161,9 @@ consolidation_model = "gpt-5"
             max_rollouts_per_startup: 9,
             min_rollout_idle_hours: 24,
             extract_model: Some("gpt-5-mini".to_string()),
+            extract_reasoning_effort: Some(ReasoningEffort::Low),
             consolidation_model: Some("gpt-5".to_string()),
+            consolidation_reasoning_effort: Some(ReasoningEffort::Medium),
         }
     );
 }

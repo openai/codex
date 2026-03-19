@@ -750,9 +750,25 @@
           "description": "Model used for memory consolidation.",
           "type": "string"
         },
+        "consolidation_reasoning_effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Reasoning effort used for memory consolidation."
+        },
         "extract_model": {
           "description": "Model used for thread summarisation.",
           "type": "string"
+        },
+        "extract_reasoning_effort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "description": "Reasoning effort used for thread summarisation."
         },
         "generate_memories": {
           "description": "When `false`, newly created threads are stored with `memory_mode = \"disabled\"` in the state DB.",
