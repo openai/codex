@@ -24,7 +24,7 @@ async fn exec_server_stubs_process_start_over_websocket() -> anyhow::Result<()> 
         .wait_for_event(|event| {
             matches!(
                 event,
-                JSONRPCMessage::Response(JSONRPCResponse { id, .. }) if id == &initialize_id
+                JSONRPCMessage::Response(JSONRPCResponse { id, .. }) if *id == initialize_id
             )
         })
         .await?;
@@ -53,7 +53,7 @@ async fn exec_server_stubs_process_start_over_websocket() -> anyhow::Result<()> 
         .wait_for_event(|event| {
             matches!(
                 event,
-                JSONRPCMessage::Response(JSONRPCResponse { id, .. }) if id == &process_start_id
+                JSONRPCMessage::Response(JSONRPCResponse { id, .. }) if *id == process_start_id
             )
         })
         .await?;

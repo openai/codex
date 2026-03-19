@@ -44,7 +44,7 @@ async fn exec_server_reports_malformed_websocket_json_and_keeps_running() -> any
         .wait_for_event(|event| {
             matches!(
                 event,
-                JSONRPCMessage::Response(JSONRPCResponse { id, .. }) if id == &initialize_id
+                JSONRPCMessage::Response(JSONRPCResponse { id, .. }) if *id == initialize_id
             )
         })
         .await?;
