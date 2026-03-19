@@ -25,11 +25,11 @@ const STOP_OUTPUT_FIXTURE: &str = "stop.command.output.schema.json";
 pub(crate) struct NullableString(Option<String>);
 
 impl NullableString {
-    fn from_path(path: Option<PathBuf>) -> Self {
+    pub(crate) fn from_path(path: Option<PathBuf>) -> Self {
         Self(path.map(|path| path.display().to_string()))
     }
 
-    fn from_string(value: Option<String>) -> Self {
+    pub(crate) fn from_string(value: Option<String>) -> Self {
         Self(value)
     }
 }
@@ -190,29 +190,6 @@ pub(crate) struct UserPromptSubmitCommandInput {
     pub prompt: String,
 }
 
-impl UserPromptSubmitCommandInput {
-    pub(crate) fn new(
-        session_id: impl Into<String>,
-        turn_id: impl Into<String>,
-        transcript_path: Option<PathBuf>,
-        cwd: impl Into<String>,
-        model: impl Into<String>,
-        permission_mode: impl Into<String>,
-        prompt: impl Into<String>,
-    ) -> Self {
-        Self {
-            session_id: session_id.into(),
-            turn_id: turn_id.into(),
-            transcript_path: NullableString::from_path(transcript_path),
-            cwd: cwd.into(),
-            hook_event_name: "UserPromptSubmit".to_string(),
-            model: model.into(),
-            permission_mode: permission_mode.into(),
-            prompt: prompt.into(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(rename = "stop.command.input")]
@@ -229,31 +206,6 @@ pub(crate) struct StopCommandInput {
     pub permission_mode: String,
     pub stop_hook_active: bool,
     pub last_assistant_message: NullableString,
-}
-
-impl StopCommandInput {
-    pub(crate) fn new(
-        session_id: impl Into<String>,
-        turn_id: impl Into<String>,
-        transcript_path: Option<PathBuf>,
-        cwd: impl Into<String>,
-        model: impl Into<String>,
-        permission_mode: impl Into<String>,
-        stop_hook_active: bool,
-        last_assistant_message: Option<String>,
-    ) -> Self {
-        Self {
-            session_id: session_id.into(),
-            turn_id: turn_id.into(),
-            transcript_path: NullableString::from_path(transcript_path),
-            cwd: cwd.into(),
-            hook_event_name: "Stop".to_string(),
-            model: model.into(),
-            permission_mode: permission_mode.into(),
-            stop_hook_active,
-            last_assistant_message: NullableString::from_string(last_assistant_message),
-        }
-    }
 }
 
 pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {

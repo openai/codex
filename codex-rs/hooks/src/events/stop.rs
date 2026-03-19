@@ -14,6 +14,7 @@ use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
+use crate::schema::NullableString;
 use crate::schema::StopCommandInput;
 
 #[derive(Debug, Clone)]
@@ -75,16 +76,17 @@ pub(crate) async fn run(
         };
     }
 
-    let input_json = match serde_json::to_string(&StopCommandInput::new(
-        request.session_id.to_string(),
-        request.turn_id.clone(),
-        request.transcript_path.clone(),
-        request.cwd.display().to_string(),
-        request.model.clone(),
-        request.permission_mode.clone(),
-        request.stop_hook_active,
-        request.last_assistant_message.clone(),
-    )) {
+    let input_json = match serde_json::to_string(&StopCommandInput {
+        session_id: request.session_id.to_string(),
+        turn_id: request.turn_id.clone(),
+        transcript_path: NullableString::from_path(request.transcript_path.clone()),
+        cwd: request.cwd.display().to_string(),
+        hook_event_name: "Stop".to_string(),
+        model: request.model.clone(),
+        permission_mode: request.permission_mode.clone(),
+        stop_hook_active: request.stop_hook_active,
+        last_assistant_message: NullableString::from_string(request.last_assistant_message.clone()),
+    }) {
         Ok(input_json) => input_json,
         Err(error) => {
             return serialization_failure_outcome(common::serialization_failure_hook_events(
