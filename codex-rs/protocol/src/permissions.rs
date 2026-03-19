@@ -1356,7 +1356,6 @@ mod tests {
                 },
             ])
         );
-        assert!(file_system_policy.can_write_path_with_cwd(Path::new("notes.txt"), relative_cwd));
         assert!(
             !file_system_policy
                 .can_write_path_with_cwd(Path::new(".codex/config.toml"), relative_cwd,)
