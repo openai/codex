@@ -3977,9 +3977,9 @@
           "properties": {
             "method": {
               "enum": [
-                "mcpServer/status/updated"
+                "mcpServer/startupStatus/updated"
               ],
-              "title": "McpServer/status/updatedNotificationMethod",
+              "title": "McpServer/startupStatus/updatedNotificationMethod",
               "type": "string"
             },
             "params": {
@@ -3990,7 +3990,7 @@
             "method",
             "params"
           ],
-          "title": "McpServer/status/updatedNotification",
+          "title": "McpServer/startupStatus/updatedNotification",
           "type": "object"
         },
         {

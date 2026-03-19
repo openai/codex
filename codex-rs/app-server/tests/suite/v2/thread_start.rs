@@ -356,9 +356,9 @@ async fn thread_start_emits_mcp_server_status_updated_notifications() -> Result<
     let starting = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_matching_notification(
-            "mcpServer/status/updated starting",
+            "mcpServer/startupStatus/updated starting",
             |notification| {
-                notification.method == "mcpServer/status/updated"
+                notification.method == "mcpServer/startupStatus/updated"
                     && notification
                         .params
                         .as_ref()
@@ -391,9 +391,9 @@ async fn thread_start_emits_mcp_server_status_updated_notifications() -> Result<
     let failed = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_matching_notification(
-            "mcpServer/status/updated failed",
+            "mcpServer/startupStatus/updated failed",
             |notification| {
-                notification.method == "mcpServer/status/updated"
+                notification.method == "mcpServer/startupStatus/updated"
                     && notification
                         .params
                         .as_ref()
