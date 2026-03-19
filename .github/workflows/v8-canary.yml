@@ -1,10 +1,30 @@
-name: v8-poc-canary
+name: v8-canary
 
 on:
-  pull_request: {}
+  pull_request:
+    paths:
+      - ".github/scripts/rusty_v8_bazel.py"
+      - ".github/workflows/rusty-v8-release.yml"
+      - ".github/workflows/v8-canary.yml"
+      - "MODULE.bazel"
+      - "MODULE.bazel.lock"
+      - "codex-rs/Cargo.toml"
+      - "patches/BUILD.bazel"
+      - "patches/v8_*.patch"
+      - "third_party/v8/**"
   push:
     branches:
       - main
+    paths:
+      - ".github/scripts/rusty_v8_bazel.py"
+      - ".github/workflows/rusty-v8-release.yml"
+      - ".github/workflows/v8-canary.yml"
+      - "MODULE.bazel"
+      - "MODULE.bazel.lock"
+      - "codex-rs/Cargo.toml"
+      - "patches/BUILD.bazel"
+      - "patches/v8_*.patch"
+      - "third_party/v8/**"
   workflow_dispatch:
 
 concurrency:
@@ -119,5 +139,5 @@ jobs:
       - name: Upload staged musl artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: v8-poc-canary-${{ needs.metadata.outputs.v8_version }}-${{ matrix.target }}
+          name: v8-canary-${{ needs.metadata.outputs.v8_version }}-${{ matrix.target }}
           path: dist/${{ matrix.target }}/*
