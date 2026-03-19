@@ -13,6 +13,8 @@ use tempfile::NamedTempFile;
 use crate::logging::log_note;
 use crate::sandbox_bin_dir;
 
+const RESOURCES_DIRNAME: &str = "codex-resources";
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum HelperExecutable {
     CommandRunner,
@@ -46,11 +48,8 @@ pub(crate) fn helper_bin_dir(codex_home: &Path) -> PathBuf {
 
 pub(crate) fn legacy_lookup(kind: HelperExecutable) -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join(kind.file_name());
-            if candidate.exists() {
-                return candidate;
-            }
+        if let Some(candidate) = source_path_for_exe(&exe, kind.file_name()) {
+            return candidate;
         }
     }
     PathBuf::from(kind.file_name())
@@ -179,18 +178,23 @@ fn store_helper_path(cache_key: String, path: PathBuf) {
 
 fn sibling_source_path(kind: HelperExecutable) -> Result<PathBuf> {
     let exe = std::env::current_exe().context("resolve current executable for helper lookup")?;
-    let dir = exe
-        .parent()
-        .ok_or_else(|| anyhow!("current executable has no parent directory"))?;
-    let candidate = dir.join(kind.file_name());
-    if candidate.exists() {
-        Ok(candidate)
-    } else {
-        Err(anyhow!(
-            "helper not found next to current executable: {}",
-            candidate.display()
-        ))
+    source_path_for_exe(&exe, kind.file_name()).ok_or_else(|| {
+        anyhow!(
+            "helper not found next to current executable or under {RESOURCES_DIRNAME}: {}",
+            exe.display()
+        )
+    })
+}
+
+fn source_path_for_exe(exe: &Path, file_name: &str) -> Option<PathBuf> {
+    let dir = exe.parent()?;
+    let direct_candidate = dir.join(file_name);
+    if direct_candidate.exists() {
+        return Some(direct_candidate);
     }
+
+    let resource_candidate = dir.join(RESOURCES_DIRNAME).join(file_name);
+    resource_candidate.exists().then_some(resource_candidate)
 }
 
 fn copy_from_source_if_needed(source: &Path, destination: &Path) -> Result<CopyOutcome> {
@@ -292,10 +296,12 @@ fn destination_is_fresh(source: &Path, destination: &Path) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::destination_is_fresh;
-    use super::helper_bin_dir;
     use super::copy_from_source_if_needed;
     use super::CopyOutcome;
+    use super::destination_is_fresh;
+    use super::helper_bin_dir;
+    use super::RESOURCES_DIRNAME;
+    use super::source_path_for_exe;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
@@ -376,5 +382,20 @@ mod tests {
             fs::read(&runner_destination).expect("read runner")
         );
     }
-}
 
+    #[test]
+    fn helper_source_lookup_checks_resource_dir() {
+        let tmp = TempDir::new().expect("tempdir");
+        let release_dir = tmp.path().join("release");
+        let resources_dir = release_dir.join(RESOURCES_DIRNAME);
+        fs::create_dir_all(&resources_dir).expect("create resources dir");
+        let exe = release_dir.join("codex.exe");
+        let helper = resources_dir.join("codex-command-runner.exe");
+        fs::write(&exe, b"codex").expect("write exe");
+        fs::write(&helper, b"runner").expect("write helper");
+
+        let resolved = source_path_for_exe(&exe, "codex-command-runner.exe").expect("helper path");
+
+        assert_eq!(resolved, helper);
+    }
+}
