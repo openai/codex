@@ -51,7 +51,6 @@ Expects the binary containing `codex-core` to run the equivalent of `codex sandb
 Legacy `SandboxPolicy` / `sandbox_mode` configs are still supported on Linux.
 They can continue to use the legacy Landlock path when the split filesystem
 policy is sandbox-equivalent to the legacy model after `cwd` resolution.
-
 Split filesystem policies that need direct `FileSystemSandboxPolicy`
 enforcement, such as read-only or denied carveouts under a broader writable
 root, automatically route through bubblewrap. The legacy Landlock path is used
@@ -81,13 +80,18 @@ backend-managed system read roots required for basic execution, such as
 `C:\ProgramData`. When it is `false`, those extra system roots are omitted.
 
 The unelevated restricted-token backend still supports the legacy full-read
-Windows model only. Restricted read-only policies continue to fail closed there
-instead of running with weaker read enforcement.
+Windows model for legacy `ReadOnly` and `WorkspaceWrite` behavior. It also
+supports a narrow split-filesystem subset: full-read split policies whose
+writable roots still match the legacy `WorkspaceWrite` root set, but add extra
+read-only carveouts under those writable roots.
 
 New `[permissions]` / split filesystem policies remain supported on Windows
 only when they round-trip through the legacy `SandboxPolicy` model without
-changing semantics. Richer split-only carveouts still fail closed instead of
-running with weaker enforcement.
+changing semantics. Policies that would require direct read restriction,
+explicit unreadable carveouts, reopened writable descendants under read-only
+carveouts, different writable root sets, or split carveout support in the
+elevated setup/runner backend still fail closed instead of running with weaker
+enforcement.
 
 ### All Platforms
 
