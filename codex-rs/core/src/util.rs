@@ -7,7 +7,8 @@ use rand::Rng;
 use tracing::debug;
 use tracing::error;
 
-use crate::auth_env_telemetry::AuthEnvTelemetry;
+use crate::default_client::client_origin_class;
+use crate::default_client::originator;
 use crate::parse_command::shlex_join;
 
 const INITIAL_DELAY_MS: u64 = 200;
@@ -43,33 +44,31 @@ pub(crate) struct FeedbackRequestTags<'a> {
     pub auth_header_attached: bool,
     pub auth_header_name: Option<&'a str>,
     pub auth_mode: Option<&'a str>,
+    pub auth_env_openai_api_key_present: bool,
+    pub auth_env_codex_api_key_present: bool,
+    pub auth_env_codex_api_key_enabled: bool,
+    pub auth_env_provider_key_name: Option<&'a str>,
+    pub auth_env_provider_key_present: Option<bool>,
+    pub auth_env_refresh_token_url_override_present: bool,
     pub auth_retry_after_unauthorized: Option<bool>,
     pub auth_recovery_mode: Option<&'a str>,
     pub auth_recovery_phase: Option<&'a str>,
     pub auth_connection_reused: Option<bool>,
+    pub app_server_auth_state: Option<&'a str>,
+    pub app_server_requires_openai_auth: Option<bool>,
+    pub provider_header_names: Option<&'a str>,
+    pub base_url_origin: &'a str,
+    pub host_class: &'a str,
+    pub base_url_source: &'a str,
+    pub base_url_is_default: bool,
     pub auth_request_id: Option<&'a str>,
     pub auth_cf_ray: Option<&'a str>,
     pub auth_error: Option<&'a str>,
     pub auth_error_code: Option<&'a str>,
+    pub error_body_class: Option<&'a str>,
+    pub safe_error_message: Option<&'a str>,
     pub auth_recovery_followup_success: Option<bool>,
     pub auth_recovery_followup_status: Option<u16>,
-}
-
-struct FeedbackRequestSnapshot<'a> {
-    endpoint: &'a str,
-    auth_header_attached: bool,
-    auth_header_name: &'a str,
-    auth_mode: &'a str,
-    auth_retry_after_unauthorized: String,
-    auth_recovery_mode: &'a str,
-    auth_recovery_phase: &'a str,
-    auth_connection_reused: String,
-    auth_request_id: &'a str,
-    auth_cf_ray: &'a str,
-    auth_error: &'a str,
-    auth_error_code: &'a str,
-    auth_recovery_followup_success: String,
-    auth_recovery_followup_status: String,
 }
 
 struct Auth401FeedbackSnapshot<'a> {
@@ -95,84 +94,71 @@ impl<'a> Auth401FeedbackSnapshot<'a> {
     }
 }
 
-impl<'a> FeedbackRequestSnapshot<'a> {
-    fn from_tags(tags: &'a FeedbackRequestTags<'a>) -> Self {
-        Self {
-            endpoint: tags.endpoint,
-            auth_header_attached: tags.auth_header_attached,
-            auth_header_name: tags.auth_header_name.unwrap_or(""),
-            auth_mode: tags.auth_mode.unwrap_or(""),
-            auth_retry_after_unauthorized: tags
-                .auth_retry_after_unauthorized
-                .map_or_else(String::new, |value| value.to_string()),
-            auth_recovery_mode: tags.auth_recovery_mode.unwrap_or(""),
-            auth_recovery_phase: tags.auth_recovery_phase.unwrap_or(""),
-            auth_connection_reused: tags
-                .auth_connection_reused
-                .map_or_else(String::new, |value| value.to_string()),
-            auth_request_id: tags.auth_request_id.unwrap_or(""),
-            auth_cf_ray: tags.auth_cf_ray.unwrap_or(""),
-            auth_error: tags.auth_error.unwrap_or(""),
-            auth_error_code: tags.auth_error_code.unwrap_or(""),
-            auth_recovery_followup_success: tags
-                .auth_recovery_followup_success
-                .map_or_else(String::new, |value| value.to_string()),
-            auth_recovery_followup_status: tags
-                .auth_recovery_followup_status
-                .map_or_else(String::new, |value| value.to_string()),
-        }
-    }
-}
-
-#[cfg(test)]
 pub(crate) fn emit_feedback_request_tags(tags: &FeedbackRequestTags<'_>) {
-    let snapshot = FeedbackRequestSnapshot::from_tags(tags);
+    let auth_header_name = tags.auth_header_name.unwrap_or("");
+    let auth_mode = tags.auth_mode.unwrap_or("");
+    let auth_env_provider_key_name = tags.auth_env_provider_key_name.unwrap_or("");
+    let auth_env_provider_key_present = tags
+        .auth_env_provider_key_present
+        .map_or_else(String::new, |value| value.to_string());
+    let auth_retry_after_unauthorized = tags
+        .auth_retry_after_unauthorized
+        .map_or_else(String::new, |value| value.to_string());
+    let auth_recovery_mode = tags.auth_recovery_mode.unwrap_or("");
+    let auth_recovery_phase = tags.auth_recovery_phase.unwrap_or("");
+    let auth_connection_reused = tags
+        .auth_connection_reused
+        .map_or_else(String::new, |value| value.to_string());
+    let app_server_auth_state = tags.app_server_auth_state.unwrap_or("");
+    let app_server_requires_openai_auth = tags
+        .app_server_requires_openai_auth
+        .map_or_else(String::new, |value| value.to_string());
+    let provider_header_names = tags.provider_header_names.unwrap_or("");
+    let auth_request_id = tags.auth_request_id.unwrap_or("");
+    let auth_cf_ray = tags.auth_cf_ray.unwrap_or("");
+    let auth_error = tags.auth_error.unwrap_or("");
+    let auth_error_code = tags.auth_error_code.unwrap_or("");
+    let error_body_class = tags.error_body_class.unwrap_or("");
+    let safe_error_message = tags.safe_error_message.unwrap_or("");
+    let auth_recovery_followup_success = tags
+        .auth_recovery_followup_success
+        .map_or_else(String::new, |value| value.to_string());
+    let auth_recovery_followup_status = tags
+        .auth_recovery_followup_status
+        .map_or_else(String::new, |value| value.to_string());
+    let originator = originator().value;
     feedback_tags!(
-        endpoint = snapshot.endpoint,
-        auth_header_attached = snapshot.auth_header_attached,
-        auth_header_name = snapshot.auth_header_name,
-        auth_mode = snapshot.auth_mode,
-        auth_retry_after_unauthorized = snapshot.auth_retry_after_unauthorized,
-        auth_recovery_mode = snapshot.auth_recovery_mode,
-        auth_recovery_phase = snapshot.auth_recovery_phase,
-        auth_connection_reused = snapshot.auth_connection_reused,
-        auth_request_id = snapshot.auth_request_id,
-        auth_cf_ray = snapshot.auth_cf_ray,
-        auth_error = snapshot.auth_error,
-        auth_error_code = snapshot.auth_error_code,
-        auth_recovery_followup_success = snapshot.auth_recovery_followup_success,
-        auth_recovery_followup_status = snapshot.auth_recovery_followup_status
-    );
-}
-
-pub(crate) fn emit_feedback_request_tags_with_auth_env(
-    tags: &FeedbackRequestTags<'_>,
-    auth_env: &AuthEnvTelemetry,
-) {
-    let snapshot = FeedbackRequestSnapshot::from_tags(tags);
-    feedback_tags!(
-        endpoint = snapshot.endpoint,
-        auth_header_attached = snapshot.auth_header_attached,
-        auth_header_name = snapshot.auth_header_name,
-        auth_mode = snapshot.auth_mode,
-        auth_retry_after_unauthorized = snapshot.auth_retry_after_unauthorized,
-        auth_recovery_mode = snapshot.auth_recovery_mode,
-        auth_recovery_phase = snapshot.auth_recovery_phase,
-        auth_connection_reused = snapshot.auth_connection_reused,
-        auth_request_id = snapshot.auth_request_id,
-        auth_cf_ray = snapshot.auth_cf_ray,
-        auth_error = snapshot.auth_error,
-        auth_error_code = snapshot.auth_error_code,
-        auth_recovery_followup_success = snapshot.auth_recovery_followup_success,
-        auth_recovery_followup_status = snapshot.auth_recovery_followup_status,
-        auth_env_openai_api_key_present = auth_env.openai_api_key_env_present,
-        auth_env_codex_api_key_present = auth_env.codex_api_key_env_present,
-        auth_env_codex_api_key_enabled = auth_env.codex_api_key_env_enabled,
-        auth_env_provider_key_name = auth_env.provider_env_key_name.as_deref().unwrap_or(""),
-        auth_env_provider_key_present = auth_env
-            .provider_env_key_present
-            .map_or_else(String::new, |value| value.to_string()),
-        auth_env_refresh_token_url_override_present = auth_env.refresh_token_url_override_present
+        endpoint = tags.endpoint,
+        client_origin = client_origin_class(originator.as_str()),
+        auth_header_attached = tags.auth_header_attached,
+        auth_header_name = auth_header_name,
+        auth_mode = auth_mode,
+        auth_env_openai_api_key_present = tags.auth_env_openai_api_key_present,
+        auth_env_codex_api_key_present = tags.auth_env_codex_api_key_present,
+        auth_env_codex_api_key_enabled = tags.auth_env_codex_api_key_enabled,
+        auth_env_provider_key_name = auth_env_provider_key_name,
+        auth_env_provider_key_present = auth_env_provider_key_present,
+        auth_env_refresh_token_url_override_present =
+            tags.auth_env_refresh_token_url_override_present,
+        auth_retry_after_unauthorized = auth_retry_after_unauthorized,
+        auth_recovery_mode = auth_recovery_mode,
+        auth_recovery_phase = auth_recovery_phase,
+        auth_connection_reused = auth_connection_reused,
+        app_server_auth_state = app_server_auth_state,
+        app_server_requires_openai_auth = app_server_requires_openai_auth,
+        provider_header_names = provider_header_names,
+        base_url_origin = tags.base_url_origin,
+        host_class = tags.host_class,
+        base_url_source = tags.base_url_source,
+        base_url_is_default = tags.base_url_is_default,
+        auth_request_id = auth_request_id,
+        auth_cf_ray = auth_cf_ray,
+        auth_error = auth_error,
+        auth_error_code = auth_error_code,
+        error_body_class = error_body_class,
+        safe_error_message = safe_error_message,
+        auth_recovery_followup_success = auth_recovery_followup_success,
+        auth_recovery_followup_status = auth_recovery_followup_status
     );
 }
 

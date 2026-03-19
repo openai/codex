@@ -8,6 +8,7 @@ use crate::auth_env_telemetry::AuthEnvTelemetry;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
 use crate::config::Config;
 use crate::default_client::build_reqwest_client;
+use crate::endpoint_config_telemetry::EndpointConfigTelemetrySource;
 use crate::error::CodexErr;
 use crate::error::Result as CoreResult;
 use crate::model_provider_info::ModelProviderInfo;
@@ -17,7 +18,7 @@ use crate::models_manager::model_info;
 use crate::response_debug_context::extract_response_debug_context;
 use crate::response_debug_context::telemetry_transport_error_message;
 use crate::util::FeedbackRequestTags;
-use crate::util::emit_feedback_request_tags_with_auth_env;
+use crate::util::emit_feedback_request_tags;
 use codex_api::ModelsClient;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
@@ -49,6 +50,11 @@ struct ModelsRequestTelemetry {
     auth_header_attached: bool,
     auth_header_name: Option<&'static str>,
     auth_env: AuthEnvTelemetry,
+    provider_header_names: Option<String>,
+    base_url_origin: &'static str,
+    host_class: &'static str,
+    base_url_source: &'static str,
+    base_url_is_default: bool,
 }
 
 impl RequestTelemetry for ModelsRequestTelemetry {
@@ -77,6 +83,11 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             endpoint = MODELS_ENDPOINT,
             auth.header_attached = self.auth_header_attached,
             auth.header_name = self.auth_header_name,
+            provider_header_names = self.provider_header_names.as_deref(),
+            base_url_origin = self.base_url_origin,
+            host_class = self.host_class,
+            base_url_source = self.base_url_source,
+            base_url_is_default = self.base_url_is_default,
             auth.env_openai_api_key_present = self.auth_env.openai_api_key_env_present,
             auth.env_codex_api_key_present = self.auth_env.codex_api_key_env_present,
             auth.env_codex_api_key_enabled = self.auth_env.codex_api_key_env_enabled,
@@ -87,6 +98,8 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             auth.cf_ray = response_debug.cf_ray.as_deref(),
             auth.error = response_debug.auth_error.as_deref(),
             auth.error_code = response_debug.auth_error_code.as_deref(),
+            error_body_class = response_debug.error_body_class,
+            safe_error_message = response_debug.safe_error_message,
             auth.mode = self.auth_mode.as_deref(),
         );
         tracing::event!(
@@ -101,6 +114,11 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             endpoint = MODELS_ENDPOINT,
             auth.header_attached = self.auth_header_attached,
             auth.header_name = self.auth_header_name,
+            provider_header_names = self.provider_header_names.as_deref(),
+            base_url_origin = self.base_url_origin,
+            host_class = self.host_class,
+            base_url_source = self.base_url_source,
+            base_url_is_default = self.base_url_is_default,
             auth.env_openai_api_key_present = self.auth_env.openai_api_key_env_present,
             auth.env_codex_api_key_present = self.auth_env.codex_api_key_env_present,
             auth.env_codex_api_key_enabled = self.auth_env.codex_api_key_env_enabled,
@@ -111,27 +129,43 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             auth.cf_ray = response_debug.cf_ray.as_deref(),
             auth.error = response_debug.auth_error.as_deref(),
             auth.error_code = response_debug.auth_error_code.as_deref(),
+            error_body_class = response_debug.error_body_class,
+            safe_error_message = response_debug.safe_error_message,
             auth.mode = self.auth_mode.as_deref(),
         );
-        emit_feedback_request_tags_with_auth_env(
-            &FeedbackRequestTags {
-                endpoint: MODELS_ENDPOINT,
-                auth_header_attached: self.auth_header_attached,
-                auth_header_name: self.auth_header_name,
-                auth_mode: self.auth_mode.as_deref(),
-                auth_retry_after_unauthorized: None,
-                auth_recovery_mode: None,
-                auth_recovery_phase: None,
-                auth_connection_reused: None,
-                auth_request_id: response_debug.request_id.as_deref(),
-                auth_cf_ray: response_debug.cf_ray.as_deref(),
-                auth_error: response_debug.auth_error.as_deref(),
-                auth_error_code: response_debug.auth_error_code.as_deref(),
-                auth_recovery_followup_success: None,
-                auth_recovery_followup_status: None,
-            },
-            &self.auth_env,
-        );
+        emit_feedback_request_tags(&FeedbackRequestTags {
+            endpoint: MODELS_ENDPOINT,
+            auth_header_attached: self.auth_header_attached,
+            auth_header_name: self.auth_header_name,
+            auth_mode: self.auth_mode.as_deref(),
+            auth_env_openai_api_key_present: self.auth_env.openai_api_key_env_present,
+            auth_env_codex_api_key_present: self.auth_env.codex_api_key_env_present,
+            auth_env_codex_api_key_enabled: self.auth_env.codex_api_key_env_enabled,
+            auth_env_provider_key_name: self.auth_env.provider_env_key_name.as_deref(),
+            auth_env_provider_key_present: self.auth_env.provider_env_key_present,
+            auth_env_refresh_token_url_override_present: self
+                .auth_env
+                .refresh_token_url_override_present,
+            auth_retry_after_unauthorized: None,
+            auth_recovery_mode: None,
+            auth_recovery_phase: None,
+            auth_connection_reused: None,
+            app_server_auth_state: None,
+            app_server_requires_openai_auth: None,
+            provider_header_names: self.provider_header_names.as_deref(),
+            base_url_origin: self.base_url_origin,
+            host_class: self.host_class,
+            base_url_source: self.base_url_source,
+            base_url_is_default: self.base_url_is_default,
+            auth_request_id: response_debug.request_id.as_deref(),
+            auth_cf_ray: response_debug.cf_ray.as_deref(),
+            auth_error: response_debug.auth_error.as_deref(),
+            auth_error_code: response_debug.auth_error_code.as_deref(),
+            error_body_class: response_debug.error_body_class,
+            safe_error_message: response_debug.safe_error_message,
+            auth_recovery_followup_success: None,
+            auth_recovery_followup_status: None,
+        });
     }
 }
 
@@ -181,6 +215,7 @@ pub struct ModelsManager {
     etag: RwLock<Option<String>>,
     cache_manager: ModelsCacheManager,
     provider: ModelProviderInfo,
+    endpoint_telemetry_source: EndpointConfigTelemetrySource,
 }
 
 impl ModelsManager {
@@ -212,6 +247,29 @@ impl ModelsManager {
         collaboration_modes_config: CollaborationModesConfig,
         provider: ModelProviderInfo,
     ) -> Self {
+        let endpoint_telemetry_source = if provider.is_openai() {
+            EndpointConfigTelemetrySource::for_provider(crate::OPENAI_PROVIDER_ID, &provider)
+        } else {
+            EndpointConfigTelemetrySource::for_provider_without_id(&provider)
+        };
+        Self::new_with_provider_and_endpoint_telemetry_source(
+            codex_home,
+            auth_manager,
+            model_catalog,
+            collaboration_modes_config,
+            provider,
+            endpoint_telemetry_source,
+        )
+    }
+
+    pub(crate) fn new_with_provider_and_endpoint_telemetry_source(
+        codex_home: PathBuf,
+        auth_manager: Arc<AuthManager>,
+        model_catalog: Option<ModelsResponse>,
+        collaboration_modes_config: CollaborationModesConfig,
+        provider: ModelProviderInfo,
+        endpoint_telemetry_source: EndpointConfigTelemetrySource,
+    ) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
         let catalog_mode = if model_catalog.is_some() {
@@ -233,6 +291,7 @@ impl ModelsManager {
             etag: RwLock::new(None),
             cache_manager,
             provider,
+            endpoint_telemetry_source,
         }
     }
 
@@ -439,12 +498,20 @@ impl ModelsManager {
             &self.provider,
             self.auth_manager.codex_api_key_env_enabled(),
         );
+        let endpoint_telemetry = self
+            .endpoint_telemetry_source
+            .classify(api_provider.base_url.as_str());
         let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
             auth_mode: auth_mode.map(|mode| TelemetryAuthMode::from(mode).to_string()),
             auth_header_attached: api_auth.auth_header_attached(),
             auth_header_name: api_auth.auth_header_name(),
             auth_env,
+            provider_header_names: self.provider.telemetry_header_names(),
+            base_url_origin: endpoint_telemetry.base_url_origin,
+            host_class: endpoint_telemetry.host_class,
+            base_url_source: endpoint_telemetry.base_url_source,
+            base_url_is_default: endpoint_telemetry.base_url_is_default,
         });
         let client = ModelsClient::new(transport, api_provider, api_auth)
             .with_telemetry(Some(request_telemetry));
@@ -543,12 +610,18 @@ impl ModelsManager {
         auth_manager: Arc<AuthManager>,
         provider: ModelProviderInfo,
     ) -> Self {
-        Self::new_with_provider(
+        let endpoint_telemetry_source = if provider.is_openai() {
+            EndpointConfigTelemetrySource::for_provider(crate::OPENAI_PROVIDER_ID, &provider)
+        } else {
+            EndpointConfigTelemetrySource::for_provider_without_id(&provider)
+        };
+        Self::new_with_provider_and_endpoint_telemetry_source(
             codex_home,
             auth_manager,
             /*model_catalog*/ None,
             CollaborationModesConfig::default(),
             provider,
+            endpoint_telemetry_source,
         )
     }
 

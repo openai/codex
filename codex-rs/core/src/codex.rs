@@ -169,6 +169,7 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
+use crate::endpoint_config_telemetry::resolve_endpoint_config_telemetry_source;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -1570,6 +1571,17 @@ impl Session {
             &session_configuration.provider,
             auth_manager.codex_api_key_env_enabled(),
         );
+        let endpoint_telemetry_source = resolve_endpoint_config_telemetry_source(
+            &config,
+            session_configuration.session_source.clone(),
+        );
+        let conversation_start_base_url = session_configuration
+            .provider
+            .to_api_provider(auth.map(CodexAuth::auth_mode))
+            .map(|provider| provider.base_url)
+            .unwrap_or_default();
+        let endpoint_telemetry =
+            endpoint_telemetry_source.classify(conversation_start_base_url.as_str());
         let mut session_telemetry = SessionTelemetry::new(
             conversation_id,
             session_model.as_str(),
@@ -1611,8 +1623,12 @@ impl Session {
             )],
         );
 
-        session_telemetry.conversation_starts(
-            config.model_provider.name.as_str(),
+        session_telemetry.conversation_starts_with_endpoint_details(
+            session_configuration.provider.name.as_str(),
+            endpoint_telemetry.base_url_origin,
+            endpoint_telemetry.host_class,
+            endpoint_telemetry.base_url_source,
+            endpoint_telemetry.base_url_is_default,
             session_configuration.collaboration_mode.reasoning_effort(),
             config
                 .model_reasoning_summary
@@ -1796,10 +1812,11 @@ impl Session {
             network_proxy,
             network_approval: Arc::clone(&network_approval),
             state_db: state_db_ctx.clone(),
-            model_client: ModelClient::new(
+            model_client: ModelClient::new_with_endpoint_telemetry_source(
                 Some(Arc::clone(&auth_manager)),
                 conversation_id,
                 session_configuration.provider.clone(),
+                endpoint_telemetry_source,
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
                 ws_version_from_features(config.as_ref()),

@@ -7,6 +7,11 @@ const OAI_REQUEST_ID_HEADER: &str = "x-oai-request-id";
 const CF_RAY_HEADER: &str = "cf-ray";
 const AUTH_ERROR_HEADER: &str = "x-openai-authorization-error";
 const X_ERROR_JSON_HEADER: &str = "x-error-json";
+const WORKSPACE_NOT_AUTHORIZED_IN_REGION_MESSAGE: &str =
+    "Workspace is not authorized in this region.";
+pub(crate) const WORKSPACE_NOT_AUTHORIZED_IN_REGION_CLASS: &str =
+    "workspace_not_authorized_in_region";
+const MAX_ERROR_BODY_BYTES: usize = 1000;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct ResponseDebugContext {
@@ -14,15 +19,14 @@ pub(crate) struct ResponseDebugContext {
     pub(crate) cf_ray: Option<String>,
     pub(crate) auth_error: Option<String>,
     pub(crate) auth_error_code: Option<String>,
+    pub(crate) safe_error_message: Option<&'static str>,
+    pub(crate) error_body_class: Option<&'static str>,
 }
 
 pub(crate) fn extract_response_debug_context(transport: &TransportError) -> ResponseDebugContext {
     let mut context = ResponseDebugContext::default();
 
-    let TransportError::Http {
-        headers, body: _, ..
-    } = transport
-    else {
+    let TransportError::Http { headers, body, .. } = transport else {
         return context;
     };
 
@@ -49,6 +53,11 @@ pub(crate) fn extract_response_debug_context(transport: &TransportError) -> Resp
             .and_then(serde_json::Value::as_str)
             .map(str::to_string)
     });
+    let error_body = extract_error_body(body.as_deref());
+    context.safe_error_message = error_body
+        .as_deref()
+        .and_then(allowlisted_error_body_message);
+    context.error_body_class = error_body.as_deref().and_then(classify_error_body_message);
 
     context
 }
@@ -87,9 +96,75 @@ pub(crate) fn telemetry_api_error_message(error: &ApiError) -> String {
     }
 }
 
+fn extract_error_body(body: Option<&str>) -> Option<String> {
+    let body = body?;
+    if let Some(message) = extract_error_message(body) {
+        return Some(message);
+    }
+
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    Some(truncate_with_ellipsis(trimmed, MAX_ERROR_BODY_BYTES))
+}
+
+fn extract_error_message(body: &str) -> Option<String> {
+    let json = serde_json::from_str::<serde_json::Value>(body).ok()?;
+    let message = json
+        .get("error")
+        .and_then(|error| error.get("message"))
+        .and_then(serde_json::Value::as_str)?;
+    let message = message.trim();
+    if message.is_empty() {
+        None
+    } else {
+        Some(message.to_string())
+    }
+}
+
+fn classify_error_body_message(message: &str) -> Option<&'static str> {
+    if message == WORKSPACE_NOT_AUTHORIZED_IN_REGION_MESSAGE {
+        Some(WORKSPACE_NOT_AUTHORIZED_IN_REGION_CLASS)
+    } else {
+        None
+    }
+}
+
+fn allowlisted_error_body_message(message: &str) -> Option<&'static str> {
+    if message == WORKSPACE_NOT_AUTHORIZED_IN_REGION_MESSAGE {
+        Some(WORKSPACE_NOT_AUTHORIZED_IN_REGION_MESSAGE)
+    } else {
+        None
+    }
+}
+
+fn truncate_with_ellipsis(input: &str, max_bytes: usize) -> String {
+    if input.len() <= max_bytes {
+        return input.to_string();
+    }
+
+    let ellipsis = "...";
+    let keep = max_bytes.saturating_sub(ellipsis.len());
+    let mut truncated = String::new();
+    let mut used = 0usize;
+    for ch in input.chars() {
+        let len = ch.len_utf8();
+        if used + len > keep {
+            break;
+        }
+        truncated.push(ch);
+        used += len;
+    }
+    truncated.push_str(ellipsis);
+    truncated
+}
+
 #[cfg(test)]
 mod tests {
     use super::ResponseDebugContext;
+    use super::WORKSPACE_NOT_AUTHORIZED_IN_REGION_CLASS;
     use super::extract_response_debug_context;
     use super::telemetry_api_error_message;
     use super::telemetry_transport_error_message;
@@ -128,6 +203,33 @@ mod tests {
                 cf_ray: Some("ray-auth".to_string()),
                 auth_error: Some("missing_authorization_header".to_string()),
                 auth_error_code: Some("token_expired".to_string()),
+                safe_error_message: None,
+                error_body_class: None,
+            }
+        );
+    }
+
+    #[test]
+    fn extract_response_debug_context_captures_allowlisted_safe_error_message() {
+        let context = extract_response_debug_context(&TransportError::Http {
+            status: StatusCode::UNAUTHORIZED,
+            url: Some("https://chatgpt.com/backend-api/codex/responses".to_string()),
+            headers: None,
+            body: Some(
+                r#"{"error":{"message":"Workspace is not authorized in this region."},"status":401}"#
+                    .to_string(),
+            ),
+        });
+
+        assert_eq!(
+            context,
+            ResponseDebugContext {
+                request_id: None,
+                cf_ray: None,
+                auth_error: None,
+                auth_error_code: None,
+                safe_error_message: Some("Workspace is not authorized in this region."),
+                error_body_class: Some(WORKSPACE_NOT_AUTHORIZED_IN_REGION_CLASS),
             }
         );
     }

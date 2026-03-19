@@ -27,6 +27,10 @@ base_url = "http://localhost:11434/v1"
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
     assert_eq!(expected_provider, provider);
+    assert_eq!(
+        provider.telemetry_header_names().as_deref(),
+        Some("x-example-header")
+    );
 }
 
 #[test]

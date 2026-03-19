@@ -605,6 +605,11 @@ fn models_request_telemetry_emits_auth_env_feedback_tags_on_failure() {
             provider_env_key_present: Some(false),
             refresh_token_url_override_present: false,
         },
+        provider_header_names: None,
+        base_url_origin: "chatgpt.com",
+        host_class: "openai_chatgpt",
+        base_url_source: "default",
+        base_url_is_default: true,
     };
     let mut headers = HeaderMap::new();
     headers.insert("x-request-id", "req-models-401".parse().unwrap());

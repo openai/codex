@@ -179,6 +179,7 @@ use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
+use codex_core::ModelProviderInfo;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
@@ -410,6 +411,29 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
+}
+
+fn app_server_feedback_auth_state(
+    requires_openai_auth: bool,
+    auth: Option<&CodexAuth>,
+    provider: &ModelProviderInfo,
+) -> &'static str {
+    let has_required_auth = if requires_openai_auth {
+        auth.is_some()
+            || provider.api_key().ok().flatten().is_some()
+            || provider
+                .experimental_bearer_token
+                .as_ref()
+                .is_some_and(|token| !token.trim().is_empty())
+    } else {
+        true
+    };
+
+    if has_required_auth {
+        "connected"
+    } else {
+        "unauthed"
+    }
 }
 
 impl CodexMessageProcessor {
@@ -6897,6 +6921,17 @@ impl CodexMessageProcessor {
         {
             tracing::info!(target: "feedback_tags", chatgpt_user_id);
         }
+        let auth = self.auth_manager.auth_cached();
+        let requires_openai_auth = self.config.model_provider.requires_openai_auth;
+        tracing::info!(
+            target: "feedback_tags",
+            app_server_auth_state = app_server_feedback_auth_state(
+                requires_openai_auth,
+                auth.as_ref(),
+                &self.config.model_provider,
+            ),
+            app_server_requires_openai_auth = requires_openai_auth,
+        );
         let snapshot = self.feedback.snapshot(conversation_id);
         let thread_id = snapshot.thread_id.clone();
         let sqlite_feedback_logs = if include_logs {
@@ -8264,6 +8299,60 @@ mod tests {
         assert_eq!(
             collect_resume_override_mismatches(&request, &config_snapshot),
             vec!["service_tier requested=Some(Fast) active=Some(Flex)".to_string()]
+        );
+    }
+
+    #[test]
+    fn app_server_feedback_auth_state_matches_current_auth_snapshot() {
+        let no_provider_auth = ModelProviderInfo {
+            name: "provider".to_string(),
+            base_url: None,
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            wire_api: codex_core::WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: true,
+            supports_websockets: false,
+        };
+        assert_eq!(
+            app_server_feedback_auth_state(true, None, &no_provider_auth),
+            "unauthed"
+        );
+        assert_eq!(
+            app_server_feedback_auth_state(false, None, &no_provider_auth),
+            "connected"
+        );
+
+        let api_key_auth = CodexAuth::from_api_key("sk-test-key");
+        assert_eq!(
+            app_server_feedback_auth_state(true, Some(&api_key_auth), &no_provider_auth),
+            "connected"
+        );
+        assert_eq!(
+            app_server_feedback_auth_state(false, Some(&api_key_auth), &no_provider_auth),
+            "connected"
+        );
+
+        let chatgpt_auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+        assert_eq!(
+            app_server_feedback_auth_state(true, Some(&chatgpt_auth), &no_provider_auth),
+            "connected"
+        );
+
+        let provider_bearer_auth = ModelProviderInfo {
+            experimental_bearer_token: Some("provider-token".to_string()),
+            ..no_provider_auth
+        };
+        assert_eq!(
+            app_server_feedback_auth_state(true, None, &provider_bearer_auth),
+            "connected"
         );
     }
 

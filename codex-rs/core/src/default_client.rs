@@ -120,6 +120,18 @@ pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
     originator_value == "codex_atlas" || originator_value == "codex_chatgpt_desktop"
 }
 
+pub fn client_origin_class(originator_value: &str) -> &'static str {
+    if is_first_party_chat_originator(originator_value) {
+        "first_party_chat"
+    } else if originator_value == DEFAULT_ORIGINATOR {
+        "codex_cli"
+    } else if is_first_party_originator(originator_value) {
+        "first_party_ide"
+    } else {
+        "custom"
+    }
+}
+
 pub fn get_codex_user_agent() -> String {
     let build_version = env!("CARGO_PKG_VERSION");
     let os_info = os_info::get();

@@ -30,6 +30,15 @@ fn is_first_party_chat_originator_matches_known_values() {
     assert_eq!(is_first_party_chat_originator("codex_vscode"), false);
 }
 
+#[test]
+fn client_origin_class_matches_known_values() {
+    assert_eq!(client_origin_class(DEFAULT_ORIGINATOR), "codex_cli");
+    assert_eq!(client_origin_class("codex_vscode"), "first_party_ide");
+    assert_eq!(client_origin_class("Codex ChatGPT"), "first_party_ide");
+    assert_eq!(client_origin_class("codex_atlas"), "first_party_chat");
+    assert_eq!(client_origin_class("third_party_client"), "custom");
+}
+
 #[tokio::test]
 async fn test_create_client_sets_default_headers() {
     skip_if_no_network!();

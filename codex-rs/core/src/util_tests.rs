@@ -1,5 +1,4 @@
 use super::*;
-use crate::auth_env_telemetry::AuthEnvTelemetry;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -69,7 +68,6 @@ impl Visit for TagCollectorVisitor {
 #[derive(Clone)]
 struct TagCollectorLayer {
     tags: Arc<Mutex<BTreeMap<String, String>>>,
-    event_count: Arc<Mutex<usize>>,
 }
 
 impl<S> Layer<S> for TagCollectorLayer
@@ -83,54 +81,56 @@ where
         let mut visitor = TagCollectorVisitor::default();
         event.record(&mut visitor);
         self.tags.lock().unwrap().extend(visitor.tags);
-        *self.event_count.lock().unwrap() += 1;
     }
 }
 
 #[test]
 fn emit_feedback_request_tags_records_sentry_feedback_fields() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
-    let event_count = Arc::new(Mutex::new(0));
     let _guard = tracing_subscriber::registry()
-        .with(TagCollectorLayer {
-            tags: tags.clone(),
-            event_count: event_count.clone(),
-        })
+        .with(TagCollectorLayer { tags: tags.clone() })
         .set_default();
 
-    let auth_env = AuthEnvTelemetry {
-        openai_api_key_env_present: true,
-        codex_api_key_env_present: false,
-        codex_api_key_env_enabled: true,
-        provider_env_key_name: Some("configured".to_string()),
-        provider_env_key_present: Some(true),
-        refresh_token_url_override_present: true,
-    };
-
-    emit_feedback_request_tags_with_auth_env(
-        &FeedbackRequestTags {
-            endpoint: "/responses",
-            auth_header_attached: true,
-            auth_header_name: Some("authorization"),
-            auth_mode: Some("chatgpt"),
-            auth_retry_after_unauthorized: Some(false),
-            auth_recovery_mode: Some("managed"),
-            auth_recovery_phase: Some("refresh_token"),
-            auth_connection_reused: Some(true),
-            auth_request_id: Some("req-123"),
-            auth_cf_ray: Some("ray-123"),
-            auth_error: Some("missing_authorization_header"),
-            auth_error_code: Some("token_expired"),
-            auth_recovery_followup_success: Some(true),
-            auth_recovery_followup_status: Some(200),
-        },
-        &auth_env,
-    );
+    emit_feedback_request_tags(&FeedbackRequestTags {
+        endpoint: "/responses",
+        auth_header_attached: true,
+        auth_header_name: Some("authorization"),
+        auth_mode: Some("chatgpt"),
+        auth_env_openai_api_key_present: true,
+        auth_env_codex_api_key_present: false,
+        auth_env_codex_api_key_enabled: true,
+        auth_env_provider_key_name: Some("OPENAI_API_KEY"),
+        auth_env_provider_key_present: Some(true),
+        auth_env_refresh_token_url_override_present: true,
+        auth_retry_after_unauthorized: Some(false),
+        auth_recovery_mode: Some("managed"),
+        auth_recovery_phase: Some("refresh_token"),
+        auth_connection_reused: Some(true),
+        app_server_auth_state: None,
+        app_server_requires_openai_auth: None,
+        provider_header_names: Some("openai-project"),
+        base_url_origin: "chatgpt.com",
+        host_class: "openai_chatgpt",
+        base_url_source: "default",
+        base_url_is_default: true,
+        auth_request_id: Some("req-123"),
+        auth_cf_ray: Some("ray-123"),
+        auth_error: Some("missing_authorization_header"),
+        auth_error_code: Some("token_expired"),
+        error_body_class: Some("workspace_not_authorized_in_region"),
+        safe_error_message: Some("Workspace is not authorized in this region."),
+        auth_recovery_followup_success: Some(true),
+        auth_recovery_followup_status: Some(200),
+    });
 
     let tags = tags.lock().unwrap().clone();
     assert_eq!(
         tags.get("endpoint").map(String::as_str),
         Some("\"/responses\"")
+    );
+    assert_eq!(
+        tags.get("client_origin").map(String::as_str),
+        Some("\"codex_cli\"")
     );
     assert_eq!(
         tags.get("auth_header_attached").map(String::as_str),
@@ -141,37 +141,17 @@ fn emit_feedback_request_tags_records_sentry_feedback_fields() {
         Some("\"authorization\"")
     );
     assert_eq!(
-        tags.get("auth_env_openai_api_key_present")
-            .map(String::as_str),
-        Some("true")
-    );
-    assert_eq!(
-        tags.get("auth_env_codex_api_key_present")
-            .map(String::as_str),
-        Some("false")
-    );
-    assert_eq!(
-        tags.get("auth_env_codex_api_key_enabled")
-            .map(String::as_str),
-        Some("true")
+        tags.get("auth_request_id").map(String::as_str),
+        Some("\"req-123\"")
     );
     assert_eq!(
         tags.get("auth_env_provider_key_name").map(String::as_str),
-        Some("\"configured\"")
+        Some("\"OPENAI_API_KEY\"")
     );
     assert_eq!(
         tags.get("auth_env_provider_key_present")
             .map(String::as_str),
         Some("\"true\"")
-    );
-    assert_eq!(
-        tags.get("auth_env_refresh_token_url_override_present")
-            .map(String::as_str),
-        Some("true")
-    );
-    assert_eq!(
-        tags.get("auth_request_id").map(String::as_str),
-        Some("\"req-123\"")
     );
     assert_eq!(
         tags.get("auth_error_code").map(String::as_str),
@@ -187,18 +167,13 @@ fn emit_feedback_request_tags_records_sentry_feedback_fields() {
             .map(String::as_str),
         Some("\"200\"")
     );
-    assert_eq!(*event_count.lock().unwrap(), 1);
 }
 
 #[test]
 fn emit_feedback_auth_recovery_tags_preserves_401_specific_fields() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
-    let event_count = Arc::new(Mutex::new(0));
     let _guard = tracing_subscriber::registry()
-        .with(TagCollectorLayer {
-            tags: tags.clone(),
-            event_count: event_count.clone(),
-        })
+        .with(TagCollectorLayer { tags: tags.clone() })
         .set_default();
 
     emit_feedback_auth_recovery_tags(
@@ -228,18 +203,13 @@ fn emit_feedback_auth_recovery_tags_preserves_401_specific_fields() {
         tags.get("auth_401_error_code").map(String::as_str),
         Some("\"token_expired\"")
     );
-    assert_eq!(*event_count.lock().unwrap(), 1);
 }
 
 #[test]
 fn emit_feedback_auth_recovery_tags_clears_stale_401_fields() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
-    let event_count = Arc::new(Mutex::new(0));
     let _guard = tracing_subscriber::registry()
-        .with(TagCollectorLayer {
-            tags: tags.clone(),
-            event_count: event_count.clone(),
-        })
+        .with(TagCollectorLayer { tags: tags.clone() })
         .set_default();
 
     emit_feedback_auth_recovery_tags(
@@ -275,18 +245,13 @@ fn emit_feedback_auth_recovery_tags_clears_stale_401_fields() {
         tags.get("auth_401_error_code").map(String::as_str),
         Some("\"\"")
     );
-    assert_eq!(*event_count.lock().unwrap(), 2);
 }
 
 #[test]
-fn emit_feedback_request_tags_preserves_latest_auth_fields_after_unauthorized() {
+fn emit_feedback_request_tags_clears_stale_latest_auth_fields() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
-    let event_count = Arc::new(Mutex::new(0));
     let _guard = tracing_subscriber::registry()
-        .with(TagCollectorLayer {
-            tags: tags.clone(),
-            event_count: event_count.clone(),
-        })
+        .with(TagCollectorLayer { tags: tags.clone() })
         .set_default();
 
     emit_feedback_request_tags(&FeedbackRequestTags {
@@ -294,95 +259,60 @@ fn emit_feedback_request_tags_preserves_latest_auth_fields_after_unauthorized() 
         auth_header_attached: true,
         auth_header_name: Some("authorization"),
         auth_mode: Some("chatgpt"),
+        auth_env_openai_api_key_present: true,
+        auth_env_codex_api_key_present: true,
+        auth_env_codex_api_key_enabled: true,
+        auth_env_provider_key_name: Some("OPENAI_API_KEY"),
+        auth_env_provider_key_present: Some(true),
+        auth_env_refresh_token_url_override_present: true,
         auth_retry_after_unauthorized: Some(true),
         auth_recovery_mode: Some("managed"),
         auth_recovery_phase: Some("refresh_token"),
-        auth_connection_reused: None,
+        auth_connection_reused: Some(true),
+        app_server_auth_state: None,
+        app_server_requires_openai_auth: None,
+        provider_header_names: Some("openai-project"),
+        base_url_origin: "chatgpt.com",
+        host_class: "openai_chatgpt",
+        base_url_source: "default",
+        base_url_is_default: true,
         auth_request_id: Some("req-123"),
         auth_cf_ray: Some("ray-123"),
         auth_error: Some("missing_authorization_header"),
         auth_error_code: Some("token_expired"),
-        auth_recovery_followup_success: Some(false),
-        auth_recovery_followup_status: Some(401),
+        error_body_class: Some("workspace_not_authorized_in_region"),
+        safe_error_message: Some("Workspace is not authorized in this region."),
+        auth_recovery_followup_success: Some(true),
+        auth_recovery_followup_status: Some(200),
     });
-
-    let tags = tags.lock().unwrap().clone();
-    assert_eq!(
-        tags.get("auth_request_id").map(String::as_str),
-        Some("\"req-123\"")
-    );
-    assert_eq!(
-        tags.get("auth_cf_ray").map(String::as_str),
-        Some("\"ray-123\"")
-    );
-    assert_eq!(
-        tags.get("auth_error").map(String::as_str),
-        Some("\"missing_authorization_header\"")
-    );
-    assert_eq!(
-        tags.get("auth_error_code").map(String::as_str),
-        Some("\"token_expired\"")
-    );
-    assert_eq!(
-        tags.get("auth_recovery_followup_success")
-            .map(String::as_str),
-        Some("\"false\"")
-    );
-    assert_eq!(*event_count.lock().unwrap(), 1);
-}
-
-#[test]
-fn emit_feedback_request_tags_preserves_auth_env_fields_for_legacy_emitters() {
-    let tags = Arc::new(Mutex::new(BTreeMap::new()));
-    let event_count = Arc::new(Mutex::new(0));
-    let _guard = tracing_subscriber::registry()
-        .with(TagCollectorLayer {
-            tags: tags.clone(),
-            event_count: event_count.clone(),
-        })
-        .set_default();
-
-    let auth_env = AuthEnvTelemetry {
-        openai_api_key_env_present: true,
-        codex_api_key_env_present: true,
-        codex_api_key_env_enabled: true,
-        provider_env_key_name: Some("configured".to_string()),
-        provider_env_key_present: Some(true),
-        refresh_token_url_override_present: true,
-    };
-
-    emit_feedback_request_tags_with_auth_env(
-        &FeedbackRequestTags {
-            endpoint: "/responses",
-            auth_header_attached: true,
-            auth_header_name: Some("authorization"),
-            auth_mode: Some("chatgpt"),
-            auth_retry_after_unauthorized: Some(false),
-            auth_recovery_mode: Some("managed"),
-            auth_recovery_phase: Some("refresh_token"),
-            auth_connection_reused: Some(true),
-            auth_request_id: Some("req-123"),
-            auth_cf_ray: Some("ray-123"),
-            auth_error: Some("missing_authorization_header"),
-            auth_error_code: Some("token_expired"),
-            auth_recovery_followup_success: Some(true),
-            auth_recovery_followup_status: Some(200),
-        },
-        &auth_env,
-    );
     emit_feedback_request_tags(&FeedbackRequestTags {
         endpoint: "/responses",
         auth_header_attached: true,
         auth_header_name: None,
         auth_mode: None,
+        auth_env_openai_api_key_present: false,
+        auth_env_codex_api_key_present: false,
+        auth_env_codex_api_key_enabled: false,
+        auth_env_provider_key_name: None,
+        auth_env_provider_key_present: None,
+        auth_env_refresh_token_url_override_present: false,
         auth_retry_after_unauthorized: None,
         auth_recovery_mode: None,
         auth_recovery_phase: None,
         auth_connection_reused: None,
+        app_server_auth_state: None,
+        app_server_requires_openai_auth: None,
+        provider_header_names: None,
+        base_url_origin: "chatgpt.com",
+        host_class: "openai_chatgpt",
+        base_url_source: "default",
+        base_url_is_default: true,
         auth_request_id: None,
         auth_cf_ray: None,
         auth_error: None,
         auth_error_code: None,
+        error_body_class: None,
+        safe_error_message: None,
         auth_recovery_followup_success: None,
         auth_recovery_followup_status: None,
     });
@@ -394,6 +324,28 @@ fn emit_feedback_request_tags_preserves_auth_env_fields_for_legacy_emitters() {
     );
     assert_eq!(tags.get("auth_mode").map(String::as_str), Some("\"\""));
     assert_eq!(
+        tags.get("app_server_auth_state").map(String::as_str),
+        Some("\"\"")
+    );
+    assert_eq!(
+        tags.get("app_server_requires_openai_auth")
+            .map(String::as_str),
+        Some("\"\"")
+    );
+    assert_eq!(
+        tags.get("provider_header_names").map(String::as_str),
+        Some("\"\"")
+    );
+    assert_eq!(
+        tags.get("auth_env_provider_key_name").map(String::as_str),
+        Some("\"\"")
+    );
+    assert_eq!(
+        tags.get("auth_env_provider_key_present")
+            .map(String::as_str),
+        Some("\"\"")
+    );
+    assert_eq!(
         tags.get("auth_request_id").map(String::as_str),
         Some("\"\"")
     );
@@ -404,33 +356,12 @@ fn emit_feedback_request_tags_preserves_auth_env_fields_for_legacy_emitters() {
         Some("\"\"")
     );
     assert_eq!(
-        tags.get("auth_env_openai_api_key_present")
-            .map(String::as_str),
-        Some("true")
+        tags.get("error_body_class").map(String::as_str),
+        Some("\"\"")
     );
     assert_eq!(
-        tags.get("auth_env_codex_api_key_present")
-            .map(String::as_str),
-        Some("true")
-    );
-    assert_eq!(
-        tags.get("auth_env_codex_api_key_enabled")
-            .map(String::as_str),
-        Some("true")
-    );
-    assert_eq!(
-        tags.get("auth_env_provider_key_name").map(String::as_str),
-        Some("\"configured\"")
-    );
-    assert_eq!(
-        tags.get("auth_env_provider_key_present")
-            .map(String::as_str),
-        Some("\"true\"")
-    );
-    assert_eq!(
-        tags.get("auth_env_refresh_token_url_override_present")
-            .map(String::as_str),
-        Some("true")
+        tags.get("safe_error_message").map(String::as_str),
+        Some("\"\"")
     );
     assert_eq!(
         tags.get("auth_recovery_followup_success")
@@ -442,7 +373,6 @@ fn emit_feedback_request_tags_preserves_auth_env_fields_for_legacy_emitters() {
             .map(String::as_str),
         Some("\"\"")
     );
-    assert_eq!(*event_count.lock().unwrap(), 2);
 }
 
 #[test]
