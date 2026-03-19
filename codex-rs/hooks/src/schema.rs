@@ -138,34 +138,6 @@ pub(crate) struct PreToolUseCommandInput {
     pub tool_use_id: String,
 }
 
-impl PreToolUseCommandInput {
-    pub(crate) fn new(
-        session_id: impl Into<String>,
-        turn_id: impl Into<String>,
-        transcript_path: Option<PathBuf>,
-        cwd: impl Into<String>,
-        model: impl Into<String>,
-        permission_mode: impl Into<String>,
-        tool_use_id: impl Into<String>,
-        command: impl Into<String>,
-    ) -> Self {
-        Self {
-            session_id: session_id.into(),
-            turn_id: turn_id.into(),
-            transcript_path: NullableString::from_path(transcript_path),
-            cwd: cwd.into(),
-            hook_event_name: "PreToolUse".to_string(),
-            model: model.into(),
-            permission_mode: permission_mode.into(),
-            tool_name: "Bash".to_string(),
-            tool_input: PreToolUseToolInput {
-                command: command.into(),
-            },
-            tool_use_id: tool_use_id.into(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]

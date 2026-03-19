@@ -74,16 +74,20 @@ pub(crate) async fn run(
         };
     }
 
-    let input_json = match serde_json::to_string(&PreToolUseCommandInput::new(
-        request.session_id.to_string(),
-        request.turn_id.clone(),
-        request.transcript_path.clone(),
-        request.cwd.display().to_string(),
-        request.model.clone(),
-        request.permission_mode.clone(),
-        request.tool_use_id.clone(),
-        request.command.clone(),
-    )) {
+    let input_json = match serde_json::to_string(&PreToolUseCommandInput {
+        session_id: request.session_id.to_string(),
+        turn_id: request.turn_id.clone(),
+        transcript_path: crate::schema::NullableString::from_path(request.transcript_path.clone()),
+        cwd: request.cwd.display().to_string(),
+        hook_event_name: "PreToolUse".to_string(),
+        model: request.model.clone(),
+        permission_mode: request.permission_mode.clone(),
+        tool_name: "Bash".to_string(),
+        tool_input: crate::schema::PreToolUseToolInput {
+            command: request.command.clone(),
+        },
+        tool_use_id: request.tool_use_id.clone(),
+    }) {
         Ok(input_json) => input_json,
         Err(error) => {
             return serialization_failure_outcome(common::serialization_failure_hook_events(
