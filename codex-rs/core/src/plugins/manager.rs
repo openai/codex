@@ -1053,7 +1053,6 @@ impl PluginsManager {
         })
     }
 
-
     pub fn maybe_start_curated_repo_sync_for_config(
         self: &Arc<Self>,
         config: &Config,
