@@ -15,13 +15,16 @@ path = "src/bin/codex-exec-server.rs"
 workspace = true
 
 [dependencies]
+async-trait = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-app-server-protocol = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = [
+    "fs",
     "io-std",
     "io-util",
     "macros",

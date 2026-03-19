@@ -22,7 +22,6 @@ members = [
     "shell-escalation",
     "skills",
     "core",
-    "environment",
     "hooks",
     "secrets",
     "exec",
@@ -105,8 +104,8 @@ codex-cloud-requirements = { path = "cloud-requirements" }
 codex-connectors = { path = "connectors" }
 codex-config = { path = "config" }
 codex-core = { path = "core" }
-codex-environment = { path = "environment" }
 codex-exec = { path = "exec" }
+codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
 codex-feedback = { path = "feedback" }
