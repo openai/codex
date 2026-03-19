@@ -15,6 +15,11 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+// Windows CI runners can take longer to finish the app-server startup handshake.
+#[cfg(windows)]
+const DEFAULT_INIT_TIMEOUT: Duration = Duration::from_secs(25);
+#[cfg(not(windows))]
+const DEFAULT_INIT_TIMEOUT: Duration = DEFAULT_TIMEOUT;
 
 #[tokio::test]
 async fn plugin_read_returns_plugin_details_with_bundle_contents() -> Result<()> {
@@ -113,7 +118,7 @@ enabled = true
     write_installed_plugin(&codex_home, "codex-curated", "demo-plugin")?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    timeout(DEFAULT_INIT_TIMEOUT, mcp.initialize()).await??;
 
     let marketplace_path =
         AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
@@ -234,7 +239,7 @@ async fn plugin_read_accepts_legacy_string_default_prompt() -> Result<()> {
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    timeout(DEFAULT_INIT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
@@ -287,7 +292,7 @@ async fn plugin_read_returns_invalid_request_when_plugin_is_missing() -> Result<
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    timeout(DEFAULT_INIT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
@@ -338,7 +343,7 @@ async fn plugin_read_returns_invalid_request_when_plugin_manifest_is_missing() -
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    timeout(DEFAULT_INIT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
