@@ -931,7 +931,7 @@ async fn rewrite_argument_value_for_openai_files(
                 turn_context,
                 auth,
                 field_name,
-                None,
+                /*index*/ None,
                 path_or_file_ref,
             )
             .await?;
