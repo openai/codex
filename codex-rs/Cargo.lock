@@ -2008,11 +2008,9 @@ name = "codex-exec-server"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
  "clap",
  "codex-app-server-protocol",
  "codex-utils-cargo-bin",
- "codex-utils-pty",
  "futures",
  "pretty_assertions",
  "serde",

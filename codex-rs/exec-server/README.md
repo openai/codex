@@ -24,12 +24,10 @@ the wire.
 The standalone binary supports:
 
 - `ws://IP:PORT` (default)
-- `stdio://`
 
 Wire framing:
 
 - websocket: one JSON-RPC message per websocket text frame
-- stdio: one newline-delimited JSON-RPC message per line on stdin/stdout
 
 ## Lifecycle
 
@@ -43,8 +41,8 @@ Each connection follows this sequence:
 If the server receives any notification other than `initialized`, it replies
 with an error using request id `-1`.
 
-If the stdio connection closes, the server terminates any remaining managed
-processes before exiting.
+If the websocket connection closes, the server terminates any remaining managed
+processes for that client connection.
 
 ## API
 
@@ -239,13 +237,13 @@ Typical error cases:
 The crate exports:
 
 - `ExecServerClient`
-- `ExecServerLaunchCommand`
-- `ExecServerProcess`
 - `ExecServerError`
-- protocol structs such as `ExecParams`, `ExecResponse`,
-  `WriteParams`, `TerminateParams`, `ExecOutputDeltaNotification`, and
-  `ExecExitedNotification`
-- `run_main()` for embedding the stdio server in a binary
+- `ExecServerClientConnectOptions`
+- `RemoteExecServerConnectArgs`
+- protocol structs `InitializeParams` and `InitializeResponse`
+- `DEFAULT_LISTEN_URL` and `ExecServerListenUrlParseError`
+- `run_main_with_listen_url()`
+- `run_main()` for embedding the websocket server in a binary
 
 ## Example session
 
