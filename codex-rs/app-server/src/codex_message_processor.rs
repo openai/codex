@@ -197,7 +197,6 @@ use codex_core::config::ConfigOverrides;
 use codex_core::config::NetworkProxyAuditMetadata;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
-use codex_core::config::load_global_mcp_servers;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::config_loader::CloudRequirementsLoadError;
@@ -5745,7 +5744,7 @@ impl CodexMessageProcessor {
 
         match install_result {
             Ok(result) => {
-                let mut config = match self.load_latest_config(config_cwd.clone()).await {
+                let config = match self.load_latest_config(config_cwd).await {
                     Ok(config) => config,
                     Err(err) => {
                         warn!(
@@ -5760,45 +5759,6 @@ impl CodexMessageProcessor {
                 let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path());
 
                 if !plugin_mcp_servers.is_empty() {
-                    match load_global_mcp_servers(&config.codex_home).await {
-                        Ok(mut global_mcp_servers) => {
-                            let mut updated = false;
-                            for (name, server_config) in &plugin_mcp_servers {
-                                if global_mcp_servers.contains_key(name) {
-                                    continue;
-                                }
-                                global_mcp_servers.insert(name.clone(), server_config.clone());
-                                updated = true;
-                            }
-
-                            if updated
-                                && let Err(err) = ConfigEditsBuilder::new(&config.codex_home)
-                                    .replace_mcp_servers(&global_mcp_servers)
-                                    .apply()
-                                    .await
-                            {
-                                warn!(
-                                    plugin = result.plugin_id.as_key(),
-                                    "failed to persist plugin MCP servers to config.toml: {err:#}"
-                                );
-                            } else if updated {
-                                match self.load_latest_config(config_cwd).await {
-                                    Ok(latest_config) => config = latest_config,
-                                    Err(err) => {
-                                        warn!(
-                                            "failed to reload config after persisting plugin MCP servers, using previous config: {err:?}"
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                        Err(err) => {
-                            warn!(
-                                plugin = result.plugin_id.as_key(),
-                                "failed to load global MCP servers after plugin install: {err:#}"
-                            );
-                        }
-                    }
                     if let Err(err) = self.queue_mcp_server_refresh_for_config(&config).await {
                         warn!(
                             plugin = result.plugin_id.as_key(),

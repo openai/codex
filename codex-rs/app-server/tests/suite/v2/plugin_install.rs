@@ -530,6 +530,10 @@ async fn plugin_install_filters_disallowed_apps_needing_auth() -> Result<()> {
 #[tokio::test]
 async fn plugin_install_makes_bundled_mcp_servers_available_to_followup_requests() -> Result<()> {
     let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "[features]\nplugins = true\n",
+    )?;
     let repo_root = TempDir::new()?;
     write_plugin_marketplace(
         repo_root.path(),
@@ -571,8 +575,8 @@ async fn plugin_install_makes_bundled_mcp_servers_available_to_followup_requests
     let response: PluginInstallResponse = to_response(response)?;
     assert_eq!(response.apps_needing_auth, Vec::<AppSummary>::new());
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    assert!(config.contains("[mcp_servers.sample-mcp]"));
-    assert!(config.contains("command = \"echo\""));
+    assert!(!config.contains("[mcp_servers.sample-mcp]"));
+    assert!(!config.contains("command = \"echo\""));
 
     let request_id = mcp
         .send_raw_request(
