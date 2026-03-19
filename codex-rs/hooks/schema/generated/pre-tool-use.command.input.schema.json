@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "NullableString": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "PreToolUseToolInput": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "cwd": {
+      "type": "string"
+    },
+    "hook_event_name": {
+      "const": "PreToolUse",
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "permission_mode": {
+      "enum": [
+        "default",
+        "acceptEdits",
+        "plan",
+        "dontAsk",
+        "bypassPermissions"
+      ],
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "tool_input": {
+      "$ref": "#/definitions/PreToolUseToolInput"
+    },
+    "tool_name": {
+      "const": "Bash",
+      "type": "string"
+    },
+    "tool_use_id": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "$ref": "#/definitions/NullableString"
+    }
+  },
+  "required": [
+    "cwd",
+    "hook_event_name",
+    "model",
+    "permission_mode",
+    "session_id",
+    "tool_input",
+    "tool_name",
+    "tool_use_id",
+    "transcript_path"
+  ],
+  "title": "pre-tool-use.command.input",
+  "type": "object"
+}

@@ -69,6 +69,21 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
             }
         };
 
+        for group in parsed.hooks.pre_tool_use {
+            append_group_handlers(
+                &mut handlers,
+                &mut warnings,
+                &mut display_order,
+                source_path.as_path(),
+                codex_protocol::protocol::HookEventName::PreToolUse,
+                effective_matcher(
+                    codex_protocol::protocol::HookEventName::PreToolUse,
+                    group.matcher.as_deref(),
+                ),
+                group.hooks,
+            );
+        }
+
         for group in parsed.hooks.session_start {
             append_group_handlers(
                 &mut handlers,
@@ -123,7 +138,8 @@ fn effective_matcher(
     matcher: Option<&str>,
 ) -> Option<&str> {
     match event_name {
-        codex_protocol::protocol::HookEventName::SessionStart => matcher,
+        codex_protocol::protocol::HookEventName::PreToolUse
+        | codex_protocol::protocol::HookEventName::SessionStart => matcher,
         codex_protocol::protocol::HookEventName::UserPromptSubmit
         | codex_protocol::protocol::HookEventName::Stop => None,
     }
@@ -234,6 +250,42 @@ mod tests {
             vec![ConfiguredHandler {
                 event_name: HookEventName::UserPromptSubmit,
                 matcher: None,
+                command: "echo hello".to_string(),
+                timeout_sec: 600,
+                status_message: None,
+                source_path: PathBuf::from("/tmp/hooks.json"),
+                display_order: 0,
+            }]
+        );
+    }
+
+    #[test]
+    fn pre_tool_use_keeps_valid_matcher_during_discovery() {
+        let mut handlers = Vec::new();
+        let mut warnings = Vec::new();
+        let mut display_order = 0;
+
+        append_group_handlers(
+            &mut handlers,
+            &mut warnings,
+            &mut display_order,
+            Path::new("/tmp/hooks.json"),
+            HookEventName::PreToolUse,
+            effective_matcher(HookEventName::PreToolUse, Some("^Bash$")),
+            vec![HookHandlerConfig::Command {
+                command: "echo hello".to_string(),
+                timeout_sec: None,
+                r#async: false,
+                status_message: None,
+            }],
+        );
+
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(
+            handlers,
+            vec![ConfiguredHandler {
+                event_name: HookEventName::PreToolUse,
+                matcher: Some("^Bash$".to_string()),
                 command: "echo hello".to_string(),
                 timeout_sec: 600,
                 status_message: None,

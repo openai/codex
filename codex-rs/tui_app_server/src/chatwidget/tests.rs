@@ -11618,11 +11618,11 @@ async fn hook_events_render_snapshot() {
         msg: EventMsg::HookStarted(codex_protocol::protocol::HookStartedEvent {
             turn_id: None,
             run: codex_protocol::protocol::HookRunSummary {
-                id: "session-start:0:/tmp/hooks.json".to_string(),
-                event_name: codex_protocol::protocol::HookEventName::SessionStart,
+                id: "pre-tool-use:0:/tmp/hooks.json".to_string(),
+                event_name: codex_protocol::protocol::HookEventName::PreToolUse,
                 handler_type: codex_protocol::protocol::HookHandlerType::Command,
                 execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
-                scope: codex_protocol::protocol::HookScope::Thread,
+                scope: codex_protocol::protocol::HookScope::Turn,
                 source_path: PathBuf::from("/tmp/hooks.json"),
                 display_order: 0,
                 status: codex_protocol::protocol::HookRunStatus::Running,
@@ -11640,11 +11640,11 @@ async fn hook_events_render_snapshot() {
         msg: EventMsg::HookCompleted(codex_protocol::protocol::HookCompletedEvent {
             turn_id: None,
             run: codex_protocol::protocol::HookRunSummary {
-                id: "session-start:0:/tmp/hooks.json".to_string(),
-                event_name: codex_protocol::protocol::HookEventName::SessionStart,
+                id: "pre-tool-use:0:/tmp/hooks.json".to_string(),
+                event_name: codex_protocol::protocol::HookEventName::PreToolUse,
                 handler_type: codex_protocol::protocol::HookHandlerType::Command,
                 execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
-                scope: codex_protocol::protocol::HookScope::Thread,
+                scope: codex_protocol::protocol::HookScope::Turn,
                 source_path: PathBuf::from("/tmp/hooks.json"),
                 display_order: 0,
                 status: codex_protocol::protocol::HookRunStatus::Completed,

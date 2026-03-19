@@ -13,6 +13,13 @@ pub(crate) struct SessionStartOutput {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct PreToolUseOutput {
+    pub universal: UniversalOutput,
+    pub block_reason: Option<String>,
+    pub invalid_reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct UserPromptSubmitOutput {
     pub universal: UniversalOutput,
     pub should_block: bool,
@@ -31,6 +38,8 @@ pub(crate) struct StopOutput {
 
 use crate::schema::BlockDecisionWire;
 use crate::schema::HookUniversalOutputWire;
+use crate::schema::PreToolUseCommandOutputWire;
+use crate::schema::PreToolUsePermissionDecisionWire;
 use crate::schema::SessionStartCommandOutputWire;
 use crate::schema::StopCommandOutputWire;
 use crate::schema::UserPromptSubmitCommandOutputWire;
@@ -43,6 +52,31 @@ pub(crate) fn parse_session_start(stdout: &str) -> Option<SessionStartOutput> {
     Some(SessionStartOutput {
         universal: UniversalOutput::from(wire.universal),
         additional_context,
+    })
+}
+
+pub(crate) fn parse_pre_tool_use(stdout: &str) -> Option<PreToolUseOutput> {
+    let wire: PreToolUseCommandOutputWire = parse_json(stdout)?;
+    let universal = UniversalOutput::from(wire.universal);
+    let hook_specific_output = wire.hook_specific_output.as_ref();
+    let invalid_reason = unsupported_pre_tool_use_universal(&universal)
+        .or_else(|| hook_specific_output.and_then(unsupported_pre_tool_use_hook_specific_output));
+    let block_reason = hook_specific_output.and_then(|output| match output.permission_decision {
+        Some(PreToolUsePermissionDecisionWire::Deny) => output
+            .permission_decision_reason
+            .as_deref()
+            .and_then(trimmed_reason),
+        _ => None,
+    });
+
+    Some(PreToolUseOutput {
+        universal,
+        block_reason: if invalid_reason.is_none() {
+            block_reason
+        } else {
+            None
+        },
+        invalid_reason,
     })
 }
 
@@ -118,4 +152,73 @@ where
 
 fn invalid_block_message(event_name: &str) -> String {
     format!("{event_name} hook returned decision:block without a non-empty reason")
+}
+
+fn unsupported_pre_tool_use_universal(universal: &UniversalOutput) -> Option<String> {
+    if !universal.continue_processing {
+        Some("PreToolUse hook returned unsupported continue:false".to_string())
+    } else if universal.stop_reason.is_some() {
+        Some("PreToolUse hook returned unsupported stopReason".to_string())
+    } else if universal.suppress_output {
+        Some("PreToolUse hook returned unsupported suppressOutput".to_string())
+    } else {
+        None
+    }
+}
+
+fn unsupported_pre_tool_use_hook_specific_output(
+    output: &crate::schema::PreToolUseHookSpecificOutputWire,
+) -> Option<String> {
+    if output.updated_input.is_some() {
+        Some("PreToolUse hook returned unsupported updatedInput".to_string())
+    } else if output
+        .additional_context
+        .as_deref()
+        .and_then(trimmed_reason)
+        .is_some()
+    {
+        Some("PreToolUse hook returned unsupported additionalContext".to_string())
+    } else {
+        match output.permission_decision {
+            Some(PreToolUsePermissionDecisionWire::Allow) => {
+                Some("PreToolUse hook returned unsupported permissionDecision:allow".to_string())
+            }
+            Some(PreToolUsePermissionDecisionWire::Ask) => {
+                Some("PreToolUse hook returned unsupported permissionDecision:ask".to_string())
+            }
+            Some(PreToolUsePermissionDecisionWire::Deny) => {
+                if output
+                    .permission_decision_reason
+                    .as_deref()
+                    .and_then(trimmed_reason)
+                    .is_none()
+                {
+                    Some(invalid_pre_tool_use_reason_message())
+                } else {
+                    None
+                }
+            }
+            None => {
+                if output.permission_decision_reason.is_some() {
+                    Some("PreToolUse hook returned permissionDecisionReason without permissionDecision".to_string())
+                } else {
+                    None
+                }
+            }
+        }
+    }
+}
+
+fn invalid_pre_tool_use_reason_message() -> String {
+    "PreToolUse hook returned permissionDecision:deny without a non-empty permissionDecisionReason"
+        .to_string()
+}
+
+fn trimmed_reason(reason: &str) -> Option<String> {
+    let trimmed = reason.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
