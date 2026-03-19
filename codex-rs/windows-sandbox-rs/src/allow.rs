@@ -26,9 +26,7 @@ pub fn compute_allow_paths(
         }
     };
     let mut add_deny_path = |p: PathBuf| {
-        if p.exists() {
-            deny.insert(p);
-        }
+        deny.insert(p);
     };
     let include_tmp_env_vars = matches!(
         policy,
@@ -52,12 +50,14 @@ pub fn compute_allow_paths(
                 let canonical = canonicalize(&candidate).unwrap_or(candidate);
                 add_allow(canonical.clone());
 
-                for protected_subdir in [".git", ".codex", ".agents"] {
+                for protected_subdir in [".git", ".agents"] {
                     let protected_entry = canonical.join(protected_subdir);
                     if protected_entry.exists() {
                         add_deny(protected_entry);
                     }
                 }
+                // Reserve project `.codex` even before it exists so first creation stays protected.
+                add_deny(canonical.join(".codex"));
             };
 
         add_writable_root(
@@ -124,7 +124,14 @@ mod tests {
         assert!(paths
             .allow
             .contains(&dunce::canonicalize(&extra_root).unwrap()));
-        assert!(paths.deny.is_empty(), "no deny paths expected");
+        let expected_deny: HashSet<PathBuf> = [
+            dunce::canonicalize(&command_cwd).unwrap().join(".codex"),
+            dunce::canonicalize(&extra_root).unwrap().join(".codex"),
+        ]
+        .into_iter()
+        .collect();
+
+        assert_eq!(expected_deny, paths.deny);
     }
 
     #[test]
@@ -153,7 +160,13 @@ mod tests {
         assert!(!paths
             .allow
             .contains(&dunce::canonicalize(&temp_dir).unwrap()));
-        assert!(paths.deny.is_empty(), "no deny paths expected");
+        let expected_deny: HashSet<PathBuf> = [dunce::canonicalize(&command_cwd)
+            .unwrap()
+            .join(".codex")]
+        .into_iter()
+        .collect();
+
+        assert_eq!(expected_deny, paths.deny);
     }
 
     #[test]
@@ -175,9 +188,12 @@ mod tests {
         let expected_allow: HashSet<PathBuf> = [dunce::canonicalize(&command_cwd).unwrap()]
             .into_iter()
             .collect();
-        let expected_deny: HashSet<PathBuf> = [dunce::canonicalize(&git_dir).unwrap()]
-            .into_iter()
-            .collect();
+        let expected_deny: HashSet<PathBuf> = [
+            dunce::canonicalize(&git_dir).unwrap(),
+            dunce::canonicalize(&command_cwd).unwrap().join(".codex"),
+        ]
+        .into_iter()
+        .collect();
 
         assert_eq!(expected_allow, paths.allow);
         assert_eq!(expected_deny, paths.deny);
@@ -203,9 +219,12 @@ mod tests {
         let expected_allow: HashSet<PathBuf> = [dunce::canonicalize(&command_cwd).unwrap()]
             .into_iter()
             .collect();
-        let expected_deny: HashSet<PathBuf> = [dunce::canonicalize(&git_file).unwrap()]
-            .into_iter()
-            .collect();
+        let expected_deny: HashSet<PathBuf> = [
+            dunce::canonicalize(&git_file).unwrap(),
+            dunce::canonicalize(&command_cwd).unwrap().join(".codex"),
+        ]
+        .into_iter()
+        .collect();
 
         assert_eq!(expected_allow, paths.allow);
         assert_eq!(expected_deny, paths.deny);
@@ -244,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn skips_protected_subdirs_when_missing() {
+    fn reserves_missing_codex_dir_but_not_other_missing_protected_subdirs() {
         let tmp = TempDir::new().expect("tempdir");
         let command_cwd = tmp.path().join("workspace");
         let _ = fs::create_dir_all(&command_cwd);
@@ -259,6 +278,12 @@ mod tests {
 
         let paths = compute_allow_paths(&policy, &command_cwd, &command_cwd, &HashMap::new());
         assert_eq!(paths.allow.len(), 1);
-        assert!(paths.deny.is_empty(), "no deny when protected dirs are absent");
+        let expected_deny: HashSet<PathBuf> = [dunce::canonicalize(&command_cwd)
+            .unwrap()
+            .join(".codex")]
+        .into_iter()
+        .collect();
+
+        assert_eq!(expected_deny, paths.deny);
     }
 }
