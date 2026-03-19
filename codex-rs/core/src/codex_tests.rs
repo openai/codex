@@ -3709,7 +3709,11 @@ async fn handle_output_item_done_records_image_save_history_message() {
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let call_id = "ig_history_records_message";
-    let expected_saved_path = std::env::temp_dir().join(format!("{call_id}.png"));
+    let expected_saved_path = crate::stream_events_utils::image_generation_artifact_path(
+        turn_context.config.codex_home.as_path(),
+        &session.conversation_id.to_string(),
+        call_id,
+    );
     let _ = std::fs::remove_file(&expected_saved_path);
     let item = ResponseItem::ImageGenerationCall {
         id: call_id.to_string(),
@@ -3729,10 +3733,14 @@ async fn handle_output_item_done_records_image_save_history_message() {
         .expect("image generation item should succeed");
 
     let history = session.clone_history().await;
+    let image_output_dir = crate::stream_events_utils::image_generation_artifact_dir(
+        turn_context.config.codex_home.as_path(),
+        &session.conversation_id.to_string(),
+    );
     let save_message: ResponseItem = DeveloperInstructions::new(format!(
         "Generated images are saved to {} as {} by default.",
-        std::env::temp_dir().display(),
-        std::env::temp_dir().join("<image_id>.png").display(),
+        image_output_dir.display(),
+        image_output_dir.join("<image_id>.png").display(),
     ))
     .into();
     assert_eq!(history.raw_items(), &[save_message, item]);
@@ -3749,7 +3757,11 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let call_id = "ig_history_no_message";
-    let expected_saved_path = std::env::temp_dir().join(format!("{call_id}.png"));
+    let expected_saved_path = crate::stream_events_utils::image_generation_artifact_path(
+        turn_context.config.codex_home.as_path(),
+        &session.conversation_id.to_string(),
+        call_id,
+    );
     let _ = std::fs::remove_file(&expected_saved_path);
     let item = ResponseItem::ImageGenerationCall {
         id: call_id.to_string(),
