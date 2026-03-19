@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -29,6 +30,42 @@ use codex_utils_stream_parser::strip_proposed_plan_blocks;
 use futures::Future;
 use tracing::debug;
 use tracing::instrument;
+
+const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
+
+pub(crate) fn image_generation_artifact_dir(codex_home: &Path, session_id: &str) -> PathBuf {
+    codex_home
+        .join(GENERATED_IMAGE_ARTIFACTS_DIR)
+        .join(sanitize_image_artifact_component(session_id))
+}
+
+pub(crate) fn image_generation_artifact_path(
+    codex_home: &Path,
+    session_id: &str,
+    call_id: &str,
+) -> PathBuf {
+    image_generation_artifact_dir(codex_home, session_id).join(format!(
+        "{}.png",
+        sanitize_image_artifact_component(call_id)
+    ))
+}
+
+fn sanitize_image_artifact_component(value: &str) -> String {
+    let mut sanitized: String = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if sanitized.is_empty() {
+        sanitized = "generated_image".to_string();
+    }
+    sanitized
+}
 
 fn strip_hidden_assistant_markup(text: &str, plan_mode: bool) -> String {
     let (without_citations, _) = strip_citations(text);
@@ -71,26 +108,21 @@ pub(crate) fn raw_assistant_output_text_from_item(item: &ResponseItem) -> Option
     None
 }
 
-async fn save_image_generation_result(call_id: &str, result: &str) -> Result<PathBuf> {
+async fn save_image_generation_result(
+    codex_home: &std::path::Path,
+    session_id: &str,
+    call_id: &str,
+    result: &str,
+) -> Result<PathBuf> {
     let bytes = BASE64_STANDARD
         .decode(result.trim().as_bytes())
         .map_err(|err| {
             CodexErr::InvalidRequest(format!("invalid image generation payload: {err}"))
         })?;
-    let mut file_stem: String = call_id
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if file_stem.is_empty() {
-        file_stem = "generated_image".to_string();
+    let path = image_generation_artifact_path(codex_home, session_id, call_id);
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
     }
-    let path = std::env::temp_dir().join(format!("{file_stem}.png"));
     tokio::fs::write(&path, bytes).await?;
     Ok(path)
 }
@@ -321,10 +353,21 @@ pub(crate) async fn handle_non_tool_response_item(
                 agent_message.memory_citation = memory_citation;
             }
             if let TurnItem::ImageGeneration(image_item) = &mut turn_item {
-                match save_image_generation_result(&image_item.id, &image_item.result).await {
+                let session_id = sess.conversation_id.to_string();
+                match save_image_generation_result(
+                    turn_context.config.codex_home.as_path(),
+                    &session_id,
+                    &image_item.id,
+                    &image_item.result,
+                )
+                .await
+                {
                     Ok(path) => {
                         image_item.saved_path = Some(path.to_string_lossy().into_owned());
-                        let image_output_dir = std::env::temp_dir();
+                        let image_output_dir = image_generation_artifact_dir(
+                            turn_context.config.codex_home.as_path(),
+                            &session_id,
+                        );
                         let message: ResponseItem = DeveloperInstructions::new(format!(
                             "Generated images are saved to {} as {} by default.",
                             image_output_dir.display(),
@@ -338,7 +381,10 @@ pub(crate) async fn handle_non_tool_response_item(
                         .await;
                     }
                     Err(err) => {
-                        let output_dir = std::env::temp_dir();
+                        let output_dir = image_generation_artifact_dir(
+                            turn_context.config.codex_home.as_path(),
+                            &session_id,
+                        );
                         tracing::warn!(
                             call_id = %image_item.id,
                             output_dir = %output_dir.display(),
