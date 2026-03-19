@@ -128,7 +128,7 @@ use toml::Value as TomlValue;
 use uuid::Uuid;
 mod agent_navigation;
 mod app_server_adapter;
-mod app_server_requests;
+pub(crate) mod app_server_requests;
 mod pending_interactive_replay;
 
 use self::agent_navigation::AgentNavigationDirection;
