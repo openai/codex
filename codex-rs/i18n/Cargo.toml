@@ -1,0 +1,22 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-i18n"
+version.workspace = true
+
+[lib]
+name = "codex_i18n"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-utils-cargo-bin = { workspace = true }
+fluent-bundle = { workspace = true }
+sys-locale = { workspace = true }
+thiserror = { workspace = true }
+unic-langid = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

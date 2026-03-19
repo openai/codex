@@ -16,6 +16,7 @@ use crate::config_loader::RequirementSource;
 use crate::features::Feature;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
+use codex_i18n::DEFAULT_LOCALE;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -4247,6 +4248,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
     )?;
     assert_eq!(
         Config {
+            locale: o3_profile_config.locale.clone(),
             model: Some("o3".to_string()),
             review_model: None,
             model_context_window: None,
@@ -4389,6 +4391,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         fixture.codex_home(),
     )?;
     let expected_gpt3_profile_config = Config {
+        locale: gpt3_profile_config.locale.clone(),
         model: Some("gpt-3.5-turbo".to_string()),
         review_model: None,
         model_context_window: None,
@@ -4529,6 +4532,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         fixture.codex_home(),
     )?;
     let expected_zdr_profile_config = Config {
+        locale: zdr_profile_config.locale.clone(),
         model: Some("o3".to_string()),
         review_model: None,
         model_context_window: None,
@@ -4655,6 +4659,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         fixture.codex_home(),
     )?;
     let expected_gpt5_profile_config = Config {
+        locale: gpt5_profile_config.locale.clone(),
         model: Some("gpt-5.1".to_string()),
         review_model: None,
         model_context_window: None,
@@ -6184,6 +6189,59 @@ speaker = "Desk Speakers"
         config.realtime_audio.speaker.as_deref(),
         Some("Desk Speakers")
     );
+    Ok(())
+}
+
+#[test]
+fn locale_loads_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+locale = "zh-CN"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(cfg.locale.as_deref(), Some("zh-CN"));
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(config.locale, "zh");
+    Ok(())
+}
+
+#[test]
+fn invalid_locale_is_rejected() {
+    let codex_home = TempDir::new().expect("tempdir");
+    let err = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            locale: Some("not a locale".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )
+    .expect_err("invalid locale should fail");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(err.to_string().contains("invalid locale `not a locale`"));
+}
+
+#[test]
+fn missing_or_unsupported_locale_falls_back_to_default() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert!(!config.locale.trim().is_empty());
+    assert!(config.locale == DEFAULT_LOCALE || config.locale == "zh");
     Ok(())
 }
 

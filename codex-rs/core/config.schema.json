@@ -2187,6 +2187,10 @@
       ],
       "description": "Optional absolute path to the Node runtime used by `js_repl`."
     },
+    "locale": {
+      "description": "Preferred locale for localized user-facing strings.",
+      "type": "string"
+    },
     "log_dir": {
       "allOf": [
         {

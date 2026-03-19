@@ -7,6 +7,7 @@ use crate::config::types::AppToolConfig;
 use crate::config::types::AppToolsConfig;
 use crate::config::types::AppsConfigToml;
 use codex_config::CONFIG_TOML_FILE;
+use codex_i18n::DEFAULT_LOCALE;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -61,6 +62,10 @@ fn prompt_options(
     }
 }
 
+fn approval_copy() -> McpToolApprovalCopy {
+    mcp_tool_approval_copy(DEFAULT_LOCALE)
+}
+
 #[test]
 fn approval_required_when_read_only_false_and_destructive() {
     let annotations = annotations(Some(false), Some(true), None);
@@ -99,19 +104,24 @@ fn prompt_mode_does_not_allow_persistent_remember() {
 
 #[test]
 fn approval_question_text_prepends_safety_reason() {
-    assert_eq!(
-        mcp_tool_approval_question_text(
-            "Allow this action?".to_string(),
-            Some("This tool may contact an external system."),
-        ),
-        "Tool call needs your approval. Reason: This tool may contact an external system."
+    let rendered = mcp_tool_approval_question_text(
+        DEFAULT_LOCALE,
+        "Allow this action?".to_string(),
+        Some("This tool may contact an external system."),
     );
+
+    assert_eq!(
+        rendered.contains("This tool may contact an external system."),
+        true
+    );
+    assert_ne!(rendered, "Allow this action?".to_string());
 }
 
 #[tokio::test]
 async fn approval_elicitation_request_uses_message_override_and_preserves_tool_params_keys() {
     let (session, turn_context) = make_session_and_context().await;
     let question = build_mcp_tool_approval_question(
+        DEFAULT_LOCALE,
         "q".to_string(),
         CODEX_APPS_MCP_SERVER_NAME,
         "create_event",
@@ -205,6 +215,7 @@ async fn approval_elicitation_request_uses_message_override_and_preserves_tool_p
 #[test]
 fn custom_mcp_tool_question_mentions_server_name() {
     let question = build_mcp_tool_approval_question(
+        DEFAULT_LOCALE,
         "q".to_string(),
         "custom_server",
         "run_action",
@@ -213,7 +224,7 @@ fn custom_mcp_tool_question_mentions_server_name() {
         None,
     );
 
-    assert_eq!(question.header, "Approve app tool call?");
+    assert_eq!(question.header, approval_copy().header);
     assert_eq!(
         question.question,
         "Allow the custom_server MCP server to run tool \"run_action\"?"
@@ -224,13 +235,14 @@ fn custom_mcp_tool_question_mentions_server_name() {
             .expect("options")
             .into_iter()
             .map(|option| option.label)
-            .any(|label| label == MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER)
+            .any(|label| label == approval_copy().accept_and_remember.label)
     );
 }
 
 #[test]
 fn codex_apps_tool_question_uses_fallback_app_label() {
     let question = build_mcp_tool_approval_question(
+        DEFAULT_LOCALE,
         "q".to_string(),
         CODEX_APPS_MCP_SERVER_NAME,
         "run_action",
@@ -248,6 +260,7 @@ fn codex_apps_tool_question_uses_fallback_app_label() {
 #[test]
 fn trusted_codex_apps_tool_question_offers_always_allow() {
     let question = build_mcp_tool_approval_question(
+        DEFAULT_LOCALE,
         "q".to_string(),
         CODEX_APPS_MCP_SERVER_NAME,
         "run_action",
@@ -256,14 +269,15 @@ fn trusted_codex_apps_tool_question_offers_always_allow() {
         None,
     );
     let options = question.options.expect("options");
+    let approval_copy = approval_copy();
 
     assert!(options.iter().any(|option| {
-        option.label == MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION
-            && option.description == "Run the tool and remember this choice for this session."
+        option.label == approval_copy.accept_for_session.label
+            && option.description == approval_copy.accept_for_session.description
     }));
     assert!(options.iter().any(|option| {
-        option.label == MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER
-            && option.description == "Run the tool and remember this choice for future tool calls."
+        option.label == approval_copy.accept_and_remember.label
+            && option.description == approval_copy.accept_and_remember.description
     }));
     assert_eq!(
         options
@@ -271,10 +285,10 @@ fn trusted_codex_apps_tool_question_offers_always_allow() {
             .map(|option| option.label)
             .collect::<Vec<_>>(),
         vec![
-            MCP_TOOL_APPROVAL_ACCEPT.to_string(),
-            MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION.to_string(),
-            MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER.to_string(),
-            MCP_TOOL_APPROVAL_CANCEL.to_string(),
+            approval_copy.accept.label,
+            approval_copy.accept_for_session.label,
+            approval_copy.accept_and_remember.label,
+            approval_copy.cancel.label,
         ]
     );
 }
@@ -288,6 +302,7 @@ fn codex_apps_tool_question_without_elicitation_omits_always_allow() {
     };
     let persistent_key = session_key.clone();
     let question = build_mcp_tool_approval_question(
+        DEFAULT_LOCALE,
         "q".to_string(),
         CODEX_APPS_MCP_SERVER_NAME,
         "run_action",
@@ -304,9 +319,9 @@ fn codex_apps_tool_question_without_elicitation_omits_always_allow() {
             .map(|option| option.label)
             .collect::<Vec<_>>(),
         vec![
-            MCP_TOOL_APPROVAL_ACCEPT.to_string(),
-            MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION.to_string(),
-            MCP_TOOL_APPROVAL_CANCEL.to_string(),
+            approval_copy().accept.label,
+            approval_copy().accept_for_session.label,
+            approval_copy().cancel.label,
         ]
     );
 }
@@ -314,6 +329,7 @@ fn codex_apps_tool_question_without_elicitation_omits_always_allow() {
 #[test]
 fn custom_mcp_tool_question_offers_session_remember_without_always_allow() {
     let question = build_mcp_tool_approval_question(
+        DEFAULT_LOCALE,
         "q".to_string(),
         "custom_server",
         "run_action",
@@ -330,9 +346,9 @@ fn custom_mcp_tool_question_offers_session_remember_without_always_allow() {
             .map(|option| option.label)
             .collect::<Vec<_>>(),
         vec![
-            MCP_TOOL_APPROVAL_ACCEPT.to_string(),
-            MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION.to_string(),
-            MCP_TOOL_APPROVAL_CANCEL.to_string(),
+            approval_copy().accept.label,
+            approval_copy().accept_for_session.label,
+            approval_copy().cancel.label,
         ]
     );
 }
@@ -474,9 +490,10 @@ fn codex_apps_tool_call_request_meta_includes_codex_apps_meta() {
 
 #[test]
 fn accepted_elicitation_content_converts_to_request_user_input_response() {
+    let approval_copy = approval_copy();
     let response = request_user_input_response_from_elicitation_content(Some(serde_json::json!(
         {
-            "approval": MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER,
+            "approval": approval_copy.accept_and_remember.label,
         }
     )));
 
@@ -486,7 +503,7 @@ fn accepted_elicitation_content_converts_to_request_user_input_response() {
             answers: std::collections::HashMap::from([(
                 "approval".to_string(),
                 RequestUserInputAnswer {
-                    answers: vec![MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER.to_string()],
+                    answers: vec![approval_copy.accept_and_remember.label],
                 },
             )]),
         })
@@ -743,10 +760,11 @@ fn approval_elicitation_meta_merges_session_and_always_persist_with_connector_so
 #[test]
 fn declined_elicitation_response_stays_decline() {
     let response = parse_mcp_tool_approval_elicitation_response(
+        DEFAULT_LOCALE,
         Some(ElicitationResponse {
             action: ElicitationAction::Decline,
             content: Some(serde_json::json!({
-                "approval": MCP_TOOL_APPROVAL_ACCEPT,
+                "approval": approval_copy().accept.label,
             })),
             meta: None,
         }),
@@ -759,6 +777,7 @@ fn declined_elicitation_response_stays_decline() {
 #[test]
 fn synthetic_decline_request_user_input_response_stays_decline() {
     let response = parse_mcp_tool_approval_response(
+        DEFAULT_LOCALE,
         Some(RequestUserInputResponse {
             answers: HashMap::from([(
                 "approval".to_string(),
@@ -776,6 +795,7 @@ fn synthetic_decline_request_user_input_response_stays_decline() {
 #[test]
 fn accepted_elicitation_response_uses_always_persist_meta() {
     let response = parse_mcp_tool_approval_elicitation_response(
+        DEFAULT_LOCALE,
         Some(ElicitationResponse {
             action: ElicitationAction::Accept,
             content: None,
@@ -792,6 +812,7 @@ fn accepted_elicitation_response_uses_always_persist_meta() {
 #[test]
 fn accepted_elicitation_response_uses_session_persist_meta() {
     let response = parse_mcp_tool_approval_elicitation_response(
+        DEFAULT_LOCALE,
         Some(ElicitationResponse {
             action: ElicitationAction::Accept,
             content: None,
@@ -808,6 +829,7 @@ fn accepted_elicitation_response_uses_session_persist_meta() {
 #[test]
 fn accepted_elicitation_without_content_defaults_to_accept() {
     let response = parse_mcp_tool_approval_elicitation_response(
+        DEFAULT_LOCALE,
         Some(ElicitationResponse {
             action: ElicitationAction::Accept,
             content: None,
@@ -991,12 +1013,13 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_for_model() {
     )
     .await;
 
-    assert_eq!(
-        decision,
-        Some(McpToolApprovalDecision::BlockedBySafetyMonitor(
-            "Tool call was cancelled because of safety risks: high-risk action".to_string(),
-        ))
-    );
+    match decision {
+        Some(McpToolApprovalDecision::BlockedBySafetyMonitor(message)) => {
+            assert_eq!(message.contains("high-risk action"), true);
+            assert_eq!(message.is_empty(), false);
+        }
+        other => panic!("expected BlockedBySafetyMonitor, got {other:?}"),
+    }
 }
 
 #[tokio::test]

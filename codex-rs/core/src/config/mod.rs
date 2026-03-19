@@ -65,6 +65,7 @@ use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
+use codex_i18n::resolve_locale;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
@@ -236,6 +237,9 @@ pub struct Config {
 
     /// Warnings collected during config load that should be shown on startup.
     pub startup_warnings: Vec<String>,
+
+    /// Resolved UI locale used for localized user-facing strings.
+    pub locale: String,
 
     /// Optional override of model selection.
     pub model: Option<String>,
@@ -1250,6 +1254,9 @@ pub struct ConfigToml {
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
+
+    /// Preferred locale for localized user-facing strings.
+    pub locale: Option<String>,
 
     /// System instructions.
     pub instructions: Option<String>,
@@ -2408,6 +2415,9 @@ impl Config {
         let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
 
         let history = cfg.history.unwrap_or_default();
+        let locale = resolve_locale(cfg.locale.as_deref()).map_err(|err| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("{err}"))
+        })?;
 
         let agent_max_threads = cfg
             .agents
@@ -2658,6 +2668,7 @@ impl Config {
                 NetworkSandboxPolicy::from(&effective_sandbox_policy)
             };
         let config = Self {
+            locale,
             model,
             service_tier,
             review_model,

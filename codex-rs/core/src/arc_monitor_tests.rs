@@ -331,6 +331,58 @@ async fn monitor_action_posts_expected_arc_request() {
 
 #[tokio::test]
 #[serial(arc_monitor_env)]
+async fn monitor_action_returns_empty_reason_when_arc_requires_generic_confirmation() {
+    let server = MockServer::start().await;
+    let (session, mut turn_context) = make_session_and_context().await;
+    turn_context.auth_manager = Some(crate::test_support::auth_manager_from_auth(
+        crate::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    ));
+
+    let mut config = (*turn_context.config).clone();
+    config.chatgpt_base_url = server.uri();
+    turn_context.config = Arc::new(config);
+
+    session
+        .record_into_history(
+            &[ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "please run the tool".to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            }],
+            &turn_context,
+        )
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/codex/safety/arc"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "outcome": "ask-user",
+            "short_reason": "",
+            "rationale": "",
+            "risk_score": 42,
+            "risk_level": "medium",
+            "evidence": [],
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let outcome = monitor_action(
+        &session,
+        &turn_context,
+        serde_json::json!({ "tool": "mcp_tool_call" }),
+    )
+    .await;
+
+    assert_eq!(outcome, ArcMonitorOutcome::AskUser(String::new()));
+}
+
+#[tokio::test]
+#[serial(arc_monitor_env)]
 async fn monitor_action_uses_env_url_and_token_overrides() {
     let server = MockServer::start().await;
     let _url_guard = EnvVarGuard::set(

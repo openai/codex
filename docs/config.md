@@ -26,6 +26,19 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 When Codex knows which client started the turn, the legacy notify JSON payload also includes a top-level `client` field. The TUI reports `codex-tui`, and the app server reports the `clientInfo.name` value from `initialize`.
 
+## Locale
+
+Set top-level `locale` in `config.toml` to choose the preferred locale for
+localized user-facing strings. For example:
+
+```toml
+locale = "zh"
+```
+
+Codex resolves locales to canonical locale codes, preferring specific locale
+codes first, then generic language codes, and finally `en-US`. For example,
+`zh-HK` falls back to `zh` when there is no `zh-HK` resource bundle.
+
 ## JSON Schema
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.

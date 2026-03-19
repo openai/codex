@@ -3,6 +3,7 @@ members = [
     "backend-client",
     "ansi-escape",
     "async-utils",
+    "i18n",
     "app-server",
     "app-server-client",
     "app-server-protocol",
@@ -112,6 +113,7 @@ codex-feedback = { path = "feedback" }
 codex-file-search = { path = "file-search" }
 codex-git = { path = "utils/git" }
 codex-hooks = { path = "hooks" }
+codex-i18n = { path = "i18n" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
@@ -191,6 +193,7 @@ env-flags = "0.1.1"
 env_logger = "0.11.9"
 eventsource-stream = "0.2.3"
 flate2 = "1.1.4"
+fluent-bundle = "0.16.0"
 futures = { version = "0.3", default-features = false }
 gethostname = "1.1.0"
 globset = "0.4"
@@ -305,6 +308,7 @@ tree-sitter-bash = "0.25"
 ts-rs = "11"
 tungstenite = { version = "0.27.0", features = ["deflate", "proxy"] }
 uds_windows = "1.1.0"
+unic-langid = "0.9.6"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2"
 url = "2"

@@ -195,10 +195,7 @@ pub(crate) async fn monitor_action(
             } else if !rationale.is_empty() {
                 ArcMonitorOutcome::AskUser(rationale.to_string())
             } else {
-                ArcMonitorOutcome::AskUser(
-                    "Additional confirmation is required before this tool call can continue."
-                        .to_string(),
-                )
+                ArcMonitorOutcome::AskUser(String::new())
             }
         }
         ArcMonitorResultOutcome::SteerModel => {
@@ -207,9 +204,7 @@ pub(crate) async fn monitor_action(
             } else if !short_reason.is_empty() {
                 ArcMonitorOutcome::SteerModel(short_reason.to_string())
             } else {
-                ArcMonitorOutcome::SteerModel(
-                    "Tool call was cancelled because of safety risks.".to_string(),
-                )
+                ArcMonitorOutcome::SteerModel(String::new())
             }
         }
     }

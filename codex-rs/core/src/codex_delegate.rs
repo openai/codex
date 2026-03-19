@@ -42,8 +42,6 @@ use crate::error::CodexErr;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request_with_cancel;
 use crate::guardian::routes_approval_to_guardian;
-use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT;
-use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
 use crate::mcp_tool_call::build_guardian_mcp_tool_review_request;
 use crate::mcp_tool_call::is_mcp_tool_approval_question_id;
@@ -693,15 +691,22 @@ async fn maybe_auto_review_mcp_request_user_input(
             .options
             .as_ref()
             .and_then(|options| {
-                options
-                    .iter()
-                    .find(|option| option.label == MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION)
+                if options.len() > 2 {
+                    options.get(1)
+                } else {
+                    options.first()
+                }
             })
             .map(|option| option.label.clone())
-            .unwrap_or_else(|| MCP_TOOL_APPROVAL_ACCEPT.to_string()),
+            .unwrap_or_default(),
         ReviewDecision::Approved
         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
-        | ReviewDecision::NetworkPolicyAmendment { .. } => MCP_TOOL_APPROVAL_ACCEPT.to_string(),
+        | ReviewDecision::NetworkPolicyAmendment { .. } => question
+            .options
+            .as_ref()
+            .and_then(|options| options.first())
+            .map(|option| option.label.clone())
+            .unwrap_or_default(),
         ReviewDecision::Denied | ReviewDecision::Abort => {
             MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC.to_string()
         }

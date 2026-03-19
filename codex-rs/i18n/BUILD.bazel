@@ -1,0 +1,8 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+codex_rust_crate(
+    name = "i18n",
+    crate_name = "codex_i18n",
+    lib_data_extra = glob(["src/locales/**"]),
+    test_data_extra = glob(["src/locales/**"]),
+)

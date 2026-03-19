@@ -1,5 +1,5 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "templates": [
     {
       "source_tool_index": 0,
@@ -9,18 +9,18 @@
       "template_params": [
         {
           "name": "pr_number",
-          "label": "Pull request"
+          "label_id": "approval-param-pull-request"
         },
         {
           "name": "repo_full_name",
-          "label": "Repository"
+          "label_id": "approval-param-repository"
         },
         {
           "name": "comment",
-          "label": "Comment"
+          "label_id": "approval-param-comment"
         }
       ],
-      "template": "Allow {connector_name} to add a comment to a pull request?"
+      "question_id": "approval-question-github-add-comment-to-issue"
     },
     {
       "source_tool_index": 1,
@@ -30,18 +30,18 @@
       "template_params": [
         {
           "name": "reaction",
-          "label": "Reaction"
+          "label_id": "approval-param-reaction"
         },
         {
           "name": "comment_id",
-          "label": "Comment"
+          "label_id": "approval-param-comment"
         },
         {
           "name": "repo_full_name",
-          "label": "Repository"
+          "label_id": "approval-param-repository"
         }
       ],
-      "template": "Allow {connector_name} to add a reaction to an issue comment?"
+      "question_id": "approval-question-github-add-reaction-to-issue-comment"
     },
     {
       "source_tool_index": 2,
@@ -51,18 +51,18 @@
       "template_params": [
         {
           "name": "reaction",
-          "label": "Reaction"
+          "label_id": "approval-param-reaction"
         },
         {
           "name": "pr_number",
-          "label": "Pull request"
+          "label_id": "approval-param-pull-request"
         },
         {
           "name": "repo_full_name",
-          "label": "Repository"
+          "label_id": "approval-param-repository"
         }
       ],
-      "template": "Allow {connector_name} to add a reaction to a pull request?"
+      "question_id": "approval-question-github-add-reaction-to-pr"
     },
     {
       "source_tool_index": 3,
@@ -72,18 +72,18 @@
       "template_params": [
         {
           "name": "reaction",
-          "label": "Reaction"
+          "label_id": "approval-param-reaction"
         },
         {
           "name": "comment_id",
-          "label": "Comment"
+          "label_id": "approval-param-comment"
         },
         {
           "name": "repo_full_name",
-          "label": "Repository"
+          "label_id": "approval-param-repository"
         }
       ],
-      "template": "Allow {connector_name} to add a reaction to a pull request review comment?"
+      "question_id": "approval-question-github-add-reaction-to-pr-review-comment"
     },
     {
       "source_tool_index": 4,
@@ -93,18 +93,18 @@
       "template_params": [
         {
           "name": "action",
-          "label": "Action"
+          "label_id": "approval-param-action"
         },
         {
           "name": "pr_number",
-          "label": "Pull request"
+          "label_id": "approval-param-pull-request"
         },
         {
           "name": "review",
-          "label": "Review"
+          "label_id": "approval-param-review"
         }
       ],
-      "template": "Allow {connector_name} to submit a pull request review?"
+      "question_id": "approval-question-github-add-review-to-pr"
     },
     {
       "source_tool_index": 5,
@@ -114,14 +114,14 @@
       "template_params": [
         {
           "name": "repository_full_name",
-          "label": "Repository"
+          "label_id": "approval-param-repository"
         },
         {
           "name": "content",
-          "label": "Content"
+          "label_id": "approval-param-content"
         }
       ],
-      "template": "Allow {connector_name} to create a Git blob?"
+      "question_id": "approval-question-github-create-blob"
     },
     {
       "source_tool_index": 6,
@@ -131,14 +131,14 @@
       "template_params": [
         {
           "name": "branch_name",
-          "label": "Branch"
+          "label_id": "approval-param-branch"
         },
         {
           "name": "repository_full_name",
-          "label": "Repository"
+          "label_id": "approval-param-repository"
         }
       ],
-      "template": "Allow {connector_name} to create a branch?"
+      "question_id": "approval-question-github-create-branch"
     },
     {
       "source_tool_index": 7,
@@ -148,14 +148,14 @@
       "template_params": [
         {
           "name": "repository_full_name",
-          "label": "Repository"
+          "label_id": "approval-param-repository"
         },
         {
           "name": "message",
-          "label": "Message"
+          "label_id": "approval-param-message"
         }
       ],
-      "template": "Allow {connector_name} to create a commit?"
+      "question_id": "approval-question-github-create-commit"
     },
     {
       "source_tool_index": 8,
@@ -165,18 +165,18 @@
       "template_params": [
         {
           "name": "title",
-          "label": "Title"
+          "label_id": "approval-param-title"
         },
         {
           "name": "head_branch",
-          "label": "Head branch"
+          "label_id": "approval-param-head-branch"
         },
         {
           "name": "base_branch",
-          "label": "Base branch"
+          "label_id": "approval-param-base-branch"
         }
       ],
-      "template": "Allow {connector_name} to create a pull request?"
+      "question_id": "approval-question-github-create-pull-request"
     },
     {
       "source_tool_index": 9,
@@ -186,14 +186,14 @@
       "template_params": [
         {
           "name": "repository_full_name",
-          "label": "Repository"
+          "label_id": "approval-param-repository"
         },
         {
           "name": "tree_elements",
-          "label": "Changes"
+          "label_id": "approval-param-changes"
         }
       ],
-      "template": "Allow {connector_name} to create a Git tree?"
+      "question_id": "approval-question-github-create-tree"
     },
     {
       "source_tool_index": 10,
@@ -203,14 +203,14 @@
       "template_params": [
         {
           "name": "pr_number",
-          "label": "Pull request"
+          "label_id": "approval-param-pull-request"
         },
         {
           "name": "repository_full_name",
-          "label": "Repository"
+          "label_id": "approval-param-repository"
         }
       ],
-      "template": "Allow {connector_name} to enable pull request auto-merge?"
+      "question_id": "approval-question-github-enable-auto-merge"
     },
     {
       "source_tool_index": 11,
@@ -220,18 +220,18 @@
       "template_params": [
         {
           "name": "label",
-          "label": "Label"
+          "label_id": "approval-param-label"
         },
         {
           "name": "pr_number",
-          "label": "Pull request"
+          "label_id": "approval-param-pull-request"
         },
         {
           "name": "repository_full_name",
-          "label": "Repository"
+          "label_id": "approval-param-repository"
         }
       ],
-      "template": "Allow {connector_name} to add a label to a pull request?"
+      "question_id": "approval-question-github-label-pr"
     },
     {
       "source_tool_index": 12,
@@ -241,18 +241,18 @@
       "template_params": [
         {
           "name": "reaction_id",
-          "label": "Reaction"
+          "label_id": "approval-param-reaction"
         },
         {
           "name": "comment_id",
-          "label": "Comment"
+          "label_id": "approval-param-comment"
         },
         {
           "name": "repo_full_name",
-          "label": "Repository"
+          "label_id": "approval-param-repository"
         }
       ],
-      "template": "Allow {connector_name} to remove a reaction from an issue comment?"
+      "question_id": "approval-question-github-remove-reaction-from-issue-comment"
     },
     {
       "source_tool_index": 13,
@@ -262,18 +262,18 @@
       "template_params": [
         {
           "name": "reaction_id",
-          "label": "Reaction"
+          "label_id": "approval-param-reaction"
         },
         {
           "name": "pr_number",
-          "label": "Pull request"
+          "label_id": "approval-param-pull-request"
         },
         {
           "name": "repo_full_name",
-          "label": "Repository"
+          "label_id": "approval-param-repository"
         }
       ],
-      "template": "Allow {connector_name} to remove a reaction from a pull request?"
+      "question_id": "approval-question-github-remove-reaction-from-pr"
     },
     {
       "source_tool_index": 14,
@@ -283,18 +283,18 @@
       "template_params": [
         {
           "name": "reaction_id",
-          "label": "Reaction"
+          "label_id": "approval-param-reaction"
         },
         {
           "name": "comment_id",
-          "label": "Comment"
+          "label_id": "approval-param-comment"
         },
         {
           "name": "repo_full_name",
-          "label": "Repository"
+          "label_id": "approval-param-repository"
         }
       ],
-      "template": "Allow {connector_name} to remove a reaction from a pull request review comment?"
+      "question_id": "approval-question-github-remove-reaction-from-pr-review-comment"
     },
     {
       "source_tool_index": 15,
@@ -304,18 +304,18 @@
       "template_params": [
         {
           "name": "pr_number",
-          "label": "Pull request"
+          "label_id": "approval-param-pull-request"
         },
         {
           "name": "repo_full_name",
-          "label": "Repository"
+          "label_id": "approval-param-repository"
         },
         {
           "name": "comment",
-          "label": "Comment"
+          "label_id": "approval-param-comment"
         }
       ],
-      "template": "Allow {connector_name} to reply to a pull request review comment?"
+      "question_id": "approval-question-github-reply-to-review-comment"
     },
     {
       "source_tool_index": 16,
@@ -325,18 +325,18 @@
       "template_params": [
         {
           "name": "comment_id",
-          "label": "Comment ID"
+          "label_id": "approval-param-comment-id"
         },
         {
           "name": "repo_full_name",
-          "label": "Repository"
+          "label_id": "approval-param-repository"
         },
         {
           "name": "comment",
-          "label": "Comment"
+          "label_id": "approval-param-comment"
         }
       ],
-      "template": "Allow {connector_name} to update an issue comment?"
+      "question_id": "approval-question-github-update-issue-comment"
     },
     {
       "source_tool_index": 17,
@@ -346,18 +346,18 @@
       "template_params": [
         {
           "name": "branch_name",
-          "label": "Branch"
+          "label_id": "approval-param-branch"
         },
         {
           "name": "repository_full_name",
-          "label": "Repository"
+          "label_id": "approval-param-repository"
         },
         {
           "name": "sha",
-          "label": "Commit"
+          "label_id": "approval-param-commit"
         }
       ],
-      "template": "Allow {connector_name} to update a branch reference?"
+      "question_id": "approval-question-github-update-ref"
     },
     {
       "source_tool_index": 18,
@@ -367,18 +367,18 @@
       "template_params": [
         {
           "name": "comment_id",
-          "label": "Comment ID"
+          "label_id": "approval-param-comment-id"
         },
         {
           "name": "repo_full_name",
-          "label": "Repository"
+          "label_id": "approval-param-repository"
         },
         {
           "name": "comment",
-          "label": "Comment"
+          "label_id": "approval-param-comment"
         }
       ],
-      "template": "Allow {connector_name} to update a pull request review comment?"
+      "question_id": "approval-question-github-update-review-comment"
     },
     {
       "source_tool_index": 19,
@@ -388,18 +388,18 @@
       "template_params": [
         {
           "name": "title",
-          "label": "Title"
+          "label_id": "approval-param-title"
         },
         {
           "name": "start_time",
-          "label": "Start"
+          "label_id": "approval-param-start"
         },
         {
           "name": "attendees",
-          "label": "Attendees"
+          "label_id": "approval-param-attendees"
         }
       ],
-      "template": "Allow {connector_name} to create an event?"
+      "question_id": "approval-question-google-calendar-create-event"
     },
     {
       "source_tool_index": 20,
@@ -409,10 +409,10 @@
       "template_params": [
         {
           "name": "event_id",
-          "label": "Event"
+          "label_id": "approval-param-event"
         }
       ],
-      "template": "Allow {connector_name} to delete an event?"
+      "question_id": "approval-question-google-calendar-delete-event"
     },
     {
       "source_tool_index": 21,
@@ -422,14 +422,14 @@
       "template_params": [
         {
           "name": "response_status",
-          "label": "Response Status"
+          "label_id": "approval-param-response-status"
         },
         {
           "name": "event_id",
-          "label": "Event"
+          "label_id": "approval-param-event"
         }
       ],
-      "template": "Allow {connector_name} to respond to an event?"
+      "question_id": "approval-question-google-calendar-respond-event"
     },
     {
       "source_tool_index": 22,
@@ -439,10 +439,10 @@
       "template_params": [
         {
           "name": "event_id",
-          "label": "Event"
+          "label_id": "approval-param-event"
         }
       ],
-      "template": "Allow {connector_name} to update an event?"
+      "question_id": "approval-question-google-calendar-update-event"
     },
     {
       "source_tool_index": 23,
@@ -452,14 +452,14 @@
       "template_params": [
         {
           "name": "spreadsheet_url",
-          "label": "Spreadsheet"
+          "label_id": "approval-param-spreadsheet"
         },
         {
           "name": "requests",
-          "label": "Changes"
+          "label_id": "approval-param-changes"
         }
       ],
-      "template": "Allow {connector_name} to apply spreadsheet updates?"
+      "question_id": "approval-question-google-sheets-batch-update"
     },
     {
       "source_tool_index": 24,
@@ -469,10 +469,10 @@
       "template_params": [
         {
           "name": "title",
-          "label": "Title"
+          "label_id": "approval-param-title"
         }
       ],
-      "template": "Allow {connector_name} to create a spreadsheet?"
+      "question_id": "approval-question-google-sheets-create-spreadsheet"
     },
     {
       "source_tool_index": 25,
@@ -482,18 +482,18 @@
       "template_params": [
         {
           "name": "source_sheet_name",
-          "label": "Source Sheet Name"
+          "label_id": "approval-param-source-sheet-name"
         },
         {
           "name": "spreadsheet_url",
-          "label": "Spreadsheet"
+          "label_id": "approval-param-spreadsheet"
         },
         {
           "name": "new_file_name",
-          "label": "New File Name"
+          "label_id": "approval-param-new-file-name"
         }
       ],
-      "template": "Allow {connector_name} to copy a sheet into a new spreadsheet?"
+      "question_id": "approval-question-google-sheets-duplicate-sheet-in-new-file"
     },
     {
       "source_tool_index": 26,
@@ -503,14 +503,14 @@
       "template_params": [
         {
           "name": "presentation_url",
-          "label": "Presentation"
+          "label_id": "approval-param-presentation"
         },
         {
           "name": "requests",
-          "label": "Changes"
+          "label_id": "approval-param-changes"
         }
       ],
-      "template": "Allow {connector_name} to apply presentation updates?"
+      "question_id": "approval-question-google-slides-batch-update"
     },
     {
       "source_tool_index": 27,
@@ -520,10 +520,10 @@
       "template_params": [
         {
           "name": "title",
-          "label": "Title"
+          "label_id": "approval-param-title"
         }
       ],
-      "template": "Allow {connector_name} to create a presentation?"
+      "question_id": "approval-question-google-slides-create-presentation"
     },
     {
       "source_tool_index": 28,
@@ -533,14 +533,14 @@
       "template_params": [
         {
           "name": "document_url",
-          "label": "Document"
+          "label_id": "approval-param-document"
         },
         {
           "name": "requests",
-          "label": "Changes"
+          "label_id": "approval-param-changes"
         }
       ],
-      "template": "Allow {connector_name} to apply document updates?"
+      "question_id": "approval-question-google-docs-batch-update"
     },
     {
       "source_tool_index": 29,
@@ -550,10 +550,10 @@
       "template_params": [
         {
           "name": "title",
-          "label": "Title"
+          "label_id": "approval-param-title"
         }
       ],
-      "template": "Allow {connector_name} to create a document?"
+      "question_id": "approval-question-google-docs-create-document"
     },
     {
       "source_tool_index": 30,
@@ -563,10 +563,10 @@
       "template_params": [
         {
           "name": "url",
-          "label": "URL"
+          "label_id": "approval-param-url"
         }
       ],
-      "template": "Allow {connector_name} to copy a file?"
+      "question_id": "approval-question-google-drive-copy-document"
     },
     {
       "source_tool_index": 31,
@@ -576,14 +576,14 @@
       "template_params": [
         {
           "name": "url",
-          "label": "URL"
+          "label_id": "approval-param-url"
         },
         {
           "name": "permission",
-          "label": "Permission"
+          "label_id": "approval-param-permission"
         }
       ],
-      "template": "Allow {connector_name} to change file sharing?"
+      "question_id": "approval-question-google-drive-share-document"
     },
     {
       "source_tool_index": 32,
@@ -593,14 +593,14 @@
       "template_params": [
         {
           "name": "channel_id",
-          "label": "Conversation"
+          "label_id": "approval-param-conversation"
         },
         {
           "name": "message",
-          "label": "Message"
+          "label_id": "approval-param-message"
         }
       ],
-      "template": "Allow {connector_name} to send a message?"
+      "question_id": "approval-question-slack-slack-send-message"
     },
     {
       "source_tool_index": 33,
@@ -610,18 +610,18 @@
       "template_params": [
         {
           "name": "channel_id",
-          "label": "Conversation"
+          "label_id": "approval-param-conversation"
         },
         {
           "name": "post_at",
-          "label": "Send at"
+          "label_id": "approval-param-send-at"
         },
         {
           "name": "message",
-          "label": "Message"
+          "label_id": "approval-param-message"
         }
       ],
-      "template": "Allow {connector_name} to schedule a message?"
+      "question_id": "approval-question-slack-slack-schedule-message"
     },
     {
       "source_tool_index": 34,
@@ -631,14 +631,14 @@
       "template_params": [
         {
           "name": "title",
-          "label": "Title"
+          "label_id": "approval-param-title"
         },
         {
           "name": "content",
-          "label": "Content"
+          "label_id": "approval-param-content"
         }
       ],
-      "template": "Allow {connector_name} to create a canvas?"
+      "question_id": "approval-question-slack-slack-create-canvas"
     },
     {
       "source_tool_index": 35,
@@ -648,14 +648,14 @@
       "template_params": [
         {
           "name": "channel_id",
-          "label": "Conversation"
+          "label_id": "approval-param-conversation"
         },
         {
           "name": "message",
-          "label": "Message"
+          "label_id": "approval-param-message"
         }
       ],
-      "template": "Allow {connector_name} to create a message draft?"
+      "question_id": "approval-question-slack-slack-send-message-draft"
     },
     {
       "source_tool_index": 36,
@@ -665,14 +665,14 @@
       "template_params": [
         {
           "name": "issue_id",
-          "label": "Issue"
+          "label_id": "approval-param-issue"
         },
         {
           "name": "body",
-          "label": "Body"
+          "label_id": "approval-param-body"
         }
       ],
-      "template": "Allow {connector_name} to add a comment to an issue?"
+      "question_id": "approval-question-linear-add-comment-to-issue"
     },
     {
       "source_tool_index": 37,
@@ -682,14 +682,14 @@
       "template_params": [
         {
           "name": "label_id",
-          "label": "Label"
+          "label_id": "approval-param-label"
         },
         {
           "name": "issue_id",
-          "label": "Issue"
+          "label_id": "approval-param-issue"
         }
       ],
-      "template": "Allow {connector_name} to add a label to an issue?"
+      "question_id": "approval-question-linear-add-label-to-issue"
     },
     {
       "source_tool_index": 38,
@@ -699,18 +699,18 @@
       "template_params": [
         {
           "name": "url",
-          "label": "URL"
+          "label_id": "approval-param-url"
         },
         {
           "name": "issue_id",
-          "label": "Issue"
+          "label_id": "approval-param-issue"
         },
         {
           "name": "title",
-          "label": "Title"
+          "label_id": "approval-param-title"
         }
       ],
-      "template": "Allow {connector_name} to attach a link to an issue?"
+      "question_id": "approval-question-linear-add-url-attachment-to-issue"
     },
     {
       "source_tool_index": 39,
@@ -720,14 +720,14 @@
       "template_params": [
         {
           "name": "issue_id",
-          "label": "Issue"
+          "label_id": "approval-param-issue"
         },
         {
           "name": "user_id",
-          "label": "User"
+          "label_id": "approval-param-user"
         }
       ],
-      "template": "Allow {connector_name} to assign an issue?"
+      "question_id": "approval-question-linear-assign-issue"
     },
     {
       "source_tool_index": 40,
@@ -737,14 +737,14 @@
       "template_params": [
         {
           "name": "title",
-          "label": "Title"
+          "label_id": "approval-param-title"
         },
         {
           "name": "team_id",
-          "label": "Team"
+          "label_id": "approval-param-team"
         }
       ],
-      "template": "Allow {connector_name} to create an issue?"
+      "question_id": "approval-question-linear-create-issue"
     },
     {
       "source_tool_index": 41,
@@ -754,10 +754,10 @@
       "template_params": [
         {
           "name": "label_name",
-          "label": "Label Name"
+          "label_id": "approval-param-label-name"
         }
       ],
-      "template": "Allow {connector_name} to create a label?"
+      "question_id": "approval-question-linear-create-label"
     },
     {
       "source_tool_index": 42,
@@ -767,14 +767,14 @@
       "template_params": [
         {
           "name": "name",
-          "label": "Name"
+          "label_id": "approval-param-name"
         },
         {
           "name": "team_id",
-          "label": "Team"
+          "label_id": "approval-param-team"
         }
       ],
-      "template": "Allow {connector_name} to create a project?"
+      "question_id": "approval-question-linear-create-project"
     },
     {
       "source_tool_index": 43,
@@ -784,14 +784,14 @@
       "template_params": [
         {
           "name": "label_id",
-          "label": "Label"
+          "label_id": "approval-param-label"
         },
         {
           "name": "issue_id",
-          "label": "Issue"
+          "label_id": "approval-param-issue"
         }
       ],
-      "template": "Allow {connector_name} to remove a label from an issue?"
+      "question_id": "approval-question-linear-remove-label-from-issue"
     },
     {
       "source_tool_index": 44,
@@ -801,10 +801,10 @@
       "template_params": [
         {
           "name": "comment_id",
-          "label": "Comment"
+          "label_id": "approval-param-comment"
         }
       ],
-      "template": "Allow {connector_name} to resolve a comment?"
+      "question_id": "approval-question-linear-resolve-comment"
     },
     {
       "source_tool_index": 45,
@@ -814,14 +814,14 @@
       "template_params": [
         {
           "name": "issue_id",
-          "label": "Issue"
+          "label_id": "approval-param-issue"
         },
         {
           "name": "state_id",
-          "label": "State"
+          "label_id": "approval-param-state"
         }
       ],
-      "template": "Allow {connector_name} to change issue state?"
+      "question_id": "approval-question-linear-set-issue-state"
     },
     {
       "source_tool_index": 46,
@@ -831,10 +831,10 @@
       "template_params": [
         {
           "name": "issue_id",
-          "label": "Issue"
+          "label_id": "approval-param-issue"
         }
       ],
-      "template": "Allow {connector_name} to unassign an issue?"
+      "question_id": "approval-question-linear-unassign-issue"
     },
     {
       "source_tool_index": 47,
@@ -844,14 +844,14 @@
       "template_params": [
         {
           "name": "issue_id",
-          "label": "Issue"
+          "label_id": "approval-param-issue"
         },
         {
           "name": "issue_update",
-          "label": "Changes"
+          "label_id": "approval-param-changes"
         }
       ],
-      "template": "Allow {connector_name} to update an issue?"
+      "question_id": "approval-question-linear-update-issue"
     },
     {
       "source_tool_index": 48,
@@ -861,14 +861,14 @@
       "template_params": [
         {
           "name": "project_id",
-          "label": "Project"
+          "label_id": "approval-param-project"
         },
         {
           "name": "update_fields",
-          "label": "Changes"
+          "label_id": "approval-param-changes"
         }
       ],
-      "template": "Allow {connector_name} to update a project?"
+      "question_id": "approval-question-linear-update-project"
     },
     {
       "source_tool_index": 49,
@@ -876,7 +876,7 @@
       "server_name": "codex_apps",
       "tool_title": "apply_labels_to_emails",
       "template_params": [],
-      "template": "Allow {connector_name} to apply label changes to messages?"
+      "question_id": "approval-question-gmail-apply-labels-to-emails"
     },
     {
       "source_tool_index": 50,
@@ -884,7 +884,7 @@
       "server_name": "codex_apps",
       "tool_title": "batch_modify_email",
       "template_params": [],
-      "template": "Allow {connector_name} to update message labels?"
+      "question_id": "approval-question-gmail-batch-modify-email"
     },
     {
       "source_tool_index": 51,
@@ -894,14 +894,14 @@
       "template_params": [
         {
           "name": "label_name",
-          "label": "Label Name"
+          "label_id": "approval-param-label-name"
         },
         {
           "name": "query",
-          "label": "Query"
+          "label_id": "approval-param-query"
         }
       ],
-      "template": "Allow {connector_name} to label matching messages?"
+      "question_id": "approval-question-gmail-bulk-label-matching-emails"
     },
     {
       "source_tool_index": 52,
@@ -911,18 +911,18 @@
       "template_params": [
         {
           "name": "to",
-          "label": "To"
+          "label_id": "approval-param-to"
         },
         {
           "name": "subject",
-          "label": "Subject"
+          "label_id": "approval-param-subject"
         },
         {
           "name": "body",
-          "label": "Body"
+          "label_id": "approval-param-body"
         }
       ],
-      "template": "Allow {connector_name} to create an email draft?"
+      "question_id": "approval-question-gmail-create-draft"
     },
     {
       "source_tool_index": 53,
@@ -932,10 +932,10 @@
       "template_params": [
         {
           "name": "name",
-          "label": "Name"
+          "label_id": "approval-param-name"
         }
       ],
-      "template": "Allow {connector_name} to create a label?"
+      "question_id": "approval-question-gmail-create-label"
     },
     {
       "source_tool_index": 54,
@@ -945,18 +945,18 @@
       "template_params": [
         {
           "name": "to",
-          "label": "To"
+          "label_id": "approval-param-to"
         },
         {
           "name": "subject",
-          "label": "Subject"
+          "label_id": "approval-param-subject"
         },
         {
           "name": "body",
-          "label": "Body"
+          "label_id": "approval-param-body"
         }
       ],
-      "template": "Allow {connector_name} to send an email?"
+      "question_id": "approval-question-gmail-send-email"
     }
   ]
 }

@@ -6,6 +6,7 @@ use codex_app_server_protocol::McpElicitationObjectType;
 use codex_app_server_protocol::McpElicitationSchema;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
+use codex_i18n::format_message;
 use tracing::error;
 
 use crate::analytics_client::AppInvocation;
@@ -319,6 +320,117 @@ fn sanitize_mcp_tool_result_for_model(
     })
 }
 
+fn arc_monitor_additional_confirmation_message(locale: &str) -> String {
+    localized_message(locale, "arc-monitor-additional-confirmation", &[])
+}
+
+fn arc_monitor_interrupt_message(locale: &str, reason: &str) -> String {
+    let reason = reason.trim();
+    if reason.is_empty() {
+        return localized_message(locale, "approval-safety-cancelled", &[]);
+    }
+
+    localized_message(
+        locale,
+        "approval-safety-cancelled-with-reason",
+        &[("reason", reason)],
+    )
+}
+
+fn mcp_tool_approval_copy(locale: &str) -> McpToolApprovalCopy {
+    McpToolApprovalCopy {
+        header: localized_message(locale, "approval-header", &[]),
+        accept: McpToolApprovalOptionCopy {
+            label: localized_message(locale, "approval-option-allow", &[]),
+            description: localized_message(locale, "approval-option-allow-description", &[]),
+        },
+        accept_for_session: McpToolApprovalOptionCopy {
+            label: localized_message(locale, "approval-option-allow-session", &[]),
+            description: localized_message(
+                locale,
+                "approval-option-allow-session-description",
+                &[],
+            ),
+        },
+        accept_and_remember: McpToolApprovalOptionCopy {
+            label: localized_message(locale, "approval-option-allow-remember", &[]),
+            description: localized_message(
+                locale,
+                "approval-option-allow-remember-description",
+                &[],
+            ),
+        },
+        cancel: McpToolApprovalOptionCopy {
+            label: localized_message(locale, "approval-option-cancel", &[]),
+            description: localized_message(locale, "approval-option-cancel-description", &[]),
+        },
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct McpToolApprovalOptionCopy {
+    label: String,
+    description: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct McpToolApprovalCopy {
+    header: String,
+    accept: McpToolApprovalOptionCopy,
+    accept_for_session: McpToolApprovalOptionCopy,
+    accept_and_remember: McpToolApprovalOptionCopy,
+    cancel: McpToolApprovalOptionCopy,
+}
+
+fn mcp_tool_approval_fallback_message(
+    locale: &str,
+    server: &str,
+    tool_name: &str,
+    connector_name: Option<&str>,
+) -> String {
+    if let Some(connector_name) = connector_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        return format_message(
+            locale,
+            "approval-fallback-question-connector",
+            &[("connector_name", connector_name), ("tool_name", tool_name)],
+        );
+    }
+
+    if server == CODEX_APPS_MCP_SERVER_NAME {
+        return format_message(
+            locale,
+            "approval-fallback-question-this-app",
+            &[("tool_name", tool_name)],
+        );
+    }
+
+    format_message(
+        locale,
+        "approval-fallback-question-server",
+        &[("server", server), ("tool_name", tool_name)],
+    )
+}
+
+fn mcp_tool_approval_question_text(
+    locale: &str,
+    question: String,
+    monitor_reason: Option<&str>,
+) -> String {
+    match monitor_reason.map(str::trim) {
+        Some(reason) if !reason.is_empty() => {
+            localized_message(locale, "approval-monitor-question", &[("reason", reason)])
+        }
+        _ => question,
+    }
+}
+
+fn localized_message(locale: &str, message_id: &str, args: &[(&str, &str)]) -> String {
+    format_message(locale, message_id, args)
+}
+
 async fn notify_mcp_tool_call_event(sess: &Session, turn_context: &TurnContext, event: EventMsg) {
     sess.send_event(turn_context, event).await;
 }
@@ -421,15 +533,11 @@ struct McpToolApprovalElicitationRequest<'a> {
 }
 
 pub(crate) const MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX: &str = "mcp_tool_call_approval";
-pub(crate) const MCP_TOOL_APPROVAL_ACCEPT: &str = "Allow";
-pub(crate) const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Allow for this session";
 // Internal-only token used when guardian auto-reviews delegated MCP approvals on the
 // RequestUserInput compatibility path. That legacy MCP prompt has allow/cancel labels but no
 // real "Decline" answer, so this lets guardian denials round-trip distinctly from user cancel.
 // This is not a user-facing option.
 pub(crate) const MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC: &str = "__codex_mcp_decline__";
-const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER: &str = "Allow and don't ask me again";
-const MCP_TOOL_APPROVAL_CANCEL: &str = "Cancel";
 const MCP_TOOL_APPROVAL_KIND_KEY: &str = "codex_approval_kind";
 const MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL: &str = "mcp_tool_call";
 const MCP_TOOL_APPROVAL_PERSIST_KEY: &str = "persist";
@@ -492,11 +600,15 @@ async fn maybe_request_mcp_tool_approval(
         {
             ArcMonitorOutcome::Ok => return None,
             ArcMonitorOutcome::AskUser(reason) => {
-                monitor_reason = Some(reason);
+                monitor_reason = Some(if reason.trim().is_empty() {
+                    arc_monitor_additional_confirmation_message(&turn_context.config.locale)
+                } else {
+                    reason
+                });
             }
             ArcMonitorOutcome::SteerModel(reason) => {
                 return Some(McpToolApprovalDecision::BlockedBySafetyMonitor(
-                    arc_monitor_interrupt_message(&reason),
+                    arc_monitor_interrupt_message(&turn_context.config.locale, &reason),
                 ));
             }
         }
@@ -551,6 +663,7 @@ async fn maybe_request_mcp_tool_approval(
     );
     let question_id = format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_{call_id}");
     let rendered_template = render_mcp_tool_approval_template(
+        &turn_context.config.locale,
         &invocation.server,
         metadata.and_then(|metadata| metadata.connector_id.as_deref()),
         metadata.and_then(|metadata| metadata.connector_name.as_deref()),
@@ -562,6 +675,7 @@ async fn maybe_request_mcp_tool_approval(
         .map(|rendered_template| rendered_template.tool_params_display.clone())
         .or_else(|| build_mcp_tool_approval_display_params(invocation.arguments.as_ref()));
     let mut question = build_mcp_tool_approval_question(
+        &turn_context.config.locale,
         question_id.clone(),
         &invocation.server,
         &invocation.tool,
@@ -571,8 +685,11 @@ async fn maybe_request_mcp_tool_approval(
             .as_ref()
             .map(|rendered_template| rendered_template.question.as_str()),
     );
-    question.question =
-        mcp_tool_approval_question_text(question.question, monitor_reason.as_deref());
+    question.question = mcp_tool_approval_question_text(
+        &turn_context.config.locale,
+        question.question,
+        monitor_reason.as_deref(),
+    );
     if tool_call_mcp_elicitation_enabled {
         let request_id = rmcp::model::RequestId::String(
             format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_{call_id}").into(),
@@ -598,6 +715,7 @@ async fn maybe_request_mcp_tool_approval(
             },
         );
         let decision = parse_mcp_tool_approval_elicitation_response(
+            &turn_context.config.locale,
             sess.request_mcp_server_elicitation(turn_context.as_ref(), request_id, params)
                 .await,
             &question_id,
@@ -621,7 +739,7 @@ async fn maybe_request_mcp_tool_approval(
         .request_user_input(turn_context.as_ref(), call_id.to_string(), args)
         .await;
     let decision = normalize_approval_decision_for_mode(
-        parse_mcp_tool_approval_response(response, &question_id),
+        parse_mcp_tool_approval_response(&turn_context.config.locale, response, &question_id),
         approval_mode,
     );
     apply_mcp_tool_approval_decision(
@@ -820,6 +938,7 @@ async fn lookup_mcp_app_usage_metadata(
 }
 
 fn build_mcp_tool_approval_question(
+    locale: &str,
     question_id: String,
     server: &str,
     tool_name: &str,
@@ -827,78 +946,42 @@ fn build_mcp_tool_approval_question(
     prompt_options: McpToolApprovalPromptOptions,
     question_override: Option<&str>,
 ) -> RequestUserInputQuestion {
+    let approval_copy = mcp_tool_approval_copy(locale);
     let question = question_override
         .map(ToString::to_string)
         .unwrap_or_else(|| {
-            build_mcp_tool_approval_fallback_message(server, tool_name, connector_name)
+            mcp_tool_approval_fallback_message(locale, server, tool_name, connector_name)
         });
     let question = format!("{}?", question.trim_end_matches('?'));
 
     let mut options = vec![RequestUserInputQuestionOption {
-        label: MCP_TOOL_APPROVAL_ACCEPT.to_string(),
-        description: "Run the tool and continue.".to_string(),
+        label: approval_copy.accept.label.clone(),
+        description: approval_copy.accept.description,
     }];
     if prompt_options.allow_session_remember {
         options.push(RequestUserInputQuestionOption {
-            label: MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION.to_string(),
-            description: "Run the tool and remember this choice for this session.".to_string(),
+            label: approval_copy.accept_for_session.label.clone(),
+            description: approval_copy.accept_for_session.description,
         });
     }
     if prompt_options.allow_persistent_approval {
         options.push(RequestUserInputQuestionOption {
-            label: MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER.to_string(),
-            description: "Run the tool and remember this choice for future tool calls.".to_string(),
+            label: approval_copy.accept_and_remember.label.clone(),
+            description: approval_copy.accept_and_remember.description,
         });
     }
     options.push(RequestUserInputQuestionOption {
-        label: MCP_TOOL_APPROVAL_CANCEL.to_string(),
-        description: "Cancel this tool call.".to_string(),
+        label: approval_copy.cancel.label,
+        description: approval_copy.cancel.description,
     });
 
     RequestUserInputQuestion {
         id: question_id,
-        header: "Approve app tool call?".to_string(),
+        header: approval_copy.header,
         question,
         is_other: false,
         is_secret: false,
         options: Some(options),
-    }
-}
-
-fn build_mcp_tool_approval_fallback_message(
-    server: &str,
-    tool_name: &str,
-    connector_name: Option<&str>,
-) -> String {
-    let actor = connector_name
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(ToString::to_string)
-        .unwrap_or_else(|| {
-            if server == CODEX_APPS_MCP_SERVER_NAME {
-                "this app".to_string()
-            } else {
-                format!("the {server} MCP server")
-            }
-        });
-    format!("Allow {actor} to run tool \"{tool_name}\"?")
-}
-
-fn mcp_tool_approval_question_text(question: String, monitor_reason: Option<&str>) -> String {
-    match monitor_reason.map(str::trim) {
-        Some(reason) if !reason.is_empty() => {
-            format!("Tool call needs your approval. Reason: {reason}")
-        }
-        _ => question,
-    }
-}
-
-fn arc_monitor_interrupt_message(reason: &str) -> String {
-    let reason = reason.trim();
-    if reason.is_empty() {
-        "Tool call was cancelled because of safety risks.".to_string()
-    } else {
-        format!("Tool call was cancelled because of safety risks: {reason}")
     }
 }
 
@@ -1052,6 +1135,7 @@ fn build_mcp_tool_approval_display_params(
 }
 
 fn parse_mcp_tool_approval_elicitation_response(
+    locale: &str,
     response: Option<ElicitationResponse>,
     question_id: &str,
 ) -> McpToolApprovalDecision {
@@ -1077,6 +1161,7 @@ fn parse_mcp_tool_approval_elicitation_response(
             }
 
             match parse_mcp_tool_approval_response(
+                locale,
                 request_user_input_response_from_elicitation_content(response.content),
                 question_id,
             ) {
@@ -1117,9 +1202,11 @@ fn request_user_input_response_from_elicitation_content(
 }
 
 fn parse_mcp_tool_approval_response(
+    locale: &str,
     response: Option<RequestUserInputResponse>,
     question_id: &str,
 ) -> McpToolApprovalDecision {
+    let approval_copy = mcp_tool_approval_copy(locale);
     let Some(response) = response else {
         return McpToolApprovalDecision::Cancel;
     };
@@ -1137,17 +1224,17 @@ fn parse_mcp_tool_approval_response(
         McpToolApprovalDecision::Decline
     } else if answers
         .iter()
-        .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION)
+        .any(|answer| answer == &approval_copy.accept_for_session.label)
     {
         McpToolApprovalDecision::AcceptForSession
     } else if answers
         .iter()
-        .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER)
+        .any(|answer| answer == &approval_copy.accept_and_remember.label)
     {
         McpToolApprovalDecision::AcceptAndRemember
     } else if answers
         .iter()
-        .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT)
+        .any(|answer| answer == &approval_copy.accept.label)
     {
         McpToolApprovalDecision::Accept
     } else {
