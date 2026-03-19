@@ -870,6 +870,7 @@ fn turn_snapshot_events(
                         }),
                 );
             }
+            TurnItem::HookPrompt(_) => {}
         }
     }
 
