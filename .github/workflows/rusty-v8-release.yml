@@ -106,6 +106,8 @@ jobs:
 
           bazel_args=(
             build
+            -c
+            opt
             "--platforms=@llvm//platforms:${PLATFORM}"
             "${pair_target}"
             "${extra_targets[@]}"
