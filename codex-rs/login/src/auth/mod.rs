@@ -2,8 +2,8 @@ pub mod error;
 mod storage;
 mod util;
 
-mod auth;
+mod manager;
 
-pub use auth::*;
 pub use error::RefreshTokenFailedError;
 pub use error::RefreshTokenFailedReason;
+pub use manager::*;
