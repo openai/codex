@@ -322,7 +322,7 @@ fn spawn_rollout_page_loader(
                 PAGE_SIZE,
                 cursor,
                 request.sort_key,
-                INTERACTIVE_SESSION_SOURCES,
+                INTERACTIVE_SESSION_SOURCES.as_slice(),
                 default_provider.as_ref().map(std::slice::from_ref),
                 default_provider.as_deref().unwrap_or_default(),
                 /*search_term*/ None,

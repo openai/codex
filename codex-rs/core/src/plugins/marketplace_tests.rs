@@ -30,6 +30,7 @@ fn resolve_marketplace_plugin_finds_repo_marketplace_plugin() {
     let resolved = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
         "local-plugin",
+        Some(Product::Codex),
     )
     .unwrap();
 
@@ -59,6 +60,7 @@ fn resolve_marketplace_plugin_reports_missing_plugin() {
     let err = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
         "missing",
+        Some(Product::Codex),
     )
     .unwrap_err();
 
@@ -297,6 +299,7 @@ fn list_marketplaces_keeps_distinct_entries_for_same_name() {
     let resolved = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_marketplace).unwrap(),
         "local-plugin",
+        Some(Product::Codex),
     )
     .unwrap();
 
@@ -401,6 +404,62 @@ fn list_marketplaces_reads_marketplace_display_name() {
             display_name: Some("ChatGPT Official".to_string()),
         })
     );
+}
+
+#[test]
+fn list_marketplaces_skips_marketplaces_that_fail_to_load() {
+    let tmp = tempdir().unwrap();
+    let valid_repo_root = tmp.path().join("valid-repo");
+    let invalid_repo_root = tmp.path().join("invalid-repo");
+
+    fs::create_dir_all(valid_repo_root.join(".git")).unwrap();
+    fs::create_dir_all(valid_repo_root.join(".agents/plugins")).unwrap();
+    fs::create_dir_all(invalid_repo_root.join(".git")).unwrap();
+    fs::create_dir_all(invalid_repo_root.join(".agents/plugins")).unwrap();
+    fs::write(
+        valid_repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "valid-marketplace",
+  "plugins": [
+    {
+      "name": "valid-plugin",
+      "source": {
+        "source": "local",
+        "path": "./plugin"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    fs::write(
+        invalid_repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "invalid-marketplace",
+  "plugins": [
+    {
+      "name": "broken-plugin",
+      "source": {
+        "source": "local",
+        "path": "plugin-without-dot-slash"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let marketplaces = list_marketplaces_with_home(
+        &[
+            AbsolutePathBuf::try_from(valid_repo_root).unwrap(),
+            AbsolutePathBuf::try_from(invalid_repo_root).unwrap(),
+        ],
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(marketplaces.len(), 1);
+    assert_eq!(marketplaces[0].name, "valid-marketplace");
 }
 
 #[test]
@@ -631,6 +690,7 @@ fn resolve_marketplace_plugin_rejects_non_relative_local_paths() {
     let err = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
         "local-plugin",
+        Some(Product::Codex),
     )
     .unwrap_err();
 
@@ -676,11 +736,51 @@ fn resolve_marketplace_plugin_uses_first_duplicate_entry() {
     let resolved = resolve_marketplace_plugin(
         &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
         "local-plugin",
+        Some(Product::Codex),
     )
     .unwrap();
 
     assert_eq!(
         resolved.source_path,
         AbsolutePathBuf::try_from(repo_root.join("first")).unwrap()
+    );
+}
+
+#[test]
+fn resolve_marketplace_plugin_rejects_disallowed_product() {
+    let tmp = tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "codex-curated",
+  "plugins": [
+    {
+      "name": "chatgpt-plugin",
+      "source": {
+        "source": "local",
+        "path": "./plugin"
+      },
+      "policy": {
+        "products": ["CHATGPT"]
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+
+    let err = resolve_marketplace_plugin(
+        &AbsolutePathBuf::try_from(repo_root.join(".agents/plugins/marketplace.json")).unwrap(),
+        "chatgpt-plugin",
+        Some(Product::Atlas),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "plugin `chatgpt-plugin` is not available for install in marketplace `codex-curated`"
     );
 }

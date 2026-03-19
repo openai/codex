@@ -147,6 +147,56 @@ async fn plugin_install_returns_invalid_request_for_not_available_plugin() -> Re
 }
 
 #[tokio::test]
+async fn plugin_install_returns_invalid_request_for_disallowed_product_plugin() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
+    std::fs::write(
+        repo_root.path().join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "sample-plugin",
+      "source": {
+        "source": "local",
+        "path": "./sample-plugin"
+      },
+      "policy": {
+        "products": ["CHATGPT"]
+      }
+    }
+  ]
+}"#,
+    )?;
+    write_plugin_source(repo_root.path(), "sample-plugin", &[])?;
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
+
+    let mut mcp =
+        McpProcess::new_with_args(codex_home.path(), &["--session-source", "atlas"]).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_install_request(PluginInstallParams {
+            marketplace_path,
+            plugin_name: "sample-plugin".to_string(),
+            force_remote_sync: false,
+        })
+        .await?;
+
+    let err = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, -32600);
+    assert!(err.error.message.contains("not available for install"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_install_force_remote_sync_enables_remote_plugin_before_local_install() -> Result<()>
 {
     let server = MockServer::start().await;
@@ -261,21 +311,22 @@ async fn plugin_install_tracks_analytics_event() -> Result<()> {
     let response: PluginInstallResponse = to_response(response)?;
     assert_eq!(response.apps_needing_auth, Vec::<AppSummary>::new());
 
-    let payloads = timeout(DEFAULT_TIMEOUT, async {
+    let payload = timeout(DEFAULT_TIMEOUT, async {
         loop {
             let Some(requests) = analytics_server.received_requests().await else {
                 tokio::time::sleep(Duration::from_millis(25)).await;
                 continue;
             };
-            if !requests.is_empty() {
-                break requests;
+            if let Some(request) = requests.iter().find(|request| {
+                request.method == "POST" && request.url.path() == "/codex/analytics-events/events"
+            }) {
+                break request.body.clone();
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     })
     .await?;
-    let payload: serde_json::Value =
-        serde_json::from_slice(&payloads[0].body).expect("analytics payload");
+    let payload: serde_json::Value = serde_json::from_slice(&payload).expect("analytics payload");
     assert_eq!(
         payload,
         json!({

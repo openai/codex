@@ -380,11 +380,19 @@ jobs:
       publish: true
     secrets: inherit
 
+  argument-comment-lint-release-assets:
+    name: argument-comment-lint release assets
+    needs: tag-check
+    uses: ./.github/workflows/rust-release-argument-comment-lint.yml
+    with:
+      publish: true
+
   release:
     needs:
       - build
       - build-windows
       - shell-tool-mcp
+      - argument-comment-lint-release-assets
     name: release
     runs-on: ubuntu-latest
     permissions:
@@ -520,6 +528,13 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-config.json
+
+      - uses: facebook/dotslash-publish-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag: ${{ github.ref_name }}
+          config: .github/dotslash-argument-comment-lint-config.json
 
       - name: Trigger developers.openai.com deploy
         # Only trigger the deploy if the release is not a pre-release.

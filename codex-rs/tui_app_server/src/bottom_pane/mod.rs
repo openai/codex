@@ -1073,7 +1073,6 @@ impl BottomPane {
             || self.composer.is_in_paste_burst()
     }
 
-    #[cfg(test)]
     pub(crate) fn on_history_entry_response(
         &mut self,
         log_id: u64,

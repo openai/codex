@@ -1033,6 +1033,30 @@
             },
             "method": {
               "enum": [
+                "thread/shellCommand"
+              ],
+              "title": "Thread/shellCommandRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadShellCommandParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/shellCommandRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/rollback"
               ],
               "title": "Thread/rollbackRequestMethod",
@@ -2754,6 +2778,15 @@
       "title": "CommandExecutionOutputDeltaNotification",
       "type": "object"
     },
+    "CommandExecutionSource": {
+      "enum": [
+        "agent",
+        "userShell",
+        "unifiedExecStartup",
+        "unifiedExecInteraction"
+      ],
+      "type": "string"
+    },
     "CommandExecutionStatus": {
       "enum": [
         "inProgress",
@@ -4327,6 +4360,13 @@
         }
       ]
     },
+    "FuzzyFileSearchMatchType": {
+      "enum": [
+        "file",
+        "directory"
+      ],
+      "type": "string"
+    },
     "FuzzyFileSearchParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -4370,6 +4410,9 @@
             "null"
           ]
         },
+        "match_type": {
+          "$ref": "#/definitions/FuzzyFileSearchMatchType"
+        },
         "path": {
           "type": "string"
         },
@@ -4384,6 +4427,7 @@
       },
       "required": [
         "file_name",
+        "match_type",
         "path",
         "root",
         "score"
@@ -4670,6 +4714,21 @@
         "error"
       ],
       "type": "string"
+    },
+    "HookPromptFragment": {
+      "properties": {
+        "hookRunId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "hookRunId",
+        "text"
+      ],
+      "type": "object"
     },
     "HookRunStatus": {
       "enum": [
@@ -6128,6 +6187,13 @@
     "PluginListResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "featuredPluginIds": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "marketplaces": {
           "items": {
             "$ref": "#/definitions/PluginMarketplaceEntry"
@@ -8747,6 +8813,19 @@
         {
           "additionalProperties": false,
           "properties": {
+            "custom": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "custom"
+          ],
+          "title": "CustomSessionSource",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "subAgent": {
               "$ref": "#/definitions/SubAgentSource"
             }
@@ -9652,6 +9731,33 @@
         },
         {
           "properties": {
+            "fragments": {
+              "items": {
+                "$ref": "#/definitions/HookPromptFragment"
+              },
+              "type": "array"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "hookPrompt"
+              ],
+              "title": "HookPromptThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "fragments",
+            "id",
+            "type"
+          ],
+          "title": "HookPromptThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
             "id": {
               "type": "string"
             },
@@ -9804,6 +9910,14 @@
                 "string",
                 "null"
               ]
+            },
+            "source": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/CommandExecutionSource"
+                }
+              ],
+              "default": "agent"
             },
             "status": {
               "$ref": "#/definitions/CommandExecutionStatus"
@@ -10842,6 +10956,29 @@
     "ThreadSetNameResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "ThreadSetNameResponse",
+      "type": "object"
+    },
+    "ThreadShellCommandParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "command": {
+          "description": "Shell command string evaluated by the thread's configured shell. Unlike `command/exec`, this intentionally preserves shell syntax such as pipes, redirects, and quoting. This runs unsandboxed with full access rather than inheriting the thread sandbox policy.",
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "threadId"
+      ],
+      "title": "ThreadShellCommandParams",
+      "type": "object"
+    },
+    "ThreadShellCommandResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ThreadShellCommandResponse",
       "type": "object"
     },
     "ThreadSortKey": {

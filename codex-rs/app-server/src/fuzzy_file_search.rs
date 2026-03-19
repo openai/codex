@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+use codex_app_server_protocol::FuzzyFileSearchMatchType;
 use codex_app_server_protocol::FuzzyFileSearchResult;
 use codex_app_server_protocol::FuzzyFileSearchSessionCompletedNotification;
 use codex_app_server_protocol::FuzzyFileSearchSessionUpdatedNotification;
@@ -60,6 +61,10 @@ pub(crate) async fn run_fuzzy_file_search(
                 FuzzyFileSearchResult {
                     root: m.root.to_string_lossy().to_string(),
                     path: m.path.to_string_lossy().to_string(),
+                    match_type: match m.match_type {
+                        file_search::MatchType::File => FuzzyFileSearchMatchType::File,
+                        file_search::MatchType::Directory => FuzzyFileSearchMatchType::Directory,
+                    },
                     file_name: file_name.to_string_lossy().to_string(),
                     score: m.score,
                     indices: m.indices,
@@ -231,6 +236,10 @@ fn collect_files(snapshot: &file_search::FileSearchSnapshot) -> Vec<FuzzyFileSea
             FuzzyFileSearchResult {
                 root: m.root.to_string_lossy().to_string(),
                 path: m.path.to_string_lossy().to_string(),
+                match_type: match m.match_type {
+                    file_search::MatchType::File => FuzzyFileSearchMatchType::File,
+                    file_search::MatchType::Directory => FuzzyFileSearchMatchType::Directory,
+                },
                 file_name: file_name.to_string_lossy().to_string(),
                 score: m.score,
                 indices: m.indices.clone(),

@@ -223,14 +223,48 @@ function codeModeWorkerMain() {
     return String(value);
   }
 
-  function normalizeOutputImageUrl(value) {
-    if (typeof value !== 'string' || !value) {
-      throw new TypeError('image expects a non-empty image URL string');
+  function normalizeOutputImage(value) {
+    let imageUrl;
+    let detail;
+    if (typeof value === 'string') {
+      imageUrl = value;
+    } else if (
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value)
+    ) {
+      if (typeof value.image_url === 'string') {
+        imageUrl = value.image_url;
+      }
+      if (typeof value.detail === 'string') {
+        detail = value.detail;
+      } else if (
+        Object.prototype.hasOwnProperty.call(value, 'detail') &&
+        value.detail !== null &&
+        typeof value.detail !== 'undefined'
+      ) {
+        throw new TypeError('image detail must be a string when provided');
+      }
     }
-    if (/^(?:https?:\/\/|data:)/i.test(value)) {
-      return value;
+
+    if (typeof imageUrl !== 'string' || !imageUrl) {
+      throw new TypeError(
+        'image expects a non-empty image URL string or an object with image_url and optional detail'
+      );
     }
-    throw new TypeError('image expects an http(s) or data URL');
+    if (!/^(?:https?:\/\/|data:)/i.test(imageUrl)) {
+      throw new TypeError('image expects an http(s) or data URL');
+    }
+
+    if (typeof detail !== 'undefined' && !/^(?:auto|low|high|original)$/i.test(detail)) {
+      throw new TypeError('image detail must be one of: auto, low, high, original');
+    }
+
+    const normalized = { image_url: imageUrl };
+    if (typeof detail === 'string') {
+      normalized.detail = detail.toLowerCase();
+    }
+    return normalized;
   }
 
   function createCodeModeHelpers(context, state, toolCallId) {
@@ -258,10 +292,7 @@ function codeModeWorkerMain() {
       return item;
     };
     const image = (value) => {
-      const item = {
-        type: 'input_image',
-        image_url: normalizeOutputImageUrl(value),
-      };
+      const item = Object.assign({ type: 'input_image' }, normalizeOutputImage(value));
       ensureContentItems(context).push(item);
       return item;
     };
@@ -595,6 +626,10 @@ function createProtocol() {
         return;
       }
       pending.delete(message.request_id + ':' + message.id);
+      if (typeof message.error_text === 'string') {
+        entry.reject(new Error(message.error_text));
+        return;
+      }
       entry.resolve(message.code_mode_result ?? '');
       return;
     }

@@ -228,10 +228,7 @@ impl MessageProcessor {
         thread_manager
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());
-        // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
-        thread_manager
-            .plugins_manager()
-            .maybe_start_curated_repo_sync_for_config(&config);
+
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager: auth_manager.clone(),
@@ -244,6 +241,11 @@ impl MessageProcessor {
             feedback,
             log_db,
         });
+        // Keep plugin startup warmups aligned at app-server startup.
+        // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
+        thread_manager
+            .plugins_manager()
+            .maybe_start_curated_repo_sync_for_config(&config, auth_manager.clone());
         let config_api = ConfigApi::new(
             config.codex_home.clone(),
             cli_overrides,

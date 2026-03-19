@@ -516,7 +516,7 @@ async fn test_list_conversations_latest_first() {
         10,
         None,
         ThreadSortKey::CreatedAt,
-        INTERACTIVE_SESSION_SOURCES,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
     )
@@ -665,7 +665,7 @@ async fn test_pagination_cursor() {
         2,
         None,
         ThreadSortKey::CreatedAt,
-        INTERACTIVE_SESSION_SOURCES,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
     )
@@ -733,7 +733,7 @@ async fn test_pagination_cursor() {
         2,
         page1.next_cursor.as_ref(),
         ThreadSortKey::CreatedAt,
-        INTERACTIVE_SESSION_SOURCES,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
     )
@@ -801,7 +801,7 @@ async fn test_pagination_cursor() {
         2,
         page2.next_cursor.as_ref(),
         ThreadSortKey::CreatedAt,
-        INTERACTIVE_SESSION_SOURCES,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
     )
@@ -854,7 +854,7 @@ async fn test_list_threads_scans_past_head_for_user_event() {
         10,
         None,
         ThreadSortKey::CreatedAt,
-        INTERACTIVE_SESSION_SOURCES,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
     )
@@ -880,7 +880,7 @@ async fn test_get_thread_contents() {
         1,
         None,
         ThreadSortKey::CreatedAt,
-        INTERACTIVE_SESSION_SOURCES,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
     )
@@ -970,7 +970,7 @@ async fn test_base_instructions_missing_in_meta_defaults_to_null() {
         1,
         None,
         ThreadSortKey::CreatedAt,
-        INTERACTIVE_SESSION_SOURCES,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
     )
@@ -1013,7 +1013,7 @@ async fn test_base_instructions_present_in_meta_is_preserved() {
         1,
         None,
         ThreadSortKey::CreatedAt,
-        INTERACTIVE_SESSION_SOURCES,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
     )
@@ -1064,7 +1064,7 @@ async fn test_created_at_sort_uses_file_mtime_for_updated_at() -> Result<()> {
         1,
         None,
         ThreadSortKey::CreatedAt,
-        INTERACTIVE_SESSION_SOURCES,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
     )
@@ -1148,7 +1148,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
         1,
         None,
         ThreadSortKey::UpdatedAt,
-        INTERACTIVE_SESSION_SOURCES,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
     )
@@ -1188,7 +1188,7 @@ async fn test_stable_ordering_same_second_pagination() {
         2,
         None,
         ThreadSortKey::CreatedAt,
-        INTERACTIVE_SESSION_SOURCES,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
     )
@@ -1256,7 +1256,7 @@ async fn test_stable_ordering_same_second_pagination() {
         2,
         page1.next_cursor.as_ref(),
         ThreadSortKey::CreatedAt,
-        INTERACTIVE_SESSION_SOURCES,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
     )
@@ -1325,7 +1325,7 @@ async fn test_source_filter_excludes_non_matching_sessions() {
         10,
         None,
         ThreadSortKey::CreatedAt,
-        INTERACTIVE_SESSION_SOURCES,
+        INTERACTIVE_SESSION_SOURCES.as_slice(),
         Some(provider_filter.as_slice()),
         TEST_PROVIDER,
     )

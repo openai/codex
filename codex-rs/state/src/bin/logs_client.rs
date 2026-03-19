@@ -46,7 +46,7 @@ struct Args {
     #[arg(long = "thread-id")]
     thread_id: Vec<String>,
 
-    /// Substring match against the log message.
+    /// Substring match against the rendered log body.
     #[arg(long)]
     search: Option<String>,
 
@@ -62,7 +62,7 @@ struct Args {
     #[arg(long, default_value_t = 500)]
     poll_ms: u64,
 
-    /// Show compact output with only time, level, and message.
+    /// Show compact output with only time, level, and rendered log body.
     #[arg(long)]
     compact: bool,
 }
@@ -295,7 +295,7 @@ fn heuristic_formatting(message: &str) -> String {
 
 mod matcher {
     pub(super) fn apply_patch(message: &str) -> bool {
-        message.starts_with("ToolCall: apply_patch")
+        message.contains("ToolCall: apply_patch")
     }
 }
 

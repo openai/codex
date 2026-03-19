@@ -22,10 +22,10 @@ members = [
     "shell-escalation",
     "skills",
     "core",
-    "environment",
     "hooks",
     "secrets",
     "exec",
+    "exec-server",
     "execpolicy",
     "execpolicy-legacy",
     "keyring-store",
@@ -104,8 +104,8 @@ codex-cloud-requirements = { path = "cloud-requirements" }
 codex-connectors = { path = "connectors" }
 codex-config = { path = "config" }
 codex-core = { path = "core" }
-codex-environment = { path = "environment" }
 codex-exec = { path = "exec" }
+codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
 codex-feedback = { path = "feedback" }
@@ -232,6 +232,7 @@ portable-pty = "0.9.0"
 predicates = "3"
 pretty_assertions = "1.4.1"
 pulldown-cmark = "0.10"
+quick-xml = "0.38.4"
 rand = "0.9"
 ratatui = "0.29.0"
 ratatui-macros = "0.6.0"

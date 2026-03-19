@@ -980,7 +980,21 @@ fn create_view_image_tool(can_request_original_image_detail: bool) -> ToolSpec {
             required: Some(vec!["path".to_string()]),
             additional_properties: Some(false.into()),
         },
-        output_schema: None,
+        output_schema: Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "image_url": {
+                    "type": "string",
+                    "description": "Data URL for the loaded image."
+                },
+                "detail": {
+                    "type": ["string", "null"],
+                    "description": "Image detail hint returned by view_image. Returns `original` when original resolution is preserved, otherwise `null`."
+                }
+            },
+            "required": ["image_url", "detail"],
+            "additionalProperties": false
+        })),
     })
 }
 
@@ -1526,7 +1540,7 @@ fn create_close_agent_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "close_agent".to_string(),
-        description: "Close an agent when it is no longer needed and return its previous status before shutdown was requested. Don't keep agents open for too long if they are not needed anymore.".to_string(),
+        description: "Close an agent and any open descendants when they are no longer needed, and return the target agent's previous status before shutdown was requested. Don't keep agents open for too long if they are not needed anymore.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::Object {

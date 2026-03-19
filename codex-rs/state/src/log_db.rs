@@ -34,6 +34,10 @@ use tracing::span::Attributes;
 use tracing::span::Id;
 use tracing::span::Record;
 use tracing_subscriber::Layer;
+use tracing_subscriber::field::RecordFields;
+use tracing_subscriber::fmt::FormatFields;
+use tracing_subscriber::fmt::FormattedFields;
+use tracing_subscriber::fmt::format::DefaultFields;
 use tracing_subscriber::registry::LookupSpan;
 use uuid::Uuid;
 
@@ -95,6 +99,8 @@ where
 
         if let Some(span) = ctx.span(id) {
             span.extensions_mut().insert(SpanLogContext {
+                name: span.metadata().name().to_string(),
+                formatted_fields: format_fields(attrs),
                 thread_id: visitor.thread_id,
             });
         }
@@ -109,16 +115,17 @@ where
         let mut visitor = SpanFieldVisitor::default();
         values.record(&mut visitor);
 
-        if visitor.thread_id.is_none() {
-            return;
-        }
-
         if let Some(span) = ctx.span(id) {
             let mut extensions = span.extensions_mut();
             if let Some(log_context) = extensions.get_mut::<SpanLogContext>() {
-                log_context.thread_id = visitor.thread_id;
+                if let Some(thread_id) = visitor.thread_id {
+                    log_context.thread_id = Some(thread_id);
+                }
+                append_fields(&mut log_context.formatted_fields, values);
             } else {
                 extensions.insert(SpanLogContext {
+                    name: span.metadata().name().to_string(),
+                    formatted_fields: format_fields(values),
                     thread_id: visitor.thread_id,
                 });
             }
@@ -133,6 +140,7 @@ where
             .thread_id
             .clone()
             .or_else(|| event_thread_id(event, &ctx));
+        let feedback_log_body = format_feedback_log_body(event, &ctx);
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -143,6 +151,7 @@ where
             level: metadata.level().as_str().to_string(),
             target: metadata.target().to_string(),
             message: visitor.message,
+            feedback_log_body: Some(feedback_log_body),
             thread_id,
             process_uuid: Some(self.process_uuid.clone()),
             module_path: metadata.module_path().map(ToString::to_string),
@@ -150,17 +159,19 @@ where
             line: metadata.line().map(|line| line as i64),
         };
 
-        let _ = self.sender.try_send(LogDbCommand::Entry(entry));
+        let _ = self.sender.try_send(LogDbCommand::Entry(Box::new(entry)));
     }
 }
 
 enum LogDbCommand {
-    Entry(LogEntry),
+    Entry(Box<LogEntry>),
     Flush(oneshot::Sender<()>),
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug)]
 struct SpanLogContext {
+    name: String,
+    formatted_fields: String,
     thread_id: Option<String>,
 }
 
@@ -228,6 +239,54 @@ where
     thread_id
 }
 
+fn format_feedback_log_body<S>(
+    event: &Event<'_>,
+    ctx: &tracing_subscriber::layer::Context<'_, S>,
+) -> String
+where
+    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+{
+    let mut feedback_log_body = String::new();
+    if let Some(scope) = ctx.event_scope(event) {
+        for span in scope.from_root() {
+            let extensions = span.extensions();
+            if let Some(log_context) = extensions.get::<SpanLogContext>() {
+                feedback_log_body.push_str(&log_context.name);
+                if !log_context.formatted_fields.is_empty() {
+                    feedback_log_body.push('{');
+                    feedback_log_body.push_str(&log_context.formatted_fields);
+                    feedback_log_body.push('}');
+                }
+            } else {
+                feedback_log_body.push_str(span.metadata().name());
+            }
+            feedback_log_body.push(':');
+        }
+        if !feedback_log_body.is_empty() {
+            feedback_log_body.push(' ');
+        }
+    }
+    feedback_log_body.push_str(&format_fields(event));
+    feedback_log_body
+}
+
+fn format_fields<R>(fields: R) -> String
+where
+    R: RecordFields,
+{
+    let formatter = DefaultFields::default();
+    let mut formatted = FormattedFields::<DefaultFields>::new(String::new());
+    let _ = formatter.format_fields(formatted.as_writer(), fields);
+    formatted.fields
+}
+
+fn append_fields(fields: &mut String, values: &Record<'_>) {
+    let formatter = DefaultFields::default();
+    let mut formatted = FormattedFields::<DefaultFields>::new(std::mem::take(fields));
+    let _ = formatter.add_fields(&mut formatted, values);
+    *fields = formatted.fields;
+}
+
 fn current_process_log_uuid() -> &'static str {
     static PROCESS_LOG_UUID: OnceLock<String> = OnceLock::new();
     PROCESS_LOG_UUID.get_or_init(|| {
@@ -248,7 +307,7 @@ async fn run_inserter(
             maybe_command = receiver.recv() => {
                 match maybe_command {
                     Some(LogDbCommand::Entry(entry)) => {
-                        buffer.push(entry);
+                        buffer.push(*entry);
                         if buffer.len() >= LOG_BATCH_SIZE {
                             flush(&state_db, &mut buffer).await;
                         }
@@ -401,7 +460,6 @@ mod tests {
             .with(
                 tracing_subscriber::fmt::layer()
                     .with_writer(writer.clone())
-                    .without_time()
                     .with_ansi(false)
                     .with_target(false)
                     .with_filter(Targets::new().with_default(tracing::Level::TRACE)),
@@ -413,30 +471,23 @@ mod tests {
         let guard = subscriber.set_default();
 
         tracing::trace!("threadless-before");
-        tracing::info_span!("feedback-thread", thread_id = "thread-1").in_scope(|| {
-            tracing::info!("thread-scoped");
+        tracing::info_span!("feedback-thread", thread_id = "thread-1", turn = 1).in_scope(|| {
+            tracing::info!(foo = 2, "thread-scoped");
         });
         tracing::debug!("threadless-after");
 
         drop(guard);
 
-        // SQLite exports now include timestamps, while this test writer has
-        // `.without_time()`. Compare bodies after stripping the SQLite prefix.
-        let feedback_logs = writer
-            .snapshot()
-            .replace("feedback-thread{thread_id=\"thread-1\"}: ", "");
-        let strip_sqlite_timestamp = |logs: &str| {
+        let feedback_logs = writer.snapshot();
+        let without_timestamps = |logs: &str| {
             logs.lines()
-                .map(|line| {
-                    line.split_once(' ')
-                        .map_or_else(|| line.to_string(), |(_, rest)| rest.to_string())
+                .map(|line| match line.split_once(' ') {
+                    Some((_, rest)) => rest,
+                    None => line,
                 })
                 .collect::<Vec<_>>()
+                .join("\n")
         };
-        let feedback_lines = feedback_logs
-            .lines()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>();
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             let sqlite_logs = String::from_utf8(
@@ -446,7 +497,7 @@ mod tests {
                     .expect("query feedback logs"),
             )
             .expect("valid utf-8");
-            if strip_sqlite_timestamp(&sqlite_logs) == feedback_lines {
+            if without_timestamps(&sqlite_logs) == without_timestamps(&feedback_logs) {
                 break;
             }
             assert!(

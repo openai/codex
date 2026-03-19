@@ -745,6 +745,15 @@
       ],
       "type": "object"
     },
+    "CommandExecutionSource": {
+      "enum": [
+        "agent",
+        "userShell",
+        "unifiedExecStartup",
+        "unifiedExecInteraction"
+      ],
+      "type": "string"
+    },
     "CommandExecutionStatus": {
       "enum": [
         "inProgress",
@@ -964,6 +973,13 @@
       ],
       "type": "object"
     },
+    "FuzzyFileSearchMatchType": {
+      "enum": [
+        "file",
+        "directory"
+      ],
+      "type": "string"
+    },
     "FuzzyFileSearchResult": {
       "description": "Superset of [`codex_file_search::FileMatch`]",
       "properties": {
@@ -981,6 +997,9 @@
             "null"
           ]
         },
+        "match_type": {
+          "$ref": "#/definitions/FuzzyFileSearchMatchType"
+        },
         "path": {
           "type": "string"
         },
@@ -995,6 +1014,7 @@
       },
       "required": [
         "file_name",
+        "match_type",
         "path",
         "root",
         "score"
@@ -1180,6 +1200,21 @@
         "error"
       ],
       "type": "string"
+    },
+    "HookPromptFragment": {
+      "properties": {
+        "hookRunId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "hookRunId",
+        "text"
+      ],
+      "type": "object"
     },
     "HookRunStatus": {
       "enum": [
@@ -1883,6 +1918,19 @@
         {
           "additionalProperties": false,
           "properties": {
+            "custom": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "custom"
+          ],
+          "title": "CustomSessionSource",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "subAgent": {
               "$ref": "#/definitions/SubAgentSource"
             }
@@ -2226,6 +2274,33 @@
         },
         {
           "properties": {
+            "fragments": {
+              "items": {
+                "$ref": "#/definitions/HookPromptFragment"
+              },
+              "type": "array"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "hookPrompt"
+              ],
+              "title": "HookPromptThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "fragments",
+            "id",
+            "type"
+          ],
+          "title": "HookPromptThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
             "id": {
               "type": "string"
             },
@@ -2378,6 +2453,14 @@
                 "string",
                 "null"
               ]
+            },
+            "source": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/CommandExecutionSource"
+                }
+              ],
+              "default": "agent"
             },
             "status": {
               "$ref": "#/definitions/CommandExecutionStatus"

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use toml::Value as TomlValue;
@@ -30,6 +31,7 @@ use crate::skills::system::uninstall_system_skills;
 pub struct SkillsManager {
     codex_home: PathBuf,
     plugins_manager: Arc<PluginsManager>,
+    restriction_product: Option<Product>,
     cache_by_cwd: RwLock<HashMap<PathBuf, SkillLoadOutcome>>,
     cache_by_config: RwLock<HashMap<ConfigSkillsCacheKey, SkillLoadOutcome>>,
 }
@@ -40,9 +42,24 @@ impl SkillsManager {
         plugins_manager: Arc<PluginsManager>,
         bundled_skills_enabled: bool,
     ) -> Self {
+        Self::new_with_restriction_product(
+            codex_home,
+            plugins_manager,
+            bundled_skills_enabled,
+            Some(Product::Codex),
+        )
+    }
+
+    pub fn new_with_restriction_product(
+        codex_home: PathBuf,
+        plugins_manager: Arc<PluginsManager>,
+        bundled_skills_enabled: bool,
+        restriction_product: Option<Product>,
+    ) -> Self {
         let manager = Self {
             codex_home,
             plugins_manager,
+            restriction_product,
             cache_by_cwd: RwLock::new(HashMap::new()),
             cache_by_config: RwLock::new(HashMap::new()),
         };
@@ -69,8 +86,10 @@ impl SkillsManager {
             return outcome;
         }
 
-        let outcome =
-            finalize_skill_outcome(load_skills_from_roots(roots), &config.config_layer_stack);
+        let outcome = crate::skills::filter_skill_load_outcome_for_product(
+            finalize_skill_outcome(load_skills_from_roots(roots), &config.config_layer_stack),
+            self.restriction_product,
+        );
         let mut cache = self
             .cache_by_config
             .write()
@@ -92,18 +111,24 @@ impl SkillsManager {
         roots
     }
 
-    pub async fn skills_for_cwd(&self, cwd: &Path, force_reload: bool) -> SkillLoadOutcome {
+    pub async fn skills_for_cwd(
+        &self,
+        cwd: &Path,
+        config: &Config,
+        force_reload: bool,
+    ) -> SkillLoadOutcome {
         if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(cwd) {
             return outcome;
         }
 
-        self.skills_for_cwd_with_extra_user_roots(cwd, force_reload, &[])
+        self.skills_for_cwd_with_extra_user_roots(cwd, config, force_reload, &[])
             .await
     }
 
     pub async fn skills_for_cwd_with_extra_user_roots(
         &self,
         cwd: &Path,
+        config: &Config,
         force_reload: bool,
         extra_user_roots: &[PathBuf],
     ) -> SkillLoadOutcome {
@@ -147,9 +172,9 @@ impl SkillsManager {
             }
         };
 
-        let loaded_plugins =
-            self.plugins_manager
-                .plugins_for_layer_stack(cwd, &config_layer_stack, force_reload);
+        let loaded_plugins = self
+            .plugins_manager
+            .plugins_for_config_with_force_reload(config, force_reload);
         let mut roots = skill_roots(
             &config_layer_stack,
             cwd,
@@ -167,14 +192,24 @@ impl SkillsManager {
                     scope: SkillScope::User,
                 }),
         );
-        let outcome = load_skills_from_roots(roots);
-        let outcome = finalize_skill_outcome(outcome, &config_layer_stack);
+        let outcome = self.build_skill_outcome(roots, &config_layer_stack);
         let mut cache = self
             .cache_by_cwd
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.insert(cwd.to_path_buf(), outcome.clone());
         outcome
+    }
+
+    fn build_skill_outcome(
+        &self,
+        roots: Vec<SkillRoot>,
+        config_layer_stack: &crate::config_loader::ConfigLayerStack,
+    ) -> SkillLoadOutcome {
+        crate::skills::filter_skill_load_outcome_for_product(
+            finalize_skill_outcome(load_skills_from_roots(roots), config_layer_stack),
+            self.restriction_product,
+        )
     }
 
     pub fn clear_cache(&self) {

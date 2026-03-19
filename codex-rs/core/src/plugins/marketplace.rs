@@ -14,6 +14,7 @@ use std::io;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
+use tracing::warn;
 
 const MARKETPLACE_RELATIVE_PATH: &str = ".agents/plugins/marketplace.json";
 
@@ -127,6 +128,9 @@ pub enum MarketplaceError {
         marketplace_name: String,
     },
 
+    #[error("plugins feature is disabled")]
+    PluginsDisabled,
+
     #[error("{0}")]
     InvalidPlugin(String),
 }
@@ -142,6 +146,7 @@ impl MarketplaceError {
 pub fn resolve_marketplace_plugin(
     marketplace_path: &AbsolutePathBuf,
     plugin_name: &str,
+    restriction_product: Option<Product>,
 ) -> Result<ResolvedMarketplacePlugin, MarketplaceError> {
     let marketplace = load_raw_marketplace_manifest(marketplace_path)?;
     let marketplace_name = marketplace.name;
@@ -164,7 +169,10 @@ pub fn resolve_marketplace_plugin(
         ..
     } = plugin;
     let install_policy = policy.installation;
-    if install_policy == MarketplacePluginInstallPolicy::NotAvailable {
+    let product_allowed = policy.products.is_empty()
+        || restriction_product
+            .is_some_and(|product| product.matches_product_restriction(&policy.products));
+    if install_policy == MarketplacePluginInstallPolicy::NotAvailable || !product_allowed {
         return Err(MarketplaceError::PluginNotAvailable {
             plugin_name: name,
             marketplace_name,
@@ -238,7 +246,16 @@ fn list_marketplaces_with_home(
     let mut marketplaces = Vec::new();
 
     for marketplace_path in discover_marketplace_paths_from_roots(additional_roots, home_dir) {
-        marketplaces.push(load_marketplace(&marketplace_path)?);
+        match load_marketplace(&marketplace_path) {
+            Ok(marketplace) => marketplaces.push(marketplace),
+            Err(err) => {
+                warn!(
+                    path = %marketplace_path.display(),
+                    error = %err,
+                    "skipping marketplace that failed to load"
+                );
+            }
+        }
     }
 
     Ok(marketplaces)

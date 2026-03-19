@@ -164,7 +164,7 @@ async fn run_session_picker(
                 PAGE_SIZE,
                 request.cursor.as_ref(),
                 request.sort_key,
-                INTERACTIVE_SESSION_SOURCES,
+                INTERACTIVE_SESSION_SOURCES.as_slice(),
                 Some(provider_filter.as_slice()),
                 request.default_provider.as_str(),
                 /*search_term*/ None,

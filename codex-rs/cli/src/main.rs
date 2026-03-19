@@ -649,6 +649,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     codex_core::config_loader::LoaderOverrides::default(),
                     app_server_cli.analytics_default_enabled,
                     transport,
+                    codex_protocol::protocol::SessionSource::VSCode,
                 )
                 .await?;
             }

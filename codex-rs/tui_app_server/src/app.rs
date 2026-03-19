@@ -69,6 +69,7 @@ use codex_core::config::types::ApprovalsReviewer;
 use codex_core::config::types::ModelAvailabilityNuxConfig;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::Feature;
+use codex_core::message_history;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
@@ -86,10 +87,10 @@ use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FinalOutput;
+use codex_protocol::protocol::GetHistoryEntryResponseEvent;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 #[cfg(test)]
 use codex_protocol::protocol::McpAuthStatus;
-#[cfg(test)]
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
@@ -457,6 +458,7 @@ struct ThreadEventSnapshot {
 enum ThreadBufferedEvent {
     Notification(ServerNotification),
     Request(ServerRequest),
+    HistoryEntryResponse(GetHistoryEntryResponseEvent),
     LegacyWarning(String),
     LegacyRollback { num_turns: u32 },
 }
@@ -616,6 +618,7 @@ impl ThreadEventStore {
                         .pending_interactive_replay
                         .should_replay_snapshot_request(request),
                     ThreadBufferedEvent::Notification(_)
+                    | ThreadBufferedEvent::HistoryEntryResponse(_)
                     | ThreadBufferedEvent::LegacyWarning(_)
                     | ThreadBufferedEvent::LegacyRollback { .. } => true,
                 })
@@ -1763,7 +1766,20 @@ impl App {
             return Ok(());
         };
 
+        self.submit_thread_op(app_server, thread_id, op).await
+    }
+
+    async fn submit_thread_op(
+        &mut self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+        op: AppCommand,
+    ) -> Result<()> {
         crate::session_log::log_outbound_op(&op);
+
+        if self.try_handle_local_history_op(thread_id, &op).await? {
+            return Ok(());
+        }
 
         if self
             .try_resolve_app_server_request(app_server, thread_id, &op)
@@ -1777,7 +1793,7 @@ impl App {
             .await?
         {
             if ThreadEventStore::op_can_change_pending_replay_state(&op) {
-                self.note_active_thread_outbound_op(&op).await;
+                self.note_thread_outbound_op(thread_id, &op).await;
                 self.refresh_pending_thread_approvals().await;
             }
             return Ok(());
@@ -1852,6 +1868,66 @@ impl App {
         self.transcript_cells.remove(index);
         if let Some(Overlay::Transcript(overlay)) = &mut self.overlay {
             overlay.replace_cells(self.transcript_cells.clone());
+        }
+    }
+
+    /// Intercept composer-history operations and handle them locally against
+    /// `$CODEX_HOME/history.jsonl`, bypassing the app-server RPC layer.
+    async fn try_handle_local_history_op(
+        &mut self,
+        thread_id: ThreadId,
+        op: &AppCommand,
+    ) -> Result<bool> {
+        match op.view() {
+            AppCommandView::Other(Op::AddToHistory { text }) => {
+                let text = text.clone();
+                let config = self.chat_widget.config_ref().clone();
+                tokio::spawn(async move {
+                    if let Err(err) =
+                        message_history::append_entry(&text, &thread_id, &config).await
+                    {
+                        tracing::warn!(
+                            thread_id = %thread_id,
+                            error = %err,
+                            "failed to append to message history"
+                        );
+                    }
+                });
+                Ok(true)
+            }
+            AppCommandView::Other(Op::GetHistoryEntryRequest { offset, log_id }) => {
+                let offset = *offset;
+                let log_id = *log_id;
+                let config = self.chat_widget.config_ref().clone();
+                let app_event_tx = self.app_event_tx.clone();
+                tokio::spawn(async move {
+                    let entry_opt = tokio::task::spawn_blocking(move || {
+                        message_history::lookup(log_id, offset, &config)
+                    })
+                    .await
+                    .unwrap_or_else(|err| {
+                        tracing::warn!(error = %err, "history lookup task failed");
+                        None
+                    });
+
+                    app_event_tx.send(AppEvent::ThreadHistoryEntryResponse {
+                        thread_id,
+                        event: GetHistoryEntryResponseEvent {
+                            offset,
+                            log_id,
+                            entry: entry_opt.map(|entry| {
+                                codex_protocol::message_history::HistoryEntry {
+                                    conversation_id: entry.session_id,
+                                    ts: entry.ts,
+                                    text: entry.text,
+                                }
+                            }),
+                        },
+                    });
+                });
+                Ok(true)
+            }
+            _ => Ok(false),
         }
     }
 
@@ -1972,6 +2048,12 @@ impl App {
             }
             AppCommandView::RealtimeConversationClose => {
                 app_server.thread_realtime_stop(thread_id).await?;
+                Ok(true)
+            }
+            AppCommandView::RunUserShellCommand { command } => {
+                app_server
+                    .thread_shell_command(thread_id, command.to_string())
+                    .await?;
                 Ok(true)
             }
             AppCommandView::OverrideTurnContext { .. } => Ok(true),
@@ -2213,6 +2295,50 @@ impl App {
         Ok(())
     }
 
+    async fn enqueue_thread_history_entry_response(
+        &mut self,
+        thread_id: ThreadId,
+        event: GetHistoryEntryResponseEvent,
+    ) -> Result<()> {
+        let (sender, store) = {
+            let channel = self.ensure_thread_channel(thread_id);
+            (channel.sender.clone(), Arc::clone(&channel.store))
+        };
+
+        let should_send = {
+            let mut guard = store.lock().await;
+            guard
+                .buffer
+                .push_back(ThreadBufferedEvent::HistoryEntryResponse(event.clone()));
+            if guard.buffer.len() > guard.capacity
+                && let Some(removed) = guard.buffer.pop_front()
+                && let ThreadBufferedEvent::Request(request) = &removed
+            {
+                guard
+                    .pending_interactive_replay
+                    .note_evicted_server_request(request);
+            }
+            guard.active
+        };
+
+        if should_send {
+            match sender.try_send(ThreadBufferedEvent::HistoryEntryResponse(event)) {
+                Ok(()) => {}
+                Err(TrySendError::Full(event)) => {
+                    tokio::spawn(async move {
+                        if let Err(err) = sender.send(event).await {
+                            tracing::warn!("thread {thread_id} event channel closed: {err}");
+                        }
+                    });
+                }
+                Err(TrySendError::Closed(_)) => {
+                    tracing::warn!("thread {thread_id} event channel closed");
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn enqueue_thread_legacy_rollback(
         &mut self,
         thread_id: ThreadId,
@@ -2303,6 +2429,10 @@ impl App {
                 }
                 ThreadBufferedEvent::Request(request) => {
                     self.enqueue_thread_request(thread_id, request).await?;
+                }
+                ThreadBufferedEvent::HistoryEntryResponse(event) => {
+                    self.enqueue_thread_history_entry_response(thread_id, event)
+                        .await?;
                 }
                 ThreadBufferedEvent::LegacyWarning(message) => {
                     self.enqueue_thread_legacy_warning(thread_id, message)
@@ -3465,22 +3595,12 @@ impl App {
                 self.submit_active_thread_op(app_server, op.into()).await?;
             }
             AppEvent::SubmitThreadOp { thread_id, op } => {
-                let app_command: AppCommand = op.into();
-                if self
-                    .try_resolve_app_server_request(app_server, thread_id, &app_command)
-                    .await?
-                {
-                    return Ok(AppRunControl::Continue);
-                }
-                crate::session_log::log_outbound_op(&app_command);
-                tracing::error!(
-                    thread_id = %thread_id,
-                    op = ?app_command,
-                    "unexpected unresolved thread-scoped app command"
-                );
-                self.chat_widget.add_error_message(format!(
-                    "Thread-scoped request is no longer pending for thread {thread_id}."
-                ));
+                self.submit_thread_op(app_server, thread_id, op.into())
+                    .await?;
+            }
+            AppEvent::ThreadHistoryEntryResponse { thread_id, event } => {
+                self.enqueue_thread_history_entry_response(thread_id, event)
+                    .await?;
             }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
@@ -4639,6 +4759,9 @@ impl App {
                 self.chat_widget
                     .handle_server_request(request, /*replay_kind*/ None);
             }
+            ThreadBufferedEvent::HistoryEntryResponse(event) => {
+                self.chat_widget.handle_history_entry_response(event);
+            }
             ThreadBufferedEvent::LegacyWarning(message) => {
                 self.chat_widget.add_warning_message(message);
             }
@@ -4660,6 +4783,9 @@ impl App {
             ThreadBufferedEvent::Request(request) => self
                 .chat_widget
                 .handle_server_request(request, Some(ReplayKind::ThreadSnapshot)),
+            ThreadBufferedEvent::HistoryEntryResponse(event) => {
+                self.chat_widget.handle_history_entry_response(event)
+            }
             ThreadBufferedEvent::LegacyWarning(message) => {
                 self.chat_widget.add_warning_message(message);
             }
@@ -5518,6 +5644,44 @@ mod tests {
             .await
             .expect("timed out waiting for listener task abort")
             .expect("listener task drop notification should succeed");
+    }
+
+    #[tokio::test]
+    async fn history_lookup_response_is_routed_to_requesting_thread() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+
+        let handled = app
+            .try_handle_local_history_op(
+                thread_id,
+                &Op::GetHistoryEntryRequest {
+                    offset: 0,
+                    log_id: 1,
+                }
+                .into(),
+            )
+            .await?;
+
+        assert!(handled);
+
+        let app_event = tokio::time::timeout(Duration::from_secs(1), app_event_rx.recv())
+            .await
+            .expect("history lookup should emit an app event")
+            .expect("app event channel should stay open");
+
+        let AppEvent::ThreadHistoryEntryResponse {
+            thread_id: routed_thread_id,
+            event,
+        } = app_event
+        else {
+            panic!("expected thread-routed history response");
+        };
+        assert_eq!(routed_thread_id, thread_id);
+        assert_eq!(event.offset, 0);
+        assert_eq!(event.log_id, 1);
+        assert!(event.entry.is_none());
+
+        Ok(())
     }
 
     #[tokio::test]

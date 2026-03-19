@@ -25,6 +25,7 @@ async fn plugin_read_returns_plugin_details_with_bundle_contents() -> Result<()>
     std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
     std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
     std::fs::create_dir_all(plugin_root.join("skills/thread-summarizer"))?;
+    std::fs::create_dir_all(plugin_root.join("skills/chatgpt-only"))?;
     std::fs::write(
         repo_root.path().join(".agents/plugins/marketplace.json"),
         r#"{
@@ -79,6 +80,32 @@ description: Summarize email threads
 ---
 
 # Thread Summarizer
+"#,
+    )?;
+    std::fs::write(
+        plugin_root.join("skills/chatgpt-only/SKILL.md"),
+        r#"---
+name: chatgpt-only
+description: Visible only for ChatGPT
+---
+
+# ChatGPT Only
+"#,
+    )?;
+    std::fs::create_dir_all(plugin_root.join("skills/thread-summarizer/agents"))?;
+    std::fs::write(
+        plugin_root.join("skills/thread-summarizer/agents/openai.yaml"),
+        r#"policy:
+  products:
+    - CODEX
+"#,
+    )?;
+    std::fs::create_dir_all(plugin_root.join("skills/chatgpt-only/agents"))?;
+    std::fs::write(
+        plugin_root.join("skills/chatgpt-only/agents/openai.yaml"),
+        r#"policy:
+  products:
+    - CHATGPT
 "#,
     )?;
     std::fs::write(
@@ -232,6 +259,7 @@ async fn plugin_read_accepts_legacy_string_default_prompt() -> Result<()> {
   }
 }"##,
     )?;
+    write_plugins_enabled_config(&codex_home)?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -285,6 +313,7 @@ async fn plugin_read_returns_invalid_request_when_plugin_is_missing() -> Result<
   ]
 }"#,
     )?;
+    write_plugins_enabled_config(&codex_home)?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -336,6 +365,7 @@ async fn plugin_read_returns_invalid_request_when_plugin_manifest_is_missing() -
   ]
 }"#,
     )?;
+    write_plugins_enabled_config(&codex_home)?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -379,6 +409,16 @@ fn write_installed_plugin(
     std::fs::write(
         plugin_root.join("plugin.json"),
         format!(r#"{{"name":"{plugin_name}"}}"#),
+    )?;
+    Ok(())
+}
+
+fn write_plugins_enabled_config(codex_home: &TempDir) -> Result<()> {
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"[features]
+plugins = true
+"#,
     )?;
     Ok(())
 }

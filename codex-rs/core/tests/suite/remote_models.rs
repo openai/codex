@@ -683,6 +683,8 @@ async fn remote_models_do_not_append_removed_builtin_presets() -> Result<()> {
         1,
         "expected a single /models request"
     );
+    // Keep the mock server alive until after async assertions complete.
+    drop(server);
 
     Ok(())
 }

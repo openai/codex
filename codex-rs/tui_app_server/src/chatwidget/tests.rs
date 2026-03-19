@@ -8840,7 +8840,7 @@ async fn user_shell_command_renders_output_not_exploring() {
 }
 
 #[tokio::test]
-async fn bang_shell_command_is_disabled_in_app_server_tui() {
+async fn bang_shell_command_submits_run_user_shell_command_in_app_server_tui() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
@@ -8873,22 +8873,11 @@ async fn bang_shell_command_is_disabled_in_app_server_tui() {
         .set_composer_text("!echo hi".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
-
-    let mut rendered = None;
-    while let Ok(event) = rx.try_recv() {
-        if let AppEvent::InsertHistoryCell(cell) = event {
-            rendered = Some(lines_to_single_string(&cell.display_lines(80)));
-            break;
-        }
+    match op_rx.try_recv() {
+        Ok(Op::RunUserShellCommand { command }) => assert_eq!(command, "echo hi"),
+        other => panic!("expected RunUserShellCommand op, got {other:?}"),
     }
-    let rendered = rendered.expect("expected disabled bang-shell error");
-    assert!(
-        rendered.contains(
-            "`!` shell commands are unavailable in app-server TUI because command output is not yet persisted in thread history."
-        ),
-        "expected bang-shell disabled message, got: {rendered}"
-    );
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 #[tokio::test]

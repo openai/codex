@@ -52,6 +52,7 @@ use codex_protocol::protocol::AgentStatus as CoreAgentStatus;
 use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
+use codex_protocol::protocol::ExecCommandSource as CoreExecCommandSource;
 use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
 use codex_protocol::protocol::GranularApprovalConfig as CoreGranularApprovalConfig;
 use codex_protocol::protocol::GuardianRiskLevel as CoreGuardianRiskLevel;
@@ -92,6 +93,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use serde_with::serde_as;
 use thiserror::Error;
 use ts_rs::TS;
 
@@ -1467,6 +1469,7 @@ pub enum SessionSource {
     VsCode,
     Exec,
     AppServer,
+    Custom(String),
     SubAgent(CoreSubAgentSource),
     #[serde(other)]
     Unknown,
@@ -1479,6 +1482,7 @@ impl From<CoreSessionSource> for SessionSource {
             CoreSessionSource::VSCode => SessionSource::VsCode,
             CoreSessionSource::Exec => SessionSource::Exec,
             CoreSessionSource::Mcp => SessionSource::AppServer,
+            CoreSessionSource::Custom(source) => SessionSource::Custom(source),
             CoreSessionSource::SubAgent(sub) => SessionSource::SubAgent(sub),
             CoreSessionSource::Unknown => SessionSource::Unknown,
         }
@@ -1492,6 +1496,7 @@ impl From<SessionSource> for CoreSessionSource {
             SessionSource::VsCode => CoreSessionSource::VSCode,
             SessionSource::Exec => CoreSessionSource::Exec,
             SessionSource::AppServer => CoreSessionSource::Mcp,
+            SessionSource::Custom(source) => CoreSessionSource::Custom(source),
             SessionSource::SubAgent(sub) => CoreSessionSource::SubAgent(sub),
             SessionSource::Unknown => CoreSessionSource::Unknown,
         }
@@ -2874,6 +2879,23 @@ pub struct ThreadCompactStartResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct ThreadShellCommandParams {
+    pub thread_id: String,
+    /// Shell command string evaluated by the thread's configured shell.
+    /// Unlike `command/exec`, this intentionally preserves shell syntax
+    /// such as pipes, redirects, and quoting. This runs unsandboxed with full
+    /// access rather than inheriting the thread sandbox policy.
+    pub command: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadShellCommandResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadBackgroundTerminalsCleanParams {
     pub thread_id: String,
 }
@@ -3093,6 +3115,8 @@ pub struct PluginListParams {
 pub struct PluginListResponse {
     pub marketplaces: Vec<PluginMarketplaceEntry>,
     pub remote_sync_error: Option<String>,
+    #[serde(default)]
+    pub featured_plugin_ids: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -4103,6 +4127,12 @@ pub enum ThreadItem {
     UserMessage { id: String, content: Vec<UserInput> },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
+    HookPrompt {
+        id: String,
+        fragments: Vec<HookPromptFragment>,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     AgentMessage {
         id: String,
         text: String,
@@ -4135,6 +4165,8 @@ pub enum ThreadItem {
         cwd: PathBuf,
         /// Identifier for the underlying PTY process (when available).
         process_id: Option<String>,
+        #[serde(default)]
+        source: CommandExecutionSource,
         status: CommandExecutionStatus,
         /// A best-effort parsing of the command to understand the action(s) it will perform.
         /// This returns a list of CommandAction objects because a single shell command may
@@ -4234,10 +4266,19 @@ pub enum ThreadItem {
     ContextCompaction { id: String },
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase", export_to = "v2/")]
+pub struct HookPromptFragment {
+    pub text: String,
+    pub hook_run_id: String,
+}
+
 impl ThreadItem {
     pub fn id(&self) -> &str {
         match self {
             ThreadItem::UserMessage { id, .. }
+            | ThreadItem::HookPrompt { id, .. }
             | ThreadItem::AgentMessage { id, .. }
             | ThreadItem::Plan { id, .. }
             | ThreadItem::Reasoning { id, .. }
@@ -4347,6 +4388,14 @@ impl From<CoreTurnItem> for ThreadItem {
                 id: user.id,
                 content: user.content.into_iter().map(UserInput::from).collect(),
             },
+            CoreTurnItem::HookPrompt(hook_prompt) => ThreadItem::HookPrompt {
+                id: hook_prompt.id,
+                fragments: hook_prompt
+                    .fragments
+                    .into_iter()
+                    .map(HookPromptFragment::from)
+                    .collect(),
+            },
             CoreTurnItem::AgentMessage(agent) => {
                 let text = agent
                     .content
@@ -4389,6 +4438,15 @@ impl From<CoreTurnItem> for ThreadItem {
     }
 }
 
+impl From<codex_protocol::items::HookPromptFragment> for HookPromptFragment {
+    fn from(value: codex_protocol::items::HookPromptFragment) -> Self {
+        Self {
+            text: value.text,
+            hook_run_id: value.hook_run_id,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -4412,6 +4470,17 @@ impl From<&CoreExecCommandStatus> for CommandExecutionStatus {
             CoreExecCommandStatus::Failed => CommandExecutionStatus::Failed,
             CoreExecCommandStatus::Declined => CommandExecutionStatus::Declined,
         }
+    }
+}
+
+v2_enum_from_core! {
+    #[derive(Default)]
+    pub enum CommandExecutionSource from CoreExecCommandSource {
+        #[default]
+        Agent,
+        UserShell,
+        UnifiedExecStartup,
+        UnifiedExecInteraction,
     }
 }
 
@@ -4861,6 +4930,7 @@ pub struct TerminalInteractionNotification {
     pub stdin: String,
 }
 
+#[serde_as]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -6312,6 +6382,40 @@ mod tests {
     }
 
     #[test]
+    fn thread_shell_command_params_round_trip() {
+        let params = ThreadShellCommandParams {
+            thread_id: "thr_123".to_string(),
+            command: "printf 'hello world\\n'".to_string(),
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize thread/shellCommand params");
+        assert_eq!(
+            value,
+            json!({
+                "threadId": "thr_123",
+                "command": "printf 'hello world\\n'",
+            })
+        );
+
+        let decoded = serde_json::from_value::<ThreadShellCommandParams>(value)
+            .expect("deserialize thread/shellCommand params");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn thread_shell_command_response_round_trip() {
+        let response = ThreadShellCommandResponse {};
+
+        let value =
+            serde_json::to_value(&response).expect("serialize thread/shellCommand response");
+        assert_eq!(value, json!({}));
+
+        let decoded = serde_json::from_value::<ThreadShellCommandResponse>(value)
+            .expect("deserialize thread/shellCommand response");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
     fn command_exec_params_default_optional_streaming_flags() {
         let params = serde_json::from_value::<CommandExecParams>(json!({
             "command": ["ls", "-la"],
@@ -6601,6 +6705,32 @@ mod tests {
         );
 
         let decoded = serde_json::from_value::<CommandExecOutputDeltaNotification>(value)
+            .expect("deserialize round-trip");
+        assert_eq!(decoded, notification);
+    }
+
+    #[test]
+    fn command_execution_output_delta_round_trips() {
+        let notification = CommandExecutionOutputDeltaNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "item-1".to_string(),
+            delta: "\u{fffd}a\n".to_string(),
+        };
+
+        let value = serde_json::to_value(&notification)
+            .expect("serialize item/commandExecution/outputDelta notification");
+        assert_eq!(
+            value,
+            json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "item-1",
+                "delta": "\u{fffd}a\n",
+            })
+        );
+
+        let decoded = serde_json::from_value::<CommandExecutionOutputDeltaNotification>(value)
             .expect("deserialize round-trip");
         assert_eq!(decoded, notification);
     }

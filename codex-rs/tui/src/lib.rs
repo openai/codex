@@ -125,6 +125,7 @@ mod status_indicator_widget;
 mod streaming;
 mod style;
 mod terminal_palette;
+mod terminal_title;
 mod text_formatting;
 mod theme_picker;
 mod tooltips;
@@ -735,7 +736,7 @@ async fn run_ratatui_app(
                 /*page_size*/ 1,
                 /*cursor*/ None,
                 ThreadSortKey::UpdatedAt,
-                INTERACTIVE_SESSION_SOURCES,
+                INTERACTIVE_SESSION_SOURCES.as_slice(),
                 Some(provider_filter.as_slice()),
                 &config.model_provider_id,
                 /*search_term*/ None,
@@ -835,7 +836,7 @@ async fn run_ratatui_app(
             /*page_size*/ 1,
             /*cursor*/ None,
             ThreadSortKey::UpdatedAt,
-            INTERACTIVE_SESSION_SOURCES,
+            INTERACTIVE_SESSION_SOURCES.as_slice(),
             Some(provider_filter.as_slice()),
             &config.model_provider_id,
             filter_cwd,
