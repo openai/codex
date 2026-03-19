@@ -161,6 +161,16 @@ jobs:
       actions: read
 
     steps:
+      - name: Ensure publishing from default branch
+        if: ${{ github.ref_name != github.event.repository.default_branch }}
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Publishing is only allowed from ${DEFAULT_BRANCH}; current ref is ${GITHUB_REF_NAME}." >&2
+          exit 1
+
       - name: Ensure release tag is new
         env:
           GH_TOKEN: ${{ github.token }}
@@ -169,7 +179,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if gh release view "${RELEASE_TAG}" > /dev/null 2>&1; then
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
             echo "Release tag ${RELEASE_TAG} already exists; musl artifact tags are immutable." >&2
             exit 1
           fi
@@ -184,3 +194,5 @@ jobs:
           tag_name: ${{ needs.metadata.outputs.release_tag }}
           name: ${{ needs.metadata.outputs.release_tag }}
           files: dist/**
+          # Keep V8 artifact releases out of Codex's normal "latest release" channel.
+          prerelease: true
