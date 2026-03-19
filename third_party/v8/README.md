@@ -25,19 +25,8 @@ Each release pair contains:
 - a Rust binding file copied from the exact same `v8` crate version for that
   target
 
-Consumers in this repo should be wired with explicit paths:
-
-- `RUSTY_V8_ARCHIVE`
-- `RUSTY_V8_SRC_BINDING_PATH`
-
 Do not mix artifacts across crate versions. The archive and binding must match
-the exact pinned `v8` crate version used by this repo. On consumer branches,
-that should also align with `codex-rs/Cargo.lock`.
-
-The target-select aliases used by the `v8` build script are:
-
-- `//third_party/v8:rusty_v8_archive_for_target`
-- `//third_party/v8:rusty_v8_binding_for_target`
+the exact pinned `v8` crate version used by this repo.
 
 The dedicated publishing workflow is:
 

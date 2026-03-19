@@ -135,23 +135,6 @@ crate.annotation(
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
-crate.annotation(
-    build_script_data = [
-        "//third_party/v8:rusty_v8_archive_for_target",
-        "//third_party/v8:rusty_v8_binding_for_target",
-    ],
-    build_script_env = {
-        "RUSTY_V8_ARCHIVE": "$(execpath //third_party/v8:rusty_v8_archive_for_target)",
-        "RUSTY_V8_SRC_BINDING_PATH": "$(execpath //third_party/v8:rusty_v8_binding_for_target)",
-    },
-    crate = "v8",
-    gen_build_script = "on",
-    patch_args = ["-p1"],
-    patches = [
-        "//patches:v8_custom_archive_out_dir.patch",
-    ],
-)
-
 llvm = use_extension("@llvm//extensions:llvm.bzl", "llvm")
 use_repo(llvm, "llvm-project")
 
