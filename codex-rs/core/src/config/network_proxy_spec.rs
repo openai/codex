@@ -226,9 +226,11 @@ impl NetworkProxySpec {
                 Some(dangerously_allow_all_unix_sockets);
         }
         let managed_allowed_domains = if hard_deny_allowlist_misses {
-            Some(requirements.allowed_domains.clone().unwrap_or_default())
+            Some(requirements.allowed_domains())
+        } else if requirements.domains.is_some() {
+            Some(requirements.allowed_domains())
         } else {
-            requirements.allowed_domains.clone()
+            None
         };
         if let Some(allowed_domains) = managed_allowed_domains {
             // Managed requirements seed the baseline allowlist. User additions
@@ -242,7 +244,8 @@ impl NetworkProxySpec {
             constraints.allowed_domains = Some(allowed_domains);
             constraints.allowlist_expansion_enabled = Some(allowlist_expansion_enabled);
         }
-        if let Some(denied_domains) = requirements.denied_domains.clone() {
+        if requirements.domains.is_some() {
+            let denied_domains = requirements.denied_domains();
             config.network.denied_domains = if denylist_expansion_enabled {
                 Self::merge_domain_lists(denied_domains.clone(), &config.network.denied_domains)
             } else {
@@ -251,7 +254,8 @@ impl NetworkProxySpec {
             constraints.denied_domains = Some(denied_domains);
             constraints.denylist_expansion_enabled = Some(denylist_expansion_enabled);
         }
-        if let Some(allow_unix_sockets) = requirements.allow_unix_sockets.clone() {
+        if requirements.unix_sockets.is_some() {
+            let allow_unix_sockets = requirements.allow_unix_sockets();
             config.network.allow_unix_sockets = allow_unix_sockets.clone();
             constraints.allow_unix_sockets = Some(allow_unix_sockets);
         }

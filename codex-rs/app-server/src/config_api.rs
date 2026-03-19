@@ -12,7 +12,9 @@ use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::NetworkDomainPermission;
 use codex_app_server_protocol::NetworkRequirements;
+use codex_app_server_protocol::NetworkUnixSocketPermission;
 use codex_app_server_protocol::SandboxMode;
 use codex_core::AnalyticsEventsClient;
 use codex_core::ThreadManager;
@@ -417,10 +419,54 @@ fn map_network_requirements_to_api(
         allow_upstream_proxy: network.allow_upstream_proxy,
         dangerously_allow_non_loopback_proxy: network.dangerously_allow_non_loopback_proxy,
         dangerously_allow_all_unix_sockets: network.dangerously_allow_all_unix_sockets,
-        allowed_domains: network.allowed_domains,
-        denied_domains: network.denied_domains,
-        allow_unix_sockets: network.allow_unix_sockets,
+        domains: network.domains.map(|domains| {
+            domains
+                .entries
+                .into_iter()
+                .map(|(pattern, permission)| {
+                    (pattern, map_network_domain_permission_to_api(permission))
+                })
+                .collect()
+        }),
+        unix_sockets: network.unix_sockets.map(|unix_sockets| {
+            unix_sockets
+                .entries
+                .into_iter()
+                .map(|(path, permission)| {
+                    (path, map_network_unix_socket_permission_to_api(permission))
+                })
+                .collect()
+        }),
         allow_local_binding: network.allow_local_binding,
+    }
+}
+
+fn map_network_domain_permission_to_api(
+    permission: codex_core::config_loader::NetworkDomainPermissionToml,
+) -> NetworkDomainPermission {
+    match permission {
+        codex_core::config_loader::NetworkDomainPermissionToml::Allow => {
+            NetworkDomainPermission::Allow
+        }
+        codex_core::config_loader::NetworkDomainPermissionToml::Deny => {
+            NetworkDomainPermission::Deny
+        }
+        codex_core::config_loader::NetworkDomainPermissionToml::None => {
+            NetworkDomainPermission::None
+        }
+    }
+}
+
+fn map_network_unix_socket_permission_to_api(
+    permission: codex_core::config_loader::NetworkUnixSocketPermissionToml,
+) -> NetworkUnixSocketPermission {
+    match permission {
+        codex_core::config_loader::NetworkUnixSocketPermissionToml::Allow => {
+            NetworkUnixSocketPermission::Allow
+        }
+        codex_core::config_loader::NetworkUnixSocketPermissionToml::None => {
+            NetworkUnixSocketPermission::None
+        }
     }
 }
 
@@ -452,7 +498,11 @@ mod tests {
     use codex_core::AnalyticsEventsClient;
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
+    use codex_core::config_loader::NetworkDomainPermissionToml as CoreNetworkDomainPermissionToml;
+    use codex_core::config_loader::NetworkDomainPermissionsToml as CoreNetworkDomainPermissionsToml;
     use codex_core::config_loader::NetworkRequirementsToml as CoreNetworkRequirementsToml;
+    use codex_core::config_loader::NetworkUnixSocketPermissionToml as CoreNetworkUnixSocketPermissionToml;
+    use codex_core::config_loader::NetworkUnixSocketPermissionsToml as CoreNetworkUnixSocketPermissionsToml;
     use codex_features::Feature;
     use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
     use pretty_assertions::assert_eq;
@@ -505,10 +555,25 @@ mod tests {
                 allow_upstream_proxy: Some(false),
                 dangerously_allow_non_loopback_proxy: Some(false),
                 dangerously_allow_all_unix_sockets: Some(true),
-                allowed_domains: Some(vec!["api.openai.com".to_string()]),
+                domains: Some(CoreNetworkDomainPermissionsToml {
+                    entries: std::collections::BTreeMap::from([
+                        (
+                            "api.openai.com".to_string(),
+                            CoreNetworkDomainPermissionToml::Allow,
+                        ),
+                        (
+                            "example.com".to_string(),
+                            CoreNetworkDomainPermissionToml::Deny,
+                        ),
+                    ]),
+                }),
                 managed_allowed_domains_only: Some(false),
-                denied_domains: Some(vec!["example.com".to_string()]),
-                allow_unix_sockets: Some(vec!["/tmp/proxy.sock".to_string()]),
+                unix_sockets: Some(CoreNetworkUnixSocketPermissionsToml {
+                    entries: std::collections::BTreeMap::from([(
+                        "/tmp/proxy.sock".to_string(),
+                        CoreNetworkUnixSocketPermissionToml::Allow,
+                    )]),
+                }),
                 allow_local_binding: Some(true),
             }),
         };
@@ -550,9 +615,14 @@ mod tests {
                 allow_upstream_proxy: Some(false),
                 dangerously_allow_non_loopback_proxy: Some(false),
                 dangerously_allow_all_unix_sockets: Some(true),
-                allowed_domains: Some(vec!["api.openai.com".to_string()]),
-                denied_domains: Some(vec!["example.com".to_string()]),
-                allow_unix_sockets: Some(vec!["/tmp/proxy.sock".to_string()]),
+                domains: Some(std::collections::BTreeMap::from([
+                    ("api.openai.com".to_string(), NetworkDomainPermission::Allow,),
+                    ("example.com".to_string(), NetworkDomainPermission::Deny),
+                ])),
+                unix_sockets: Some(std::collections::BTreeMap::from([(
+                    "/tmp/proxy.sock".to_string(),
+                    NetworkUnixSocketPermission::Allow,
+                )])),
                 allow_local_binding: Some(true),
             }),
         );

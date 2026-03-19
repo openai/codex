@@ -5,6 +5,8 @@ use crate::config::test_config;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::NetworkConstraints;
+use crate::config_loader::NetworkDomainPermissionToml;
+use crate::config_loader::NetworkDomainPermissionsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use crate::exec::ExecCapturePolicy;
@@ -483,7 +485,12 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
     let spec = crate::config::NetworkProxySpec::from_config_and_constraints(
         NetworkProxyConfig::default(),
         Some(NetworkConstraints {
-            allowed_domains: Some(vec!["managed.example.com".to_string()]),
+            domains: Some(NetworkDomainPermissionsToml {
+                entries: std::collections::BTreeMap::from([(
+                    "managed.example.com".to_string(),
+                    NetworkDomainPermissionToml::Allow,
+                )]),
+            }),
             managed_allowed_domains_only: Some(true),
             ..Default::default()
         }),
@@ -3712,8 +3719,18 @@ async fn build_settings_update_items_emits_environment_item_for_network_changes(
     let mut requirements = config.config_layer_stack.requirements().clone();
     requirements.network = Some(Sourced::new(
         NetworkConstraints {
-            allowed_domains: Some(vec!["api.example.com".to_string()]),
-            denied_domains: Some(vec!["blocked.example.com".to_string()]),
+            domains: Some(NetworkDomainPermissionsToml {
+                entries: std::collections::BTreeMap::from([
+                    (
+                        "api.example.com".to_string(),
+                        NetworkDomainPermissionToml::Allow,
+                    ),
+                    (
+                        "blocked.example.com".to_string(),
+                        NetworkDomainPermissionToml::Deny,
+                    ),
+                ]),
+            }),
             ..Default::default()
         },
         RequirementSource::CloudRequirements,
