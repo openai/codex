@@ -210,8 +210,7 @@ impl CodexAuth {
     pub fn auth_mode(&self) -> crate::AuthMode {
         match self {
             Self::ApiKey(_) => crate::AuthMode::ApiKey,
-            Self::Chatgpt(_) => crate::AuthMode::Chatgpt,
-            Self::ChatgptAuthTokens(_) => crate::AuthMode::ChatgptAuthTokens,
+            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => crate::AuthMode::Chatgpt,
         }
     }
 
@@ -228,10 +227,7 @@ impl CodexAuth {
     }
 
     pub fn is_chatgpt_auth(&self) -> bool {
-        matches!(
-            self.auth_mode(),
-            crate::AuthMode::Chatgpt | crate::AuthMode::ChatgptAuthTokens
-        )
+        self.auth_mode() == crate::AuthMode::Chatgpt
     }
 
     pub fn is_external_chatgpt_tokens(&self) -> bool {
