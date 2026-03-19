@@ -3,6 +3,7 @@ use crate::codex::make_session_and_context;
 use crate::config::test_config;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::RefreshStrategy;
+use crate::tasks::interrupted_turn_history_marker;
 use assert_matches::assert_matches;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -184,4 +185,34 @@ async fn new_uses_configured_openai_provider_for_model_refresh() {
 
     let _ = manager.list_models(RefreshStrategy::Online).await;
     assert_eq!(models_mock.requests().len(), 1);
+}
+
+#[test]
+fn interrupted_fork_snapshot_appends_interrupt_marker() {
+    let committed_history =
+        InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("hello"))]);
+
+    assert_eq!(
+        serde_json::to_value(
+            snapshot_fork_history(committed_history, ForkSnapshotMode::Interrupted)
+                .get_rollout_items()
+        )
+        .expect("serialize interrupted fork history"),
+        serde_json::to_value(vec![
+            RolloutItem::ResponseItem(user_msg("hello")),
+            RolloutItem::ResponseItem(interrupted_turn_history_marker()),
+        ])
+        .expect("serialize expected interrupted fork history"),
+    );
+    assert_eq!(
+        serde_json::to_value(
+            snapshot_fork_history(InitialHistory::New, ForkSnapshotMode::Interrupted)
+                .get_rollout_items()
+        )
+        .expect("serialize interrupted empty fork history"),
+        serde_json::to_value(vec![RolloutItem::ResponseItem(
+            interrupted_turn_history_marker(),
+        )])
+        .expect("serialize expected interrupted empty fork history"),
+    );
 }

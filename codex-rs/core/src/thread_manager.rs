@@ -24,6 +24,7 @@ use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillsManager;
+use crate::tasks::interrupted_turn_history_marker;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelPreset;
@@ -122,6 +123,12 @@ pub struct NewThread {
     pub thread_id: ThreadId,
     pub thread: Arc<CodexThread>,
     pub session_configured: SessionConfiguredEvent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForkSnapshotMode {
+    Committed,
+    Interrupted,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -550,9 +557,15 @@ impl ThreadManager {
         path: PathBuf,
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
+        snapshot_mode: ForkSnapshotMode,
     ) -> CodexResult<NewThread> {
-        let history = RolloutRecorder::get_rollout_history(&path).await?;
-        let history = truncate_before_nth_user_message(history, nth_user_message);
+        let history = snapshot_fork_history(
+            truncate_before_nth_user_message(
+                RolloutRecorder::get_rollout_history(&path).await?,
+                nth_user_message,
+            ),
+            snapshot_mode,
+        );
         Box::pin(self.state.spawn_thread(
             config,
             history,
@@ -835,6 +848,28 @@ fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> Initia
         InitialHistory::New
     } else {
         InitialHistory::Forked(rolled)
+    }
+}
+
+fn snapshot_fork_history(
+    history: InitialHistory,
+    snapshot_mode: ForkSnapshotMode,
+) -> InitialHistory {
+    match (history, snapshot_mode) {
+        (InitialHistory::New, ForkSnapshotMode::Committed) => InitialHistory::New,
+        (InitialHistory::New, ForkSnapshotMode::Interrupted) => {
+            InitialHistory::Forked(vec![RolloutItem::ResponseItem(
+                interrupted_turn_history_marker(),
+            )])
+        }
+        (InitialHistory::Forked(history), ForkSnapshotMode::Committed) => {
+            InitialHistory::Forked(history)
+        }
+        (InitialHistory::Forked(mut history), ForkSnapshotMode::Interrupted) => {
+            history.push(RolloutItem::ResponseItem(interrupted_turn_history_marker()));
+            InitialHistory::Forked(history)
+        }
+        (InitialHistory::Resumed(_), _) => unreachable!("truncate_before_nth_user_message"),
     }
 }
 
