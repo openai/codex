@@ -44,14 +44,16 @@ async fn create_file_system_context(use_remote: bool) -> Result<FileSystemContex
     }
 }
 
-#[allow(clippy::expect_used)]
 fn absolute_path(path: std::path::PathBuf) -> AbsolutePathBuf {
     assert!(
         path.is_absolute(),
         "path must be absolute: {}",
         path.display()
     );
-    AbsolutePathBuf::try_from(path).expect("path should be absolute")
+    match AbsolutePathBuf::try_from(path) {
+        Ok(path) => path,
+        Err(err) => panic!("path should be absolute: {err}"),
+    }
 }
 
 #[test_case(false ; "local")]
@@ -196,8 +198,11 @@ async fn file_system_copy_rejects_directory_without_recursive(use_remote: bool) 
             &absolute_path(tmp.path().join("dest")),
             CopyOptions { recursive: false },
         )
-        .await
-        .expect_err("copy should fail");
+        .await;
+    let error = match error {
+        Ok(()) => panic!("copy should fail"),
+        Err(error) => error,
+    };
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     assert_eq!(
         error.to_string(),
@@ -226,8 +231,11 @@ async fn file_system_copy_rejects_copying_directory_into_descendant(
             &absolute_path(source_dir.join("nested").join("copy")),
             CopyOptions { recursive: true },
         )
-        .await
-        .expect_err("copy should fail");
+        .await;
+    let error = match error {
+        Ok(()) => panic!("copy should fail"),
+        Err(error) => error,
+    };
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     assert_eq!(
         error.to_string(),
@@ -338,8 +346,11 @@ async fn file_system_copy_rejects_standalone_fifo_source(use_remote: bool) -> Re
             &absolute_path(tmp.path().join("copied")),
             CopyOptions { recursive: false },
         )
-        .await
-        .expect_err("copy should fail");
+        .await;
+    let error = match error {
+        Ok(()) => panic!("copy should fail"),
+        Err(error) => error,
+    };
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     assert_eq!(
         error.to_string(),
