@@ -996,7 +996,8 @@ mod tests {
         .expect("run ok");
 
         assert!(results.matches.iter().any(|m| {
-            m.path.to_string_lossy() == "docs/guides" && m.match_type == MatchType::Directory
+            m.path == std::path::Path::new("docs").join("guides")
+                && m.match_type == MatchType::Directory
         }));
     }
 
