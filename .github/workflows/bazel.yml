@@ -161,7 +161,9 @@ jobs:
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
             --build_metadata=ROLE=CI
             --build_metadata=VISIBILITY=PUBLIC
-            --
+          )
+
+          bazel_targets=(
             //...
             # Keep V8 out of the ordinary Bazel CI path. Only the dedicated
             # canary and release workflows should build `third_party/v8`.
@@ -187,6 +189,8 @@ jobs:
               --bazelrc=.github/workflows/ci.bazelrc \
               "${bazel_args[@]}" \
               "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" \
+              -- \
+              "${bazel_targets[@]}" \
               2>&1 | tee "$bazel_console_log"
             bazel_status=${PIPESTATUS[0]}
             set -e
@@ -214,6 +218,8 @@ jobs:
               "${bazel_args[@]}" \
               --remote_cache= \
               --remote_executor= \
+              -- \
+              "${bazel_targets[@]}" \
               2>&1 | tee "$bazel_console_log"
             bazel_status=${PIPESTATUS[0]}
             set -e
