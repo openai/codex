@@ -14,3 +14,32 @@ pub(crate) fn try_parse_error_message(text: &str) -> String {
     }
     text.to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::try_parse_error_message;
+
+    #[test]
+    fn try_parse_error_message_extracts_openai_error_message() {
+        let text = r#"{
+  "error": {
+    "message": "Your refresh token has already been used to generate a new access token. Please try signing in again.",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "refresh_token_reused"
+  }
+}"#;
+        let message = try_parse_error_message(text);
+        assert_eq!(
+            message,
+            "Your refresh token has already been used to generate a new access token. Please try signing in again."
+        );
+    }
+
+    #[test]
+    fn try_parse_error_message_falls_back_to_raw_text() {
+        let text = r#"{"message": "test"}"#;
+        let message = try_parse_error_message(text);
+        assert_eq!(message, r#"{"message": "test"}"#);
+    }
+}

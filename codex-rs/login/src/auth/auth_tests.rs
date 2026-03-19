@@ -101,7 +101,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
         .unwrap()
         .unwrap();
     assert_eq!(None, auth.api_key());
-    assert_eq!(AuthMode::Chatgpt, auth.auth_mode());
+    assert_eq!(crate::AuthMode::Chatgpt, auth.auth_mode());
     assert_eq!(auth.get_chatgpt_user_id().as_deref(), Some("user-12345"));
 
     let auth_dot_json = auth
@@ -147,7 +147,7 @@ async fn loads_api_key_from_auth_json() {
     let auth = super::load_auth(dir.path(), false, AuthCredentialsStoreMode::File)
         .unwrap()
         .unwrap();
-    assert_eq!(auth.auth_mode(), AuthMode::ApiKey);
+    assert_eq!(auth.auth_mode(), crate::AuthMode::ApiKey);
     assert_eq!(auth.api_key(), Some("sk-test-key"));
 
     assert!(auth.get_token_data().is_err());
