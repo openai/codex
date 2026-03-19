@@ -1276,8 +1276,13 @@ mod tests {
     #[test]
     fn legacy_workspace_write_projection_accepts_relative_cwd() {
         let relative_cwd = Path::new("workspace");
-        let regular_file = relative_cwd.join("notes.txt");
-        let dot_codex_config = relative_cwd.join(".codex/config.toml");
+        let expected_dot_codex = AbsolutePathBuf::from_absolute_path(
+            std::env::current_dir()
+                .expect("current dir")
+                .join(relative_cwd)
+                .join(".codex"),
+        )
+        .expect("absolute dot codex");
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             read_only_access: ReadOnlyAccess::Restricted {
@@ -1292,9 +1297,27 @@ mod tests {
         let file_system_policy =
             FileSystemSandboxPolicy::from_legacy_sandbox_policy(&policy, relative_cwd);
 
-        assert!(file_system_policy.can_write_path_with_cwd(regular_file.as_path(), relative_cwd));
+        assert_eq!(
+            file_system_policy,
+            FileSystemSandboxPolicy::restricted(vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: expected_dot_codex,
+                    },
+                    access: FileSystemAccessMode::Read,
+                },
+            ])
+        );
+        assert!(file_system_policy.can_write_path_with_cwd(Path::new("notes.txt"), relative_cwd));
         assert!(
-            !file_system_policy.can_write_path_with_cwd(dot_codex_config.as_path(), relative_cwd)
+            !file_system_policy
+                .can_write_path_with_cwd(Path::new(".codex/config.toml"), relative_cwd,)
         );
     }
 
