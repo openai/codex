@@ -1000,6 +1000,11 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
     assert_eq!(hook_inputs[0]["tool_name"], "Bash");
     assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert!(
+        hook_inputs[0]["turn_id"]
+            .as_str()
+            .is_some_and(|turn_id| !turn_id.is_empty())
+    );
 
     Ok(())
 }
@@ -1082,6 +1087,11 @@ async fn pre_tool_use_blocks_local_shell_before_execution() -> Result<()> {
         hook_inputs[0]["tool_input"]["command"],
         codex_shell_command::parse_command::shlex_join(&command),
     );
+    assert!(
+        hook_inputs[0]["turn_id"]
+            .as_str()
+            .is_some_and(|turn_id| !turn_id.is_empty())
+    );
 
     Ok(())
 }
@@ -1160,6 +1170,11 @@ async fn pre_tool_use_blocks_exec_command_before_execution() -> Result<()> {
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert!(
+        hook_inputs[0]["turn_id"]
+            .as_str()
+            .is_some_and(|turn_id| !turn_id.is_empty())
+    );
 
     Ok(())
 }

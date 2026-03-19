@@ -123,6 +123,8 @@ pub(crate) struct PreToolUseToolInput {
 #[schemars(rename = "pre-tool-use.command.input")]
 pub(crate) struct PreToolUseCommandInput {
     pub session_id: String,
+    /// Codex extension: expose the active turn id to internal turn-scoped hooks.
+    pub turn_id: String,
     pub transcript_path: NullableString,
     pub cwd: String,
     #[schemars(schema_with = "pre_tool_use_hook_event_name_schema")]
@@ -139,6 +141,7 @@ pub(crate) struct PreToolUseCommandInput {
 impl PreToolUseCommandInput {
     pub(crate) fn new(
         session_id: impl Into<String>,
+        turn_id: impl Into<String>,
         transcript_path: Option<PathBuf>,
         cwd: impl Into<String>,
         model: impl Into<String>,
@@ -148,6 +151,7 @@ impl PreToolUseCommandInput {
     ) -> Self {
         Self {
             session_id: session_id.into(),
+            turn_id: turn_id.into(),
             transcript_path: NullableString::from_path(transcript_path),
             cwd: cwd.into(),
             hook_event_name: "PreToolUse".to_string(),
@@ -455,6 +459,7 @@ fn default_continue() -> bool {
 mod tests {
     use super::PRE_TOOL_USE_INPUT_FIXTURE;
     use super::PRE_TOOL_USE_OUTPUT_FIXTURE;
+    use super::PreToolUseCommandInput;
     use super::SESSION_START_INPUT_FIXTURE;
     use super::SESSION_START_OUTPUT_FIXTURE;
     use super::STOP_INPUT_FIXTURE;
@@ -531,6 +536,10 @@ mod tests {
     fn turn_scoped_hook_inputs_include_codex_turn_id_extension() {
         // Codex intentionally diverges from Claude's public hook docs here so
         // internal hook consumers can key off the active turn.
+        let pre_tool_use: Value = serde_json::from_slice(
+            &schema_json::<PreToolUseCommandInput>().expect("serialize pre tool use input schema"),
+        )
+        .expect("parse pre tool use input schema");
         let user_prompt_submit: Value = serde_json::from_slice(
             &schema_json::<UserPromptSubmitCommandInput>()
                 .expect("serialize user prompt submit input schema"),
@@ -541,7 +550,7 @@ mod tests {
         )
         .expect("parse stop input schema");
 
-        for schema in [&user_prompt_submit, &stop] {
+        for schema in [&pre_tool_use, &user_prompt_submit, &stop] {
             assert_eq!(schema["properties"]["turn_id"]["type"], "string");
             assert!(
                 schema["required"]
