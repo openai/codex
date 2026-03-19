@@ -150,13 +150,14 @@ fn apply_network_constraints(network: NetworkToml, constraints: &mut NetworkProx
     if let Some(dangerously_allow_all_unix_sockets) = network.dangerously_allow_all_unix_sockets {
         constraints.dangerously_allow_all_unix_sockets = Some(dangerously_allow_all_unix_sockets);
     }
-    if let Some(allowed_domains) = network.allowed_domains {
+    if network.domains.is_some() {
+        let allowed_domains = network.allowed_domains();
         constraints.allowed_domains = Some(allowed_domains);
-    }
-    if let Some(denied_domains) = network.denied_domains {
+        let denied_domains = network.denied_domains();
         constraints.denied_domains = Some(denied_domains);
     }
-    if let Some(allow_unix_sockets) = network.allow_unix_sockets {
+    if network.unix_sockets.is_some() {
+        let allow_unix_sockets = network.allow_unix_sockets();
         constraints.allow_unix_sockets = Some(allow_unix_sockets);
     }
     if let Some(allow_local_binding) = network.allow_local_binding {

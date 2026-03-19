@@ -333,10 +333,9 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
         allow_upstream_proxy,
         dangerously_allow_non_loopback_proxy,
         dangerously_allow_all_unix_sockets,
-        allowed_domains,
+        domains,
         managed_allowed_domains_only,
-        denied_domains,
-        allow_unix_sockets,
+        unix_sockets,
         allow_local_binding,
     } = network;
 
@@ -362,21 +361,21 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
             "dangerously_allow_all_unix_sockets={dangerously_allow_all_unix_sockets}"
         ));
     }
-    if let Some(allowed_domains) = allowed_domains {
-        parts.push(format!("allowed_domains=[{}]", allowed_domains.join(", ")));
+    if let Some(domains) = domains {
+        parts.push(format!(
+            "domains={}",
+            format_network_permission_entries(&domains.entries)
+        ));
     }
     if let Some(managed_allowed_domains_only) = managed_allowed_domains_only {
         parts.push(format!(
             "managed_allowed_domains_only={managed_allowed_domains_only}"
         ));
     }
-    if let Some(denied_domains) = denied_domains {
-        parts.push(format!("denied_domains=[{}]", denied_domains.join(", ")));
-    }
-    if let Some(allow_unix_sockets) = allow_unix_sockets {
+    if let Some(unix_sockets) = unix_sockets {
         parts.push(format!(
-            "allow_unix_sockets=[{}]",
-            allow_unix_sockets.join(", ")
+            "unix_sockets={}",
+            format_network_permission_entries(&unix_sockets.entries)
         ));
     }
     if let Some(allow_local_binding) = allow_local_binding {
@@ -384,6 +383,16 @@ fn format_network_constraints(network: &NetworkConstraints) -> String {
     }
 
     join_or_empty(parts)
+}
+
+fn format_network_permission_entries<T: std::fmt::Display>(
+    entries: &std::collections::BTreeMap<String, T>,
+) -> String {
+    let parts = entries
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>();
+    format!("{{{}}}", parts.join(", "))
 }
 
 #[cfg(test)]
@@ -400,6 +409,8 @@ mod tests {
     use codex_core::config_loader::McpServerIdentity;
     use codex_core::config_loader::McpServerRequirement;
     use codex_core::config_loader::NetworkConstraints;
+    use codex_core::config_loader::NetworkDomainPermissionToml;
+    use codex_core::config_loader::NetworkDomainPermissionsToml;
     use codex_core::config_loader::RequirementSource;
     use codex_core::config_loader::ResidencyRequirement;
     use codex_core::config_loader::SandboxModeRequirement;
@@ -516,7 +527,12 @@ mod tests {
             network: Some(Sourced::new(
                 NetworkConstraints {
                     enabled: Some(true),
-                    allowed_domains: Some(vec!["example.com".to_string()]),
+                    domains: Some(NetworkDomainPermissionsToml {
+                        entries: BTreeMap::from([(
+                            "example.com".to_string(),
+                            NetworkDomainPermissionToml::Allow,
+                        )]),
+                    }),
                     ..Default::default()
                 },
                 RequirementSource::CloudRequirements,
@@ -580,7 +596,7 @@ mod tests {
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
         assert!(rendered.contains("enforce_residency: us (source: cloud requirements)"));
         assert!(rendered.contains(
-            "experimental_network: enabled=true, allowed_domains=[example.com] (source: cloud requirements)"
+            "experimental_network: enabled=true, domains={example.com=allow} (source: cloud requirements)"
         ));
         assert!(!rendered.contains("  - rules:"));
     }

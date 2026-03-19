@@ -139,6 +139,18 @@
         "null"
       ]
     },
+    "path": {
+      "description": "[UNSTABLE] Specify the rollout path to fork from. If specified, the thread_id param will be ignored.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "persistExtendedHistory": {
+      "default": false,
+      "description": "If true, persist additional rollout EventMsg variants required to reconstruct a richer thread history on subsequent resume/fork/read.",
+      "type": "boolean"
+    },
     "sandbox": {
       "anyOf": [
         {

@@ -318,9 +318,13 @@ allowed_domains = ["openai.com"]
                         dangerously_allow_non_loopback_proxy: None,
                         dangerously_allow_all_unix_sockets: None,
                         mode: None,
-                        allowed_domains: Some(vec!["openai.com".to_string()]),
-                        denied_domains: None,
-                        allow_unix_sockets: None,
+                        domains: Some(NetworkDomainPermissionsToml {
+                            entries: BTreeMap::from([(
+                                "openai.com".to_string(),
+                                NetworkDomainPermissionToml::Allow,
+                            )]),
+                        }),
+                        unix_sockets: None,
                         allow_local_binding: None,
                     }),
                 },
@@ -396,7 +400,12 @@ fn permissions_profiles_network_disabled_by_default_does_not_start_proxy() -> st
                             )]),
                         }),
                         network: Some(NetworkToml {
-                            allowed_domains: Some(vec!["openai.com".to_string()]),
+                            domains: Some(NetworkDomainPermissionsToml {
+                                entries: BTreeMap::from([(
+                                    "openai.com".to_string(),
+                                    NetworkDomainPermissionToml::Allow,
+                                )]),
+                            }),
                             ..Default::default()
                         }),
                     },

@@ -11,6 +11,8 @@ use crate::config::test_config;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::FeatureRequirementsToml;
 use crate::config_loader::NetworkConstraints;
+use crate::config_loader::NetworkDomainPermissionToml;
+use crate::config_loader::NetworkDomainPermissionsToml;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
 use crate::protocol::SandboxPolicy;
@@ -865,7 +867,12 @@ fn guardian_review_session_config_preserves_parent_network_proxy() {
         NetworkProxyConfig::default(),
         Some(NetworkConstraints {
             enabled: Some(true),
-            allowed_domains: Some(vec!["github.com".to_string()]),
+            domains: Some(NetworkDomainPermissionsToml {
+                entries: std::collections::BTreeMap::from([(
+                    "github.com".to_string(),
+                    NetworkDomainPermissionToml::Allow,
+                )]),
+            }),
             ..Default::default()
         }),
         parent_config.permissions.sandbox_policy.get(),

@@ -983,8 +983,8 @@ impl TurnContext {
             .network
             .as_ref()?;
         Some(TurnContextNetworkItem {
-            allowed_domains: network.allowed_domains.clone().unwrap_or_default(),
-            denied_domains: network.denied_domains.clone().unwrap_or_default(),
+            allowed_domains: network.allowed_domains(),
+            denied_domains: network.denied_domains(),
         })
     }
 }

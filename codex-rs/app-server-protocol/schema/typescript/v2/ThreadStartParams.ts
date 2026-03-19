@@ -6,18 +6,27 @@ import type { ServiceTier } from "../ServiceTier";
 import type { JsonValue } from "../serde_json/JsonValue";
 import type { ApprovalsReviewer } from "./ApprovalsReviewer";
 import type { AskForApproval } from "./AskForApproval";
+import type { DynamicToolSpec } from "./DynamicToolSpec";
 import type { SandboxMode } from "./SandboxMode";
 
-export type ThreadStartParams = {model?: string | null, modelProvider?: string | null, serviceTier?: ServiceTier | null | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, /**
+export type ThreadStartParams = { model?: string | null, modelProvider?: string | null, serviceTier?: ServiceTier | null | null, cwd?: string | null, approvalPolicy?: AskForApproval | null, 
+/**
  * Override where approval requests are routed for review on this thread
  * and subsequent turns.
  */
-approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, serviceName?: string | null, baseInstructions?: string | null, developerInstructions?: string | null, personality?: Personality | null, ephemeral?: boolean | null, /**
+approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, serviceName?: string | null, baseInstructions?: string | null, developerInstructions?: string | null, personality?: Personality | null, ephemeral?: boolean | null, dynamicTools?: Array<DynamicToolSpec> | null, 
+/**
+ * Test-only experimental field used to validate experimental gating and
+ * schema filtering behavior in a stable way.
+ */
+mockExperimentalField?: string | null, 
+/**
  * If true, opt into emitting raw Responses API items on the event stream.
  * This is for internal use only (e.g. Codex Cloud).
  */
-experimentalRawEvents: boolean, /**
+experimentalRawEvents: boolean, 
+/**
  * If true, persist additional rollout EventMsg variants required to
  * reconstruct a richer thread history on resume/fork/read.
  */
-persistExtendedHistory: boolean};
+persistExtendedHistory: boolean, };

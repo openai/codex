@@ -1,5 +1,18 @@
 use super::*;
+use crate::config_loader::NetworkDomainPermissionToml;
+use crate::config_loader::NetworkDomainPermissionsToml;
 use pretty_assertions::assert_eq;
+
+fn domain_permissions(
+    entries: impl IntoIterator<Item = (&'static str, NetworkDomainPermissionToml)>,
+) -> NetworkDomainPermissionsToml {
+    NetworkDomainPermissionsToml {
+        entries: entries
+            .into_iter()
+            .map(|(pattern, permission)| (pattern.to_string(), permission))
+            .collect(),
+    }
+}
 
 #[test]
 fn build_state_with_audit_metadata_threads_metadata_to_state() {
@@ -26,7 +39,10 @@ fn requirements_allowed_domains_are_a_baseline_for_user_allowlist() {
     let mut config = NetworkProxyConfig::default();
     config.network.allowed_domains = vec!["api.example.com".to_string()];
     let requirements = NetworkConstraints {
-        allowed_domains: Some(vec!["*.example.com".to_string()]),
+        domains: Some(domain_permissions([(
+            "*.example.com",
+            NetworkDomainPermissionToml::Allow,
+        )])),
         ..Default::default()
     };
 
@@ -54,8 +70,10 @@ fn danger_full_access_keeps_managed_allowlist_and_denylist_fixed() {
     config.network.allowed_domains = vec!["evil.com".to_string()];
     config.network.denied_domains = vec!["more-blocked.example.com".to_string()];
     let requirements = NetworkConstraints {
-        allowed_domains: Some(vec!["*.example.com".to_string()]),
-        denied_domains: Some(vec!["blocked.example.com".to_string()]),
+        domains: Some(domain_permissions([
+            ("*.example.com", NetworkDomainPermissionToml::Allow),
+            ("blocked.example.com", NetworkDomainPermissionToml::Deny),
+        ])),
         ..Default::default()
     };
 
@@ -83,7 +101,10 @@ fn managed_allowed_domains_only_disables_default_mode_allowlist_expansion() {
     let mut config = NetworkProxyConfig::default();
     config.network.allowed_domains = vec!["api.example.com".to_string()];
     let requirements = NetworkConstraints {
-        allowed_domains: Some(vec!["*.example.com".to_string()]),
+        domains: Some(domain_permissions([(
+            "*.example.com",
+            NetworkDomainPermissionToml::Allow,
+        )])),
         managed_allowed_domains_only: Some(true),
         ..Default::default()
     };
@@ -107,7 +128,10 @@ fn managed_allowed_domains_only_ignores_user_allowlist_and_hard_denies_misses() 
     let mut config = NetworkProxyConfig::default();
     config.network.allowed_domains = vec!["api.example.com".to_string()];
     let requirements = NetworkConstraints {
-        allowed_domains: Some(vec!["managed.example.com".to_string()]),
+        domains: Some(domain_permissions([(
+            "managed.example.com",
+            NetworkDomainPermissionToml::Allow,
+        )])),
         managed_allowed_domains_only: Some(true),
         ..Default::default()
     };
@@ -180,7 +204,10 @@ fn requirements_denied_domains_are_a_baseline_for_default_mode() {
     let mut config = NetworkProxyConfig::default();
     config.network.denied_domains = vec!["blocked.example.com".to_string()];
     let requirements = NetworkConstraints {
-        denied_domains: Some(vec!["managed-blocked.example.com".to_string()]),
+        domains: Some(domain_permissions([(
+            "managed-blocked.example.com",
+            NetworkDomainPermissionToml::Deny,
+        )])),
         ..Default::default()
     };
 

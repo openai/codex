@@ -57,6 +57,49 @@ pub enum FilesystemPermissionToml {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+pub struct NetworkDomainPermissionsToml {
+    #[serde(flatten)]
+    pub entries: BTreeMap<String, NetworkDomainPermissionToml>,
+}
+
+impl NetworkDomainPermissionsToml {
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkDomainPermissionToml {
+    Allow,
+    Deny,
+    None,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+pub struct NetworkUnixSocketPermissionsToml {
+    #[serde(flatten)]
+    pub entries: BTreeMap<String, NetworkUnixSocketPermissionToml>,
+}
+
+impl NetworkUnixSocketPermissionsToml {
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+#[derive(
+    Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkUnixSocketPermissionToml {
+    Allow,
+    None,
+}
+
+#[derive(Serialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct NetworkToml {
     pub enabled: Option<bool>,
@@ -69,9 +112,8 @@ pub struct NetworkToml {
     pub dangerously_allow_all_unix_sockets: Option<bool>,
     #[schemars(with = "Option<NetworkModeSchema>")]
     pub mode: Option<NetworkMode>,
-    pub allowed_domains: Option<Vec<String>>,
-    pub denied_domains: Option<Vec<String>>,
-    pub allow_unix_sockets: Option<Vec<String>>,
+    pub domains: Option<NetworkDomainPermissionsToml>,
+    pub unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
     pub allow_local_binding: Option<bool>,
 }
 
@@ -80,6 +122,66 @@ pub struct NetworkToml {
 enum NetworkModeSchema {
     Limited,
     Full,
+}
+
+#[derive(Deserialize)]
+struct RawNetworkToml {
+    pub enabled: Option<bool>,
+    pub proxy_url: Option<String>,
+    pub enable_socks5: Option<bool>,
+    pub socks_url: Option<String>,
+    pub enable_socks5_udp: Option<bool>,
+    pub allow_upstream_proxy: Option<bool>,
+    pub dangerously_allow_non_loopback_proxy: Option<bool>,
+    pub dangerously_allow_all_unix_sockets: Option<bool>,
+    pub mode: Option<NetworkMode>,
+    pub domains: Option<NetworkDomainPermissionsToml>,
+    pub unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
+    pub allowed_domains: Option<Vec<String>>,
+    pub denied_domains: Option<Vec<String>>,
+    pub allow_unix_sockets: Option<Vec<String>>,
+    pub allow_local_binding: Option<bool>,
+}
+
+impl<'de> Deserialize<'de> for NetworkToml {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawNetworkToml::deserialize(deserializer)?;
+        let RawNetworkToml {
+            enabled,
+            proxy_url,
+            enable_socks5,
+            socks_url,
+            enable_socks5_udp,
+            allow_upstream_proxy,
+            dangerously_allow_non_loopback_proxy,
+            dangerously_allow_all_unix_sockets,
+            mode,
+            domains,
+            unix_sockets,
+            allowed_domains,
+            denied_domains,
+            allow_unix_sockets,
+            allow_local_binding,
+        } = raw;
+
+        Ok(Self {
+            enabled,
+            proxy_url,
+            enable_socks5,
+            socks_url,
+            enable_socks5_udp,
+            allow_upstream_proxy,
+            dangerously_allow_non_loopback_proxy,
+            dangerously_allow_all_unix_sockets,
+            mode,
+            domains: merge_domain_permissions(allowed_domains, denied_domains, domains),
+            unix_sockets: merge_unix_socket_permissions(allow_unix_sockets, unix_sockets),
+            allow_local_binding,
+        })
+    }
 }
 
 impl NetworkToml {
@@ -114,14 +216,12 @@ impl NetworkToml {
         if let Some(mode) = self.mode {
             config.network.mode = mode;
         }
-        if let Some(allowed_domains) = self.allowed_domains.as_ref() {
-            config.network.allowed_domains = allowed_domains.clone();
+        if self.domains.is_some() {
+            config.network.allowed_domains = self.allowed_domains();
+            config.network.denied_domains = self.denied_domains();
         }
-        if let Some(denied_domains) = self.denied_domains.as_ref() {
-            config.network.denied_domains = denied_domains.clone();
-        }
-        if let Some(allow_unix_sockets) = self.allow_unix_sockets.as_ref() {
-            config.network.allow_unix_sockets = allow_unix_sockets.clone();
+        if self.unix_sockets.is_some() {
+            config.network.allow_unix_sockets = self.allow_unix_sockets();
         }
         if let Some(allow_local_binding) = self.allow_local_binding {
             config.network.allow_local_binding = allow_local_binding;
@@ -133,6 +233,94 @@ impl NetworkToml {
         self.apply_to_network_proxy_config(&mut config);
         config
     }
+
+    pub(crate) fn allowed_domains(&self) -> Vec<String> {
+        self.domains
+            .as_ref()
+            .map(|domains| {
+                domains
+                    .entries
+                    .iter()
+                    .filter(|(_, permission)| {
+                        matches!(permission, NetworkDomainPermissionToml::Allow)
+                    })
+                    .map(|(pattern, _)| pattern.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn denied_domains(&self) -> Vec<String> {
+        self.domains
+            .as_ref()
+            .map(|domains| {
+                domains
+                    .entries
+                    .iter()
+                    .filter(|(_, permission)| {
+                        matches!(permission, NetworkDomainPermissionToml::Deny)
+                    })
+                    .map(|(pattern, _)| pattern.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn allow_unix_sockets(&self) -> Vec<String> {
+        self.unix_sockets
+            .as_ref()
+            .map(|unix_sockets| {
+                unix_sockets
+                    .entries
+                    .iter()
+                    .filter(|(_, permission)| {
+                        matches!(permission, NetworkUnixSocketPermissionToml::Allow)
+                    })
+                    .map(|(path, _)| path.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+fn merge_domain_permissions(
+    allowed_domains: Option<Vec<String>>,
+    denied_domains: Option<Vec<String>>,
+    domains: Option<NetworkDomainPermissionsToml>,
+) -> Option<NetworkDomainPermissionsToml> {
+    let mut entries = BTreeMap::new();
+
+    for pattern in allowed_domains.unwrap_or_default() {
+        entries.insert(pattern, NetworkDomainPermissionToml::Allow);
+    }
+    for pattern in denied_domains.unwrap_or_default() {
+        entries.insert(pattern, NetworkDomainPermissionToml::Deny);
+    }
+    if let Some(domains) = domains {
+        for (pattern, permission) in domains.entries {
+            entries.insert(pattern, permission);
+        }
+    }
+
+    (!entries.is_empty()).then_some(NetworkDomainPermissionsToml { entries })
+}
+
+fn merge_unix_socket_permissions(
+    allow_unix_sockets: Option<Vec<String>>,
+    unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
+) -> Option<NetworkUnixSocketPermissionsToml> {
+    let mut entries = BTreeMap::new();
+
+    for path in allow_unix_sockets.unwrap_or_default() {
+        entries.insert(path, NetworkUnixSocketPermissionToml::Allow);
+    }
+    if let Some(unix_sockets) = unix_sockets {
+        for (path, permission) in unix_sockets.entries {
+            entries.insert(path, permission);
+        }
+    }
+
+    (!entries.is_empty()).then_some(NetworkUnixSocketPermissionsToml { entries })
 }
 
 pub(crate) fn network_proxy_config_from_profile_network(
