@@ -292,10 +292,7 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
         .read()
         .await
         .list_all_tools()
-        .await
-        .into_iter()
-        .map(|(name, tool_info)| (name, tool_info.tool))
-        .collect();
+        .await;
 
     ToolRouter::from_config(
         &nested_tools_config,

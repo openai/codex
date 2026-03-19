@@ -129,7 +129,7 @@ fn serialize_tool_search_output_tools(
         let tools = tools
             .iter()
             .map(|tool| {
-                mcp_tool_to_deferred_openai_tool(tool.tool_name.clone(), tool.tool.clone())
+                mcp_tool_to_deferred_openai_tool(tool.tool_name.clone(), tool)
                     .map(ResponsesApiNamespaceTool::Function)
             })
             .collect::<Result<Vec<_>, _>>()?;

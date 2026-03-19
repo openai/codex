@@ -25,8 +25,17 @@ use crate::guardian::guardian_approval_request_to_json;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use crate::mcp_openai_file::declared_openai_file_outputs;
+use crate::mcp_openai_file::declared_openai_file_params;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
+use crate::openai_files::OPENAI_FILE_AUTO_DOWNLOAD_BUDGET_BYTES;
+use crate::openai_files::OPENAI_FILE_AUTO_DOWNLOAD_LIMIT_BYTES;
+use crate::openai_files::download_file_to_managed_temp;
+use crate::openai_files::is_openai_file_uri;
+use crate::openai_files::openai_file_uri;
+use crate::openai_files::parse_openai_file_id;
+use crate::openai_files::upload_local_file;
 use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
@@ -145,22 +154,17 @@ pub(crate) async fn handle_mcp_tool_call(
                 maybe_mark_thread_memory_mode_polluted(sess.as_ref(), turn_context.as_ref()).await;
 
                 let start = Instant::now();
-                let result = sess
-                    .call_tool(
-                        &server,
-                        &tool_name,
-                        arguments_value.clone(),
-                        request_meta.clone(),
-                    )
-                    .await
-                    .map_err(|e| format!("tool call error: {e:?}"));
-                let result = sanitize_mcp_tool_result_for_model(
-                    turn_context
-                        .model_info
-                        .input_modalities
-                        .contains(&InputModality::Image),
-                    result,
-                );
+                let result = execute_mcp_tool_call(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    &call_id,
+                    &server,
+                    &tool_name,
+                    arguments_value.clone(),
+                    metadata.as_ref(),
+                    request_meta.clone(),
+                )
+                .await;
                 if let Err(e) = &result {
                     tracing::warn!("MCP tool call error: {e:?}");
                 }
@@ -235,18 +239,17 @@ pub(crate) async fn handle_mcp_tool_call(
     maybe_mark_thread_memory_mode_polluted(sess.as_ref(), turn_context.as_ref()).await;
 
     let start = Instant::now();
-    // Perform the tool call.
-    let result = sess
-        .call_tool(&server, &tool_name, arguments_value.clone(), request_meta)
-        .await
-        .map_err(|e| format!("tool call error: {e:?}"));
-    let result = sanitize_mcp_tool_result_for_model(
-        turn_context
-            .model_info
-            .input_modalities
-            .contains(&InputModality::Image),
-        result,
-    );
+    let result = execute_mcp_tool_call(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        &call_id,
+        &server,
+        &tool_name,
+        arguments_value.clone(),
+        metadata.as_ref(),
+        request_meta,
+    )
+    .await;
     if let Err(e) = &result {
         tracing::warn!("MCP tool call error: {e:?}");
     }
@@ -271,6 +274,46 @@ pub(crate) async fn handle_mcp_tool_call(
         .counter("codex.mcp.call", /*inc*/ 1, &[("status", status)]);
 
     CallToolResult::from_result(result)
+}
+
+async fn execute_mcp_tool_call(
+    sess: &Session,
+    turn_context: &TurnContext,
+    call_id: &str,
+    server: &str,
+    tool_name: &str,
+    arguments_value: Option<serde_json::Value>,
+    metadata: Option<&McpToolApprovalMetadata>,
+    request_meta: Option<serde_json::Value>,
+) -> Result<CallToolResult, String> {
+    let rewritten_arguments = rewrite_mcp_tool_arguments_for_openai_files(
+        sess,
+        turn_context,
+        server,
+        arguments_value,
+        metadata,
+    )
+    .await?;
+    let result = sess
+        .call_tool(server, tool_name, rewritten_arguments, request_meta)
+        .await
+        .map_err(|e| format!("tool call error: {e:?}"))?;
+    let result = rewrite_mcp_tool_result_for_openai_files(
+        sess,
+        turn_context,
+        call_id,
+        server,
+        result,
+        metadata,
+    )
+    .await;
+    sanitize_mcp_tool_result_for_model(
+        turn_context
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image),
+        Ok(result),
+    )
 }
 
 async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {
@@ -386,6 +429,8 @@ pub(crate) struct McpToolApprovalMetadata {
     tool_title: Option<String>,
     tool_description: Option<String>,
     codex_apps_meta: Option<serde_json::Map<String, serde_json::Value>>,
+    openai_file_params: Vec<String>,
+    openai_file_outputs: Vec<String>,
 }
 
 const MCP_TOOL_CODEX_APPS_META_KEY: &str = "_codex_apps";
@@ -833,7 +878,227 @@ pub(crate) async fn lookup_mcp_tool_metadata(
             .and_then(|meta| meta.get(MCP_TOOL_CODEX_APPS_META_KEY))
             .and_then(serde_json::Value::as_object)
             .cloned(),
+        openai_file_params: declared_openai_file_params(tool_info.tool.meta.as_deref()),
+        openai_file_outputs: declared_openai_file_outputs(tool_info.tool.meta.as_deref()),
     })
+}
+
+async fn rewrite_mcp_tool_arguments_for_openai_files(
+    sess: &Session,
+    turn_context: &TurnContext,
+    server: &str,
+    arguments_value: Option<serde_json::Value>,
+    metadata: Option<&McpToolApprovalMetadata>,
+) -> Result<Option<serde_json::Value>, String> {
+    if server != CODEX_APPS_MCP_SERVER_NAME {
+        return Ok(arguments_value);
+    }
+    let Some(metadata) = metadata else {
+        return Ok(arguments_value);
+    };
+    if metadata.openai_file_params.is_empty() {
+        return Ok(arguments_value);
+    }
+
+    let Some(mut arguments_value) = arguments_value else {
+        return Ok(None);
+    };
+    let Some(arguments) = arguments_value.as_object_mut() else {
+        return Ok(Some(arguments_value));
+    };
+    let auth = sess.services.auth_manager.auth().await;
+
+    for field_name in &metadata.openai_file_params {
+        let Some(value) = arguments.get_mut(field_name) else {
+            continue;
+        };
+        rewrite_argument_value_for_openai_files(turn_context, auth.as_ref(), field_name, value)
+            .await?;
+    }
+
+    Ok(Some(arguments_value))
+}
+
+async fn rewrite_argument_value_for_openai_files(
+    turn_context: &TurnContext,
+    auth: Option<&crate::CodexAuth>,
+    field_name: &str,
+    value: &mut serde_json::Value,
+) -> Result<(), String> {
+    match value {
+        serde_json::Value::String(path_or_file_ref) => {
+            let rewritten = rewrite_single_argument_string(
+                turn_context,
+                auth,
+                field_name,
+                None,
+                path_or_file_ref,
+            )
+            .await?;
+            *value = serde_json::Value::String(rewritten);
+            Ok(())
+        }
+        serde_json::Value::Array(values) => {
+            for (index, item) in values.iter_mut().enumerate() {
+                let Some(path_or_file_ref) = item.as_str() else {
+                    continue;
+                };
+                let rewritten = rewrite_single_argument_string(
+                    turn_context,
+                    auth,
+                    field_name,
+                    Some(index),
+                    path_or_file_ref,
+                )
+                .await?;
+                *item = serde_json::Value::String(rewritten);
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+async fn rewrite_single_argument_string(
+    turn_context: &TurnContext,
+    auth: Option<&crate::CodexAuth>,
+    field_name: &str,
+    index: Option<usize>,
+    path_or_file_ref: &str,
+) -> Result<String, String> {
+    if let Some(file_id) = parse_openai_file_id(path_or_file_ref) {
+        return Ok(openai_file_uri(file_id));
+    }
+
+    let resolved_path = turn_context.resolve_path(Some(path_or_file_ref.to_string()));
+    let uploaded = upload_local_file(turn_context.config.as_ref(), auth, &resolved_path)
+        .await
+        .map_err(|error| match index {
+            Some(index) => format!(
+                "failed to upload `{path_or_file_ref}` for `{field_name}[{index}]`: {error}"
+            ),
+            None => format!("failed to upload `{path_or_file_ref}` for `{field_name}`: {error}"),
+        })?;
+    Ok(uploaded.uri)
+}
+
+async fn rewrite_mcp_tool_result_for_openai_files(
+    sess: &Session,
+    turn_context: &TurnContext,
+    call_id: &str,
+    server: &str,
+    mut result: CallToolResult,
+    metadata: Option<&McpToolApprovalMetadata>,
+) -> CallToolResult {
+    if server != CODEX_APPS_MCP_SERVER_NAME {
+        return result;
+    }
+    let Some(metadata) = metadata else {
+        return result;
+    };
+    if metadata.openai_file_outputs.is_empty() {
+        return result;
+    }
+    let Some(structured_content) = result.structured_content.as_mut() else {
+        return result;
+    };
+    let Some(properties) = structured_content.as_object_mut() else {
+        return result;
+    };
+    let auth = sess.services.auth_manager.auth().await;
+    let mut remaining_budget = OPENAI_FILE_AUTO_DOWNLOAD_BUDGET_BYTES;
+
+    for field_name in &metadata.openai_file_outputs {
+        let Some(value) = properties.get_mut(field_name) else {
+            continue;
+        };
+        rewrite_output_value_for_openai_files(
+            turn_context,
+            auth.as_ref(),
+            call_id,
+            value,
+            &mut remaining_budget,
+        )
+        .await;
+    }
+
+    result
+}
+
+async fn rewrite_output_value_for_openai_files(
+    turn_context: &TurnContext,
+    auth: Option<&crate::CodexAuth>,
+    call_id: &str,
+    value: &mut serde_json::Value,
+    remaining_budget: &mut u64,
+) {
+    match value {
+        serde_json::Value::String(file_ref) => {
+            if let Some(downloaded_path) = auto_download_openai_file_value(
+                turn_context,
+                auth,
+                call_id,
+                file_ref,
+                remaining_budget,
+            )
+            .await
+            {
+                *value = serde_json::Value::String(downloaded_path);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for item in values.iter_mut() {
+                let Some(file_ref) = item.as_str() else {
+                    continue;
+                };
+                if let Some(downloaded_path) = auto_download_openai_file_value(
+                    turn_context,
+                    auth,
+                    call_id,
+                    file_ref,
+                    remaining_budget,
+                )
+                .await
+                {
+                    *item = serde_json::Value::String(downloaded_path);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+async fn auto_download_openai_file_value(
+    turn_context: &TurnContext,
+    auth: Option<&crate::CodexAuth>,
+    call_id: &str,
+    file_ref: &str,
+    remaining_budget: &mut u64,
+) -> Option<String> {
+    if !is_openai_file_uri(file_ref) || *remaining_budget == 0 {
+        return None;
+    }
+
+    let max_bytes = (*remaining_budget).min(OPENAI_FILE_AUTO_DOWNLOAD_LIMIT_BYTES);
+    match download_file_to_managed_temp(
+        turn_context.config.as_ref(),
+        auth,
+        turn_context.cwd.as_path(),
+        file_ref,
+        call_id,
+        max_bytes,
+    )
+    .await
+    {
+        Ok(downloaded) => {
+            *remaining_budget = (*remaining_budget).saturating_sub(downloaded.bytes_written);
+            Some(downloaded.destination_path.display().to_string())
+        }
+        Err(error) => {
+            tracing::debug!(error = %error, file_ref, "skipping OpenAI file auto-download");
+            None
+        }
+    }
 }
 
 async fn lookup_mcp_app_usage_metadata(

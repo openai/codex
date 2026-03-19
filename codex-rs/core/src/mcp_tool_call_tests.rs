@@ -48,6 +48,8 @@ fn approval_metadata(
         tool_title: tool_title.map(str::to_string),
         tool_description: tool_description.map(str::to_string),
         codex_apps_meta: None,
+        openai_file_params: Vec::new(),
+        openai_file_outputs: Vec::new(),
     }
 }
 
@@ -489,6 +491,8 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
             .cloned()
             .expect("_codex_apps metadata should be an object"),
         ),
+        openai_file_params: Vec::new(),
+        openai_file_outputs: Vec::new(),
     };
 
     assert_eq!(
@@ -629,6 +633,8 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
         tool_title: None,
         tool_description: None,
         codex_apps_meta: None,
+        openai_file_params: Vec::new(),
+        openai_file_outputs: Vec::new(),
     };
 
     let request = build_guardian_mcp_tool_review_request("call-1", &invocation, Some(&metadata));
@@ -983,6 +989,8 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
         tool_title: Some("Read Only Tool".to_string()),
         tool_description: None,
         codex_apps_meta: None,
+        openai_file_params: Vec::new(),
+        openai_file_outputs: Vec::new(),
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1047,6 +1055,8 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_for_model() {
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
         codex_apps_meta: None,
+        openai_file_params: Vec::new(),
+        openai_file_outputs: Vec::new(),
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1227,6 +1237,8 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
         codex_apps_meta: None,
+        openai_file_params: Vec::new(),
+        openai_file_outputs: Vec::new(),
     };
 
     let decision = maybe_request_mcp_tool_approval(

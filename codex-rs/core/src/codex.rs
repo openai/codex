@@ -6399,12 +6399,7 @@ pub(crate) async fn built_tools(
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
         ToolRouterParams {
-            mcp_tools: has_mcp_servers.then(|| {
-                mcp_tools
-                    .into_iter()
-                    .map(|(name, tool)| (name, tool.tool))
-                    .collect()
-            }),
+            mcp_tools: has_mcp_servers.then_some(mcp_tools),
             app_tools,
             discoverable_tools,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
