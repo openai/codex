@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use codex_protocol::ThreadId;
 use rand::Rng;
-use tracing::debug;
 use tracing::error;
 
 use crate::auth_env_telemetry::AuthEnvTelemetry;
