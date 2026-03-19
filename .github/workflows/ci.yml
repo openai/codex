@@ -51,7 +51,8 @@ jobs:
           fi
 
           for WORKFLOW_URL in $WORKFLOW_URLS; do
-            CODEX_VERSION="$(gh run view "$WORKFLOW_URL" --json headBranch -q '.headBranch | sub("^rust-v"; "")')"
+            WORKFLOW_ID="${WORKFLOW_URL##*/}"
+            CODEX_VERSION="$(gh run view "$WORKFLOW_ID" --json headBranch -q '.headBranch | sub("^rust-v"; "")')"
 
             echo "Attempting npm staging from ${WORKFLOW_URL} (version ${CODEX_VERSION})."
             if python3 ./scripts/stage_npm_packages.py \
