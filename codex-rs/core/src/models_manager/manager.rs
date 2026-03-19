@@ -478,7 +478,17 @@ impl ModelsManager {
                 .iter()
                 .position(|existing| existing.slug == model.slug)
             {
-                existing_models[existing_index] = model;
+                let existing = &existing_models[existing_index];
+                existing_models[existing_index] = if model.experimental_supported_tools.is_empty()
+                    && !existing.experimental_supported_tools.is_empty()
+                {
+                    ModelInfo {
+                        experimental_supported_tools: existing.experimental_supported_tools.clone(),
+                        ..model
+                    }
+                } else {
+                    model
+                };
             } else {
                 existing_models.push(model);
             }

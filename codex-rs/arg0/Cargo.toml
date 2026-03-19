@@ -14,6 +14,7 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 codex-apply-patch = { workspace = true }
+codex-file-transfer = { workspace = true }
 codex-linux-sandbox = { workspace = true }
 codex-shell-escalation = { workspace = true }
 codex-utils-home-dir = { workspace = true }

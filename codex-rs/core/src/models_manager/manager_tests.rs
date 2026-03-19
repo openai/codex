@@ -352,6 +352,45 @@ async fn refresh_available_models_uses_cache_when_fresh() {
 }
 
 #[tokio::test]
+async fn refresh_available_models_preserves_local_experimental_tools_when_remote_empty() {
+    let server = MockServer::start().await;
+    let remote_models = vec![remote_model("gpt-5.4", "gpt-5.4", 0)];
+    let _models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: remote_models,
+        },
+    )
+    .await;
+
+    let codex_home = tempdir().expect("temp dir");
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let provider = provider_for(server.uri());
+    let manager = ModelsManager::with_provider_for_tests(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        provider,
+    );
+
+    manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("refresh succeeds");
+
+    let gpt_54 = manager
+        .get_remote_models()
+        .await
+        .into_iter()
+        .find(|model| model.slug == "gpt-5.4")
+        .expect("gpt-5.4 should exist");
+    assert_eq!(
+        gpt_54.experimental_supported_tools,
+        vec!["upload_file".to_string(), "download_file".to_string()]
+    );
+}
+
+#[tokio::test]
 async fn refresh_available_models_refetches_when_cache_stale() {
     let server = MockServer::start().await;
     let initial_models = vec![remote_model("stale", "Stale", 1)];

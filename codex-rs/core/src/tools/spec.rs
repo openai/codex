@@ -98,6 +98,87 @@ fn unified_exec_output_schema() -> JsonValue {
     })
 }
 
+fn file_transfer_error_properties() -> serde_json::Map<String, JsonValue> {
+    serde_json::Map::from_iter([
+        ("error_code".to_string(), json!({"type": "string"})),
+        ("message".to_string(), json!({"type": "string"})),
+        ("retryable".to_string(), json!({"type": "boolean"})),
+        ("http_status_code".to_string(), json!({"type": "number"})),
+    ])
+}
+
+fn upload_file_output_schema() -> JsonValue {
+    let mut success_properties = serde_json::Map::from_iter([
+        ("ok".to_string(), json!({"type": "boolean", "enum": [true]})),
+        ("file_id".to_string(), json!({"type": "string"})),
+        ("uri".to_string(), json!({"type": "string"})),
+        ("file_name".to_string(), json!({"type": "string"})),
+        ("file_size_bytes".to_string(), json!({"type": "number"})),
+        ("mime_type".to_string(), json!({"type": "string"})),
+        ("path".to_string(), json!({"type": "string"})),
+    ]);
+    let mut error_properties = file_transfer_error_properties();
+    error_properties.insert(
+        "ok".to_string(),
+        json!({"type": "boolean", "enum": [false]}),
+    );
+    error_properties.insert("path".to_string(), json!({"type": "string"}));
+    success_properties.extend(error_properties.clone());
+    json!({
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": success_properties,
+                "required": ["ok", "file_id", "uri", "file_name", "file_size_bytes", "mime_type", "path"],
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "properties": error_properties,
+                "required": ["ok", "error_code", "message", "retryable"],
+                "additionalProperties": false
+            }
+        ]
+    })
+}
+
+fn download_file_output_schema() -> JsonValue {
+    let mut success_properties = serde_json::Map::from_iter([
+        ("ok".to_string(), json!({"type": "boolean", "enum": [true]})),
+        ("file_id".to_string(), json!({"type": "string"})),
+        ("uri".to_string(), json!({"type": "string"})),
+        ("file_name".to_string(), json!({"type": "string"})),
+        ("mime_type".to_string(), json!({"type": "string"})),
+        ("destination_path".to_string(), json!({"type": "string"})),
+        ("bytes_written".to_string(), json!({"type": "number"})),
+    ]);
+    let mut error_properties = file_transfer_error_properties();
+    error_properties.insert(
+        "ok".to_string(),
+        json!({"type": "boolean", "enum": [false]}),
+    );
+    error_properties.insert("file_id".to_string(), json!({"type": "string"}));
+    error_properties.insert("uri".to_string(), json!({"type": "string"}));
+    error_properties.insert("destination_path".to_string(), json!({"type": "string"}));
+    success_properties.extend(error_properties.clone());
+    json!({
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": success_properties,
+                "required": ["ok", "file_id", "uri", "file_name", "mime_type", "destination_path", "bytes_written"],
+                "additionalProperties": false
+            },
+            {
+                "type": "object",
+                "properties": error_properties,
+                "required": ["ok", "file_id", "uri", "destination_path", "error_code", "message", "retryable"],
+                "additionalProperties": false
+            }
+        ]
+    })
+}
+
 fn agent_status_output_schema() -> JsonValue {
     json!({
         "oneOf": [
@@ -1986,6 +2067,67 @@ fn create_read_file_tool() -> ToolSpec {
     })
 }
 
+fn create_upload_file_tool() -> ToolSpec {
+    let properties = BTreeMap::from([(
+        "path".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Path to a local file to upload. May be relative to the current working directory or absolute. Directories are not allowed. Use this when a Codex Apps MCP tool explicitly expects an `openai-file://` URI rather than raw file contents or a local path."
+                    .to_string(),
+            ),
+        },
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "upload_file".to_string(),
+        description: "Uploads a local sandboxed file to OpenAI file storage for use with Codex Apps MCP tools that explicitly accept `openai-file://` URIs, and returns an `openai-file://v1/{file_id}` URI.".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["path".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: Some(upload_file_output_schema()),
+    })
+}
+
+fn create_download_file_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "file_id".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "File id to download. Accepts either a bare id or `openai-file://v1/{file_id}`. Use this for files returned by Codex Apps MCP tools in `openai-file://` form."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "path".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Destination path. If this path is an existing directory, the downloaded file is written into it using the remote file name; otherwise the file is written exactly to this path."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "download_file".to_string(),
+        description: "Downloads an OpenAI file, typically one returned by a Codex Apps MCP tool as an `openai-file://` URI, into the local sandbox using strict `cp` destination semantics.".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["file_id".to_string(), "path".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: Some(download_file_output_schema()),
+    })
+}
+
 fn create_list_dir_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -2530,6 +2672,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::CodeModeExecuteHandler;
     use crate::tools::handlers::CodeModeWaitHandler;
     use crate::tools::handlers::DynamicToolHandler;
+    use crate::tools::handlers::FileTransferHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
     use crate::tools::handlers::JsReplResetHandler;
@@ -2569,6 +2712,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let request_user_input_handler = Arc::new(RequestUserInputHandler {
         default_mode_request_user_input: config.default_mode_request_user_input,
     });
+    let file_transfer_handler = Arc::new(FileTransferHandler);
     let tool_suggest_handler = Arc::new(ToolSuggestHandler);
     let code_mode_handler = Arc::new(CodeModeExecuteHandler);
     let code_mode_wait_handler = Arc::new(CodeModeWaitHandler);
@@ -2830,6 +2974,22 @@ pub(crate) fn build_specs_with_discoverable_tools(
         );
         builder.register_handler("read_file", read_file_handler);
     }
+
+    push_tool_spec(
+        &mut builder,
+        create_upload_file_tool(),
+        /*supports_parallel_tool_calls*/ true,
+        config.code_mode_enabled,
+    );
+    builder.register_handler("upload_file", file_transfer_handler.clone());
+
+    push_tool_spec(
+        &mut builder,
+        create_download_file_tool(),
+        /*supports_parallel_tool_calls*/ true,
+        config.code_mode_enabled,
+    );
+    builder.register_handler("download_file", file_transfer_handler);
 
     if config
         .experimental_supported_tools

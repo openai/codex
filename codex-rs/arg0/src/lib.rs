@@ -4,6 +4,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
+use codex_file_transfer::CODEX_CORE_FILE_TRANSFER_ARG1;
 use codex_utils_home_dir::find_codex_home;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
@@ -100,6 +101,43 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
             }
             None => {
                 eprintln!("Error: {CODEX_CORE_APPLY_PATCH_ARG1} requires a UTF-8 PATCH argument.");
+                1
+            }
+        };
+        std::process::exit(exit_code);
+    }
+    if argv1 == CODEX_CORE_FILE_TRANSFER_ARG1 {
+        let request_arg = args.next().and_then(|s| s.to_str().map(str::to_owned));
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(_) => std::process::exit(1),
+        };
+        let exit_code = match request_arg {
+            Some(request_arg) => runtime.block_on(async move {
+                match codex_file_transfer::run_from_arg(&request_arg).await {
+                    Ok(output) => match output.to_json() {
+                        Ok(json) => {
+                            println!("{json}");
+                            0
+                        }
+                        Err(err) => {
+                            eprintln!("failed to serialize file transfer output: {err}");
+                            1
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("file transfer helper failed: {err}");
+                        1
+                    }
+                }
+            }),
+            None => {
+                eprintln!(
+                    "Error: {CODEX_CORE_FILE_TRANSFER_ARG1} requires a UTF-8 request argument."
+                );
                 1
             }
         };

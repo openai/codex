@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "backend-client",
+    "file-transfer",
     "ansi-escape",
     "async-utils",
     "app-server",
@@ -110,6 +111,7 @@ codex-exec = { path = "exec" }
 codex-execpolicy = { path = "execpolicy" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
 codex-feedback = { path = "feedback" }
+codex-file-transfer = { path = "file-transfer" }
 codex-file-search = { path = "file-search" }
 codex-git = { path = "utils/git" }
 codex-hooks = { path = "hooks" }

@@ -1557,6 +1557,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-apply-patch",
+ "codex-file-transfer",
  "codex-linux-sandbox",
  "codex-shell-escalation",
  "codex-utils-home-dir",
@@ -1846,6 +1847,7 @@ dependencies = [
  "codex-environment",
  "codex-execpolicy",
  "codex-file-search",
+ "codex-file-transfer",
  "codex-git",
  "codex-hooks",
  "codex-keyring-store",
@@ -2093,6 +2095,23 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "codex-file-transfer"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-client",
+ "mime_guess",
+ "pretty_assertions",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "wiremock",
 ]
 
 [[package]]

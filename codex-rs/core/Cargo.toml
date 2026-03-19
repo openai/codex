@@ -38,6 +38,7 @@ codex-environment = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-skills = { workspace = true }
 codex-execpolicy = { workspace = true }
+codex-file-transfer = { workspace = true }
 codex-file-search = { workspace = true }
 codex-git = { workspace = true }
 codex-hooks = { workspace = true }

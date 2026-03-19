@@ -455,6 +455,8 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         PLAN_TOOL.clone(),
         create_request_user_input_tool(CollaborationModesConfig::default()),
         create_apply_patch_freeform_tool(),
+        create_upload_file_tool(),
+        create_download_file_tool(),
         ToolSpec::WebSearch {
             external_web_access: Some(true),
             filters: None,
@@ -1191,6 +1193,8 @@ fn test_build_specs_gpt5_codex_default() {
             "update_plan",
             "request_user_input",
             "apply_patch",
+            "upload_file",
+            "download_file",
             "web_search",
             "view_image",
             "spawn_agent",
@@ -1214,6 +1218,8 @@ fn test_build_specs_gpt51_codex_default() {
             "update_plan",
             "request_user_input",
             "apply_patch",
+            "upload_file",
+            "download_file",
             "web_search",
             "view_image",
             "spawn_agent",
@@ -1239,6 +1245,8 @@ fn test_build_specs_gpt5_codex_unified_exec_web_search() {
             "update_plan",
             "request_user_input",
             "apply_patch",
+            "upload_file",
+            "download_file",
             "web_search",
             "view_image",
             "spawn_agent",
@@ -1264,6 +1272,8 @@ fn test_build_specs_gpt51_codex_unified_exec_web_search() {
             "update_plan",
             "request_user_input",
             "apply_patch",
+            "upload_file",
+            "download_file",
             "web_search",
             "view_image",
             "spawn_agent",
@@ -1287,6 +1297,8 @@ fn test_gpt_5_1_codex_max_defaults() {
             "update_plan",
             "request_user_input",
             "apply_patch",
+            "upload_file",
+            "download_file",
             "web_search",
             "view_image",
             "spawn_agent",
@@ -1310,6 +1322,8 @@ fn test_codex_5_1_mini_defaults() {
             "update_plan",
             "request_user_input",
             "apply_patch",
+            "upload_file",
+            "download_file",
             "web_search",
             "view_image",
             "spawn_agent",
@@ -1332,6 +1346,8 @@ fn test_gpt_5_defaults() {
         &[
             "update_plan",
             "request_user_input",
+            "upload_file",
+            "download_file",
             "web_search",
             "view_image",
             "spawn_agent",
@@ -1355,6 +1371,8 @@ fn test_gpt_5_1_defaults() {
             "update_plan",
             "request_user_input",
             "apply_patch",
+            "upload_file",
+            "download_file",
             "web_search",
             "view_image",
             "spawn_agent",
@@ -1380,6 +1398,8 @@ fn test_gpt_5_1_codex_max_unified_exec_web_search() {
             "update_plan",
             "request_user_input",
             "apply_patch",
+            "upload_file",
+            "download_file",
             "web_search",
             "view_image",
             "spawn_agent",
@@ -1504,6 +1524,8 @@ fn test_parallel_support_flags() {
     assert!(find_tool(&tools, "grep_files").supports_parallel_tool_calls);
     assert!(find_tool(&tools, "list_dir").supports_parallel_tool_calls);
     assert!(find_tool(&tools, "read_file").supports_parallel_tool_calls);
+    assert!(find_tool(&tools, "upload_file").supports_parallel_tool_calls);
+    assert!(find_tool(&tools, "download_file").supports_parallel_tool_calls);
 }
 
 #[test]
@@ -1515,6 +1537,8 @@ fn test_test_model_info_includes_sync_tool() {
         "read_file".to_string(),
         "grep_files".to_string(),
         "list_dir".to_string(),
+        "upload_file".to_string(),
+        "download_file".to_string(),
     ];
     let features = Features::with_defaults();
     let available_models = Vec::new();
@@ -1542,9 +1566,80 @@ fn test_test_model_info_includes_sync_tool() {
     assert!(
         tools
             .iter()
+            .any(|tool| tool_name(&tool.spec) == "upload_file")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool_name(&tool.spec) == "download_file")
+    );
+    assert!(
+        tools
+            .iter()
             .any(|tool| tool_name(&tool.spec) == "grep_files")
     );
     assert!(tools.iter().any(|tool| tool_name(&tool.spec) == "list_dir"));
+}
+
+#[test]
+fn test_models_json_default_model_includes_file_transfer_tools() {
+    let _config = test_config();
+    let model_info = model_info_from_models_json("gpt-5.3-codex");
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool_name(&tool.spec) == "upload_file")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool_name(&tool.spec) == "download_file")
+    );
+}
+
+#[test]
+fn test_file_transfer_tools_are_not_experimentally_gated() {
+    let _config = test_config();
+    let mut model_info = model_info_from_models_json("gpt-5-codex");
+    model_info
+        .experimental_supported_tools
+        .retain(|tool| tool != "upload_file" && tool != "download_file");
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool_name(&tool.spec) == "upload_file")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool_name(&tool.spec) == "download_file")
+    );
 }
 
 #[test]
