@@ -191,22 +191,6 @@ impl ThreadHistoryBuilder {
     }
 
     fn handle_response_item(&mut self, item: &codex_protocol::models::ResponseItem) {
-        if let codex_protocol::models::ResponseItem::ImageGenerationCall {
-            id,
-            status,
-            revised_prompt,
-            result,
-        } = item
-        {
-            self.upsert_item_in_current_turn(ThreadItem::ImageGeneration {
-                id: id.clone(),
-                status: status.clone(),
-                revised_prompt: revised_prompt.clone(),
-                result: result.clone(),
-            });
-            return;
-        }
-
         let codex_protocol::models::ResponseItem::Message {
             role, content, id, ..
         } = item
@@ -1198,7 +1182,6 @@ mod tests {
     use codex_protocol::items::UserMessageItem as CoreUserMessageItem;
     use codex_protocol::items::build_hook_prompt_message;
     use codex_protocol::models::MessagePhase as CoreMessagePhase;
-    use codex_protocol::models::ResponseItem;
     use codex_protocol::models::WebSearchAction as CoreWebSearchAction;
     use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::AgentMessageEvent;
@@ -1403,7 +1386,7 @@ mod tests {
     }
 
     #[test]
-    fn replays_image_generation_response_items_into_turn_history() {
+    fn replays_image_generation_end_events_into_turn_history() {
         let items = vec![
             RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
                 turn_id: "turn-image".into(),
@@ -1416,18 +1399,13 @@ mod tests {
                 text_elements: Vec::new(),
                 local_images: Vec::new(),
             })),
-            RolloutItem::ResponseItem(ResponseItem::ImageGenerationCall {
-                id: "ig_123".into(),
-                status: "generating".into(),
-                revised_prompt: Some("draft prompt".into()),
-                result: String::new(),
-            }),
-            RolloutItem::ResponseItem(ResponseItem::ImageGenerationCall {
-                id: "ig_123".into(),
+            RolloutItem::EventMsg(EventMsg::ImageGenerationEnd(ImageGenerationEndEvent {
+                call_id: "ig_123".into(),
                 status: "completed".into(),
                 revised_prompt: Some("final prompt".into()),
                 result: "Zm9v".into(),
-            }),
+                saved_path: None,
+            })),
             RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
                 turn_id: "turn-image".into(),
                 last_agent_message: None,

@@ -118,12 +118,12 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         }
         EventMsg::Error(_)
         | EventMsg::GuardianAssessment(_)
+        | EventMsg::ImageGenerationEnd(_)
         | EventMsg::WebSearchEnd(_)
         | EventMsg::ExecCommandEnd(_)
         | EventMsg::PatchApplyEnd(_)
         | EventMsg::McpToolCallEnd(_)
         | EventMsg::ViewImageToolCall(_)
-        | EventMsg::ImageGenerationEnd(_)
         | EventMsg::CollabAgentSpawnEnd(_)
         | EventMsg::CollabAgentInteractionEnd(_)
         | EventMsg::CollabWaitingEnd(_)
@@ -181,5 +181,29 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::CollabCloseBegin(_)
         | EventMsg::CollabResumeBegin(_)
         | EventMsg::ImageGenerationBegin(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EventPersistenceMode;
+    use super::should_persist_event_msg;
+    use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::ImageGenerationEndEvent;
+
+    #[test]
+    fn persists_image_generation_end_events_in_limited_mode() {
+        let event = EventMsg::ImageGenerationEnd(ImageGenerationEndEvent {
+            call_id: "ig_123".into(),
+            status: "completed".into(),
+            revised_prompt: Some("final prompt".into()),
+            result: "Zm9v".into(),
+            saved_path: None,
+        });
+
+        assert!(should_persist_event_msg(
+            &event,
+            EventPersistenceMode::Limited
+        ));
     }
 }
