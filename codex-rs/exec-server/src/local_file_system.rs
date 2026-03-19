@@ -7,69 +7,15 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::io;
 
+use crate::CopyOptions;
+use crate::CreateDirectoryOptions;
+use crate::ExecutorFileSystem;
+use crate::FileMetadata;
+use crate::FileSystemResult;
+use crate::ReadDirectoryEntry;
+use crate::RemoveOptions;
+
 const MAX_READ_FILE_BYTES: u64 = 512 * 1024 * 1024;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CreateDirectoryOptions {
-    pub recursive: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RemoveOptions {
-    pub recursive: bool,
-    pub force: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CopyOptions {
-    pub recursive: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FileMetadata {
-    pub is_directory: bool,
-    pub is_file: bool,
-    pub created_at_ms: i64,
-    pub modified_at_ms: i64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ReadDirectoryEntry {
-    pub file_name: String,
-    pub is_directory: bool,
-    pub is_file: bool,
-}
-
-pub type FileSystemResult<T> = io::Result<T>;
-
-#[async_trait]
-pub trait ExecutorFileSystem: Send + Sync {
-    async fn read_file(&self, path: &AbsolutePathBuf) -> FileSystemResult<Vec<u8>>;
-
-    async fn write_file(&self, path: &AbsolutePathBuf, contents: Vec<u8>) -> FileSystemResult<()>;
-
-    async fn create_directory(
-        &self,
-        path: &AbsolutePathBuf,
-        options: CreateDirectoryOptions,
-    ) -> FileSystemResult<()>;
-
-    async fn get_metadata(&self, path: &AbsolutePathBuf) -> FileSystemResult<FileMetadata>;
-
-    async fn read_directory(
-        &self,
-        path: &AbsolutePathBuf,
-    ) -> FileSystemResult<Vec<ReadDirectoryEntry>>;
-
-    async fn remove(&self, path: &AbsolutePathBuf, options: RemoveOptions) -> FileSystemResult<()>;
-
-    async fn copy(
-        &self,
-        source_path: &AbsolutePathBuf,
-        destination_path: &AbsolutePathBuf,
-        options: CopyOptions,
-    ) -> FileSystemResult<()>;
-}
 
 #[derive(Clone, Default)]
 pub(crate) struct LocalFileSystem;

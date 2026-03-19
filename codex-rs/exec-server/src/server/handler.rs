@@ -43,7 +43,7 @@ use crate::rpc::RpcNotificationSender;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
 use crate::rpc::invalid_request;
-use crate::server::filesystem::ExecServerFileSystem;
+use crate::server::file_system_handler::FileSystemHandler;
 
 const RETAINED_OUTPUT_BYTES_PER_PROCESS: usize = 1024 * 1024;
 #[cfg(test)]
@@ -75,7 +75,7 @@ enum ProcessEntry {
 
 pub(crate) struct ExecServerHandler {
     notifications: RpcNotificationSender,
-    file_system: ExecServerFileSystem,
+    file_system: FileSystemHandler,
     processes: Arc<Mutex<HashMap<String, ProcessEntry>>>,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
@@ -85,7 +85,7 @@ impl ExecServerHandler {
     pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
         Self {
             notifications,
-            file_system: ExecServerFileSystem::default(),
+            file_system: FileSystemHandler::default(),
             processes: Arc::new(Mutex::new(HashMap::new())),
             initialize_requested: AtomicBool::new(false),
             initialized: AtomicBool::new(false),

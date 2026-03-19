@@ -1,8 +1,10 @@
 use crate::ExecServerClient;
 use crate::ExecServerError;
 use crate::RemoteExecServerConnectArgs;
-use crate::fs;
-use crate::fs::ExecutorFileSystem;
+use crate::file_system::ExecutorFileSystem;
+use crate::local_file_system::LocalFileSystem;
+use crate::remote_file_system::RemoteFileSystem;
+use std::sync::Arc;
 
 #[derive(Clone, Default)]
 pub struct Environment {
@@ -56,8 +58,12 @@ impl Environment {
         self.remote_exec_server_client.as_ref()
     }
 
-    pub fn get_filesystem(&self) -> impl ExecutorFileSystem + use<> {
-        fs::LocalFileSystem
+    pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
+        if let Some(client) = self.remote_exec_server_client.clone() {
+            Arc::new(RemoteFileSystem::new(client))
+        } else {
+            Arc::new(LocalFileSystem)
+        }
     }
 }
 
