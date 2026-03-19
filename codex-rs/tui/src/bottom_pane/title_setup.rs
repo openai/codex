@@ -132,11 +132,11 @@ impl TerminalTitleSetupView {
             .collect::<std::collections::HashSet<_>>();
         let items = selected_items
             .into_iter()
-            .map(|item| Self::title_select_item(item, true))
+            .map(|item| Self::title_select_item(item, /*enabled*/ true))
             .chain(
                 TerminalTitleItem::iter()
                     .filter(|item| !selected_set.contains(item))
-                    .map(|item| Self::title_select_item(item, false)),
+                    .map(|item| Self::title_select_item(item, /*enabled*/ false)),
             )
             .collect();
 

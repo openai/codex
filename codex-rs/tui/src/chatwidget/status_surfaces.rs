@@ -132,7 +132,7 @@ impl ChatWidget {
         let enabled = !selections.status_line_items.is_empty();
         self.bottom_pane.set_status_line_enabled(enabled);
         if !enabled {
-            self.set_status_line(None);
+            self.set_status_line(/*status_line*/ None);
             return;
         }
 
@@ -341,7 +341,10 @@ impl ChatWidget {
 
         self.config
             .config_layer_stack
-            .get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ true,
+            )
             .iter()
             .find_map(|layer| match &layer.name {
                 ConfigLayerSource::Project { dot_codex_folder } => {
@@ -355,7 +358,7 @@ impl ChatWidget {
         self.status_line_project_root_for_cwd(cwd).map(|root| {
             root.file_name()
                 .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| format_directory_display(&root, None))
+                .unwrap_or_else(|| format_directory_display(&root, /*max_width*/ None))
         })
     }
 
@@ -386,10 +389,12 @@ impl ChatWidget {
             Some(
                 cwd.file_name()
                     .map(|name| name.to_string_lossy().to_string())
-                    .unwrap_or_else(|| format_directory_display(cwd, None)),
+                    .unwrap_or_else(|| format_directory_display(cwd, /*max_width*/ None)),
             )
         })?;
-        Some(Self::truncate_terminal_title_part(project, 24))
+        Some(Self::truncate_terminal_title_part(
+            project, /*max_chars*/ 24,
+        ))
     }
 
     /// Resets git-branch cache state when the status-line cwd changes.
@@ -447,7 +452,10 @@ impl ChatWidget {
                 Some(format!("{} {label}{fast_label}", self.model_display_name()))
             }
             StatusLineItem::CurrentDir => {
-                Some(format_directory_display(self.status_line_cwd(), None))
+                Some(format_directory_display(
+                    self.status_line_cwd(),
+                    /*max_width*/ None,
+                ))
             }
             StatusLineItem::ProjectRoot => self.status_line_project_root_name(),
             StatusLineItem::GitBranch => self.status_line_branch.clone(),
@@ -530,16 +538,18 @@ impl ChatWidget {
                 if trimmed.is_empty() {
                     None
                 } else {
-                    Some(Self::truncate_terminal_title_part(trimmed.to_string(), 48))
+                    Some(Self::truncate_terminal_title_part(
+                        trimmed.to_string(),
+                        /*max_chars*/ 48,
+                    ))
                 }
             }),
-            TerminalTitleItem::GitBranch => self
-                .status_line_branch
-                .as_ref()
-                .map(|branch| Self::truncate_terminal_title_part(branch.clone(), 32)),
+            TerminalTitleItem::GitBranch => self.status_line_branch.as_ref().map(|branch| {
+                Self::truncate_terminal_title_part(branch.clone(), /*max_chars*/ 32)
+            }),
             TerminalTitleItem::Model => Some(Self::truncate_terminal_title_part(
                 self.model_display_name().to_string(),
-                32,
+                /*max_chars*/ 32,
             )),
             TerminalTitleItem::TaskProgress => self.terminal_title_task_progress(),
         }
