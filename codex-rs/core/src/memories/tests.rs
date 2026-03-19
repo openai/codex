@@ -663,9 +663,10 @@ mod phase2 {
         pretty_assertions::assert_eq!(user_input_ops, 1);
         let thread_ids = harness.manager.list_thread_ids().await;
         pretty_assertions::assert_eq!(thread_ids.len(), 1);
+        let thread_id = thread_ids[0];
         let subagent = harness
             .manager
-            .get_thread(thread_ids[0])
+            .get_thread(thread_id)
             .await
             .expect("get consolidation thread");
         let config_snapshot = subagent.config_snapshot().await;
@@ -682,6 +683,12 @@ mod phase2 {
             }
             other => panic!("unexpected sandbox policy: {other:?}"),
         }
+        let memory_mode = harness
+            .state_db
+            .get_thread_memory_mode(thread_id)
+            .await
+            .expect("read consolidation thread memory mode");
+        pretty_assertions::assert_eq!(memory_mode.as_deref(), Some("disabled"));
 
         harness.shutdown_threads().await;
     }
