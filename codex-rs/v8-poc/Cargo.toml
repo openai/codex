@@ -1,0 +1,22 @@
+[package]
+name = "codex-v8-poc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_v8_poc"
+path = "src/lib.rs"
+
+[features]
+default = []
+rusty_v8 = ["dep:v8"]
+
+[lints]
+workspace = true
+
+[dependencies]
+v8 = { workspace = true, optional = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
