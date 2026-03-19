@@ -428,9 +428,6 @@
             "plugins": {
               "type": "boolean"
             },
-            "powershell_utf8": {
-              "type": "boolean"
-            },
             "prevent_idle_sleep": {
               "type": "boolean"
             },
@@ -2032,9 +2029,6 @@
           "type": "boolean"
         },
         "plugins": {
-          "type": "boolean"
-        },
-        "powershell_utf8": {
           "type": "boolean"
         },
         "prevent_idle_sleep": {

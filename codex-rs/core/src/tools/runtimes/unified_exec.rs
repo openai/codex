@@ -200,9 +200,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             &req.cwd,
             &req.explicit_env_overrides,
         );
-        let command = if matches!(session_shell.shell_type, ShellType::PowerShell)
-            && ctx.session.features().enabled(Feature::PowershellUtf8)
-        {
+        let command = if matches!(session_shell.shell_type, ShellType::PowerShell) {
             prefix_powershell_script_with_utf8(&command)
         } else {
             command
