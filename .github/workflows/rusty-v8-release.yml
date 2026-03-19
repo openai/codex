@@ -142,6 +142,7 @@ jobs:
           python3 .github/scripts/rusty_v8_bazel.py stage-release-pair \
             --platform "${PLATFORM}" \
             --target "${TARGET}" \
+            --compilation-mode opt \
             --output-dir "dist/${TARGET}"
 
       - name: Upload staged musl artifacts
