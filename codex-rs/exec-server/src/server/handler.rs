@@ -352,6 +352,9 @@ impl ExecServerHandler {
             let process_map = self.processes.lock().await;
             match process_map.get(&params.process_id) {
                 Some(ProcessEntry::Running(process)) => {
+                    if process.exit_code.is_some() {
+                        return Ok(TerminateResponse { running: false });
+                    }
                     process.session.terminate();
                     true
                 }

@@ -8,6 +8,8 @@ use tokio::sync::mpsc;
 use super::ExecServerHandler;
 use crate::protocol::ExecParams;
 use crate::protocol::InitializeResponse;
+use crate::protocol::TerminateParams;
+use crate::protocol::TerminateResponse;
 use crate::rpc::RpcNotificationSender;
 
 fn exec_params(process_id: &str) -> ExecParams {
@@ -67,5 +69,34 @@ async fn duplicate_process_ids_allow_only_one_successful_start() {
     assert_eq!(error.message, "process proc-1 already exists");
 
     tokio::time::sleep(Duration::from_millis(150)).await;
+    handler.shutdown().await;
+}
+
+#[tokio::test]
+async fn terminate_reports_false_after_process_exit() {
+    let handler = initialized_handler().await;
+    handler
+        .exec(exec_params("proc-1"))
+        .await
+        .expect("start process");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        let response = handler
+            .terminate(TerminateParams {
+                process_id: "proc-1".to_string(),
+            })
+            .await
+            .expect("terminate response");
+        if response == (TerminateResponse { running: false }) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "process should have exited within 1s"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
     handler.shutdown().await;
 }
