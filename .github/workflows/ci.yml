@@ -42,7 +42,7 @@ jobs:
           WORKFLOW_URLS=$(gh run list \
             --workflow .github/workflows/rust-release.yml \
             --json status,conclusion,headBranch,url \
-            --jq 'map(select(.status=="completed" and .conclusion=="success" and (.headBranch | startswith("rust-v")) and (.url | contains("/actions/runs/")) ) | .[].url')
+            --jq 'map(select(.status=="completed" and .conclusion=="success" and (.headBranch | startswith("rust-v")) and (.url | contains("/actions/runs/"))) | .[].url')
           set -e
 
           if [ -z "$WORKFLOW_URLS" ]; then
