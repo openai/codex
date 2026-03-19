@@ -1,5 +1,6 @@
 module(name = "codex")
 
+bazel_dep(name = "bazel_skylib", version = "1.8.2")
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "llvm", version = "0.6.7")
 
