@@ -820,7 +820,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::VoiceTranscription,
         key: "voice_transcription",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Voice transcription",
+            menu_description: "Hold space to record, release to transcribe.",
+            announcement: "NEW: Voice transcription is now available in /experimental.",
+        },
         default_enabled: false,
     },
     FeatureSpec {
