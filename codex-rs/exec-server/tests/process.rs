@@ -4,8 +4,8 @@ mod common;
 
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_exec_server::InitializeParams;
 use codex_exec_server::ExecResponse;
+use codex_exec_server::InitializeParams;
 use common::exec_server::exec_server;
 use pretty_assertions::assert_eq;
 
@@ -30,10 +30,7 @@ async fn exec_server_stubs_process_start_over_websocket() -> anyhow::Result<()> 
         .await?;
 
     server
-        .send_notification(
-            "initialized",
-            serde_json::json!({}),
-        )
+        .send_notification("initialized", serde_json::json!({}))
         .await?;
 
     let process_start_id = server

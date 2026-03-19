@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
@@ -6,16 +8,17 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::RequestId;
 use codex_utils_cargo_bin::cargo_bin;
-use futures::{SinkExt, StreamExt};
+use futures::SinkExt;
+use futures::StreamExt;
+use std::process::Stdio;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::Command;
-use std::process::Stdio;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
-use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::Message;
 
 enum OutgoingMessage {
     Json(JSONRPCMessage),
@@ -113,7 +116,10 @@ pub mod exec_server {
         child.stderr(Stdio::piped());
         let mut child = child.spawn()?;
 
-        let stderr = child.stderr.take().expect("stderr should be piped");
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("stderr should be piped"))?;
         let mut stderr_lines = BufReader::new(stderr).lines();
         let websocket_url = read_websocket_url(&mut stderr_lines).await?;
 
@@ -132,7 +138,9 @@ pub mod exec_server {
                     Message::Binary(bytes) => serde_json::from_slice::<JSONRPCMessage>(&bytes),
                     _ => continue,
                 };
-                if let Ok(message) = outgoing && let Err(_err) = incoming_tx.send(message).await {
+                if let Ok(message) = outgoing
+                    && let Err(_err) = incoming_tx.send(message).await
+                {
                     break;
                 }
             }
@@ -141,12 +149,10 @@ pub mod exec_server {
         let writer_task = tokio::spawn(async move {
             while let Some(message) = outgoing_rx.recv().await {
                 let outgoing = match message {
-                    OutgoingMessage::Json(message) => {
-                        match serde_json::to_string(&message) {
-                            Ok(json) => Message::Text(json.into()),
-                            Err(_) => continue,
-                        }
-                    }
+                    OutgoingMessage::Json(message) => match serde_json::to_string(&message) {
+                        Ok(json) => Message::Text(json.into()),
+                        Err(_) => continue,
+                    },
                     OutgoingMessage::RawText(message) => Message::Text(message.into()),
                 };
                 if outgoing_ws.send(outgoing).await.is_err() {
@@ -165,7 +171,9 @@ pub mod exec_server {
         })
     }
 
-    async fn read_websocket_url<R>(lines: &mut tokio::io::Lines<BufReader<R>>) -> anyhow::Result<String>
+    async fn read_websocket_url<R>(
+        lines: &mut tokio::io::Lines<BufReader<R>>,
+    ) -> anyhow::Result<String>
     where
         R: tokio::io::AsyncRead + Unpin,
     {

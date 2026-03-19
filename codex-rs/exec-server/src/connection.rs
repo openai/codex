@@ -11,7 +11,6 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 
-
 pub(crate) const CHANNEL_CAPACITY: usize = 128;
 
 #[derive(Debug)]

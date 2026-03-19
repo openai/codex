@@ -17,7 +17,7 @@ use crate::server::registry::build_router;
 
 pub(crate) async fn run_connection(connection: JsonRpcConnection) {
     let router = Arc::new(build_router());
-    let (json_outgoing_tx, mut incoming_rx, _connection_tasks) = connection.into_parts();
+    let (json_outgoing_tx, mut incoming_rx, connection_tasks) = connection.into_parts();
     let (outgoing_tx, mut outgoing_rx) =
         mpsc::channel::<RpcServerOutboundMessage>(CHANNEL_CAPACITY);
     let notifications = RpcNotificationSender::new(outgoing_tx.clone());
@@ -38,6 +38,7 @@ pub(crate) async fn run_connection(connection: JsonRpcConnection) {
         }
     });
 
+    // Process inbound events sequentially to preserve initialize/initialized ordering.
     while let Some(event) = incoming_rx.recv().await {
         match event {
             JsonRpcConnectionEvent::MalformedMessage { reason } => {
@@ -114,5 +115,9 @@ pub(crate) async fn run_connection(connection: JsonRpcConnection) {
 
     handler.shutdown().await;
     drop(outgoing_tx);
+    for task in connection_tasks {
+        task.abort();
+        let _ = task.await;
+    }
     let _ = outbound_task.await;
 }

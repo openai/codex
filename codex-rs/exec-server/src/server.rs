@@ -1,7 +1,7 @@
 mod filesystem;
 mod handler;
-mod registry;
 mod processor;
+mod registry;
 mod transport;
 
 pub(crate) use handler::ExecServerHandler;
