@@ -489,7 +489,7 @@ impl CoreShellActionProvider {
             .session
             .services
             .skills_manager
-            .skills_for_cwd(&self.turn.cwd, force_reload)
+            .skills_for_cwd(&self.turn.cwd, self.turn.config.as_ref(), force_reload)
             .await;
 
         let program_path = program.as_path();

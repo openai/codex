@@ -9,6 +9,7 @@ use crate::metrics::MetricsError;
 use crate::metrics::Result as MetricsResult;
 use crate::metrics::names::API_CALL_COUNT_METRIC;
 use crate::metrics::names::API_CALL_DURATION_METRIC;
+use crate::metrics::names::PROFILE_USAGE_METRIC;
 use crate::metrics::names::RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC;
 use crate::metrics::names::RESPONSES_API_ENGINE_IAPI_TTFT_DURATION_METRIC;
 use crate::metrics::names::RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC;
@@ -276,7 +277,7 @@ impl SessionTelemetry {
                 account_email,
                 originator: sanitize_metric_tag_value(originator.as_str()),
                 service_name: None,
-                session_source: sanitize_metric_tag_value(session_source.to_string().as_str()),
+                session_source: session_source.to_string(),
                 model: model.to_owned(),
                 slug: slug.to_owned(),
                 log_user_prompts,
@@ -321,6 +322,9 @@ impl SessionTelemetry {
         mcp_servers: Vec<&str>,
         active_profile: Option<String>,
     ) {
+        if active_profile.is_some() {
+            self.counter(PROFILE_USAGE_METRIC, /*inc*/ 1, &[]);
+        }
         log_and_trace_event!(
             self,
             common: {

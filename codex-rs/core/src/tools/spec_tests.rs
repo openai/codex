@@ -50,6 +50,10 @@ fn discoverable_connector(id: &str, name: &str, description: &str) -> Discoverab
     }))
 }
 
+fn windows_shell_safety_description() -> String {
+    format!("\n\n{}", super::windows_destructive_filesystem_guidance())
+}
+
 fn search_capable_model_info() -> ModelInfo {
     let config = test_config();
     let mut model_info =
@@ -2417,7 +2421,7 @@ fn test_shell_tool() {
     assert_eq!(name, "shell");
 
     let expected = if cfg!(windows) {
-            r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
+        r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
 
 Examples of valid command strings:
 
@@ -2427,11 +2431,37 @@ Examples of valid command strings:
 - ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"]
 - setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
 - running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]"#
-        } else {
-            r#"Runs a shell command and returns its output.
+                .to_string()
+                + &windows_shell_safety_description()
+    } else {
+        r#"Runs a shell command and returns its output.
 - The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
 - Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
-        }.to_string();
+                .to_string()
+    };
+    assert_eq!(description, &expected);
+}
+
+#[test]
+fn test_exec_command_tool_windows_description_includes_shell_safety_guidance() {
+    let tool = super::create_exec_command_tool(true, false);
+    let ToolSpec::Function(ResponsesApiTool {
+        description, name, ..
+    }) = &tool
+    else {
+        panic!("expected function tool");
+    };
+    assert_eq!(name, "exec_command");
+
+    let expected = if cfg!(windows) {
+        format!(
+            "Runs a command in a PTY, returning output or a session ID for ongoing interaction.{}",
+            windows_shell_safety_description()
+        )
+    } else {
+        "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
+            .to_string()
+    };
     assert_eq!(description, &expected);
 }
 
@@ -2536,7 +2566,9 @@ Examples of valid command strings:
 - recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
 - ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
 - setting an env var: "$env:FOO='bar'; echo $env:FOO"
-- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"#.to_string()
+- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -""#
+            .to_string()
+            + &windows_shell_safety_description()
     } else {
         r#"Runs a shell command and returns its output.
 - Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#.to_string()
@@ -2681,7 +2713,7 @@ fn code_mode_augments_builtin_tool_descriptions_with_typed_sample() {
 
     assert_eq!(
         description,
-        "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: { path: string; }): Promise<unknown>; };\n```"
+        "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: { path: string; }): Promise<{ detail: string | null; image_url: string; }>; };\n```"
     );
 }
 

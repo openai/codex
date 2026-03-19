@@ -37,6 +37,8 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use url::Url;
+
 use self::realtime::PendingSteerCompareKey;
 use crate::app_command::AppCommand;
 use crate::app_event::RealtimeAudioDeviceKind;
@@ -46,6 +48,8 @@ use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
+use crate::mention_codec::LinkedMention;
+use crate::mention_codec::encode_history_mentions;
 use crate::model_catalog::ModelCatalog;
 use crate::multi_agents;
 use crate::status::RateLimitWindowDisplay;
@@ -92,8 +96,6 @@ use codex_core::git_info::local_git_branches;
 use codex_core::plugins::PluginsManager;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::skills::model::SkillMetadata;
-use codex_core::terminal::TerminalName;
-use codex_core::terminal::terminal_info;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::RuntimeMetricsSummary;
@@ -197,6 +199,8 @@ use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
+use codex_terminal_detection::TerminalName;
+use codex_terminal_detection::terminal_info;
 use codex_utils_sleep_inhibitor::SleepInhibitor;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -3131,15 +3135,15 @@ impl ChatWidget {
 
     fn on_image_generation_end(&mut self, event: ImageGenerationEndEvent) {
         self.flush_answer_stream_with_separator();
-        let saved_to = event.saved_path.as_deref().and_then(|saved_path| {
-            std::path::Path::new(saved_path)
-                .parent()
-                .map(|parent| parent.display().to_string())
+        let saved_path = event.saved_path.map(|saved_path| {
+            Url::from_file_path(Path::new(&saved_path))
+                .map(|url| url.to_string())
+                .unwrap_or(saved_path)
         });
         self.add_to_history(history_cell::new_image_generation_call(
             event.call_id,
             event.revised_prompt,
-            saved_to,
+            saved_path,
         ));
         self.request_redraw();
     }
@@ -3474,8 +3478,7 @@ impl ChatWidget {
         }
     }
 
-    #[cfg(test)]
-    fn on_get_history_entry_response(
+    pub(crate) fn handle_history_entry_response(
         &mut self,
         event: codex_protocol::protocol::GetHistoryEntryResponseEvent,
     ) {
@@ -5133,13 +5136,7 @@ impl ChatWidget {
                 )));
                 return;
             }
-            // TODO: Restore `!` support in app-server TUI once command execution can
-            // persist transcript-visible output into thread history with parity to the
-            // legacy TUI.
-            self.add_to_history(history_cell::new_error_event(
-                "`!` shell commands are unavailable in app-server TUI because command output is not yet persisted in thread history.".to_string(),
-            ));
-            self.request_redraw();
+            self.submit_op(AppCommand::run_user_shell_command(cmd.to_string()));
             return;
         }
 
@@ -5316,9 +5313,19 @@ impl ChatWidget {
             return;
         }
 
-        // Persist the text to cross-session message history.
+        // Persist the text to cross-session message history. Mentions are
+        // encoded into placeholder syntax so recall can reconstruct the
+        // mention bindings in a future session.
         if !text.is_empty() {
-            warn!("skipping composer history persistence in app-server TUI");
+            let encoded_mentions = mention_bindings
+                .iter()
+                .map(|binding| LinkedMention {
+                    mention: binding.mention.clone(),
+                    path: binding.path.clone(),
+                })
+                .collect::<Vec<_>>();
+            let history_text = encode_history_mentions(&text, &encoded_mentions);
+            self.submit_op(Op::AddToHistory { text: history_text });
         }
 
         if let Some(pending_steer) = pending_steer {
@@ -5551,6 +5558,7 @@ impl ChatWidget {
                 command,
                 cwd,
                 process_id,
+                source,
                 status,
                 command_actions,
                 aggregated_output,
@@ -5571,10 +5579,11 @@ impl ChatWidget {
                             .into_iter()
                             .map(codex_app_server_protocol::CommandAction::into_core)
                             .collect(),
-                        source: ExecCommandSource::Agent,
+                        source: source.to_core(),
                         interaction_input: None,
                     });
                 } else {
+                    let aggregated_output = aggregated_output.unwrap_or_default();
                     self.on_exec_command_end(ExecCommandEndEvent {
                         call_id: id,
                         process_id,
@@ -5585,16 +5594,16 @@ impl ChatWidget {
                             .into_iter()
                             .map(codex_app_server_protocol::CommandAction::into_core)
                             .collect(),
-                        source: ExecCommandSource::Agent,
+                        source: source.to_core(),
                         interaction_input: None,
                         stdout: String::new(),
                         stderr: String::new(),
-                        aggregated_output: aggregated_output.unwrap_or_default(),
+                        aggregated_output: aggregated_output.clone(),
                         exit_code: exit_code.unwrap_or_default(),
                         duration: Duration::from_millis(
                             duration_ms.unwrap_or_default().max(0) as u64
                         ),
-                        formatted_output: String::new(),
+                        formatted_output: aggregated_output,
                         status: match status {
                             codex_app_server_protocol::CommandExecutionStatus::Completed => {
                                 codex_protocol::protocol::ExecCommandStatus::Completed
@@ -5726,6 +5735,7 @@ impl ChatWidget {
             ThreadItem::ContextCompaction { .. } => {
                 self.on_agent_message("Context compacted".to_owned());
             }
+            ThreadItem::HookPrompt { .. } => {}
             ThreadItem::CollabAgentToolCall {
                 id,
                 tool,
@@ -6037,6 +6047,7 @@ impl ChatWidget {
             | ServerNotification::RawResponseItemCompleted(_)
             | ServerNotification::CommandExecOutputDelta(_)
             | ServerNotification::McpToolCallProgress(_)
+            | ServerNotification::McpServerStatusUpdated(_)
             | ServerNotification::McpServerOauthLoginCompleted(_)
             | ServerNotification::AppListUpdated(_)
             | ServerNotification::ContextCompacted(_)
@@ -6133,6 +6144,7 @@ impl ChatWidget {
                 command,
                 cwd,
                 process_id,
+                source,
                 command_actions,
                 ..
             } => {
@@ -6146,7 +6158,7 @@ impl ChatWidget {
                         .into_iter()
                         .map(codex_app_server_protocol::CommandAction::into_core)
                         .collect(),
-                    source: ExecCommandSource::Agent,
+                    source: source.to_core(),
                     interaction_input: None,
                 });
             }
@@ -6440,7 +6452,7 @@ impl ChatWidget {
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
             EventMsg::WebSearchBegin(ev) => self.on_web_search_begin(ev),
             EventMsg::WebSearchEnd(ev) => self.on_web_search_end(ev),
-            EventMsg::GetHistoryEntryResponse(ev) => self.on_get_history_entry_response(ev),
+            EventMsg::GetHistoryEntryResponse(ev) => self.handle_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListCustomPromptsResponse(_) => {
                 tracing::warn!(

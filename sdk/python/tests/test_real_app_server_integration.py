@@ -265,6 +265,36 @@ def test_real_thread_and_turn_start_smoke(runtime_env: PreparedRuntimeEnv) -> No
     assert isinstance(data["persisted_items_count"], int)
 
 
+def test_real_thread_run_convenience_smoke(runtime_env: PreparedRuntimeEnv) -> None:
+    data = _run_json_python(
+        runtime_env,
+        textwrap.dedent(
+            """
+            import json
+            from codex_app_server import Codex
+
+            with Codex() as codex:
+                thread = codex.thread_start(
+                    model="gpt-5.4",
+                    config={"model_reasoning_effort": "high"},
+                )
+                result = thread.run("say ok")
+                print(json.dumps({
+                    "thread_id": thread.id,
+                    "final_response": result.final_response,
+                    "items_count": len(result.items),
+                    "has_usage": result.usage is not None,
+                }))
+            """
+        ),
+    )
+
+    assert isinstance(data["thread_id"], str) and data["thread_id"].strip()
+    assert isinstance(data["final_response"], str) and data["final_response"].strip()
+    assert isinstance(data["items_count"], int)
+    assert isinstance(data["has_usage"], bool)
+
+
 def test_real_async_thread_turn_usage_and_ids_smoke(
     runtime_env: PreparedRuntimeEnv,
 ) -> None:
@@ -306,6 +336,42 @@ def test_real_async_thread_turn_usage_and_ids_smoke(
     assert data["status"] == "completed"
     assert isinstance(data["items_count"], int)
     assert isinstance(data["persisted_items_count"], int)
+
+
+def test_real_async_thread_run_convenience_smoke(
+    runtime_env: PreparedRuntimeEnv,
+) -> None:
+    data = _run_json_python(
+        runtime_env,
+        textwrap.dedent(
+            """
+            import asyncio
+            import json
+            from codex_app_server import AsyncCodex
+
+            async def main():
+                async with AsyncCodex() as codex:
+                    thread = await codex.thread_start(
+                        model="gpt-5.4",
+                        config={"model_reasoning_effort": "high"},
+                    )
+                    result = await thread.run("say ok")
+                    print(json.dumps({
+                        "thread_id": thread.id,
+                        "final_response": result.final_response,
+                        "items_count": len(result.items),
+                        "has_usage": result.usage is not None,
+                    }))
+
+            asyncio.run(main())
+            """
+        ),
+    )
+
+    assert isinstance(data["thread_id"], str) and data["thread_id"].strip()
+    assert isinstance(data["final_response"], str) and data["final_response"].strip()
+    assert isinstance(data["items_count"], int)
+    assert isinstance(data["has_usage"], bool)
 
 
 def test_notebook_bootstrap_resolves_sdk_and_runtime_from_unrelated_cwd(

@@ -50,7 +50,7 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::features::Stage;
 use codex_core::features::is_known_feature_key;
-use codex_core::terminal::TerminalName;
+use codex_terminal_detection::TerminalName;
 
 /// Codex CLI
 ///
@@ -330,17 +330,6 @@ struct AppServerCommand {
         default_value = codex_app_server::AppServerTransport::DEFAULT_LISTEN_URL
     )]
     listen: codex_app_server::AppServerTransport,
-
-    /// Session source stamped into new threads started by this app-server.
-    ///
-    /// Known values such as `vscode`, `cli`, `exec`, and `mcp` map to built-in
-    /// sources. Any other non-empty value is recorded as a custom source.
-    #[arg(
-        long = "session-source",
-        value_name = "SOURCE",
-        default_value = "vscode"
-    )]
-    session_source: String,
 
     /// Controls whether analytics are enabled by default.
     ///
@@ -654,17 +643,13 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             None => {
                 reject_remote_mode_for_subcommand(root_remote.as_deref(), "app-server")?;
                 let transport = app_server_cli.listen;
-                let session_source = codex_protocol::protocol::SessionSource::from_startup_arg(
-                    app_server_cli.session_source.as_str(),
-                )
-                .map_err(|err| anyhow::anyhow!("invalid --session-source: {err}"))?;
                 codex_app_server::run_main_with_transport(
                     arg0_paths.clone(),
                     root_config_overrides,
                     codex_core::config_loader::LoaderOverrides::default(),
                     app_server_cli.analytics_default_enabled,
                     transport,
-                    session_source,
+                    codex_protocol::protocol::SessionSource::VSCode,
                 )
                 .await?;
             }
@@ -1064,7 +1049,7 @@ async fn run_interactive_tui(
         interactive.prompt = Some(prompt.replace("\r\n", "\n").replace('\r', "\n"));
     }
 
-    let terminal_info = codex_core::terminal::terminal_info();
+    let terminal_info = codex_terminal_detection::terminal_info();
     if terminal_info.name == TerminalName::Dumb {
         if !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
             return Ok(AppExitInfo::fatal(
@@ -1631,7 +1616,6 @@ mod tests {
             app_server.listen,
             codex_app_server::AppServerTransport::Stdio
         );
-        assert_eq!(app_server.session_source, "vscode");
     }
 
     #[test]
@@ -1639,13 +1623,6 @@ mod tests {
         let app_server =
             app_server_from_args(["codex", "app-server", "--analytics-default-enabled"].as_ref());
         assert!(app_server.analytics_default_enabled);
-    }
-
-    #[test]
-    fn app_server_session_source_accepts_custom_value() {
-        let app_server =
-            app_server_from_args(["codex", "app-server", "--session-source", "atlas"].as_ref());
-        assert_eq!(app_server.session_source, "atlas");
     }
 
     #[test]

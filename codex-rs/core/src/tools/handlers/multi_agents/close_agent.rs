@@ -68,17 +68,13 @@ impl ToolHandler for Handler {
                 return Err(collab_agent_error(agent_id, err));
             }
         };
-        let result = if !matches!(status, AgentStatus::Shutdown) {
-            session
-                .services
-                .agent_control
-                .shutdown_agent(agent_id)
-                .await
-                .map_err(|err| collab_agent_error(agent_id, err))
-                .map(|_| ())
-        } else {
-            Ok(())
-        };
+        let result = session
+            .services
+            .agent_control
+            .close_agent(agent_id)
+            .await
+            .map_err(|err| collab_agent_error(agent_id, err))
+            .map(|_| ());
         session
             .send_event(
                 &turn,
