@@ -23,6 +23,7 @@ use codex_app_server_protocol::CollabAgentState as AppServerCollabAgentState;
 use codex_app_server_protocol::CollabAgentStatus as AppServerCollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool as AppServerCollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus as AppServerCollabAgentToolCallStatus;
+use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::GuardianApprovalReview;
@@ -10086,6 +10087,39 @@ async fn status_widget_and_approval_modal_snapshot() {
         .draw(|f| chat.render(f.area(), f.buffer_mut()))
         .expect("draw status + approval modal");
     assert_snapshot!("status_widget_and_approval_modal", terminal.backend());
+}
+
+#[test]
+fn exec_approval_request_from_params_splits_shell_command_string() {
+    let event = exec_approval_request_from_params(CommandExecutionRequestApprovalParams {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        item_id: "call-1".to_string(),
+        approval_id: Some("approval-1".to_string()),
+        reason: Some("Need shell".to_string()),
+        network_approval_context: None,
+        command: Some("printf 'hello world'".to_string()),
+        cwd: Some(PathBuf::from("/tmp/project")),
+        command_actions: None,
+        additional_permissions: None,
+        skill_metadata: None,
+        proposed_execpolicy_amendment: None,
+        proposed_network_policy_amendments: None,
+        available_decisions: None,
+    });
+
+    assert_eq!(
+        serde_json::to_value(event).expect("event should serialize"),
+        serde_json::json!({
+            "call_id": "call-1",
+            "approval_id": "approval-1",
+            "turn_id": "turn-1",
+            "command": ["printf", "hello world"],
+            "cwd": "/tmp/project",
+            "reason": "Need shell",
+            "parsed_cmd": [],
+        })
+    );
 }
 
 #[tokio::test]

@@ -1207,9 +1207,12 @@ fn app_server_request_id_to_mcp_request_id(
 fn exec_approval_request_from_params(
     params: CommandExecutionRequestApprovalParams,
 ) -> ExecApprovalRequestEvent {
+    let command = params.command.map_or_else(Vec::new, |command| {
+        shlex::split(&command).unwrap_or_else(|| vec![command])
+    });
     ExecApprovalRequestEvent {
         call_id: params.item_id,
-        command: params.command.into_iter().collect(),
+        command,
         cwd: params.cwd.unwrap_or_default(),
         reason: params.reason,
         network_approval_context: params
