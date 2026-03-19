@@ -25,6 +25,7 @@ const EVENT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(crate) struct ExecServerHarness {
     child: Child,
+    websocket_url: String,
     websocket: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
@@ -50,12 +51,17 @@ pub(crate) async fn exec_server() -> anyhow::Result<ExecServerHarness> {
     let (websocket, _) = connect_websocket_when_ready(&websocket_url).await?;
     Ok(ExecServerHarness {
         child,
+        websocket_url,
         websocket,
         next_request_id: 1,
     })
 }
 
 impl ExecServerHarness {
+    pub(crate) fn websocket_url(&self) -> &str {
+        &self.websocket_url
+    }
+
     pub(crate) async fn send_request(
         &mut self,
         method: &str,
