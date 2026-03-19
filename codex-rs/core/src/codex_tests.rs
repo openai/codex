@@ -7,6 +7,7 @@ use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::NetworkConstraints;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
+use crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT;
 use crate::exec::ExecToolCallOutput;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_connection_manager::ToolInfo;
@@ -1253,6 +1254,53 @@ async fn thread_rollback_clears_history_when_num_turns_exceeds_existing_turns() 
 
     let history = sess.clone_history().await;
     assert_eq!(initial_context, history.raw_items());
+}
+
+#[tokio::test]
+async fn thread_rollback_trims_adjacent_synthetic_context_before_removed_turn() {
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
+    attach_rollout_recorder(&sess).await;
+
+    let initial_context = sess.build_initial_context(tc.as_ref()).await;
+    let turn_1 = vec![
+        user_message("turn 1 user"),
+        assistant_message("turn 1 assistant"),
+    ];
+    let turn_2_context = vec![
+        ResponseItem::from(DeveloperInstructions::new(
+            "<model_switch>switched to gpt-test</model_switch>".to_string(),
+        )),
+        ENVIRONMENT_CONTEXT_FRAGMENT
+            .into_message(ENVIRONMENT_CONTEXT_FRAGMENT.wrap("<cwd>/tmp/updated</cwd>".to_string())),
+    ];
+    let turn_2 = vec![
+        user_message("turn 2 user"),
+        assistant_message("turn 2 assistant"),
+    ];
+    let mut full_history = Vec::new();
+    full_history.extend(initial_context.clone());
+    full_history.extend(turn_1.clone());
+    full_history.extend(turn_2_context);
+    full_history.extend(turn_2);
+    sess.replace_history(full_history.clone(), Some(tc.to_turn_context_item()))
+        .await;
+    let rollout_items: Vec<RolloutItem> = full_history
+        .into_iter()
+        .map(RolloutItem::ResponseItem)
+        .collect();
+    sess.persist_rollout_items(&rollout_items).await;
+
+    handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+
+    let rollback_event = wait_for_thread_rolled_back(&rx).await;
+    assert_eq!(rollback_event.num_turns, 1);
+
+    let mut expected = Vec::new();
+    expected.extend(initial_context);
+    expected.extend(turn_1);
+
+    let history = sess.clone_history().await;
+    assert_eq!(expected, history.raw_items());
 }
 
 #[tokio::test]

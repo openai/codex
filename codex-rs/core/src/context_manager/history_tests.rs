@@ -1,4 +1,5 @@
 use super::*;
+use crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT;
 use crate::truncate;
 use crate::truncate::TruncationPolicy;
 use base64::Engine;
@@ -6,6 +7,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_git::GhostCommit;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -68,6 +70,10 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
         end_turn: None,
         phase: None,
     }
+}
+
+fn developer_msg(text: &str) -> ResponseItem {
+    DeveloperInstructions::new(text.to_string()).into()
 }
 
 fn custom_tool_call_output(call_id: &str, output: &str) -> ResponseItem {
@@ -795,6 +801,65 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
     ]);
     history.drop_last_n_user_turns(3);
     assert_eq!(history.for_prompt(&modalities), expected_prefix_only);
+}
+
+#[test]
+fn drop_last_n_user_turns_trims_adjacent_developer_and_contextual_messages() {
+    let contextual_update = ENVIRONMENT_CONTEXT_FRAGMENT
+        .into_message(ENVIRONMENT_CONTEXT_FRAGMENT.wrap("<cwd>/tmp/updated</cwd>".to_string()));
+    let items = vec![
+        user_input_text_msg("<environment_context>session prefix</environment_context>"),
+        user_msg("turn 1 user"),
+        assistant_msg("turn 1 assistant"),
+        developer_msg("<model_switch>switched to gpt-test</model_switch>"),
+        contextual_update,
+        user_msg("turn 2 user"),
+        assistant_msg("turn 2 assistant"),
+    ];
+
+    let modalities = default_input_modalities();
+    let mut history = create_history_with_items(items);
+    history.drop_last_n_user_turns(1);
+
+    assert_eq!(
+        history.for_prompt(&modalities),
+        vec![
+            user_input_text_msg("<environment_context>session prefix</environment_context>"),
+            user_msg("turn 1 user"),
+            assistant_msg("turn 1 assistant"),
+        ]
+    );
+}
+
+#[test]
+fn drop_last_n_user_turns_keeps_non_adjacent_synthetic_context() {
+    let contextual_update = ENVIRONMENT_CONTEXT_FRAGMENT
+        .into_message(ENVIRONMENT_CONTEXT_FRAGMENT.wrap("<cwd>/tmp/updated</cwd>".to_string()));
+    let items = vec![
+        user_input_text_msg("<environment_context>session prefix</environment_context>"),
+        user_msg("turn 1 user"),
+        assistant_msg("turn 1 assistant"),
+        developer_msg("<model_switch>switched to gpt-test</model_switch>"),
+        assistant_msg("separator"),
+        contextual_update,
+        user_msg("turn 2 user"),
+        assistant_msg("turn 2 assistant"),
+    ];
+
+    let modalities = default_input_modalities();
+    let mut history = create_history_with_items(items);
+    history.drop_last_n_user_turns(1);
+
+    assert_eq!(
+        history.for_prompt(&modalities),
+        vec![
+            user_input_text_msg("<environment_context>session prefix</environment_context>"),
+            user_msg("turn 1 user"),
+            assistant_msg("turn 1 assistant"),
+            developer_msg("<model_switch>switched to gpt-test</model_switch>"),
+            assistant_msg("separator"),
+        ]
+    );
 }
 
 #[test]

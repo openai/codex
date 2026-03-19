@@ -213,6 +213,9 @@ impl ContextManager {
     /// - if there are no user turns, this is a no-op
     /// - if `num_turns` exceeds the number of user turns, all user turns are dropped while
     ///   preserving any items that occurred before the first user message.
+    /// - when rolling back to an earlier turn, contiguous developer/contextual messages inserted
+    ///   immediately before the removed user turn are also trimmed so stale per-turn context does
+    ///   not survive above the restored boundary.
     pub(crate) fn drop_last_n_user_turns(&mut self, num_turns: u32) {
         if num_turns == 0 {
             return;
@@ -231,6 +234,8 @@ impl ContextManager {
         } else {
             user_positions[user_positions.len() - n_from_end]
         };
+        let cut_idx =
+            trim_adjacent_rollback_context_before_user_boundary(&snapshot, first_user_idx, cut_idx);
 
         self.replace(snapshot[..cut_idx].to_vec());
     }
@@ -632,6 +637,36 @@ pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
     };
 
     role == "user" && !is_contextual_user_message_content(content)
+}
+
+fn trim_adjacent_rollback_context_before_user_boundary(
+    items: &[ResponseItem],
+    first_user_idx: usize,
+    cut_idx: usize,
+) -> usize {
+    if cut_idx <= first_user_idx {
+        return cut_idx;
+    }
+
+    let mut adjusted_cut_idx = cut_idx;
+    while adjusted_cut_idx > first_user_idx
+        && items
+            .get(adjusted_cut_idx.saturating_sub(1))
+            .is_some_and(is_adjacent_rollback_context_item)
+    {
+        adjusted_cut_idx -= 1;
+    }
+    adjusted_cut_idx
+}
+
+fn is_adjacent_rollback_context_item(item: &ResponseItem) -> bool {
+    match item {
+        ResponseItem::Message { role, .. } if role == "developer" => true,
+        ResponseItem::Message { role, content, .. } if role == "user" => {
+            is_contextual_user_message_content(content)
+        }
+        _ => false,
+    }
 }
 
 fn user_message_positions(items: &[ResponseItem]) -> Vec<usize> {
