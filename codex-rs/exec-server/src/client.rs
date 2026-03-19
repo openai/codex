@@ -1,8 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::io::AsyncRead;
-use tokio::io::AsyncWrite;
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
 use tracing::warn;
@@ -134,22 +132,6 @@ impl ExecServerClient {
         let client = Self { inner };
         client.initialize(options).await?;
         Ok(client)
-    }
-
-    pub async fn connect_stdio<R, W>(
-        stdin: W,
-        stdout: R,
-        options: ExecServerClientConnectOptions,
-    ) -> Result<Self, ExecServerError>
-    where
-        R: AsyncRead + Unpin + Send + 'static,
-        W: AsyncWrite + Unpin + Send + 'static,
-    {
-        Self::connect(
-            JsonRpcConnection::from_stdio(stdout, stdin, "exec-server stdio".to_string()),
-            options,
-        )
-        .await
     }
 
     pub async fn connect_websocket(

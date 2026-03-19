@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use anyhow::bail;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::McpProcess;
 use app_test_support::to_response;
@@ -674,6 +675,16 @@ async fn plugin_list_force_remote_sync_reconciles_curated_plugin_state() -> Resu
         ))
         .mount(&server)
         .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/plugins/featured"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"["linear@openai-curated","calendar@openai-curated"]"#),
+        )
+        .mount(&server)
+        .await;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
@@ -692,6 +703,13 @@ async fn plugin_list_force_remote_sync_reconciles_curated_plugin_state() -> Resu
     .await??;
     let response: PluginListResponse = to_response(response)?;
     assert_eq!(response.remote_sync_error, None);
+    assert_eq!(
+        response.featured_plugin_ids,
+        vec![
+            "linear@openai-curated".to_string(),
+            "calendar@openai-curated".to_string(),
+        ]
+    );
 
     let curated_marketplace = response
         .marketplaces
@@ -734,6 +752,114 @@ async fn plugin_list_force_remote_sync_reconciles_curated_plugin_state() -> Resu
             .join("plugins/cache/openai-curated/calendar")
             .exists()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_list_fetches_featured_plugin_ids_without_chatgpt_auth() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_plugin_sync_config(codex_home.path(), &format!("{}/backend-api/", server.uri()))?;
+    write_openai_curated_marketplace(codex_home.path(), &["linear", "gmail"])?;
+
+    Mock::given(method("GET"))
+        .and(path("/backend-api/plugins/featured"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"["linear@openai-curated"]"#))
+        .mount(&server)
+        .await;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: None,
+            force_remote_sync: false,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginListResponse = to_response(response)?;
+
+    assert_eq!(
+        response.featured_plugin_ids,
+        vec!["linear@openai-curated".to_string()]
+    );
+    assert_eq!(response.remote_sync_error, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_list_uses_warmed_featured_plugin_ids_cache_on_first_request() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_plugin_sync_config(codex_home.path(), &format!("{}/backend-api/", server.uri()))?;
+    write_openai_curated_marketplace(codex_home.path(), &["linear", "gmail"])?;
+
+    Mock::given(method("GET"))
+        .and(path("/backend-api/plugins/featured"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"["linear@openai-curated"]"#))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    wait_for_featured_plugin_request_count(&server, 1).await?;
+
+    let request_id = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: None,
+            force_remote_sync: false,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginListResponse = to_response(response)?;
+
+    assert_eq!(
+        response.featured_plugin_ids,
+        vec!["linear@openai-curated".to_string()]
+    );
+    assert_eq!(response.remote_sync_error, None);
+    Ok(())
+}
+
+async fn wait_for_featured_plugin_request_count(
+    server: &MockServer,
+    expected_count: usize,
+) -> Result<()> {
+    timeout(DEFAULT_TIMEOUT, async {
+        loop {
+            let Some(requests) = server.received_requests().await else {
+                bail!("wiremock did not record requests");
+            };
+            let featured_request_count = requests
+                .iter()
+                .filter(|request| {
+                    request.method == "GET" && request.url.path().ends_with("/plugins/featured")
+                })
+                .count();
+            if featured_request_count == expected_count {
+                return Ok::<(), anyhow::Error>(());
+            }
+            if featured_request_count > expected_count {
+                bail!(
+                    "expected exactly {expected_count} /plugins/featured requests, got {featured_request_count}"
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
     Ok(())
 }
 

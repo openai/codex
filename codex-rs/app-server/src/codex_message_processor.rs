@@ -221,6 +221,7 @@ use codex_core::models_manager::collaboration_mode_presets::CollaborationModesCo
 use codex_core::parse_cursor;
 use codex_core::plugins::MarketplaceError;
 use codex_core::plugins::MarketplacePluginSource;
+use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core::plugins::PluginInstallError as CorePluginInstallError;
 use codex_core::plugins::PluginInstallRequest;
 use codex_core::plugins::PluginReadRequest;
@@ -424,7 +425,10 @@ impl CodexMessageProcessor {
             Ok(config) => self
                 .thread_manager
                 .plugins_manager()
-                .maybe_start_curated_repo_sync_for_config(&config),
+                .maybe_start_curated_repo_sync_for_config(
+                    &config,
+                    self.thread_manager.auth_manager(),
+                ),
             Err(err) => warn!("failed to load latest config for curated plugin sync: {err:?}"),
         }
     }
@@ -5409,9 +5413,9 @@ impl CodexMessageProcessor {
             }
         };
         let mut remote_sync_error = None;
+        let auth = self.auth_manager.auth().await;
 
         if force_remote_sync {
-            let auth = self.auth_manager.auth().await;
             match plugins_manager
                 .sync_plugins_from_remote(&config, auth.as_ref())
                 .await
@@ -5443,8 +5447,11 @@ impl CodexMessageProcessor {
             };
         }
 
+        let config_for_marketplace_listing = config.clone();
+        let plugins_manager_for_marketplace_listing = plugins_manager.clone();
         let data = match tokio::task::spawn_blocking(move || {
-            let marketplaces = plugins_manager.list_marketplaces_for_config(&config, &roots)?;
+            let marketplaces = plugins_manager_for_marketplace_listing
+                .list_marketplaces_for_config(&config_for_marketplace_listing, &roots)?;
             Ok::<Vec<PluginMarketplaceEntry>, MarketplaceError>(
                 marketplaces
                     .into_iter()
@@ -5490,12 +5497,34 @@ impl CodexMessageProcessor {
             }
         };
 
+        let featured_plugin_ids = if data
+            .iter()
+            .any(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
+        {
+            match plugins_manager
+                .featured_plugin_ids_for_config(&config, auth.as_ref())
+                .await
+            {
+                Ok(featured_plugin_ids) => featured_plugin_ids,
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        "plugin/list featured plugin fetch failed; returning empty featured ids"
+                    );
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+
         self.outgoing
             .send_response(
                 request_id,
                 PluginListResponse {
                     marketplaces: data,
                     remote_sync_error,
+                    featured_plugin_ids,
                 },
             )
             .await;

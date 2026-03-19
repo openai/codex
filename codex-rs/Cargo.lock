@@ -1427,7 +1427,7 @@ dependencies = [
  "codex-chatgpt",
  "codex-cloud-requirements",
  "codex-core",
- "codex-exec-server",
+ "codex-environment",
  "codex-feedback",
  "codex-file-search",
  "codex-login",
@@ -1843,7 +1843,7 @@ dependencies = [
  "codex-client",
  "codex-config",
  "codex-connectors",
- "codex-exec-server",
+ "codex-environment",
  "codex-execpolicy",
  "codex-file-search",
  "codex-git",
@@ -1948,6 +1948,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-environment"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "codex-utils-absolute-path",
+ "pretty_assertions",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "codex-exec"
 version = "0.0.0"
 dependencies = [
@@ -1997,10 +2008,8 @@ name = "codex-exec-server"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "clap",
  "codex-app-server-protocol",
- "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "futures",
  "pretty_assertions",
