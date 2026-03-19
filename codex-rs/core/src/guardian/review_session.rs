@@ -14,7 +14,6 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SubAgentSource;
-use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -37,6 +36,9 @@ use crate::rollout::recorder::RolloutRecorder;
 
 use super::GUARDIAN_REVIEW_TIMEOUT;
 use super::GUARDIAN_REVIEWER_NAME;
+use super::GuardianApprovalRequest;
+use super::prompt::GuardianPromptContext;
+use super::prompt::build_guardian_prompt_payload;
 use super::prompt::guardian_policy_prompt;
 
 const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -52,7 +54,8 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) parent_session: Arc<Session>,
     pub(crate) parent_turn: Arc<TurnContext>,
     pub(crate) spawn_config: Config,
-    pub(crate) prompt_items: Vec<UserInput>,
+    pub(crate) retry_reason: Option<String>,
+    pub(crate) request: GuardianApprovalRequest,
     pub(crate) schema: Value,
     pub(crate) model: String,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
@@ -78,6 +81,8 @@ struct GuardianReviewSession {
     reuse_key: GuardianReviewSessionReuseKey,
     review_lock: Mutex<()>,
     last_committed_rollout_items: Mutex<Option<Vec<RolloutItem>>>,
+    last_parent_history_item_count: Mutex<Option<usize>>,
+    last_transcript_entry_count: Mutex<usize>,
 }
 
 struct EphemeralReviewCleanup {
@@ -176,6 +181,14 @@ impl GuardianReviewSession {
             }
         }
     }
+
+    async fn last_parent_history_item_count(&self) -> Option<usize> {
+        *self.last_parent_history_item_count.lock().await
+    }
+
+    async fn last_transcript_entry_count(&self) -> usize {
+        *self.last_transcript_entry_count.lock().await
+    }
 }
 
 impl EphemeralReviewCleanup {
@@ -267,6 +280,8 @@ impl GuardianReviewSessionManager {
                             next_reuse_key.clone(),
                             spawn_cancel_token.clone(),
                             /*initial_history*/ None,
+                            /*initial_parent_history_item_count*/ None,
+                            /*initial_transcript_entry_count*/ 0,
                         )),
                     )
                     .await
@@ -302,6 +317,8 @@ impl GuardianReviewSessionManager {
                     next_reuse_key,
                     deadline,
                     /*initial_history*/ None,
+                    /*initial_parent_history_item_count*/ None,
+                    /*initial_transcript_entry_count*/ 0,
                 )
                 .await;
         }
@@ -310,8 +327,18 @@ impl GuardianReviewSessionManager {
             Ok(trunk_guard) => trunk_guard,
             Err(_) => {
                 let initial_history = trunk.fork_initial_history().await;
+                let initial_parent_history_item_count =
+                    trunk.last_parent_history_item_count().await;
+                let initial_transcript_entry_count = trunk.last_transcript_entry_count().await;
                 return self
-                    .run_ephemeral_review(params, next_reuse_key, deadline, initial_history)
+                    .run_ephemeral_review(
+                        params,
+                        next_reuse_key,
+                        deadline,
+                        initial_history,
+                        initial_parent_history_item_count,
+                        initial_transcript_entry_count,
+                    )
                     .await;
             }
         };
@@ -344,6 +371,8 @@ impl GuardianReviewSessionManager {
             cancel_token: CancellationToken::new(),
             review_lock: Mutex::new(()),
             last_committed_rollout_items: Mutex::new(None),
+            last_parent_history_item_count: Mutex::new(None),
+            last_transcript_entry_count: Mutex::new(0),
         }));
     }
 
@@ -362,6 +391,8 @@ impl GuardianReviewSessionManager {
                 cancel_token: CancellationToken::new(),
                 review_lock: Mutex::new(()),
                 last_committed_rollout_items: Mutex::new(None),
+                last_parent_history_item_count: Mutex::new(None),
+                last_transcript_entry_count: Mutex::new(0),
             }));
     }
 
@@ -407,6 +438,8 @@ impl GuardianReviewSessionManager {
         reuse_key: GuardianReviewSessionReuseKey,
         deadline: tokio::time::Instant,
         initial_history: Option<InitialHistory>,
+        initial_parent_history_item_count: Option<usize>,
+        initial_transcript_entry_count: usize,
     ) -> GuardianReviewSessionOutcome {
         let spawn_cancel_token = CancellationToken::new();
         let mut fork_config = params.spawn_config.clone();
@@ -421,6 +454,8 @@ impl GuardianReviewSessionManager {
                 reuse_key,
                 spawn_cancel_token.clone(),
                 initial_history,
+                initial_parent_history_item_count,
+                initial_transcript_entry_count,
             )),
         )
         .await
@@ -449,6 +484,8 @@ async fn spawn_guardian_review_session(
     reuse_key: GuardianReviewSessionReuseKey,
     cancel_token: CancellationToken,
     initial_history: Option<InitialHistory>,
+    initial_parent_history_item_count: Option<usize>,
+    initial_transcript_entry_count: usize,
 ) -> anyhow::Result<GuardianReviewSession> {
     let codex = run_codex_thread_interactive(
         spawn_config,
@@ -468,6 +505,8 @@ async fn spawn_guardian_review_session(
         reuse_key,
         review_lock: Mutex::new(()),
         last_committed_rollout_items: Mutex::new(None),
+        last_parent_history_item_count: Mutex::new(initial_parent_history_item_count),
+        last_transcript_entry_count: Mutex::new(initial_transcript_entry_count),
     })
 }
 
@@ -476,6 +515,27 @@ async fn run_review_on_session(
     params: &GuardianReviewSessionParams,
     deadline: tokio::time::Instant,
 ) -> (GuardianReviewSessionOutcome, bool) {
+    let previous_history_item_count = review_session.last_parent_history_item_count().await;
+    let previous_transcript_entry_count = review_session.last_transcript_entry_count().await;
+    let prompt_payload = match build_guardian_prompt_payload(
+        params.parent_session.as_ref(),
+        params.retry_reason.clone(),
+        params.request.clone(),
+        GuardianPromptContext {
+            previous_history_item_count,
+            previous_transcript_entry_count,
+        },
+    )
+    .await
+    {
+        Ok(prompt_payload) => prompt_payload,
+        Err(err) => {
+            return (
+                GuardianReviewSessionOutcome::Completed(Err(err.into())),
+                false,
+            );
+        }
+    };
     let submit_result = run_before_review_deadline(
         deadline,
         params.external_cancel.as_ref(),
@@ -492,7 +552,7 @@ async fn run_review_on_session(
             review_session
                 .codex
                 .submit(Op::UserTurn {
-                    items: params.prompt_items.clone(),
+                    items: prompt_payload.items.clone(),
                     cwd: params.parent_turn.cwd.clone(),
                     approval_policy: AskForApproval::Never,
                     sandbox_policy: SandboxPolicy::new_read_only_policy(),
@@ -519,7 +579,15 @@ async fn run_review_on_session(
         );
     }
 
-    wait_for_guardian_review(review_session, deadline, params.external_cancel.as_ref()).await
+    let (outcome, keep_review_session) =
+        wait_for_guardian_review(review_session, deadline, params.external_cancel.as_ref()).await;
+    if keep_review_session && matches!(outcome, GuardianReviewSessionOutcome::Completed(Ok(_))) {
+        *review_session.last_parent_history_item_count.lock().await =
+            Some(prompt_payload.parent_history_item_count);
+        *review_session.last_transcript_entry_count.lock().await +=
+            prompt_payload.transcript_entry_count;
+    }
+    (outcome, keep_review_session)
 }
 
 async fn load_rollout_items_for_fork(

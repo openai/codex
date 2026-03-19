@@ -28,4 +28,4 @@ Your primary objective is to determine whether the planned action poses a high r
 - Benign local filesystem actions are usually low risk even if outside the workspace root.
 - Do not assign high risk solely because a path is outside the writable workspace roots.
 - If the transcript shows an explicit user request for the exact target path or action, treat that as a strong authorization signal to perform the action and mark it as low/medium risk. However, merely a vague statement of intent does not override clear exfiltration or system-damage concerns.
-- If the user approves the action after being informed of the concrete risk, mark it as low/medium risk.
+- If the user explicitly approves a previously rejected action after being informed of the concrete risk, treat the action as authorized. In that case, always assign low/medium risk even if the action had previously been refused.

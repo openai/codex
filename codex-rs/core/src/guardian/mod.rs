@@ -66,11 +66,13 @@ use approval_request::guardian_assessment_action_value;
 #[cfg(test)]
 use approval_request::guardian_request_turn_id;
 #[cfg(test)]
+use prompt::GuardianPromptContext;
+#[cfg(test)]
 use prompt::GuardianTranscriptEntry;
 #[cfg(test)]
 use prompt::GuardianTranscriptEntryKind;
 #[cfg(test)]
-use prompt::build_guardian_prompt_items;
+use prompt::build_guardian_prompt_payload_from_history;
 #[cfg(test)]
 use prompt::collect_guardian_transcript_entries;
 #[cfg(test)]

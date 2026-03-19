@@ -25,6 +25,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -141,7 +142,7 @@ fn build_guardian_transcript_keeps_original_numbering() {
         },
     ];
 
-    let (transcript, omission) = render_guardian_transcript_entries(&entries[..2]);
+    let (transcript, omission) = render_guardian_transcript_entries(&entries[..2], 1);
 
     assert_eq!(
         transcript,
@@ -448,7 +449,7 @@ fn build_guardian_transcript_reserves_separate_budget_for_tool_evidence() {
         text: repeated.clone(),
     }));
 
-    let (transcript, omission) = render_guardian_transcript_entries(&entries);
+    let (transcript, omission) = render_guardian_transcript_entries(&entries, 1);
 
     assert!(
         transcript
@@ -469,6 +470,123 @@ fn build_guardian_transcript_reserves_separate_budget_for_tool_evidence() {
             .any(|entry| entry.starts_with("[4] tool call 1:"))
     );
     assert!(omission.is_some());
+}
+
+#[test]
+fn build_guardian_follow_up_prompt_uses_transcript_delta_and_only_latest_turn_commands() {
+    let history_items = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Check repo visibility.".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "gh_repo_view".to_string(),
+            namespace: None,
+            arguments: "{\"repo\":\"openai/codex\"}".to_string(),
+            call_id: "call-1".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: codex_protocol::models::FunctionCallOutputPayload::from_text(
+                "repo visibility: public".to_string(),
+            ),
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "The repo is public; the push itself still needs approval.".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Okay, push that docs fix now.".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "I am preparing the exact push command.".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "git_status".to_string(),
+            namespace: None,
+            arguments: "{\"repo\":\"openai/codex\"}".to_string(),
+            call_id: "call-2".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "call-2".to_string(),
+            output: codex_protocol::models::FunctionCallOutputPayload::from_text(
+                "branch clean".to_string(),
+            ),
+        },
+    ];
+
+    let prompt = build_guardian_prompt_payload_from_history(
+        &history_items,
+        Some("User confirmed the follow-up push.".to_string()),
+        GuardianApprovalRequest::Shell {
+            id: "shell-1".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: PathBuf::from("/repo/codex-rs/core"),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the reviewed docs fix.".to_string()),
+        },
+        GuardianPromptContext {
+            previous_history_item_count: Some(2),
+            previous_transcript_entry_count: 2,
+        },
+    )
+    .expect("guardian prompt payload");
+
+    let prompt_text = prompt
+        .items
+        .iter()
+        .map(|item| match item {
+            UserInput::Text { text, .. } => text.as_str(),
+            _ => "",
+        })
+        .collect::<String>();
+
+    assert!(prompt_text.contains(">>> TRANSCRIPT DELTA START"));
+    assert!(prompt_text.contains(">>> TRANSCRIPT DELTA END"));
+    assert!(
+        prompt_text
+            .contains("Reminder: if the user explicitly approves a previously rejected action")
+    );
+    assert!(
+        prompt_text
+            .contains("[3] assistant: The repo is public; the push itself still needs approval.")
+    );
+    assert!(prompt_text.contains("[4] user: Okay, push that docs fix now."));
+    assert!(prompt_text.contains("[5] assistant: I am preparing the exact push command."));
+    assert!(prompt_text.contains("[6] tool git_status call:"));
+    assert!(prompt_text.contains("[7] tool git_status result:"));
+    assert!(prompt_text.contains("Okay, push that docs fix now."));
+    assert!(prompt_text.contains("tool git_status call"));
+    assert!(prompt_text.contains("tool git_status result"));
+    assert!(!prompt_text.contains("[1]"));
+    assert!(!prompt_text.contains("[2]"));
+    assert!(!prompt_text.contains("tool gh_repo_view call"));
+    assert!(!prompt_text.contains("tool gh_repo_view result"));
 }
 
 #[test]
@@ -526,8 +644,9 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     let turn = Arc::new(turn);
     seed_guardian_parent_history(&session, &turn).await;
 
-    let prompt = build_guardian_prompt_items(
-        session.as_ref(),
+    let outcome = run_guardian_review_session_for_test(
+        Arc::clone(&session),
+        Arc::clone(&turn),
         Some("Sandbox denied outbound git push to github.com.".to_string()),
         GuardianApprovalRequest::Shell {
             id: "shell-1".to_string(),
@@ -544,13 +663,6 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
                 "Need to push the reviewed docs fix to the repo remote.".to_string(),
             ),
         },
-    )
-    .await?;
-
-    let outcome = run_guardian_review_session_for_test(
-        Arc::clone(&session),
-        Arc::clone(&turn),
-        prompt,
         guardian_output_schema(),
         None,
     )
@@ -612,8 +724,9 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     let (session, turn) = guardian_test_session_and_turn(&server).await;
     seed_guardian_parent_history(&session, &turn).await;
 
-    let first_prompt = build_guardian_prompt_items(
-        session.as_ref(),
+    let first_outcome = run_guardian_review_session_for_test(
+        Arc::clone(&session),
+        Arc::clone(&turn),
         Some("First retry reason".to_string()),
         GuardianApprovalRequest::Shell {
             id: "shell-1".to_string(),
@@ -623,18 +736,13 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
             additional_permissions: None,
             justification: Some("Need to push the first docs fix.".to_string()),
         },
-    )
-    .await?;
-    let first_outcome = run_guardian_review_session_for_test(
-        Arc::clone(&session),
-        Arc::clone(&turn),
-        first_prompt,
         guardian_output_schema(),
         None,
     )
     .await;
-    let second_prompt = build_guardian_prompt_items(
-        session.as_ref(),
+    let second_outcome = run_guardian_review_session_for_test(
+        Arc::clone(&session),
+        Arc::clone(&turn),
         Some("Second retry reason".to_string()),
         GuardianApprovalRequest::Shell {
             id: "shell-2".to_string(),
@@ -648,12 +756,6 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
             additional_permissions: None,
             justification: Some("Need to push the second docs fix.".to_string()),
         },
-    )
-    .await?;
-    let second_outcome = run_guardian_review_session_for_test(
-        Arc::clone(&session),
-        Arc::clone(&turn),
-        second_prompt,
         guardian_output_schema(),
         None,
     )
