@@ -207,10 +207,11 @@ impl CodexAuth {
         )
     }
 
-    pub fn auth_mode(&self) -> AuthMode {
+    pub fn auth_mode(&self) -> crate::AuthMode {
         match self {
-            Self::ApiKey(_) => AuthMode::ApiKey,
-            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => AuthMode::Chatgpt,
+            Self::ApiKey(_) => crate::AuthMode::ApiKey,
+            Self::Chatgpt(_) => crate::AuthMode::Chatgpt,
+            Self::ChatgptAuthTokens(_) => crate::AuthMode::ChatgptAuthTokens,
         }
     }
 
@@ -223,11 +224,14 @@ impl CodexAuth {
     }
 
     pub fn is_api_key_auth(&self) -> bool {
-        self.auth_mode() == AuthMode::ApiKey
+        self.auth_mode() == crate::AuthMode::ApiKey
     }
 
     pub fn is_chatgpt_auth(&self) -> bool {
-        self.auth_mode() == AuthMode::Chatgpt
+        matches!(
+            self.auth_mode(),
+            crate::AuthMode::Chatgpt | crate::AuthMode::ChatgptAuthTokens
+        )
     }
 
     pub fn is_external_chatgpt_tokens(&self) -> bool {
@@ -480,13 +484,15 @@ pub fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<()> {
 
     if let Some(required_method) = config.forced_login_method {
         let method_violation = match (required_method, auth.auth_mode()) {
-            (ForcedLoginMethod::Api, AuthMode::ApiKey) => None,
-            (ForcedLoginMethod::Chatgpt, AuthMode::Chatgpt) => None,
-            (ForcedLoginMethod::Api, AuthMode::Chatgpt) => Some(
+            (ForcedLoginMethod::Api, crate::AuthMode::ApiKey) => None,
+            (ForcedLoginMethod::Chatgpt, crate::AuthMode::Chatgpt)
+            | (ForcedLoginMethod::Chatgpt, crate::AuthMode::ChatgptAuthTokens) => None,
+            (ForcedLoginMethod::Api, crate::AuthMode::Chatgpt)
+            | (ForcedLoginMethod::Api, crate::AuthMode::ChatgptAuthTokens) => Some(
                 "API key login is required, but ChatGPT is currently being used. Logging out."
                     .to_string(),
             ),
-            (ForcedLoginMethod::Chatgpt, AuthMode::ApiKey) => Some(
+            (ForcedLoginMethod::Chatgpt, crate::AuthMode::ApiKey) => Some(
                 "ChatGPT login is required, but an API key is currently being used. Logging out."
                     .to_string(),
             ),
@@ -1344,7 +1350,7 @@ impl AuthManager {
         self.auth_cached().as_ref().map(CodexAuth::api_auth_mode)
     }
 
-    pub fn auth_mode(&self) -> Option<AuthMode> {
+    pub fn auth_mode(&self) -> Option<crate::AuthMode> {
         self.auth_cached().as_ref().map(CodexAuth::auth_mode)
     }
 
