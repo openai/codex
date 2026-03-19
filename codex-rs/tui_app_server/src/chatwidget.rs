@@ -5748,6 +5748,7 @@ impl ChatWidget {
             ThreadItem::ContextCompaction { .. } => {
                 self.on_agent_message("Context compacted".to_owned());
             }
+            ThreadItem::HookPrompt { .. } => {}
             ThreadItem::CollabAgentToolCall {
                 id,
                 tool,

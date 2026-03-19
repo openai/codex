@@ -126,6 +126,7 @@ export type { HookExecutionMode } from "./HookExecutionMode";
 export type { HookHandlerType } from "./HookHandlerType";
 export type { HookOutputEntry } from "./HookOutputEntry";
 export type { HookOutputEntryKind } from "./HookOutputEntryKind";
+export type { HookPromptFragment } from "./HookPromptFragment";
 export type { HookRunStatus } from "./HookRunStatus";
 export type { HookRunSummary } from "./HookRunSummary";
 export type { HookScope } from "./HookScope";

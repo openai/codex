@@ -1,7 +1,9 @@
 use super::parse_turn_item;
 use codex_protocol::items::AgentMessageContent;
+use codex_protocol::items::HookPromptFragment;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::WebSearchItem;
+use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -205,6 +207,67 @@ fn skips_user_instructions_and_env() {
     for item in items {
         let turn_item = parse_turn_item(&item);
         assert!(turn_item.is_none(), "expected none, got {turn_item:?}");
+    }
+}
+
+#[test]
+fn parses_hook_prompt_message_as_distinct_turn_item() {
+    let item = build_hook_prompt_message(&[HookPromptFragment::from_single_hook(
+        "Retry with exactly the phrase meow meow meow.",
+        "hook-run-1",
+    )])
+    .expect("hook prompt message");
+
+    let turn_item = parse_turn_item(&item).expect("expected hook prompt turn item");
+
+    match turn_item {
+        TurnItem::HookPrompt(hook_prompt) => {
+            assert_eq!(hook_prompt.fragments.len(), 1);
+            assert_eq!(
+                hook_prompt.fragments[0],
+                HookPromptFragment {
+                    text: "Retry with exactly the phrase meow meow meow.".to_string(),
+                    hook_run_id: "hook-run-1".to_string(),
+                }
+            );
+        }
+        other => panic!("expected TurnItem::HookPrompt, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_hook_prompt_and_hides_other_contextual_fragments() {
+    let item = ResponseItem::Message {
+        id: Some("msg-1".to_string()),
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputText {
+                text: "<environment_context>ctx</environment_context>".to_string(),
+            },
+            ContentItem::InputText {
+                text:
+                    "<hook_prompt hook_run_id=\"hook-run-1\">Retry with care &amp; joy.</hook_prompt>"
+                        .to_string(),
+            },
+        ],
+        end_turn: None,
+        phase: None,
+    };
+
+    let turn_item = parse_turn_item(&item).expect("expected hook prompt turn item");
+
+    match turn_item {
+        TurnItem::HookPrompt(hook_prompt) => {
+            assert_eq!(hook_prompt.id, "msg-1");
+            assert_eq!(
+                hook_prompt.fragments,
+                vec![HookPromptFragment {
+                    text: "Retry with care & joy.".to_string(),
+                    hook_run_id: "hook-run-1".to_string(),
+                }]
+            );
+        }
+        other => panic!("expected TurnItem::HookPrompt, got {other:?}"),
     }
 }
 

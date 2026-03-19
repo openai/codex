@@ -112,6 +112,7 @@ impl ToolOrchestrator {
         let otel_tn = &tool_ctx.tool_name;
         let otel_ci = &tool_ctx.call_id;
         let otel_user = ToolDecisionSource::User;
+        let otel_automated_reviewer = ToolDecisionSource::AutomatedReviewer;
         let otel_cfg = ToolDecisionSource::Config;
 
         // 1) Approval
@@ -136,8 +137,13 @@ impl ToolOrchestrator {
                     network_approval_context: None,
                 };
                 let decision = tool.start_approval_async(req, approval_ctx).await;
+                let otel_source = if routes_approval_to_guardian(turn_ctx) {
+                    otel_automated_reviewer.clone()
+                } else {
+                    otel_user.clone()
+                };
 
-                otel.tool_decision(otel_tn, otel_ci, &decision, otel_user.clone());
+                otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
 
                 match decision {
                     ReviewDecision::Denied | ReviewDecision::Abort => {
@@ -286,7 +292,12 @@ impl ToolOrchestrator {
                     };
 
                     let decision = tool.start_approval_async(req, approval_ctx).await;
-                    otel.tool_decision(otel_tn, otel_ci, &decision, otel_user);
+                    let otel_source = if routes_approval_to_guardian(turn_ctx) {
+                        otel_automated_reviewer
+                    } else {
+                        otel_user
+                    };
+                    otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
 
                     match decision {
                         ReviewDecision::Denied | ReviewDecision::Abort => {

@@ -4,6 +4,7 @@ use std::path::Path;
 use anyhow::Context;
 use anyhow::Result;
 use codex_core::features::Feature;
+use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
@@ -78,6 +79,48 @@ else:
     });
 
     fs::write(&script_path, script).context("write stop hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
+fn write_parallel_stop_hooks(home: &Path, prompts: &[&str]) -> Result<()> {
+    let hook_entries = prompts
+        .iter()
+        .enumerate()
+        .map(|(index, prompt)| {
+            let script_path = home.join(format!("stop_hook_{index}.py"));
+            let script = format!(
+                r#"import json
+import sys
+
+payload = json.load(sys.stdin)
+if payload["stop_hook_active"]:
+    print(json.dumps({{"systemMessage": "done"}}))
+else:
+    print(json.dumps({{"decision": "block", "reason": {prompt:?}}}))
+"#
+            );
+            fs::write(&script_path, script).with_context(|| {
+                format!(
+                    "write stop hook script fixture at {}",
+                    script_path.display()
+                )
+            })?;
+            Ok(serde_json::json!({
+                "type": "command",
+                "command": format!("python3 {}", script_path.display()),
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let hooks = serde_json::json!({
+        "hooks": {
+            "Stop": [{
+                "hooks": hook_entries,
+            }]
+        }
+    });
+
     fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
     Ok(())
 }
@@ -168,7 +211,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     Ok(())
 }
 
-fn rollout_developer_texts(text: &str) -> Result<Vec<String>> {
+fn rollout_hook_prompt_texts(text: &str) -> Result<Vec<String>> {
     let mut texts = Vec::new();
     for line in text.lines() {
         let trimmed = line.trim();
@@ -177,16 +220,28 @@ fn rollout_developer_texts(text: &str) -> Result<Vec<String>> {
         }
         let rollout: RolloutLine = serde_json::from_str(trimmed).context("parse rollout line")?;
         if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = rollout.item
-            && role == "developer"
+            && role == "user"
         {
             for item in content {
-                if let ContentItem::InputText { text } = item {
-                    texts.push(text);
+                if let ContentItem::InputText { text } = item
+                    && let Some(fragment) = parse_hook_prompt_fragment(&text)
+                {
+                    texts.push(fragment.text);
                 }
             }
         }
     }
     Ok(texts)
+}
+
+fn request_hook_prompt_texts(
+    request: &core_test_support::responses::ResponsesRequest,
+) -> Vec<String> {
+    request
+        .message_input_texts("user")
+        .into_iter()
+        .filter_map(|text| parse_hook_prompt_fragment(&text).map(|fragment| fragment.text))
+        .collect()
 }
 
 fn read_stop_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
@@ -298,23 +353,18 @@ async fn stop_hook_can_block_multiple_times_in_same_turn() -> Result<()> {
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 3);
-    assert!(
-        requests[1]
-            .message_input_texts("developer")
-            .contains(&FIRST_CONTINUATION_PROMPT.to_string()),
-        "second request should include the first continuation prompt",
+    assert_eq!(
+        request_hook_prompt_texts(&requests[1]),
+        vec![FIRST_CONTINUATION_PROMPT.to_string()],
+        "second request should include the first continuation prompt as user hook context",
     );
-    assert!(
-        requests[2]
-            .message_input_texts("developer")
-            .contains(&FIRST_CONTINUATION_PROMPT.to_string()),
-        "third request should retain the first continuation prompt from history",
-    );
-    assert!(
-        requests[2]
-            .message_input_texts("developer")
-            .contains(&SECOND_CONTINUATION_PROMPT.to_string()),
-        "third request should include the second continuation prompt",
+    assert_eq!(
+        request_hook_prompt_texts(&requests[2]),
+        vec![
+            FIRST_CONTINUATION_PROMPT.to_string(),
+            SECOND_CONTINUATION_PROMPT.to_string(),
+        ],
+        "third request should retain hook prompts in user history",
     );
 
     let hook_inputs = read_stop_hook_inputs(test.codex_home_path())?;
@@ -356,13 +406,13 @@ async fn stop_hook_can_block_multiple_times_in_same_turn() -> Result<()> {
 
     let rollout_path = test.codex.rollout_path().expect("rollout path");
     let rollout_text = fs::read_to_string(&rollout_path)?;
-    let developer_texts = rollout_developer_texts(&rollout_text)?;
+    let hook_prompt_texts = rollout_hook_prompt_texts(&rollout_text)?;
     assert!(
-        developer_texts.contains(&FIRST_CONTINUATION_PROMPT.to_string()),
+        hook_prompt_texts.contains(&FIRST_CONTINUATION_PROMPT.to_string()),
         "rollout should persist the first continuation prompt",
     );
     assert!(
-        developer_texts.contains(&SECOND_CONTINUATION_PROMPT.to_string()),
+        hook_prompt_texts.contains(&SECOND_CONTINUATION_PROMPT.to_string()),
         "rollout should persist the second continuation prompt",
     );
 
@@ -481,11 +531,76 @@ async fn resumed_thread_keeps_stop_continuation_prompt_in_history() -> Result<()
     resumed.submit_turn("and now continue").await?;
 
     let resumed_request = resumed_response.single_request();
-    assert!(
-        resumed_request
-            .message_input_texts("developer")
-            .contains(&FIRST_CONTINUATION_PROMPT.to_string()),
-        "resumed request should keep the persisted continuation prompt in history",
+    assert_eq!(
+        request_hook_prompt_texts(&resumed_request),
+        vec![FIRST_CONTINUATION_PROMPT.to_string()],
+        "resumed request should keep the persisted continuation prompt in user history",
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multiple_blocking_stop_hooks_persist_multiple_hook_prompt_fragments() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "draft one"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "final draft"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_parallel_stop_hooks(
+                home,
+                &[FIRST_CONTINUATION_PROMPT, SECOND_CONTINUATION_PROMPT],
+            ) {
+                panic!("failed to write parallel stop hook fixtures: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("hello again").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        request_hook_prompt_texts(&requests[1]),
+        vec![
+            FIRST_CONTINUATION_PROMPT.to_string(),
+            SECOND_CONTINUATION_PROMPT.to_string(),
+        ],
+        "second request should receive one user hook prompt message with both fragments",
+    );
+
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
+    let rollout_text = fs::read_to_string(&rollout_path)?;
+    assert_eq!(
+        rollout_hook_prompt_texts(&rollout_text)?,
+        vec![
+            FIRST_CONTINUATION_PROMPT.to_string(),
+            SECOND_CONTINUATION_PROMPT.to_string(),
+        ],
+        "rollout should preserve both hook prompt fragments in order",
     );
 
     Ok(())
