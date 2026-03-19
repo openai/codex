@@ -7396,8 +7396,30 @@ async fn populate_thread_turns(
     if let Some(active_turn) = active_turn {
         merge_turn_history_with_active_turn(&mut turns, active_turn.clone());
     }
+    clear_inline_image_results_for_saved_files(&mut turns);
     thread.turns = turns;
     Ok(())
+}
+
+fn clear_inline_image_results_for_saved_files(turns: &mut [Turn]) {
+    for turn in turns {
+        for item in &mut turn.items {
+            let ThreadItem::ImageGeneration {
+                result, saved_path, ..
+            } = item
+            else {
+                continue;
+            };
+
+            let Some(saved_path) = saved_path.as_deref() else {
+                continue;
+            };
+
+            if Path::new(saved_path).is_file() {
+                result.clear();
+            }
+        }
+    }
 }
 
 async fn resolve_pending_server_request(
@@ -9008,6 +9030,77 @@ mod tests {
                 .is_none()
         );
         assert!(!manager.has_subscribers(thread_id).await);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn populate_thread_turns_prefers_saved_image_path_over_inline_result() -> Result<()> {
+        use codex_protocol::protocol::ImageGenerationEndEvent;
+        use codex_protocol::protocol::RolloutItem;
+        use codex_protocol::protocol::TurnCompleteEvent;
+        use codex_protocol::protocol::TurnStartedEvent;
+        use codex_protocol::protocol::UserMessageEvent;
+
+        let temp_dir = TempDir::new()?;
+        let saved_path = temp_dir.path().join("ig_123.png");
+        std::fs::write(&saved_path, b"png-bytes")?;
+        let saved_path_string = saved_path.to_string_lossy().into_owned();
+
+        let items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-image".into(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            })),
+            RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                message: "generate an image".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            })),
+            RolloutItem::EventMsg(EventMsg::ImageGenerationEnd(ImageGenerationEndEvent {
+                call_id: "ig_123".into(),
+                status: "completed".into(),
+                revised_prompt: Some("final prompt".into()),
+                result: "Zm9v".into(),
+                saved_path: Some(saved_path_string.clone()),
+            })),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-image".into(),
+                last_agent_message: None,
+            })),
+        ];
+
+        let mut thread = Thread {
+            id: "thread-image".into(),
+            preview: String::new(),
+            ephemeral: false,
+            model_provider: "openai".into(),
+            created_at: 0,
+            updated_at: 0,
+            status: ThreadStatus::NotLoaded,
+            path: None,
+            cwd: PathBuf::new(),
+            cli_version: String::new(),
+            source: SessionSource::VSCode,
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: None,
+            turns: Vec::new(),
+        };
+
+        populate_thread_turns(&mut thread, ThreadTurnSource::HistoryItems(&items), None).await?;
+
+        let Some(ThreadItem::ImageGeneration {
+            result, saved_path, ..
+        }) = thread.turns[0].items.get(1)
+        else {
+            panic!("expected image generation item");
+        };
+
+        assert!(result.is_empty());
+        assert_eq!(saved_path.as_deref(), Some(saved_path_string.as_str()));
         Ok(())
     }
 }
