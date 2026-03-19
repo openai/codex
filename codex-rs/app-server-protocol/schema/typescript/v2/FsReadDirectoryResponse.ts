@@ -6,7 +6,7 @@ import type { FsReadDirectoryEntry } from "./FsReadDirectoryEntry";
 /**
  * Directory entries returned by `fs/readDirectory`.
  */
-export type FsReadDirectoryResponse = {
+export type FsReadDirectoryResponse = { 
 /**
  * Direct child entries in the requested directory.
  */

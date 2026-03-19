@@ -5,15 +5,15 @@
 /**
  * A directory entry returned by `fs/readDirectory`.
  */
-export type FsReadDirectoryEntry = {
+export type FsReadDirectoryEntry = { 
 /**
  * Direct child entry name only, not an absolute or relative path.
  */
-fileName: string,
+fileName: string, 
 /**
  * Whether this entry resolves to a directory.
  */
-isDirectory: boolean,
+isDirectory: boolean, 
 /**
  * Whether this entry resolves to a regular file.
  */

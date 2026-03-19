@@ -5,7 +5,7 @@
 /**
  * Terminate a running `command/exec` session.
  */
-export type CommandExecTerminateParams = {
+export type CommandExecTerminateParams = { 
 /**
  * Client-supplied, connection-scoped `processId` from the original
  * `command/exec` request.

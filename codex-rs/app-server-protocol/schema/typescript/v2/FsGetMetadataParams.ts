@@ -6,7 +6,7 @@ import type { AbsolutePathBuf } from "../AbsolutePathBuf";
 /**
  * Request metadata for an absolute path.
  */
-export type FsGetMetadataParams = {
+export type FsGetMetadataParams = { 
 /**
  * Absolute path to inspect.
  */

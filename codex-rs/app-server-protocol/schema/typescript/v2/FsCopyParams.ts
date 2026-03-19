@@ -6,15 +6,15 @@ import type { AbsolutePathBuf } from "../AbsolutePathBuf";
 /**
  * Copy a file or directory tree on the host filesystem.
  */
-export type FsCopyParams = {
+export type FsCopyParams = { 
 /**
  * Absolute source path.
  */
-sourcePath: AbsolutePathBuf,
+sourcePath: AbsolutePathBuf, 
 /**
  * Absolute destination path.
  */
-destinationPath: AbsolutePathBuf,
+destinationPath: AbsolutePathBuf, 
 /**
  * Required for directory copies; ignored for file copies.
  */

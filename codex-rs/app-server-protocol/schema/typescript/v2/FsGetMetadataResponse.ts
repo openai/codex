@@ -5,19 +5,19 @@
 /**
  * Metadata returned by `fs/getMetadata`.
  */
-export type FsGetMetadataResponse = {
+export type FsGetMetadataResponse = { 
 /**
  * Whether the path currently resolves to a directory.
  */
-isDirectory: boolean,
+isDirectory: boolean, 
 /**
  * Whether the path currently resolves to a regular file.
  */
-isFile: boolean,
+isFile: boolean, 
 /**
  * File creation time in Unix milliseconds when available, otherwise `0`.
  */
-createdAtMs: number,
+createdAtMs: number, 
 /**
  * File modification time in Unix milliseconds when available, otherwise `0`.
  */
