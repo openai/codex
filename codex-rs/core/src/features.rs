@@ -118,6 +118,8 @@ pub enum Feature {
     UseLegacyLandlock,
     /// Allow the model to request approval and propose exec rules.
     RequestRule,
+    /// Use tighter generated execpolicy prefix suggestions for approval prompts.
+    EnhancedExecPolicySuggestions,
     /// Enable Windows sandbox (restricted token) on Windows.
     WindowsSandbox,
     /// Use the elevated Windows sandbox pipeline (setup + runner).
@@ -675,6 +677,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::RequestRule,
         key: "request_rule",
         stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::EnhancedExecPolicySuggestions,
+        key: "enhanced_exec_policy_suggestions",
+        stage: Stage::Experimental {
+            name: "Enhanced exec policy suggestions",
+            menu_description: "When Codex proposes a reusable exec policy prefix, stop before the first flag-like argument and use the first segment of a compound shell command.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {

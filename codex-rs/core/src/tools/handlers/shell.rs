@@ -428,18 +428,24 @@ impl ShellHandler {
         let exec_approval_requirement = session
             .services
             .exec_policy
-            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
-                command: &exec_params.command,
-                approval_policy: turn.approval_policy.value(),
-                sandbox_policy: turn.sandbox_policy.get(),
-                file_system_sandbox_policy: &turn.file_system_sandbox_policy,
-                sandbox_permissions: if effective_additional_permissions.permissions_preapproved {
-                    codex_protocol::models::SandboxPermissions::UseDefault
-                } else {
-                    effective_additional_permissions.sandbox_permissions
+            .create_exec_approval_requirement_for_command_with_enhanced_suggestions(
+                ExecApprovalRequest {
+                    command: &exec_params.command,
+                    approval_policy: turn.approval_policy.value(),
+                    sandbox_policy: turn.sandbox_policy.get(),
+                    file_system_sandbox_policy: &turn.file_system_sandbox_policy,
+                    sandbox_permissions: if effective_additional_permissions.permissions_preapproved
+                    {
+                        codex_protocol::models::SandboxPermissions::UseDefault
+                    } else {
+                        effective_additional_permissions.sandbox_permissions
+                    },
+                    prefix_rule,
                 },
-                prefix_rule,
-            })
+                session
+                    .features()
+                    .enabled(Feature::EnhancedExecPolicySuggestions),
+            )
             .await;
 
         let req = ShellRequest {

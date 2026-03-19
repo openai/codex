@@ -15,6 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
+use crate::features::Feature;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecRequest;
 use crate::tools::context::ExecCommandToolOutput;
@@ -596,18 +597,24 @@ impl UnifiedExecProcessManager {
             .session
             .services
             .exec_policy
-            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
-                command: &request.command,
-                approval_policy: context.turn.approval_policy.value(),
-                sandbox_policy: context.turn.sandbox_policy.get(),
-                file_system_sandbox_policy: &context.turn.file_system_sandbox_policy,
-                sandbox_permissions: if request.additional_permissions_preapproved {
-                    crate::sandboxing::SandboxPermissions::UseDefault
-                } else {
-                    request.sandbox_permissions
+            .create_exec_approval_requirement_for_command_with_enhanced_suggestions(
+                ExecApprovalRequest {
+                    command: &request.command,
+                    approval_policy: context.turn.approval_policy.value(),
+                    sandbox_policy: context.turn.sandbox_policy.get(),
+                    file_system_sandbox_policy: &context.turn.file_system_sandbox_policy,
+                    sandbox_permissions: if request.additional_permissions_preapproved {
+                        crate::sandboxing::SandboxPermissions::UseDefault
+                    } else {
+                        request.sandbox_permissions
+                    },
+                    prefix_rule: request.prefix_rule.clone(),
                 },
-                prefix_rule: request.prefix_rule.clone(),
-            })
+                context
+                    .session
+                    .features()
+                    .enabled(Feature::EnhancedExecPolicySuggestions),
+            )
             .await;
         let req = UnifiedExecToolRequest {
             command: request.command.clone(),

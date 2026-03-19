@@ -81,6 +81,17 @@ fn unrestricted_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
     FileSystemSandboxPolicy::unrestricted()
 }
 
+async fn create_exec_approval_requirement_with_enhanced_suggestions(
+    manager: &ExecPolicyManager,
+    req: ExecApprovalRequest<'_>,
+) -> ExecApprovalRequirement {
+    manager
+        .create_exec_approval_requirement_for_command_with_enhanced_suggestions(
+            req, /*enhanced_exec_policy_suggestions*/ true,
+        )
+        .await
+}
+
 async fn test_config() -> (TempDir, Config) {
     let home = TempDir::new().expect("create temp dir");
     let config = ConfigBuilder::default()
@@ -1032,7 +1043,7 @@ async fn exec_approval_requirement_falls_back_to_heuristics() {
 }
 
 #[tokio::test]
-async fn empty_bash_lc_script_falls_back_to_original_command() {
+async fn empty_bash_lc_script_falls_back_to_whole_command_when_truncated_prefix_is_too_short() {
     let command = vec!["bash".to_string(), "-lc".to_string(), "".to_string()];
 
     let manager = ExecPolicyManager::default();
@@ -1057,7 +1068,8 @@ async fn empty_bash_lc_script_falls_back_to_original_command() {
 }
 
 #[tokio::test]
-async fn whitespace_bash_lc_script_falls_back_to_original_command() {
+async fn whitespace_bash_lc_script_falls_back_to_whole_command_when_truncated_prefix_is_too_short()
+{
     let command = vec![
         "bash".to_string(),
         "-lc".to_string(),
@@ -1118,7 +1130,7 @@ async fn request_rule_uses_prefix_rule() {
 }
 
 #[tokio::test]
-async fn request_rule_falls_back_when_prefix_rule_does_not_approve_all_commands() {
+async fn request_rule_falls_back_to_first_segment_for_multi_command_scripts() {
     let command = vec![
         "bash".to_string(),
         "-lc".to_string(),
@@ -1126,25 +1138,27 @@ async fn request_rule_falls_back_when_prefix_rule_does_not_approve_all_commands(
     ];
     let manager = ExecPolicyManager::default();
 
-    let requirement = manager
-        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+    let requirement = create_exec_approval_requirement_with_enhanced_suggestions(
+        &manager,
+        ExecApprovalRequest {
             command: &command,
             approval_policy: AskForApproval::OnRequest,
             sandbox_policy: &SandboxPolicy::DangerFullAccess,
             file_system_sandbox_policy: &unrestricted_file_system_sandbox_policy(),
             sandbox_permissions: SandboxPermissions::RequireEscalated,
             prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
-        })
-        .await;
+        },
+    )
+    .await;
 
     assert_eq!(
         requirement,
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                "rm".to_string(),
-                "-rf".to_string(),
-                "/tmp/codex".to_string(),
+                "cargo".to_string(),
+                "install".to_string(),
+                "cargo-insta".to_string(),
             ])),
         }
     );
@@ -1165,21 +1179,23 @@ async fn heuristics_apply_when_other_commands_match_policy() {
     ];
 
     assert_eq!(
-        ExecPolicyManager::new(policy)
-            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+        create_exec_approval_requirement_with_enhanced_suggestions(
+            &ExecPolicyManager::new(policy),
+            ExecApprovalRequest {
                 command: &command,
                 approval_policy: AskForApproval::UnlessTrusted,
                 sandbox_policy: &SandboxPolicy::DangerFullAccess,
                 file_system_sandbox_policy: &unrestricted_file_system_sandbox_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
-            })
-            .await,
+            },
+        )
+        .await,
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                "orange".to_string()
-            ]))
+                "apple".to_string()
+            ])),
         }
     );
 }
@@ -1261,6 +1277,98 @@ async fn proposed_execpolicy_amendment_is_present_for_single_command_without_pol
 }
 
 #[tokio::test]
+async fn proposed_execpolicy_amendment_stops_before_first_flag_for_generated_suggestions() {
+    let command = vec![
+        "cargo".to_string(),
+        "test".to_string(),
+        "--package".to_string(),
+        "codex-core".to_string(),
+    ];
+
+    let manager = ExecPolicyManager::default();
+    let requirement = create_exec_approval_requirement_with_enhanced_suggestions(
+        &manager,
+        ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::UnlessTrusted,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+    )
+    .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                "cargo".to_string(),
+                "test".to_string(),
+            ]))
+        }
+    );
+}
+
+#[tokio::test]
+async fn proposed_execpolicy_amendment_preserves_full_command_when_enhanced_suggestions_disabled() {
+    let command = vec![
+        "cargo".to_string(),
+        "test".to_string(),
+        "--package".to_string(),
+        "codex-core".to_string(),
+    ];
+
+    let manager = ExecPolicyManager::default();
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::UnlessTrusted,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command))
+        }
+    );
+}
+
+#[tokio::test]
+async fn proposed_execpolicy_amendment_falls_back_to_whole_command_if_flag_starts_too_early() {
+    let command = vec!["curl".to_string(), "-k".to_string(), "xyz.com".to_string()];
+
+    let manager = ExecPolicyManager::default();
+    let requirement = create_exec_approval_requirement_with_enhanced_suggestions(
+        &manager,
+        ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::UnlessTrusted,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+    )
+    .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(command))
+        }
+    );
+}
+
+#[tokio::test]
 async fn proposed_execpolicy_amendment_is_omitted_when_policy_prompts() {
     let policy_src = r#"prefix_rule(pattern=["rm"], decision="prompt")"#;
     let mut parser = PolicyParser::new();
@@ -1292,23 +1400,25 @@ async fn proposed_execpolicy_amendment_is_omitted_when_policy_prompts() {
 }
 
 #[tokio::test]
-async fn proposed_execpolicy_amendment_is_present_for_multi_command_scripts() {
+async fn proposed_execpolicy_amendment_is_based_on_first_segment_for_multi_command_scripts() {
     let command = vec![
         "bash".to_string(),
         "-lc".to_string(),
         "cargo build && echo ok".to_string(),
     ];
     let manager = ExecPolicyManager::default();
-    let requirement = manager
-        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+    let requirement = create_exec_approval_requirement_with_enhanced_suggestions(
+        &manager,
+        ExecApprovalRequest {
             command: &command,
             approval_policy: AskForApproval::UnlessTrusted,
             sandbox_policy: &SandboxPolicy::new_read_only_policy(),
             file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
-        })
-        .await;
+        },
+    )
+    .await;
 
     assert_eq!(
         requirement,
@@ -1323,7 +1433,8 @@ async fn proposed_execpolicy_amendment_is_present_for_multi_command_scripts() {
 }
 
 #[tokio::test]
-async fn proposed_execpolicy_amendment_uses_first_no_match_in_multi_command_scripts() {
+async fn proposed_execpolicy_amendment_uses_whole_one_token_first_segment_for_multi_command_scripts()
+ {
     let policy_src = r#"prefix_rule(pattern=["cat"], decision="allow")"#;
     let mut parser = PolicyParser::new();
     parser
@@ -1338,21 +1449,21 @@ async fn proposed_execpolicy_amendment_uses_first_no_match_in_multi_command_scri
     ];
 
     assert_eq!(
-        ExecPolicyManager::new(policy)
-            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+        create_exec_approval_requirement_with_enhanced_suggestions(
+            &ExecPolicyManager::new(policy),
+            ExecApprovalRequest {
                 command: &command,
                 approval_policy: AskForApproval::UnlessTrusted,
                 sandbox_policy: &SandboxPolicy::new_read_only_policy(),
                 file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
-            })
-            .await,
+            },
+        )
+        .await,
         ExecApprovalRequirement::NeedsApproval {
             reason: None,
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
-                "apple".to_string()
-            ])),
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec!["cat".to_string()])),
         }
     );
 }

@@ -86,6 +86,29 @@ fn guardian_approval_is_experimental_and_user_toggleable() {
 }
 
 #[test]
+fn enhanced_exec_policy_suggestions_is_experimental_and_user_toggleable() {
+    let spec = Feature::EnhancedExecPolicySuggestions.info();
+    let stage = spec.stage;
+
+    assert!(matches!(stage, Stage::Experimental { .. }));
+    assert_eq!(
+        stage.experimental_menu_name(),
+        Some("Enhanced exec policy suggestions")
+    );
+    assert_eq!(
+        stage.experimental_menu_description(),
+        Some(
+            "When Codex proposes a reusable exec policy prefix, stop before the first flag-like argument and use the first segment of a compound shell command."
+        )
+    );
+    assert_eq!(stage.experimental_announcement(), None);
+    assert_eq!(
+        Feature::EnhancedExecPolicySuggestions.default_enabled(),
+        false
+    );
+}
+
+#[test]
 fn request_permissions_is_under_development() {
     assert_eq!(
         Feature::ExecPermissionApprovals.stage(),

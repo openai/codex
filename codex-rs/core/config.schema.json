@@ -380,6 +380,9 @@
             "enable_request_compression": {
               "type": "boolean"
             },
+            "enhanced_exec_policy_suggestions": {
+              "type": "boolean"
+            },
             "exec_permission_approvals": {
               "type": "boolean"
             },
@@ -1984,6 +1987,9 @@
           "type": "boolean"
         },
         "enable_request_compression": {
+          "type": "boolean"
+        },
+        "enhanced_exec_policy_suggestions": {
           "type": "boolean"
         },
         "exec_permission_approvals": {
