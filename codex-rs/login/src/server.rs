@@ -34,7 +34,6 @@ use base64::Engine;
 use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
 use codex_client::build_reqwest_client_with_custom_ca;
-use codex_client::default_client::originator;
 use rand::RngCore;
 use serde_json::Value as JsonValue;
 use tiny_http::Header;
@@ -486,7 +485,8 @@ fn build_authorize_url(
         ("state".to_string(), state.to_string()),
         (
             "originator".to_string(),
-            originator().value.as_str().to_string(),
+            std::env::var("CODEX_INTERNAL_ORIGINATOR_OVERRIDE")
+                .unwrap_or_else(|_| "codex_cli_rs".to_string()),
         ),
     ];
     if let Some(workspace_id) = forced_chatgpt_workspace_id {
