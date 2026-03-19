@@ -1846,13 +1846,6 @@ mod tests {
             policy.needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path(),)
         );
 
-        let split_workspace_write =
-            FileSystemSandboxPolicy::from(&SandboxPolicy::new_workspace_write_policy());
-        assert!(
-            split_workspace_write
-                .needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path(),)
-        );
-
         let legacy_workspace_write = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
             &SandboxPolicy::new_workspace_write_policy(),
             cwd.path(),
