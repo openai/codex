@@ -459,7 +459,6 @@ impl From<RemotePluginFetchError> for PluginRemoteSyncError {
 pub struct PluginsManager {
     codex_home: PathBuf,
     store: PluginStore,
-    cache_by_cwd: RwLock<HashMap<PathBuf, PluginLoadOutcome>>,
     featured_plugin_ids_cache: RwLock<Option<CachedFeaturedPluginIds>>,
     cached_enabled_outcome: RwLock<Option<PluginLoadOutcome>>,
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
@@ -470,7 +469,6 @@ impl PluginsManager {
         Self {
             codex_home: codex_home.clone(),
             store: PluginStore::new(codex_home),
-            cache_by_cwd: RwLock::new(HashMap::new()),
             featured_plugin_ids_cache: RwLock::new(None),
             cached_enabled_outcome: RwLock::new(None),
             analytics_events_client: RwLock::new(None),
@@ -517,7 +515,6 @@ impl PluginsManager {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
-        cache_by_cwd.clear();
         let mut featured_plugin_ids_cache = match self.featured_plugin_ids_cache.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
