@@ -1,3 +1,4 @@
+load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("@rules_cc//cc:cc_static_library.bzl", "cc_static_library")
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
@@ -26,11 +27,10 @@ genrule(
     """,
 )
 
-genrule(
+copy_file(
     name = "support_h",
-    srcs = ["@v8_crate_146_4_0//:support_h"],
-    outs = ["support.h"],
-    cmd = "cp $(location @v8_crate_146_4_0//:support_h) $@",
+    src = "@v8_crate_146_4_0//:support_h",
+    out = "support.h",
 )
 
 cc_library(
