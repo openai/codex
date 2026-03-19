@@ -47,10 +47,11 @@ pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
     match resolve_bin_via_assert_cmd(name) {
         Ok(path) => Ok(path),
         Err(fallback) => {
-            if !runfiles_available() && build_bin_with_cargo(name).is_ok() {
-                if let Ok(path) = resolve_bin_via_assert_cmd(name) {
-                    return Ok(path);
-                }
+            if !runfiles_available()
+                && build_bin_with_cargo(name).is_ok()
+                && let Ok(path) = resolve_bin_via_assert_cmd(name)
+            {
+                return Ok(path);
             }
             Err(CargoBinError::NotFound {
                 name: name.to_owned(),
