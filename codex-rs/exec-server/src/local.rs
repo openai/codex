@@ -42,6 +42,7 @@ pub async fn spawn_local_exec_server(
 ) -> Result<SpawnedExecServer, ExecServerError> {
     let mut child = Command::new(&command.program);
     child.args(&command.args);
+    child.args(["--listen", "stdio://"]);
     child.stdin(Stdio::piped());
     child.stdout(Stdio::piped());
     child.stderr(Stdio::inherit());

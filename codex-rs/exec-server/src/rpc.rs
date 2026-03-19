@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
+use std::pin::Pin;
 
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -438,6 +439,217 @@ async fn drain_pending(pending: &Mutex<HashMap<RequestId, PendingRequest>>) {
             data: None,
             message: "JSON-RPC transport closed".to_string(),
         }));
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum RpcServerOutboundMessage {
+    Response {
+        request_id: RequestId,
+        result: Value,
+    },
+    Error {
+        request_id: RequestId,
+        error: JSONRPCErrorError,
+    },
+    Notification(JSONRPCNotification),
+}
+
+impl RpcServerOutboundMessage {
+    fn response(request_id: RequestId, result: Result<Value, JSONRPCErrorError>) -> Self {
+        match result {
+            Ok(result) => Self::Response {
+                request_id,
+                result,
+            },
+            Err(error) => Self::Error {
+                request_id,
+                error,
+            },
+        }
+    }
+}
+
+pub(crate) fn invalid_request(message: String) -> JSONRPCErrorError {
+    JSONRPCErrorError {
+        code: -32600,
+        data: None,
+        message,
+    }
+}
+
+pub(crate) fn invalid_params(message: String) -> JSONRPCErrorError {
+    JSONRPCErrorError {
+        code: -32602,
+        data: None,
+        message,
+    }
+}
+
+pub(crate) fn method_not_found(message: String) -> JSONRPCErrorError {
+    JSONRPCErrorError {
+        code: -32601,
+        data: None,
+        message,
+    }
+}
+
+pub(crate) fn internal_error(message: String) -> JSONRPCErrorError {
+    JSONRPCErrorError {
+        code: -32603,
+        data: None,
+        message,
+    }
+}
+
+pub(crate) fn encode_server_message(
+    message: RpcServerOutboundMessage,
+) -> Result<JSONRPCMessage, serde_json::Error> {
+    Ok(match message {
+        RpcServerOutboundMessage::Response { request_id, result } => {
+            JSONRPCMessage::Response(JSONRPCResponse { id: request_id, result })
+        }
+        RpcServerOutboundMessage::Error { request_id, error } => {
+            JSONRPCMessage::Error(JSONRPCError { id: request_id, error })
+        }
+        RpcServerOutboundMessage::Notification(notification) => {
+            JSONRPCMessage::Notification(notification)
+        }
+    })
+}
+
+#[derive(Clone)]
+pub(crate) struct RpcNotificationSender {
+    tx: mpsc::Sender<RpcServerOutboundMessage>,
+}
+
+impl RpcNotificationSender {
+    pub(crate) fn new(tx: mpsc::Sender<RpcServerOutboundMessage>) -> Self {
+        Self { tx }
+    }
+
+    pub(crate) async fn notify<P: Serialize>(
+        &self,
+        method: &str,
+        params: &P,
+    ) -> Result<(), serde_json::Error> {
+        let params = serde_json::to_value(params)?;
+        self.tx
+            .send(RpcServerOutboundMessage::Notification(JSONRPCNotification {
+                method: method.to_string(),
+                params: Some(params),
+            }))
+            .await
+            .map_err(|_| {
+                serde_json::Error::io(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "JSON-RPC transport closed",
+                ))
+            })
+    }
+}
+
+type RpcRequestRoute<H> = dyn Fn(
+        Arc<H>,
+        codex_app_server_protocol::JSONRPCRequest,
+    ) -> Pin<Box<dyn std::future::Future<Output = RpcServerOutboundMessage> + Send>>
+    + Send
+    + Sync;
+
+type RpcNotificationRoute<H> = dyn Fn(
+        Arc<H>,
+        codex_app_server_protocol::JSONRPCNotification,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>
+    + Send
+    + Sync;
+
+pub(crate) struct RpcRouter<H> {
+    request_routes: HashMap<String, Box<RpcRequestRoute<H>>>,
+    notification_routes: HashMap<String, Box<RpcNotificationRoute<H>>>,
+}
+
+impl<H: Send + Sync + 'static> RpcRouter<H> {
+    pub(crate) fn new() -> Self {
+        Self {
+            request_routes: HashMap::new(),
+            notification_routes: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn request<P, F, Fut, R>(&mut self, method: &str, handler: F)
+    where
+        P: DeserializeOwned + Send + 'static,
+        R: Serialize + Send + 'static,
+        F: Fn(Arc<H>, P) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<R, JSONRPCErrorError>> + Send + 'static,
+    {
+        let method = method.to_string();
+        let handler = std::sync::Arc::new(handler);
+        self.request_routes.insert(
+            method,
+            Box::new(
+                move |server_handler: Arc<H>, request: codex_app_server_protocol::JSONRPCRequest| {
+                    let handler = std::sync::Arc::clone(&handler);
+                    let params = serde_json::from_value::<P>(request.params.unwrap_or(Value::Null))
+                        .map_err(|error| invalid_params(error.to_string()));
+                    let request_id = request.id;
+                    Box::pin(async move {
+                        let result = match params {
+                            Ok(params) => handler(server_handler.clone(), params)
+                                .await
+                                .and_then(|value| {
+                                serde_json::to_value(value)
+                                    .map_err(|error| invalid_params(error.to_string()))
+                            }),
+                            Err(error) => Err(error),
+                        };
+                        RpcServerOutboundMessage::response(request_id, result)
+                    })
+                },
+            ),
+        );
+    }
+
+    pub(crate) fn notification<P, F, Fut>(&mut self, method: &str, handler: F)
+    where
+        P: DeserializeOwned + Send + 'static,
+        F: Fn(Arc<H>, P) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<(), String>> + Send + 'static,
+    {
+        let method = method.to_string();
+        let handler = std::sync::Arc::new(handler);
+        self.notification_routes.insert(
+            method,
+            Box::new(
+                move |
+                    server_handler: Arc<H>,
+                    notification: codex_app_server_protocol::JSONRPCNotification| {
+                    let handler = std::sync::Arc::clone(&handler);
+                    let params = serde_json::from_value::<P>(notification.params.unwrap_or(Value::Null))
+                        .map_err(|err| err.to_string());
+                    Box::pin(async move {
+                        match params {
+                            Ok(params) => handler(server_handler.clone(), params).await,
+                            Err(error) => Err(error),
+                        }
+                    })
+                },
+            ),
+        );
+    }
+
+    pub(crate) fn request_route(
+        &self,
+        method: &str,
+    ) -> Option<&Box<RpcRequestRoute<H>>> {
+        self.request_routes.get(method)
+    }
+
+    pub(crate) fn notification_route(
+        &self,
+        method: &str,
+    ) -> Option<&Box<RpcNotificationRoute<H>>> {
+        self.notification_routes.get(method)
     }
 }
 

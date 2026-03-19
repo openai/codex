@@ -41,6 +41,7 @@ use tokio::time::timeout;
 async fn exec_server_accepts_initialize_over_stdio() -> anyhow::Result<()> {
     let binary = cargo_bin("codex-exec-server")?;
     let mut child = Command::new(binary);
+    child.args(["--listen", "stdio://"]);
     child.stdin(Stdio::piped());
     child.stdout(Stdio::piped());
     child.stderr(Stdio::inherit());

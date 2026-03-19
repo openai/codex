@@ -10,6 +10,7 @@ use crate::connection::JsonRpcConnectionEvent;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::RpcServerOutboundMessage;
 use crate::rpc::encode_server_message;
+use crate::rpc::invalid_request;
 use crate::rpc::method_not_found;
 use crate::server::ExecServerHandler;
 use crate::server::registry::build_router;
@@ -39,15 +40,26 @@ pub(crate) async fn run_connection(connection: JsonRpcConnection) {
 
     while let Some(event) = incoming_rx.recv().await {
         match event {
+            JsonRpcConnectionEvent::MalformedMessage { reason } => {
+                warn!("ignoring malformed exec-server message: {reason}");
+                if outgoing_tx
+                    .send(RpcServerOutboundMessage::Error {
+                        request_id: codex_app_server_protocol::RequestId::Integer(-1),
+                        error: invalid_request(reason),
+                    })
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
             JsonRpcConnectionEvent::Message(message) => match message {
                 codex_app_server_protocol::JSONRPCMessage::Request(request) => {
                     if let Some(route) = router.request_route(request.method.as_str()) {
-                        let route = route(handler.clone(), request);
-                        let outgoing_tx = outgoing_tx.clone();
-                        tokio::spawn(async move {
-                            let message = route.await;
-                            let _ = outgoing_tx.send(message).await;
-                        });
+                        let message = route(handler.clone(), request).await;
+                        if outgoing_tx.send(message).await.is_err() {
+                            break;
+                        }
                     } else if outgoing_tx
                         .send(RpcServerOutboundMessage::Error {
                             request_id: request.id,

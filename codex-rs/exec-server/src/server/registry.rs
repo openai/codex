@@ -38,7 +38,9 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
     );
     router.notification(
         INITIALIZED_METHOD,
-        |handler: Arc<ExecServerHandler>, (): ()| async move { handler.initialized() },
+        |handler: Arc<ExecServerHandler>, _params: serde_json::Value| async move {
+            handler.initialized()
+        },
     );
     router.request(
         EXEC_METHOD,

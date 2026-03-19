@@ -11,11 +11,13 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 
+
 pub(crate) const CHANNEL_CAPACITY: usize = 128;
 
 #[derive(Debug)]
 pub(crate) enum JsonRpcConnectionEvent {
     Message(JSONRPCMessage),
+    MalformedMessage { reason: String },
     Disconnected { reason: Option<String> },
 }
 
@@ -55,14 +57,13 @@ impl JsonRpcConnection {
                                 }
                             }
                             Err(err) => {
-                                send_disconnected(
+                                send_malformed_message(
                                     &incoming_tx_for_reader,
                                     Some(format!(
                                         "failed to parse JSON-RPC message from {reader_label}: {err}"
                                     )),
                                 )
                                 .await;
-                                break;
                             }
                         }
                     }
@@ -132,14 +133,13 @@ impl JsonRpcConnection {
                                 }
                             }
                             Err(err) => {
-                                send_disconnected(
+                                send_malformed_message(
                                     &incoming_tx_for_reader,
                                     Some(format!(
                                         "failed to parse websocket JSON-RPC message from {reader_label}: {err}"
                                     )),
                                 )
                                 .await;
-                                break;
                             }
                         }
                     }
@@ -155,14 +155,13 @@ impl JsonRpcConnection {
                                 }
                             }
                             Err(err) => {
-                                send_disconnected(
+                                send_malformed_message(
                                     &incoming_tx_for_reader,
                                     Some(format!(
                                         "failed to parse websocket JSON-RPC message from {reader_label}: {err}"
                                     )),
                                 )
                                 .await;
-                                break;
                             }
                         }
                     }
@@ -244,6 +243,17 @@ async fn send_disconnected(
 ) {
     let _ = incoming_tx
         .send(JsonRpcConnectionEvent::Disconnected { reason })
+        .await;
+}
+
+async fn send_malformed_message(
+    incoming_tx: &mpsc::Sender<JsonRpcConnectionEvent>,
+    reason: Option<String>,
+) {
+    let _ = incoming_tx
+        .send(JsonRpcConnectionEvent::MalformedMessage {
+            reason: reason.unwrap_or_else(|| "malformed JSON-RPC message".to_string()),
+        })
         .await;
 }
 
