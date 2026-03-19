@@ -4770,7 +4770,7 @@ mod handlers {
     pub async fn list_skills(
         sess: &Session,
         sub_id: String,
-        mut cwds: Vec<PathBuf>,
+        cwds: Vec<PathBuf>,
         force_reload: bool,
     ) {
         let cwds = if cwds.is_empty() {

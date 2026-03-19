@@ -192,16 +192,24 @@ impl SkillsManager {
                     scope: SkillScope::User,
                 }),
         );
-        let outcome = crate::skills::filter_skill_load_outcome_for_product(
-            finalize_skill_outcome(load_skills_from_roots(roots), &config_layer_stack),
-            self.restriction_product,
-        );
+        let outcome = self.build_skill_outcome(roots, &config_layer_stack);
         let mut cache = self
             .cache_by_cwd
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.insert(cwd.to_path_buf(), outcome.clone());
         outcome
+    }
+
+    fn build_skill_outcome(
+        &self,
+        roots: Vec<SkillRoot>,
+        config_layer_stack: &crate::config_loader::ConfigLayerStack,
+    ) -> SkillLoadOutcome {
+        crate::skills::filter_skill_load_outcome_for_product(
+            finalize_skill_outcome(load_skills_from_roots(roots), config_layer_stack),
+            self.restriction_product,
+        )
     }
 
     pub fn clear_cache(&self) {

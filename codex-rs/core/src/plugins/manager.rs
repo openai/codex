@@ -478,7 +478,8 @@ impl PluginsManager {
         // Product restrictions are enforced at marketplace admission time for a given CODEX_HOME:
         // listing, install, and curated refresh all consult this restriction context before new
         // plugins enter local config or cache. After admission, runtime plugin loading trusts the
-        // contents of that CODEX_HOME and does not re-filter configured plugins by product.
+        // contents of that CODEX_HOME and does not re-filter configured plugins by product, so
+        // already-admitted plugins may continue exposing MCP servers/tools from shared local state.
         //
         // This assumes a single CODEX_HOME is only used by one product.
         Self {
@@ -806,6 +807,7 @@ impl PluginsManager {
             AbsolutePathBuf,
             Option<bool>,
             Option<String>,
+            bool,
         )>::new();
         let mut local_plugin_names = HashSet::new();
         for plugin in curated_marketplace.plugins {
@@ -828,12 +830,14 @@ impl PluginsManager {
                 .get(&plugin_key)
                 .map(|plugin| plugin.enabled);
             let installed_version = self.store.active_plugin_version(&plugin_id);
+            let product_allowed = self.restriction_product_matches(&plugin.policy.products);
             local_plugins.push((
                 plugin_name,
                 plugin_id,
                 source_path,
                 current_enabled,
                 installed_version,
+                product_allowed,
             ));
         }
 
@@ -872,11 +876,20 @@ impl PluginsManager {
         let remote_plugin_count = remote_installed_plugin_names.len();
         let local_plugin_count = local_plugins.len();
 
-        for (plugin_name, plugin_id, source_path, current_enabled, installed_version) in
-            local_plugins
+        for (
+            plugin_name,
+            plugin_id,
+            source_path,
+            current_enabled,
+            installed_version,
+            product_allowed,
+        ) in local_plugins
         {
             let plugin_key = plugin_id.as_key();
             let is_installed = installed_version.is_some();
+            if !product_allowed {
+                continue;
+            }
             if remote_installed_plugin_names.contains(&plugin_name) {
                 if !is_installed {
                     installs.push((
@@ -1028,6 +1041,12 @@ impl PluginsManager {
                 marketplace_name,
             });
         };
+        if !self.restriction_product_matches(&plugin.policy.products) {
+            return Err(MarketplaceError::PluginNotFound {
+                plugin_name: request.plugin_name.clone(),
+                marketplace_name,
+            });
+        }
 
         let plugin_id = PluginId::new(plugin.name.clone(), marketplace.name.clone()).map_err(
             |err| match err {

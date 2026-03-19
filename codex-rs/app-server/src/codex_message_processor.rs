@@ -5573,6 +5573,17 @@ impl CodexMessageProcessor {
         };
         let app_summaries =
             plugin_app_helpers::load_plugin_app_summaries(&config, &outcome.plugin.apps).await;
+        let visible_skills = outcome
+            .plugin
+            .skills
+            .iter()
+            .filter(|skill| {
+                skill.matches_product_restriction_for_product(
+                    self.thread_manager.session_source().restriction_product(),
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         let plugin = PluginDetail {
             marketplace_name: outcome.marketplace_name,
             marketplace_path: outcome.marketplace_path,
@@ -5587,7 +5598,7 @@ impl CodexMessageProcessor {
                 interface: outcome.plugin.interface.map(plugin_interface_to_info),
             },
             description: outcome.plugin.description,
-            skills: plugin_skills_to_info(&outcome.plugin.skills),
+            skills: plugin_skills_to_info(&visible_skills),
             apps: app_summaries,
             mcp_servers: outcome.plugin.mcp_server_names,
         };
