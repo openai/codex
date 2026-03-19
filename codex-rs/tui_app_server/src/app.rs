@@ -1712,25 +1712,21 @@ impl App {
             };
 
             let mut retained_events = Vec::new();
-            loop {
-                match rx.try_recv() {
-                    Ok(event) => {
-                        let ThreadBufferedEvent::Request(
-                            ServerRequest::CommandExecutionRequestApproval { params, .. },
-                        ) = &event
-                        else {
-                            retained_events.push(event);
-                            continue;
-                        };
-                        let approval_id = params
-                            .approval_id
-                            .clone()
-                            .unwrap_or_else(|| params.item_id.clone());
-                        if !approval_ids.contains(&approval_id) {
-                            retained_events.push(event);
-                        }
-                    }
-                    Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+            while let Ok(event) = rx.try_recv() {
+                let ThreadBufferedEvent::Request(ServerRequest::CommandExecutionRequestApproval {
+                    params,
+                    ..
+                }) = &event
+                else {
+                    retained_events.push(event);
+                    continue;
+                };
+                let approval_id = params
+                    .approval_id
+                    .clone()
+                    .unwrap_or_else(|| params.item_id.clone());
+                if !approval_ids.contains(&approval_id) {
+                    retained_events.push(event);
                 }
             }
 
