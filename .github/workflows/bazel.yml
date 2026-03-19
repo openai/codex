@@ -156,12 +156,18 @@ jobs:
 
           bazel_args=(
             test
-            //...
             --test_verbose_timeout_warnings
             --build_metadata=REPO_URL=https://github.com/openai/codex.git
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
             --build_metadata=ROLE=CI
             --build_metadata=VISIBILITY=PUBLIC
+            --
+            //...
+            # Keep `rusty_v8` out of the ordinary Bazel CI path. The musl
+            # release workflow is the only place that should build/stage it.
+            -//codex-rs/v8-poc:v8-poc-rusty-v8
+            -//codex-rs/v8-poc:v8-poc-rusty-v8-unit-tests
+            -//codex-rs/v8-poc:v8-poc-rusty-v8-unit-tests-bin
           )
 
           if [[ "${RUNNER_OS:-}" != "Windows" ]]; then

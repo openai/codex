@@ -90,6 +90,7 @@ def codex_rust_crate(
         name,
         crate_name,
         crate_features = [],
+        tags = [],
         crate_srcs = None,
         crate_edition = None,
         proc_macro = False,
@@ -120,6 +121,7 @@ def codex_rust_crate(
             Crates are only compiled in a single configuration across the workspace, i.e.
             with all features in this list enabled. So use sparingly, and prefer to refactor
             optional functionality to a separate crate.
+        tags: Tags applied to the library and binary targets for this crate.
         crate_srcs: Optional explicit srcs; defaults to `src/**/*.rs`.
         crate_edition: Rust edition override, if not default.
             You probably don't want this, it's only here for a single caller.
@@ -180,6 +182,7 @@ def codex_rust_crate(
             edition = crate_edition,
             rustc_flags = rustc_flags_extra,
             rustc_env = rustc_env,
+            tags = tags,
             visibility = ["//visibility:public"],
         )
 
@@ -226,6 +229,7 @@ def codex_rust_crate(
             edition = crate_edition,
             rustc_flags = rustc_flags_extra,
             srcs = native.glob(["src/**/*.rs"]),
+            tags = tags,
             visibility = ["//visibility:public"],
         )
 
