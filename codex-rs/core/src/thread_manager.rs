@@ -856,12 +856,7 @@ fn snapshot_fork_history(
     snapshot_mode: ForkSnapshotMode,
 ) -> InitialHistory {
     match (history, snapshot_mode) {
-        (InitialHistory::New, ForkSnapshotMode::Committed) => InitialHistory::New,
-        (InitialHistory::New, ForkSnapshotMode::Interrupted) => {
-            InitialHistory::Forked(vec![RolloutItem::ResponseItem(
-                interrupted_turn_history_marker(),
-            )])
-        }
+        (InitialHistory::New, _) => InitialHistory::New,
         (InitialHistory::Forked(history), ForkSnapshotMode::Committed) => {
             InitialHistory::Forked(history)
         }

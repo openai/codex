@@ -210,9 +210,7 @@ fn interrupted_fork_snapshot_appends_interrupt_marker() {
                 .get_rollout_items()
         )
         .expect("serialize interrupted empty fork history"),
-        serde_json::to_value(vec![RolloutItem::ResponseItem(
-            interrupted_turn_history_marker(),
-        )])
-        .expect("serialize expected interrupted empty fork history"),
+        serde_json::to_value(Vec::<RolloutItem>::new())
+            .expect("serialize expected interrupted empty fork history"),
     );
 }
