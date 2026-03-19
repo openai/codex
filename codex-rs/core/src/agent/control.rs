@@ -444,11 +444,17 @@ impl AgentControl {
     /// persisted spawn-edge state.
     pub(crate) async fn shutdown_live_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
-        if let Ok(thread) = state.get_thread(agent_id).await {
+        let result = if let Ok(thread) = state.get_thread(agent_id).await {
             thread.codex.session.ensure_rollout_materialized().await;
             thread.codex.session.flush_rollout().await;
-        }
-        let result = state.send_op(agent_id, Op::Shutdown {}).await;
+            if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
+                Ok(String::new())
+            } else {
+                state.send_op(agent_id, Op::Shutdown {}).await
+            }
+        } else {
+            state.send_op(agent_id, Op::Shutdown {}).await
+        };
         let _ = state.remove_thread(&agent_id).await;
         self.state.release_spawned_thread(agent_id);
         result
