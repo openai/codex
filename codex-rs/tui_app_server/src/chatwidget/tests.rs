@@ -7097,7 +7097,7 @@ async fn image_generation_call_adds_history_cell() {
             status: "completed".into(),
             revised_prompt: Some("A tiny blue square".into()),
             result: "Zm9v".into(),
-            saved_path: Some("/tmp/ig-1.png".into()),
+            saved_path: Some("file:///tmp/ig-1.png".into()),
         }),
     });
 
