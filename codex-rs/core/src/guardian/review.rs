@@ -26,7 +26,7 @@ use super::prompt::guardian_output_schema;
 use super::prompt::parse_guardian_assessment;
 use super::review_session::GuardianReviewSessionOutcome;
 use super::review_session::GuardianReviewSessionParams;
-use super::review_session::build_guardian_review_session_config;
+use super::review_session::resolve_guardian_review_config;
 
 pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = concat!(
     "This action was rejected due to unacceptable risk. ",
@@ -249,14 +249,16 @@ pub(crate) async fn review_approval_request_with_cancel(
 /// it is pinned to a read-only sandbox with `approval_policy = never` and
 /// nonessential agent features disabled. When the cached trunk session is idle,
 /// later approvals append onto that same guardian conversation to preserve a
-/// stable prompt-cache key. If the trunk is already busy, the review runs in an
-/// ephemeral fork from the last committed trunk rollout so parallel approvals
-/// do not block each other or mutate the cached thread. The trunk is recreated
-/// when the effective review-session config changes, and any future compaction
-/// must continue to preserve the guardian policy as exact top-level developer
-/// context. It may still reuse the parent's managed-network allowlist for
-/// read-only checks, but it intentionally runs without inherited exec-policy
-/// rules.
+/// stable prompt-cache key. If the trunk is already busy, guardian can spawn a
+/// capped number of on-demand forked review sessions from the last committed
+/// trunk rollout so independent approvals do not block each other or mutate
+/// the cached thread. Once that fork cap is exhausted, later reviews
+/// backpressure onto the trunk instead of spawning unbounded extra sessions.
+/// The trunk is recreated when the effective review-session config changes, and
+/// any future compaction must continue to preserve the guardian policy as exact
+/// top-level developer context. It may still reuse the parent's managed-network
+/// allowlist for read-only checks, but it intentionally runs without inherited
+/// exec-policy rules.
 pub(super) async fn run_guardian_review_session(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
@@ -264,59 +266,8 @@ pub(super) async fn run_guardian_review_session(
     schema: serde_json::Value,
     external_cancel: Option<CancellationToken>,
 ) -> GuardianReviewOutcome {
-    let live_network_config = match session.services.network_proxy.as_ref() {
-        Some(network_proxy) => match network_proxy.proxy().current_cfg().await {
-            Ok(config) => Some(config),
-            Err(err) => return GuardianReviewOutcome::Completed(Err(err)),
-        },
-        None => None,
-    };
-    let available_models = session
-        .services
-        .models_manager
-        .list_models(crate::models_manager::manager::RefreshStrategy::Offline)
-        .await;
-    let preferred_reasoning_effort = |supports_low: bool, fallback| {
-        if supports_low {
-            Some(codex_protocol::openai_models::ReasoningEffort::Low)
-        } else {
-            fallback
-        }
-    };
-    let preferred_model = available_models
-        .iter()
-        .find(|preset| preset.model == super::GUARDIAN_PREFERRED_MODEL);
-    let (guardian_model, guardian_reasoning_effort) = if let Some(preset) = preferred_model {
-        let reasoning_effort = preferred_reasoning_effort(
-            preset
-                .supported_reasoning_efforts
-                .iter()
-                .any(|effort| effort.effort == codex_protocol::openai_models::ReasoningEffort::Low),
-            Some(preset.default_reasoning_effort),
-        );
-        (
-            super::GUARDIAN_PREFERRED_MODEL.to_string(),
-            reasoning_effort,
-        )
-    } else {
-        let reasoning_effort = preferred_reasoning_effort(
-            turn.model_info
-                .supported_reasoning_levels
-                .iter()
-                .any(|preset| preset.effort == codex_protocol::openai_models::ReasoningEffort::Low),
-            turn.reasoning_effort
-                .or(turn.model_info.default_reasoning_level),
-        );
-        (turn.model_info.slug.clone(), reasoning_effort)
-    };
-    let guardian_config = build_guardian_review_session_config(
-        turn.config.as_ref(),
-        live_network_config.clone(),
-        guardian_model.as_str(),
-        guardian_reasoning_effort,
-    );
-    let guardian_config = match guardian_config {
-        Ok(config) => config,
+    let resolved = match resolve_guardian_review_config(session.as_ref(), turn.as_ref()).await {
+        Ok(resolved) => resolved,
         Err(err) => return GuardianReviewOutcome::Completed(Err(err)),
     };
 
@@ -325,13 +276,11 @@ pub(super) async fn run_guardian_review_session(
         .run_review(GuardianReviewSessionParams {
             parent_session: Arc::clone(&session),
             parent_turn: turn.clone(),
-            spawn_config: guardian_config,
+            spawn_config: resolved.spawn_config,
             prompt_items,
             schema,
-            model: guardian_model,
-            reasoning_effort: guardian_reasoning_effort,
-            reasoning_summary: turn.reasoning_summary,
-            personality: turn.personality,
+            model: resolved.model,
+            reasoning_effort: resolved.reasoning_effort,
             external_cancel,
         })
         .await

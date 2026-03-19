@@ -3153,7 +3153,7 @@ async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
     };
     parent_session
         .guardian_review_session
-        .register_ephemeral_for_test(child_codex)
+        .register_fork_for_test(child_codex)
         .await;
 
     parent_codex
@@ -3163,7 +3163,7 @@ async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
 
     child_shutdown_rx
         .await
-        .expect("ephemeral guardian review should receive a shutdown op");
+        .expect("forked guardian review should receive a shutdown op");
 }
 
 pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(

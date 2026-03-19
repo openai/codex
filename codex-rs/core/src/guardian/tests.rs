@@ -718,6 +718,268 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn guardian_active_fork_cap_waits_for_any_fork_slot() -> anyhow::Result<()> {
+    let fork_cap = super::review_session::GUARDIAN_ACTIVE_FORK_CAP;
+    let first_assessment = serde_json::json!({
+        "risk_level": "low",
+        "risk_score": 4,
+        "rationale": "first guardian rationale",
+        "evidence": [],
+    })
+    .to_string();
+    let second_assessment = serde_json::json!({
+        "risk_level": "low",
+        "risk_score": 7,
+        "rationale": "second guardian rationale",
+        "evidence": [],
+    })
+    .to_string();
+    let overflow_assessment = serde_json::json!({
+        "risk_level": "low",
+        "risk_score": 13,
+        "rationale": "overflow guardian rationale",
+        "evidence": [],
+    })
+    .to_string();
+    let (trunk_gate_tx, trunk_gate_rx) = tokio::sync::oneshot::channel();
+    let mut fork_gate_txs = Vec::with_capacity(fork_cap);
+    let mut responses = vec![
+        vec![StreamingSseChunk {
+            gate: None,
+            body: sse(vec![
+                ev_response_created("resp-guardian-1"),
+                ev_assistant_message("msg-guardian-1", &first_assessment),
+                ev_completed("resp-guardian-1"),
+            ]),
+        }],
+        vec![
+            StreamingSseChunk {
+                gate: None,
+                body: sse(vec![ev_response_created("resp-guardian-2")]),
+            },
+            StreamingSseChunk {
+                gate: Some(trunk_gate_rx),
+                body: sse(vec![
+                    ev_assistant_message("msg-guardian-2", &second_assessment),
+                    ev_completed("resp-guardian-2"),
+                ]),
+            },
+        ],
+    ];
+    for fork_index in 0..fork_cap {
+        let response_id = format!("resp-guardian-fork-{}", fork_index + 1);
+        let message_id = format!("msg-guardian-fork-{}", fork_index + 1);
+        let fork_assessment = serde_json::json!({
+            "risk_level": "low",
+            "risk_score": 9 + (fork_index as i64 * 2),
+            "rationale": format!("forked guardian rationale {}", fork_index + 1),
+            "evidence": [],
+        })
+        .to_string();
+        let (fork_gate_tx, fork_gate_rx) = tokio::sync::oneshot::channel();
+        fork_gate_txs.push(fork_gate_tx);
+        responses.push(vec![
+            StreamingSseChunk {
+                gate: None,
+                body: sse(vec![ev_response_created(response_id.as_str())]),
+            },
+            StreamingSseChunk {
+                gate: Some(fork_gate_rx),
+                body: sse(vec![
+                    ev_assistant_message(message_id.as_str(), &fork_assessment),
+                    ev_completed(response_id.as_str()),
+                ]),
+            },
+        ]);
+    }
+    responses.push(vec![StreamingSseChunk {
+        gate: None,
+        body: sse(vec![
+            ev_response_created("resp-guardian-overflow"),
+            ev_assistant_message("msg-guardian-overflow", &overflow_assessment),
+            ev_completed("resp-guardian-overflow"),
+        ]),
+    }]);
+    let (server, _) = start_streaming_sse_server(responses).await;
+
+    let (session, turn) = guardian_test_session_and_turn_with_base_url(server.uri()).await;
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let initial_request = GuardianApprovalRequest::Shell {
+        id: "shell-guardian-1".to_string(),
+        command: vec!["git".to_string(), "status".to_string()],
+        cwd: PathBuf::from("/repo/codex-rs/core"),
+        sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+        additional_permissions: None,
+        justification: Some("Inspect repo state before proceeding.".to_string()),
+    };
+    assert_eq!(
+        review_approval_request(&session, &turn, initial_request, None).await,
+        ReviewDecision::Approved
+    );
+
+    let second_request = GuardianApprovalRequest::Shell {
+        id: "shell-guardian-2".to_string(),
+        command: vec!["git".to_string(), "diff".to_string()],
+        cwd: PathBuf::from("/repo/codex-rs/core"),
+        sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+        additional_permissions: None,
+        justification: Some("Inspect pending changes before proceeding.".to_string()),
+    };
+    let overflow_request = GuardianApprovalRequest::Shell {
+        id: "shell-guardian-overflow".to_string(),
+        command: vec!["git".to_string(), "pull".to_string()],
+        cwd: PathBuf::from("/repo/codex-rs/core"),
+        sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+        additional_permissions: None,
+        justification: Some(
+            "This review should wait for any fork slot once the fork cap is full.".to_string(),
+        ),
+    };
+
+    let session_for_second = Arc::clone(&session);
+    let turn_for_second = Arc::clone(&turn);
+    let second_review = tokio::spawn(async move {
+        review_approval_request(
+            &session_for_second,
+            &turn_for_second,
+            second_request,
+            Some("trunk follow-up".to_string()),
+        )
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            if server.requests().await.len() >= 2 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("second guardian request was not observed");
+
+    let mut fork_reviews = Vec::with_capacity(fork_cap);
+    for fork_index in 0..fork_cap {
+        let session_for_fork = Arc::clone(&session);
+        let turn_for_fork = Arc::clone(&turn);
+        let fork_request = GuardianApprovalRequest::Shell {
+            id: format!("shell-guardian-fork-{}", fork_index + 1),
+            command: vec![
+                "git".to_string(),
+                "fetch".to_string(),
+                format!("origin/branch-{}", fork_index + 1),
+            ],
+            cwd: PathBuf::from("/repo/codex-rs/core"),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some(format!(
+                "Check fetch safety for fork lane {}.",
+                fork_index + 1
+            )),
+        };
+        fork_reviews.push(tokio::spawn(async move {
+            review_approval_request(
+                &session_for_fork,
+                &turn_for_fork,
+                fork_request,
+                Some(format!("fork lane {}", fork_index + 1)),
+            )
+            .await
+        }));
+
+        let expected_request_count = fork_index + 3;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if server.requests().await.len() >= expected_request_count {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "forked guardian request {} was not observed",
+                fork_index + 1
+            )
+        });
+    }
+
+    let session_for_overflow = Arc::clone(&session);
+    let turn_for_overflow = Arc::clone(&turn);
+    let mut overflow_review = tokio::spawn(async move {
+        review_approval_request(
+            &session_for_overflow,
+            &turn_for_overflow,
+            overflow_request,
+            Some("fork cap overflow".to_string()),
+        )
+        .await
+    });
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), async {
+            loop {
+                if server.requests().await.len() >= fork_cap + 3 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .is_err(),
+        "overflow guardian request should wait until a fork slot becomes available"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut overflow_review)
+            .await
+            .is_err(),
+        "overflow guardian review should still be waiting while the trunk is blocked"
+    );
+
+    let mut fork_gate_txs = fork_gate_txs.into_iter();
+    fork_gate_txs
+        .next()
+        .expect("at least one fork gate")
+        .send(())
+        .expect("fork gate should still be open");
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if server.requests().await.len() >= fork_cap + 3 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("overflow guardian request was not observed after a fork slot freed");
+
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(30), &mut overflow_review).await??,
+        ReviewDecision::Approved
+    );
+
+    trunk_gate_tx
+        .send(())
+        .expect("trunk guardian review gate should still be open");
+
+    for (fork_index, fork_gate_tx) in fork_gate_txs.enumerate() {
+        fork_gate_tx
+            .send(())
+            .unwrap_or_else(|_| panic!("fork gate {} should still be open", fork_index + 1));
+    }
+
+    assert_eq!(second_review.await?, ReviewDecision::Approved);
+    for fork_review in fork_reviews {
+        assert_eq!(fork_review.await?, ReviewDecision::Approved);
+    }
+    server.shutdown().await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> anyhow::Result<()> {
     let first_assessment = serde_json::json!({
         "risk_level": "low",
