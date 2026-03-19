@@ -1,7 +1,7 @@
 # `rusty_v8` Release Artifacts
 
 This directory contains the Bazel packaging used to build and stage
-target-specific `rusty_v8` release artifacts for `codex-rs/v8-poc`.
+target-specific `rusty_v8` release artifacts for Bazel-managed consumers.
 
 Current pinned versions:
 
@@ -31,7 +31,8 @@ Consumers in this repo should be wired with explicit paths:
 - `RUSTY_V8_SRC_BINDING_PATH`
 
 Do not mix artifacts across crate versions. The archive and binding must match
-the exact resolved `v8` crate version from `codex-rs/Cargo.lock`.
+the exact pinned `v8` crate version used by this repo. On consumer branches,
+that should also align with `codex-rs/Cargo.lock`.
 
 The target-select aliases used by the `v8` build script are:
 

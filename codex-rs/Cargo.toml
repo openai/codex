@@ -44,7 +44,6 @@ members = [
     "otel",
     "tui",
     "tui_app_server",
-    "v8-poc",
     "utils/absolute-path",
     "utils/cargo-bin",
     "utils/git",
@@ -136,7 +135,6 @@ codex-test-macros = { path = "test-macros" }
 codex-terminal-detection = { path = "terminal-detection" }
 codex-tui = { path = "tui" }
 codex-tui-app-server = { path = "tui_app_server" }
-codex-v8-poc = { path = "v8-poc" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-approval-presets = { path = "utils/approval-presets" }
 codex-utils-cache = { path = "utils/cache" }
@@ -368,7 +366,6 @@ unwrap_used = "deny"
 # silence the false positive here instead of deleting a real dependency.
 [workspace.metadata.cargo-shear]
 ignored = [
-    "codex-v8-poc",
     "icu_provider",
     "openssl-sys",
     "codex-utils-readiness",

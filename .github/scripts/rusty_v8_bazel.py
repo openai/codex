@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import re
 import shutil
 import subprocess
 import sys
@@ -107,9 +108,26 @@ def resolved_v8_crate_version() -> str:
             if package["name"] == "v8"
         }
     )
-    if len(versions) != 1:
+    if len(versions) == 1:
+        return versions[0]
+    if len(versions) > 1:
         raise SystemExit(f"expected exactly one resolved v8 version, found: {versions}")
-    return versions[0]
+
+    module_bazel = (ROOT / "MODULE.bazel").read_text()
+    matches = sorted(
+        set(
+            re.findall(
+                r'https://static\.crates\.io/crates/v8/v8-([0-9]+\.[0-9]+\.[0-9]+)\.crate',
+                module_bazel,
+            )
+        )
+    )
+    if len(matches) != 1:
+        raise SystemExit(
+            "expected exactly one pinned v8 crate version in MODULE.bazel, "
+            f"found: {matches}"
+        )
+    return matches[0]
 
 
 def staged_archive_name(target: str, source_path: Path) -> str:
