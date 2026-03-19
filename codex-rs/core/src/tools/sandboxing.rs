@@ -355,6 +355,8 @@ impl<'a> SandboxAttempt<'a> {
                 #[cfg(target_os = "macos")]
                 macos_seatbelt_profile_extensions: None,
                 codex_linux_sandbox_exe: self.codex_linux_sandbox_exe,
+                linux_sandbox_detached_children:
+                    crate::exec::LinuxSandboxDetachedChildren::Disallow,
                 use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
                 windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,

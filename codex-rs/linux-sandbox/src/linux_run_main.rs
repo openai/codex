@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use crate::bwrap::BwrapNetworkMode;
 use crate::bwrap::BwrapOptions;
+use crate::bwrap::BwrapProcessLifetime;
 use crate::bwrap::create_bwrap_command_args;
 use crate::landlock::apply_sandbox_policy_to_current_thread;
 use crate::launcher::exec_bwrap;
@@ -78,6 +79,13 @@ pub struct LandlockCommand {
     #[arg(long = "proxy-route-spec", hide = true)]
     pub proxy_route_spec: Option<String>,
 
+    /// Internal compatibility flag.
+    ///
+    /// If set, omit bubblewrap's parent-death coupling so intentionally
+    /// detached descendants can outlive the original helper process.
+    #[arg(long = "allow-detached-children", hide = true, default_value_t = false)]
+    pub allow_detached_children: bool,
+
     /// When set, skip mounting a fresh `/proc` even though PID isolation is
     /// still enabled. This is primarily intended for restrictive container
     /// environments that deny `--proc /proc`.
@@ -107,6 +115,7 @@ pub fn run_main() -> ! {
         apply_seccomp_then_exec,
         allow_network_for_proxy,
         proxy_route_spec,
+        allow_detached_children,
         no_proc,
         command,
     } = LandlockCommand::parse();
@@ -194,14 +203,21 @@ pub fn run_main() -> ! {
             proxy_route_spec,
             command,
         });
+        let options = BwrapOptions {
+            mount_proc: !no_proc,
+            network_mode: bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy),
+            process_lifetime: if allow_detached_children {
+                BwrapProcessLifetime::AllowDetachedChildren
+            } else {
+                BwrapProcessLifetime::TerminateWithParent
+            },
+        };
         run_bwrap_with_proc_fallback(
             &sandbox_policy_cwd,
             command_cwd.as_deref(),
             &file_system_sandbox_policy,
-            network_sandbox_policy,
             inner,
-            !no_proc,
-            allow_network_for_proxy,
+            options,
         );
     }
 
@@ -400,32 +416,24 @@ fn run_bwrap_with_proc_fallback(
     sandbox_policy_cwd: &Path,
     command_cwd: Option<&Path>,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
     inner: Vec<String>,
-    mount_proc: bool,
-    allow_network_for_proxy: bool,
+    options: BwrapOptions,
 ) -> ! {
-    let network_mode = bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy);
-    let mut mount_proc = mount_proc;
+    let mut options = options;
     let command_cwd = command_cwd.unwrap_or(sandbox_policy_cwd);
 
-    if mount_proc
+    if options.mount_proc
         && !preflight_proc_mount_support(
             sandbox_policy_cwd,
             command_cwd,
             file_system_sandbox_policy,
-            network_mode,
+            options.network_mode,
         )
     {
         // Keep the retry silent so sandbox-internal diagnostics do not leak into the
         // child process stderr stream.
-        mount_proc = false;
+        options.mount_proc = false;
     }
-
-    let options = BwrapOptions {
-        mount_proc,
-        network_mode,
-    };
     let bwrap_args = build_bwrap_argv(
         inner,
         file_system_sandbox_policy,
@@ -514,6 +522,7 @@ fn build_preflight_bwrap_argv(
         BwrapOptions {
             mount_proc: true,
             network_mode,
+            process_lifetime: BwrapProcessLifetime::TerminateWithParent,
         },
     )
 }

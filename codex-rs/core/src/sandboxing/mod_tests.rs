@@ -174,6 +174,7 @@ fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() 
             #[cfg(target_os = "macos")]
             macos_seatbelt_profile_extensions: None,
             codex_linux_sandbox_exe: None,
+            linux_sandbox_detached_children: crate::exec::LinuxSandboxDetachedChildren::Disallow,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
@@ -543,6 +544,7 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
             #[cfg(target_os = "macos")]
             macos_seatbelt_profile_extensions: None,
             codex_linux_sandbox_exe: None,
+            linux_sandbox_detached_children: crate::exec::LinuxSandboxDetachedChildren::Disallow,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
@@ -616,6 +618,7 @@ fn transform_additional_permissions_preserves_denied_entries() {
             #[cfg(target_os = "macos")]
             macos_seatbelt_profile_extensions: None,
             codex_linux_sandbox_exe: None,
+            linux_sandbox_detached_children: crate::exec::LinuxSandboxDetachedChildren::Disallow,
             use_legacy_landlock: false,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,

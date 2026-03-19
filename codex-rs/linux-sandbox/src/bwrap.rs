@@ -46,6 +46,9 @@ pub(crate) struct BwrapOptions {
     pub mount_proc: bool,
     /// How networking should be configured inside the bubblewrap sandbox.
     pub network_mode: BwrapNetworkMode,
+    /// Whether the sandbox should terminate with the helper process or allow
+    /// intentionally detached descendants to outlive it.
+    pub process_lifetime: BwrapProcessLifetime,
 }
 
 impl Default for BwrapOptions {
@@ -53,8 +56,16 @@ impl Default for BwrapOptions {
         Self {
             mount_proc: true,
             network_mode: BwrapNetworkMode::FullAccess,
+            process_lifetime: BwrapProcessLifetime::TerminateWithParent,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum BwrapProcessLifetime {
+    #[default]
+    TerminateWithParent,
+    AllowDetachedChildren,
 }
 
 /// Network policy modes for bubblewrap.
@@ -121,7 +132,6 @@ pub(crate) fn create_bwrap_command_args(
 fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOptions) -> BwrapArgs {
     let mut args = vec![
         "--new-session".to_string(),
-        "--die-with-parent".to_string(),
         "--bind".to_string(),
         "/".to_string(),
         "/".to_string(),
@@ -130,6 +140,9 @@ fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOption
         "--unshare-user".to_string(),
         "--unshare-pid".to_string(),
     ];
+    if options.process_lifetime == BwrapProcessLifetime::TerminateWithParent {
+        args.push("--die-with-parent".to_string());
+    }
     if options.network_mode.should_unshare_network() {
         args.push("--unshare-net".to_string());
     }
@@ -160,12 +173,14 @@ fn create_bwrap_flags(
     let normalized_command_cwd = normalize_command_cwd_for_bwrap(command_cwd);
     let mut args = Vec::new();
     args.push("--new-session".to_string());
-    args.push("--die-with-parent".to_string());
     args.extend(filesystem_args);
     // Request a user namespace explicitly rather than relying on bubblewrap's
     // auto-enable behavior, which is skipped when the caller runs as uid 0.
     args.push("--unshare-user".to_string());
     args.push("--unshare-pid".to_string());
+    if options.process_lifetime == BwrapProcessLifetime::TerminateWithParent {
+        args.push("--die-with-parent".to_string());
+    }
     if options.network_mode.should_unshare_network() {
         args.push("--unshare-net".to_string());
     }
@@ -620,6 +635,7 @@ mod tests {
             BwrapOptions {
                 mount_proc: true,
                 network_mode: BwrapNetworkMode::FullAccess,
+                process_lifetime: BwrapProcessLifetime::TerminateWithParent,
             },
         )
         .expect("create bwrap args");
@@ -638,6 +654,7 @@ mod tests {
             BwrapOptions {
                 mount_proc: true,
                 network_mode: BwrapNetworkMode::ProxyOnly,
+                process_lifetime: BwrapProcessLifetime::TerminateWithParent,
             },
         )
         .expect("create bwrap args");
@@ -646,12 +663,12 @@ mod tests {
             args.args,
             vec![
                 "--new-session".to_string(),
-                "--die-with-parent".to_string(),
                 "--bind".to_string(),
                 "/".to_string(),
                 "/".to_string(),
                 "--unshare-user".to_string(),
                 "--unshare-pid".to_string(),
+                "--die-with-parent".to_string(),
                 "--unshare-net".to_string(),
                 "--proc".to_string(),
                 "/proc".to_string(),
@@ -659,6 +676,24 @@ mod tests {
                 "/bin/true".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn allow_detached_children_omits_die_with_parent() {
+        let args = create_bwrap_command_args(
+            vec!["/bin/true".to_string()],
+            &FileSystemSandboxPolicy::from(&SandboxPolicy::DangerFullAccess),
+            Path::new("/"),
+            Path::new("/"),
+            BwrapOptions {
+                mount_proc: true,
+                network_mode: BwrapNetworkMode::FullAccess,
+                process_lifetime: BwrapProcessLifetime::AllowDetachedChildren,
+            },
+        )
+        .expect("create bwrap args");
+
+        assert!(!args.args.contains(&"--die-with-parent".to_string()));
     }
 
     #[cfg(unix)]

@@ -1743,6 +1743,7 @@ impl CodexMessageProcessor {
             effective_network_sandbox_policy,
             sandbox_cwd.as_path(),
             &codex_linux_sandbox_exe,
+            codex_core::exec::LinuxSandboxDetachedChildren::Disallow,
             use_legacy_landlock,
         ) {
             Ok(exec_request) => {

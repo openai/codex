@@ -1,3 +1,4 @@
+use crate::exec::LinuxSandboxDetachedChildren;
 use crate::protocol::SandboxPolicy;
 use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
@@ -45,6 +46,7 @@ where
         sandbox_policy_cwd,
         use_legacy_landlock,
         allow_network_for_proxy(/*enforce_managed_network*/ false),
+        LinuxSandboxDetachedChildren::Disallow,
     );
     let arg0 = Some("codex-linux-sandbox");
     spawn_child_async(SpawnChildRequest {
@@ -84,6 +86,7 @@ pub fn create_linux_sandbox_command_args_for_policies(
     sandbox_policy_cwd: &Path,
     use_legacy_landlock: bool,
     allow_network_for_proxy: bool,
+    detached_children: LinuxSandboxDetachedChildren,
 ) -> Vec<String> {
     let sandbox_policy_json = serde_json::to_string(sandbox_policy)
         .unwrap_or_else(|err| panic!("failed to serialize sandbox policy: {err}"));
@@ -118,6 +121,9 @@ pub fn create_linux_sandbox_command_args_for_policies(
     if allow_network_for_proxy {
         linux_cmd.push("--allow-network-for-proxy".to_string());
     }
+    if detached_children == LinuxSandboxDetachedChildren::Allow {
+        linux_cmd.push("--allow-detached-children".to_string());
+    }
     linux_cmd.push("--".to_string());
     linux_cmd.extend(command);
     linux_cmd
@@ -132,6 +138,7 @@ pub(crate) fn create_linux_sandbox_command_args(
     sandbox_policy_cwd: &Path,
     use_legacy_landlock: bool,
     allow_network_for_proxy: bool,
+    detached_children: LinuxSandboxDetachedChildren,
 ) -> Vec<String> {
     let command_cwd = command_cwd
         .to_str()
@@ -153,6 +160,9 @@ pub(crate) fn create_linux_sandbox_command_args(
     }
     if allow_network_for_proxy {
         linux_cmd.push("--allow-network-for-proxy".to_string());
+    }
+    if detached_children == LinuxSandboxDetachedChildren::Allow {
+        linux_cmd.push("--allow-detached-children".to_string());
     }
 
     // Separator so that command arguments starting with `-` are not parsed as

@@ -10,6 +10,7 @@ pub(crate) mod macos_permissions;
 
 use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
+use crate::exec::LinuxSandboxDetachedChildren;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::execute_exec_request;
@@ -95,6 +96,7 @@ pub(crate) struct SandboxTransformRequest<'a> {
     #[cfg(target_os = "macos")]
     pub macos_seatbelt_profile_extensions: Option<&'a MacOsSeatbeltProfileExtensions>,
     pub codex_linux_sandbox_exe: Option<&'a PathBuf>,
+    pub linux_sandbox_detached_children: LinuxSandboxDetachedChildren,
     pub use_legacy_landlock: bool,
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
@@ -593,6 +595,7 @@ impl SandboxManager {
             #[cfg(target_os = "macos")]
             macos_seatbelt_profile_extensions,
             codex_linux_sandbox_exe,
+            linux_sandbox_detached_children,
             use_legacy_landlock,
             windows_sandbox_level,
             windows_sandbox_private_desktop,
@@ -679,6 +682,7 @@ impl SandboxManager {
                     sandbox_policy_cwd,
                     use_legacy_landlock,
                     allow_proxy_network,
+                    linux_sandbox_detached_children,
                 );
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(exe.to_string_lossy().to_string());
