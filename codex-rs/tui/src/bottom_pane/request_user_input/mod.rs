@@ -781,8 +781,8 @@ impl RequestUserInputOverlay {
 
         let queue_len = self.queue.len();
         self.queue
-            .retain(|queued_request| queued_request.call_id != *id);
-        if self.request.call_id == *id {
+            .retain(|queued_request| queued_request.turn_id != *id);
+        if self.request.turn_id == *id {
             self.advance_queue_or_complete();
             return true;
         }
@@ -1574,7 +1574,7 @@ mod tests {
 
         assert!(
             overlay.dismiss_app_server_request(&ResolvedAppServerRequest::UserInput {
-                id: "call-1".to_string(),
+                id: "turn-1".to_string(),
             })
         );
         assert!(overlay.done, "resolved request should close the overlay");
