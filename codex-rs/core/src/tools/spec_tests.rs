@@ -2512,7 +2512,7 @@ Examples of valid command strings:
 - recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
 - ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
 - setting an env var: "$env:FOO='bar'; echo $env:FOO"
-- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"#
+- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -""#
             .to_string()
             + &windows_shell_safety_description()
     } else {
