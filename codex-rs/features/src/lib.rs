@@ -132,8 +132,6 @@ pub enum Feature {
     ChildAgentsMd,
     /// Allow the model to request `detail: "original"` image outputs on supported models.
     ImageDetailOriginal,
-    /// Legacy flag to enforce UTF8 output in Powershell.
-    PowershellUtf8,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
     EnableRequestCompression,
     /// Enable collab tools.
@@ -684,12 +682,6 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RemoteModels,
         key: "remote_models",
-        stage: Stage::Removed,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::PowershellUtf8,
-        key: "powershell_utf8",
         stage: Stage::Removed,
         default_enabled: false,
     },
