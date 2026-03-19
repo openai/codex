@@ -39,36 +39,22 @@ use core_test_support::responses::start_websocket_server;
 use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
+use core_test_support::tracing::install_test_tracing;
 use core_test_support::wait_for_event;
 use futures::StreamExt;
-use opentelemetry::global;
-use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
-use opentelemetry_sdk::propagation::TraceContextPropagator;
-use opentelemetry_sdk::trace::SdkTracerProvider;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use serial_test::serial;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 use tracing::Instrument;
-use tracing::dispatcher::DefaultGuard;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
 use tracing_test::traced_test;
 
 const MODEL: &str = "gpt-5.2-codex";
 const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 const X_CLIENT_REQUEST_ID_HEADER: &str = "x-client-request-id";
-
-fn trace_id(traceparent: &str) -> &str {
-    traceparent
-        .split('-')
-        .nth(1)
-        .expect("traceparent missing trace id")
-}
 
 fn assert_request_trace_matches(body: &serde_json::Value, expected_trace: &W3cTraceContext) {
     let client_metadata = body["client_metadata"]
@@ -83,7 +69,7 @@ fn assert_request_trace_matches(body: &serde_json::Value, expected_trace: &W3cTr
         .as_deref()
         .expect("missing expected traceparent");
 
-    assert_eq!(trace_id(actual_traceparent), trace_id(expected_traceparent));
+    assert_eq!(actual_traceparent, expected_traceparent);
     assert_eq!(
         client_metadata
             .get(WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY)
@@ -94,25 +80,6 @@ fn assert_request_trace_matches(body: &serde_json::Value, expected_trace: &W3cTr
         body.get("trace").is_none(),
         "top-level trace should not be sent"
     );
-}
-
-struct TraceTestContext {
-    _provider: SdkTracerProvider,
-    _guard: DefaultGuard,
-}
-
-fn install_trace_test_context() -> TraceTestContext {
-    global::set_text_map_propagator(TraceContextPropagator::new());
-
-    let provider = SdkTracerProvider::builder().build();
-    let tracer = provider.tracer("client-websocket-test");
-    let subscriber =
-        tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
-
-    TraceTestContext {
-        _provider: provider,
-        _guard: subscriber.set_default(),
-    }
 }
 
 struct WebsocketTestHarness {
@@ -185,11 +152,10 @@ async fn responses_websocket_streams_without_feature_flag_when_provider_supports
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[serial]
 async fn responses_websocket_reuses_connection_with_per_turn_trace_payloads() {
     skip_if_no_network!();
 
-    let _trace_test_context = install_trace_test_context();
+    let _trace_test_context = install_test_tracing("client-websocket-test");
 
     let server = start_websocket_server(vec![vec![
         vec![ev_response_created("resp-1"), ev_completed("resp-1")],
@@ -248,17 +214,16 @@ async fn responses_websocket_reuses_connection_with_per_turn_trace_payloads() {
         [WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY]
         .as_str()
         .expect("missing second traceparent");
-    assert_ne!(trace_id(first_traceparent), trace_id(second_traceparent));
+    assert_ne!(first_traceparent, second_traceparent);
 
     server.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[serial]
 async fn responses_websocket_preconnect_does_not_replace_turn_trace_payload() {
     skip_if_no_network!();
 
-    let _trace_test_context = install_trace_test_context();
+    let _trace_test_context = install_test_tracing("client-websocket-test");
 
     let server = start_websocket_server(vec![vec![vec![
         ev_response_created("resp-1"),
