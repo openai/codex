@@ -1998,10 +1998,12 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "clap",
  "codex-app-server-protocol",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
+ "codex-utils-pty",
  "futures",
  "pretty_assertions",
  "serde",
