@@ -424,6 +424,39 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     let requests = mock.requests();
     assert_eq!(requests.len(), 3);
 
+    let apps_tool_call = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|request| {
+            let body: Value = serde_json::from_slice(&request.body).ok()?;
+            (request.url.path() == "/api/codex/apps"
+                && body.get("method").and_then(Value::as_str) == Some("tools/call"))
+            .then_some(body)
+        })
+        .expect("apps tools/call request should be recorded");
+
+    assert_eq!(
+        apps_tool_call.pointer("/params/_meta/_codex_apps"),
+        Some(&json!({
+            "resource_uri": CALENDAR_CREATE_EVENT_RESOURCE_URI,
+            "contains_mcp_source": true,
+            "connector_id": "calendar",
+        }))
+    );
+    assert_eq!(
+        apps_tool_call.pointer("/params/_meta/x-codex-turn-metadata/session_id"),
+        Some(&json!(test.session_configured.session_id.to_string()))
+    );
+    assert!(
+        apps_tool_call
+            .pointer("/params/_meta/x-codex-turn-metadata/turn_id")
+            .and_then(Value::as_str)
+            .is_some_and(|turn_id| !turn_id.is_empty()),
+        "apps tools/call should include turn metadata turn_id: {apps_tool_call:?}"
+    );
+
     let first_request_tools = tool_names(&requests[0].body_json());
     assert!(
         first_request_tools

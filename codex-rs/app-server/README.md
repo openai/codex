@@ -164,7 +164,7 @@ Example with notification opt-out:
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
 - `plugin/list` — list discovered plugin marketplaces and plugin state, including effective marketplace install/auth policy metadata and best-effort `featuredPluginIds` for the official curated marketplace. `interface.category` uses the marketplace category when present; otherwise it falls back to the plugin manifest category. Pass `forceRemoteSync: true` to refresh curated plugin state before listing (**under development; do not call from production clients yet**).
-- `plugin/read` — read one plugin by `marketplacePath` plus `pluginName`, returning marketplace info, a list-style `summary`, manifest descriptions/interface metadata, and bundled skills/apps/MCP server names (**under development; do not call from production clients yet**).
+- `plugin/read` — read one plugin by `marketplacePath` plus `pluginName`, returning marketplace info, a list-style `summary`, manifest descriptions/interface metadata, and bundled skills/apps/MCP server names. Plugin app summaries also include `needsAuth` when the server can determine connector accessibility (**under development; do not call from production clients yet**).
 - `skills/changed` — notification emitted when watched local skill files change.
 - `app/list` — list available apps.
 - `skills/config/write` — write user-level skill config by path.
@@ -836,6 +836,10 @@ Because audio is intentionally separate from `ThreadItem`, clients can opt out o
 
 - `windowsSandbox/setupCompleted` — `{ mode, success, error }` after a `windowsSandbox/setupStart` request finishes.
 
+### MCP server startup events
+
+- `mcpServer/startupStatus/updated` — `{ name, status, error }` when app-server observes an MCP server startup transition. `status` is one of `starting`, `ready`, `failed`, or `cancelled`. `error` is `null` except for `failed`.
+
 ### Turn events
 
 The app-server streams JSON-RPC notifications while a turn is running. Each turn emits `turn/started` when it begins running and ends with `turn/completed` (final `turn` status). Token usage events stream separately via `thread/tokenUsage/updated`. Clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
@@ -1258,6 +1262,7 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 - `account/rateLimits/read` — fetch ChatGPT rate limits; updates arrive via `account/rateLimits/updated` (notify).
 - `account/rateLimits/updated` (notify) — emitted whenever a user's ChatGPT rate limits change.
 - `mcpServer/oauthLogin/completed` (notify) — emitted after a `mcpServer/oauth/login` flow finishes for a server; payload includes `{ name, success, error? }`.
+- `mcpServer/startupStatus/updated` (notify) — emitted when a configured MCP server's startup status changes for a loaded thread; payload includes `{ name, status, error }` where `status` is `starting`, `ready`, `failed`, or `cancelled`.
 
 ### 1) Check auth state
 

@@ -587,6 +587,12 @@ fn create_request_permissions_schema() -> JsonSchema {
     }
 }
 
+fn windows_destructive_filesystem_guidance() -> &'static str {
+    r#"Windows safety rules:
+- Do not compose destructive filesystem commands across shells. Do not enumerate paths in PowerShell and then pass them to `cmd /c`, batch builtins, or another shell for deletion or moving. Use one shell end-to-end, prefer native PowerShell cmdlets such as `Remove-Item` / `Move-Item` with `-LiteralPath`, and avoid string-built shell commands for file operations.
+- Before any recursive delete or move on Windows, verify the resolved absolute target paths stay within the intended workspace or explicitly named target directory. Never issue a recursive delete or move against a computed path if the final target has not been checked."#
+}
+
 fn create_approval_parameters(
     exec_permission_approvals_enabled: bool,
 ) -> BTreeMap<String, JsonSchema> {
@@ -709,9 +715,15 @@ fn create_exec_command_tool(
 
     ToolSpec::Function(ResponsesApiTool {
         name: "exec_command".to_string(),
-        description:
+        description: if cfg!(windows) {
+            format!(
+                "Runs a command in a PTY, returning output or a session ID for ongoing interaction.\n\n{}",
+                windows_destructive_filesystem_guidance()
+            )
+        } else {
             "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
-                .to_string(),
+                .to_string()
+        },
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::Object {
@@ -848,22 +860,28 @@ fn create_shell_tool(exec_permission_approvals_enabled: bool) -> ToolSpec {
         exec_permission_approvals_enabled,
     ));
 
-    let description  = if cfg!(windows) {
-        r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
+    let description = if cfg!(windows) {
+        format!(
+            r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
 
 Examples of valid command strings:
 
 - ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
 - recursive find by name: ["powershell.exe", "-Command", "Get-ChildItem -Recurse -Filter *.py"]
 - recursive grep: ["powershell.exe", "-Command", "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"]
-- ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"]
+- ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object {{ $_.ProcessName -like '*python*' }}"]
 - setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
-- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]"#
+- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]
+
+{}"#,
+            windows_destructive_filesystem_guidance()
+        )
     } else {
         r#"Runs a shell command and returns its output.
 - The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
 - Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
-    }.to_string();
+            .to_string()
+    };
 
     ToolSpec::Function(ResponsesApiTool {
         name: "shell".to_string(),
@@ -921,20 +939,26 @@ fn create_shell_command_tool(
     ));
 
     let description = if cfg!(windows) {
-        r#"Runs a Powershell command (Windows) and returns its output.
+        format!(
+            r#"Runs a Powershell command (Windows) and returns its output.
 
 Examples of valid command strings:
 
 - ls -a (show hidden): "Get-ChildItem -Force"
 - recursive find by name: "Get-ChildItem -Recurse -Filter *.py"
 - recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
-- ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
+- ps aux | grep python: "Get-Process | Where-Object {{ $_.ProcessName -like '*python*' }}"
 - setting an env var: "$env:FOO='bar'; echo $env:FOO"
-- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"#
+- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"
+
+{}"#,
+            windows_destructive_filesystem_guidance()
+        )
     } else {
         r#"Runs a shell command and returns its output.
 - Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#
-    }.to_string();
+            .to_string()
+    };
 
     ToolSpec::Function(ResponsesApiTool {
         name: "shell_command".to_string(),

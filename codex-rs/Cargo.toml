@@ -66,6 +66,7 @@ members = [
     "codex-client",
     "codex-api",
     "state",
+    "terminal-detection",
     "codex-experimental-api-macros",
     "test-macros",
     "package-manager",
@@ -131,6 +132,7 @@ codex-skills = { path = "skills" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-test-macros = { path = "test-macros" }
+codex-terminal-detection = { path = "terminal-detection" }
 codex-tui = { path = "tui" }
 codex-tui-app-server = { path = "tui_app_server" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
