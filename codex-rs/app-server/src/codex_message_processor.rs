@@ -215,8 +215,11 @@ use codex_core::find_thread_name_by_id;
 use codex_core::find_thread_names_by_ids;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::git_info::git_diff_to_remote;
+use codex_core::mcp::auth::McpOAuthLoginSupport;
 use codex_core::mcp::auth::discover_supported_scopes;
+use codex_core::mcp::auth::oauth_login_support;
 use codex_core::mcp::auth::resolve_oauth_scopes;
+use codex_core::mcp::auth::should_retry_without_scopes;
 use codex_core::mcp::collect_mcp_snapshot;
 use codex_core::mcp::group_tools_by_server;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -272,6 +275,7 @@ use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
+use codex_rmcp_client::perform_oauth_login;
 use codex_rmcp_client::perform_oauth_login_return_url;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadata;
@@ -4587,20 +4591,31 @@ impl CodexMessageProcessor {
             }
         };
 
+        if let Err(error) = self.queue_mcp_server_refresh_for_config(&config).await {
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let response = McpServerRefreshResponse {};
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn queue_mcp_server_refresh_for_config(
+        &self,
+        config: &Config,
+    ) -> Result<(), JSONRPCErrorError> {
         let configured_servers = self
             .thread_manager
             .mcp_manager()
-            .configured_servers(&config);
+            .configured_servers(config);
         let mcp_servers = match serde_json::to_value(configured_servers) {
             Ok(value) => value,
             Err(err) => {
-                let error = JSONRPCErrorError {
+                return Err(JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
                     message: format!("failed to serialize MCP servers: {err}"),
                     data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
+                });
             }
         };
 
@@ -4608,15 +4623,13 @@ impl CodexMessageProcessor {
             match serde_json::to_value(config.mcp_oauth_credentials_store_mode) {
                 Ok(value) => value,
                 Err(err) => {
-                    let error = JSONRPCErrorError {
+                    return Err(JSONRPCErrorError {
                         code: INTERNAL_ERROR_CODE,
                         message: format!(
                             "failed to serialize MCP OAuth credentials store mode: {err}"
                         ),
                         data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
+                    });
                 }
             };
 
@@ -4629,8 +4642,7 @@ impl CodexMessageProcessor {
         // active turn to avoid work for threads that never resume.
         let thread_manager = Arc::clone(&self.thread_manager);
         thread_manager.refresh_mcp_servers(refresh_config).await;
-        let response = McpServerRefreshResponse {};
-        self.outgoing.send_response(request_id, response).await;
+        Ok(())
     }
 
     async fn mcp_server_oauth_login(
@@ -5710,6 +5722,10 @@ impl CodexMessageProcessor {
         let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
 
         let plugins_manager = self.thread_manager.plugins_manager();
+        let plugin_read_request = PluginReadRequest {
+            plugin_name: plugin_name.clone(),
+            marketplace_path: marketplace_path.clone(),
+        };
         let request = PluginInstallRequest {
             plugin_name,
             marketplace_path,
@@ -5742,6 +5758,32 @@ impl CodexMessageProcessor {
                         self.config.as_ref().clone()
                     }
                 };
+
+                self.clear_plugin_related_caches();
+
+                let plugin_mcp_server_names =
+                    match plugins_manager.read_plugin_for_config(&config, &plugin_read_request) {
+                        Ok(outcome) => outcome.plugin.mcp_server_names,
+                        Err(err) => {
+                            warn!(
+                                plugin = result.plugin_id.as_key(),
+                                "failed to read plugin MCP servers after install: {err:#}"
+                            );
+                            Vec::new()
+                        }
+                    };
+
+                if !plugin_mcp_server_names.is_empty() {
+                    if let Err(err) = self.queue_mcp_server_refresh_for_config(&config).await {
+                        warn!(
+                            plugin = result.plugin_id.as_key(),
+                            "failed to queue MCP refresh after plugin install: {err:?}"
+                        );
+                    }
+                    self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_server_names)
+                        .await;
+                }
+
                 let plugin_apps = load_plugin_apps(result.installed_path.as_path());
                 let apps_needing_auth = if plugin_apps.is_empty()
                     || !config.features.apps_enabled(Some(&self.auth_manager)).await
@@ -5802,7 +5844,6 @@ impl CodexMessageProcessor {
                     )
                 };
 
-                self.clear_plugin_related_caches();
                 self.outgoing
                     .send_response(
                         request_id,
@@ -5855,6 +5896,94 @@ impl CodexMessageProcessor {
                     }
                 }
             }
+        }
+    }
+
+    async fn start_plugin_mcp_oauth_logins(
+        &self,
+        config: &Config,
+        plugin_mcp_server_names: Vec<String>,
+    ) {
+        let configured_servers = self.thread_manager.mcp_manager().configured_servers(config);
+
+        for name in plugin_mcp_server_names {
+            let Some(server) = configured_servers.get(&name).cloned() else {
+                warn!(
+                    mcp_server = name,
+                    "plugin MCP server was not found after install"
+                );
+                continue;
+            };
+
+            let oauth_config = match oauth_login_support(&server.transport).await {
+                McpOAuthLoginSupport::Supported(config) => config,
+                McpOAuthLoginSupport::Unsupported => continue,
+                McpOAuthLoginSupport::Unknown(err) => {
+                    warn!(
+                        "MCP server may or may not require login for plugin install {name}: {err}"
+                    );
+                    continue;
+                }
+            };
+
+            let resolved_scopes = resolve_oauth_scopes(
+                /*explicit_scopes*/ None,
+                server.scopes.clone(),
+                oauth_config.discovered_scopes.clone(),
+            );
+
+            let store_mode = config.mcp_oauth_credentials_store_mode;
+            let callback_port = config.mcp_oauth_callback_port;
+            let callback_url = config.mcp_oauth_callback_url.clone();
+            let outgoing = Arc::clone(&self.outgoing);
+            let notification_name = name.clone();
+
+            tokio::spawn(async move {
+                let first_attempt = perform_oauth_login(
+                    &name,
+                    &oauth_config.url,
+                    store_mode,
+                    oauth_config.http_headers.clone(),
+                    oauth_config.env_http_headers.clone(),
+                    &resolved_scopes.scopes,
+                    server.oauth_resource.as_deref(),
+                    callback_port,
+                    callback_url.as_deref(),
+                )
+                .await;
+
+                let final_result = match first_attempt {
+                    Err(err) if should_retry_without_scopes(&resolved_scopes, &err) => {
+                        perform_oauth_login(
+                            &name,
+                            &oauth_config.url,
+                            store_mode,
+                            oauth_config.http_headers,
+                            oauth_config.env_http_headers,
+                            &[],
+                            server.oauth_resource.as_deref(),
+                            callback_port,
+                            callback_url.as_deref(),
+                        )
+                        .await
+                    }
+                    result => result,
+                };
+
+                let (success, error) = match final_result {
+                    Ok(()) => (true, None),
+                    Err(err) => (false, Some(err.to_string())),
+                };
+
+                let notification = ServerNotification::McpServerOauthLoginCompleted(
+                    McpServerOauthLoginCompletedNotification {
+                        name: notification_name,
+                        success,
+                        error,
+                    },
+                );
+                outgoing.send_server_notification(notification).await;
+            });
         }
     }
 
