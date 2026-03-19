@@ -389,7 +389,6 @@ pub(crate) struct McpToolApprovalMetadata {
 }
 
 const MCP_TOOL_CODEX_APPS_META_KEY: &str = "_codex_apps";
-
 fn build_mcp_tool_call_request_meta(
     turn_context: &TurnContext,
     server: &str,

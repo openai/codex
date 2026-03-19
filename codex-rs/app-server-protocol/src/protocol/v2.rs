@@ -3831,6 +3831,9 @@ pub enum TurnStatus {
 pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
+    /// Optional string metadata attached only to this turn.
+    #[ts(optional = nullable)]
+    pub metadata: Option<BTreeMap<String, String>>,
     /// Override the working directory for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub cwd: Option<PathBuf>,
@@ -7938,6 +7941,7 @@ mod tests {
         let without_override = TurnStartParams {
             thread_id: "thread_123".to_string(),
             input: vec![],
+            metadata: None,
             cwd: None,
             approval_policy: None,
             approvals_reviewer: None,

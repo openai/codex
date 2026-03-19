@@ -279,6 +279,7 @@ use codex_state::ThreadMetadataBuilder;
 use codex_state::log_db::LogDbLayer;
 use codex_utils_json_to_toml::json_to_toml;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -5973,6 +5974,8 @@ impl CodexMessageProcessor {
             .into_iter()
             .map(V2UserInput::into_core)
             .collect();
+        let next_turn_metadata = params.metadata.clone();
+        let clear_next_turn_metadata_on_error = next_turn_metadata.is_some();
 
         let has_any_overrides = params.cwd.is_some()
             || params.approval_policy.is_some()
@@ -6010,6 +6013,13 @@ impl CodexMessageProcessor {
                 .await;
         }
 
+        if let Some(metadata) = next_turn_metadata
+            && let Err(error) = Self::set_next_turn_metadata(thread.as_ref(), metadata).await
+        {
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
         // Start the turn by submitting the user input. Return its submission id as turn_id.
         let turn_id = self
             .submit_core_op(
@@ -6038,6 +6048,15 @@ impl CodexMessageProcessor {
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(err) => {
+                if clear_next_turn_metadata_on_error
+                    && let Err(clear_error) =
+                        Self::set_next_turn_metadata(thread.as_ref(), BTreeMap::new()).await
+                {
+                    warn!(
+                        error = %clear_error.message,
+                        "failed to clear next turn metadata after turn/start submission error"
+                    );
+                }
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
                     message: format!("failed to start turn: {err}"),
@@ -6058,6 +6077,20 @@ impl CodexMessageProcessor {
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to set app server client name: {err}"),
+                data: None,
+            })
+    }
+
+    async fn set_next_turn_metadata(
+        thread: &CodexThread,
+        metadata: BTreeMap<String, String>,
+    ) -> Result<(), JSONRPCErrorError> {
+        thread
+            .set_next_turn_metadata(metadata)
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INVALID_PARAMS_ERROR_CODE,
+                message: err.to_string(),
                 data: None,
             })
     }

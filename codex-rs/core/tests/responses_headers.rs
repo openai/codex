@@ -20,6 +20,7 @@ use core_test_support::responses;
 use core_test_support::test_codex::test_codex;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use tempfile::TempDir;
 use wiremock::matchers::header;
 
@@ -544,5 +545,136 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
             .get("has_changes")
             .and_then(serde_json::Value::as_bool),
         Some(false)
+    );
+}
+
+#[tokio::test]
+async fn responses_stream_includes_parent_metadata_in_turn_metadata_header() {
+    core_test_support::skip_if_no_network!();
+
+    let server = responses::start_mock_server().await;
+    let request_recorder = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let provider = ModelProviderInfo {
+        name: "mock".into(),
+        base_url: Some(format!("{}/v1", server.uri())),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        wire_api: WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: Some(0),
+        stream_max_retries: Some(0),
+        stream_idle_timeout_ms: Some(5_000),
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    };
+
+    let codex_home = TempDir::new().expect("failed to create TempDir");
+    let mut config = load_default_config_for_test(&codex_home).await;
+    config.model_provider_id = provider.name.clone();
+    config.model_provider = provider.clone();
+    let effort = config.model_reasoning_effort;
+    let summary = config.model_reasoning_summary;
+    let model = codex_core::test_support::get_model_offline(config.model.as_deref());
+    config.model = Some(model.clone());
+    let config = Arc::new(config);
+
+    let conversation_id = ThreadId::new();
+    let auth_mode = TelemetryAuthMode::Chatgpt;
+    let session_source = SessionSource::Exec;
+    let model_info =
+        codex_core::test_support::construct_model_info_offline(model.as_str(), &config);
+    let session_telemetry = SessionTelemetry::new(
+        conversation_id,
+        model.as_str(),
+        model_info.slug.as_str(),
+        None,
+        Some("test@test.com".to_string()),
+        Some(auth_mode),
+        "test_originator".to_string(),
+        false,
+        "test".to_string(),
+        session_source.clone(),
+    );
+
+    let client = ModelClient::new(
+        None,
+        conversation_id,
+        provider,
+        session_source,
+        config.model_verbosity,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
+        None,
+    );
+    let mut client_session = client.new_session();
+
+    let mut prompt = Prompt::default();
+    prompt.input = vec![ResponseItem::Message {
+        id: None,
+        role: "user".into(),
+        content: vec![ContentItem::InputText {
+            text: "hello".into(),
+        }],
+        end_turn: None,
+        phase: None,
+    }];
+    let turn_metadata_header = serde_json::to_string(&json!({
+        "turn_id": "turn-123",
+        "metadata": {
+            "parentConversationId": "conv-123",
+            "parentMessageId": "msg-123",
+            "parentTurnId": "turn-123",
+        },
+    }))
+    .expect("turn metadata json");
+
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            &model_info,
+            &session_telemetry,
+            effort,
+            summary.unwrap_or(model_info.default_reasoning_summary),
+            None,
+            Some(turn_metadata_header.as_str()),
+        )
+        .await
+        .expect("stream failed");
+    while let Some(event) = stream.next().await {
+        if matches!(event, Ok(ResponseEvent::Completed { .. })) {
+            break;
+        }
+    }
+
+    let request = request_recorder.single_request();
+    let turn_metadata_header = request
+        .header("x-codex-turn-metadata")
+        .expect("request should include turn metadata");
+    let turn_metadata: serde_json::Value =
+        serde_json::from_str(&turn_metadata_header).expect("turn metadata should be valid JSON");
+
+    assert_eq!(
+        turn_metadata.pointer("/metadata/parentConversationId"),
+        Some(&json!("conv-123"))
+    );
+    assert_eq!(
+        turn_metadata.pointer("/metadata/parentMessageId"),
+        Some(&json!("msg-123"))
+    );
+    assert_eq!(
+        turn_metadata.pointer("/metadata/parentTurnId"),
+        Some(&json!("turn-123"))
     );
 }

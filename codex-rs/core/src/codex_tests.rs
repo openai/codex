@@ -1660,6 +1660,7 @@ async fn set_rate_limits_retains_previous_credits() {
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        next_turn_metadata: std::collections::BTreeMap::new(),
     };
 
     let mut state = SessionState::new(session_configuration);
@@ -1758,6 +1759,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        next_turn_metadata: std::collections::BTreeMap::new(),
     };
 
     let mut state = SessionState::new(session_configuration);
@@ -2102,6 +2104,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        next_turn_metadata: std::collections::BTreeMap::new(),
     }
 }
 
@@ -2276,6 +2279,46 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
 }
 
 #[tokio::test]
+async fn new_turn_with_sub_id_consumes_next_turn_metadata_once() {
+    let (session, _) = make_session_and_context().await;
+    let next_turn_metadata = std::collections::BTreeMap::from([(
+        "parentTurnId".to_string(),
+        "parent-turn-123".to_string(),
+    )]);
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            next_turn_metadata: Some(next_turn_metadata.clone()),
+            ..Default::default()
+        })
+        .await
+        .expect("test setup should allow updating next turn metadata");
+
+    let first_turn_context = session
+        .new_turn_with_sub_id("turn-1".to_string(), SessionSettingsUpdate::default())
+        .await
+        .expect("first turn should be created");
+    assert_eq!(
+        first_turn_context.turn_metadata_state.metadata(),
+        &next_turn_metadata
+    );
+    let state = session.state.lock().await;
+    assert!(state.session_configuration.next_turn_metadata.is_empty());
+    drop(state);
+
+    let second_turn_context = session
+        .new_turn_with_sub_id("turn-2".to_string(), SessionSettingsUpdate::default())
+        .await
+        .expect("second turn should be created");
+    assert!(
+        second_turn_context
+            .turn_metadata_state
+            .metadata()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let mut config = build_test_config(codex_home.path()).await;
@@ -2333,6 +2376,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        next_turn_metadata: std::collections::BTreeMap::new(),
     };
 
     let (tx_event, _rx_event) = async_channel::unbounded();
@@ -2428,6 +2472,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        next_turn_metadata: std::collections::BTreeMap::new(),
     };
     let per_turn_config = Session::build_per_turn_config(&session_configuration);
     let model_info = ModelsManager::construct_model_info_offline_for_tests(
@@ -3227,6 +3272,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        next_turn_metadata: std::collections::BTreeMap::new(),
     };
     let per_turn_config = Session::build_per_turn_config(&session_configuration);
     let model_info = ModelsManager::construct_model_info_offline_for_tests(

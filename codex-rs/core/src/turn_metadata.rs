@@ -61,6 +61,8 @@ pub(crate) struct TurnMetadataBag {
     workspaces: BTreeMap<String, TurnMetadataWorkspace>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sandbox: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    metadata: BTreeMap<String, String>,
 }
 
 impl TurnMetadataBag {
@@ -75,6 +77,7 @@ fn build_turn_metadata_bag(
     sandbox: Option<String>,
     repo_root: Option<String>,
     workspace_git_metadata: Option<WorkspaceGitMetadata>,
+    metadata: BTreeMap<String, String>,
 ) -> TurnMetadataBag {
     let mut workspaces = BTreeMap::new();
     if let (Some(repo_root), Some(workspace_git_metadata)) = (repo_root, workspace_git_metadata)
@@ -88,6 +91,7 @@ fn build_turn_metadata_bag(
         turn_id,
         workspaces,
         sandbox,
+        metadata,
     }
 }
 
@@ -117,6 +121,7 @@ pub async fn build_turn_metadata_header(cwd: &Path, sandbox: Option<&str>) -> Op
             latest_git_commit_hash,
             has_changes,
         }),
+        BTreeMap::new(),
     )
     .to_header_value()
 }
@@ -138,6 +143,7 @@ impl TurnMetadataState {
         cwd: PathBuf,
         sandbox_policy: &SandboxPolicy,
         windows_sandbox_level: WindowsSandboxLevel,
+        metadata: BTreeMap<String, String>,
     ) -> Self {
         let repo_root = get_git_repo_root(&cwd).map(|root| root.to_string_lossy().into_owned());
         let sandbox = Some(sandbox_tag(sandbox_policy, windows_sandbox_level).to_string());
@@ -147,6 +153,7 @@ impl TurnMetadataState {
             sandbox,
             /*repo_root*/ None,
             /*workspace_git_metadata*/ None,
+            metadata,
         );
         let base_header = base_metadata
             .to_header_value()
@@ -180,6 +187,10 @@ impl TurnMetadataState {
             .and_then(|header| serde_json::from_str(&header).ok())
     }
 
+    pub(crate) fn metadata(&self) -> &BTreeMap<String, String> {
+        &self.base_metadata.metadata
+    }
+
     pub(crate) fn spawn_git_enrichment_task(&self) {
         if self.repo_root.is_none() {
             return;
@@ -206,6 +217,7 @@ impl TurnMetadataState {
                 state.base_metadata.sandbox.clone(),
                 Some(repo_root),
                 Some(workspace_git_metadata),
+                state.base_metadata.metadata.clone(),
             );
             if enriched_metadata.workspaces.is_empty() {
                 return;
@@ -244,7 +256,6 @@ impl TurnMetadataState {
         }
     }
 }
-
 #[cfg(test)]
 #[path = "turn_metadata_tests.rs"]
 mod tests;

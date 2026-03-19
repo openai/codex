@@ -730,6 +730,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use app_test_support::create_mock_responses_server_repeating_assistant;
     use codex_app_server_protocol::ClientInfo;
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
@@ -737,9 +738,13 @@ mod tests {
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
+    use codex_app_server_protocol::TurnStartParams;
+    use codex_app_server_protocol::TurnStartResponse;
     use codex_app_server_protocol::TurnStatus;
+    use codex_app_server_protocol::UserInput;
     use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     async fn build_test_config() -> Config {
         match ConfigBuilder::default().build().await {
@@ -857,6 +862,175 @@ mod tests {
             .expect("in-process runtime should shutdown cleanly");
     }
 
+    #[tokio::test]
+    async fn in_process_start_forwards_turn_metadata_on_turn_requests() {
+        let server = create_mock_responses_server_repeating_assistant("Done").await;
+        let codex_home = TempDir::new().expect("tempdir should create");
+        let mut client = start(InProcessStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::new(
+                ConfigBuilder::default()
+                    .codex_home(codex_home.path().to_path_buf())
+                    .build()
+                    .await
+                    .expect("test config should load"),
+            ),
+            cli_overrides: vec![
+                (
+                    "model_provider".to_string(),
+                    TomlValue::String("mock_provider".to_string()),
+                ),
+                (
+                    "model_providers.mock_provider.name".to_string(),
+                    TomlValue::String("Mock provider for test".to_string()),
+                ),
+                (
+                    "model_providers.mock_provider.base_url".to_string(),
+                    TomlValue::String(format!("{}/v1", server.uri())),
+                ),
+                (
+                    "model_providers.mock_provider.wire_api".to_string(),
+                    TomlValue::String("responses".to_string()),
+                ),
+                (
+                    "model_providers.mock_provider.request_max_retries".to_string(),
+                    TomlValue::Integer(0),
+                ),
+                (
+                    "model_providers.mock_provider.stream_max_retries".to_string(),
+                    TomlValue::Integer(0),
+                ),
+            ],
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            auth_manager: None,
+            thread_manager: None,
+            feedback: CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
+            initialize: InitializeParams {
+                client_info: ClientInfo {
+                    name: "codex-in-process-test".to_string(),
+                    title: None,
+                    version: "0.0.0".to_string(),
+                },
+                capabilities: None,
+            },
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await
+        .expect("in-process runtime should start");
+
+        let thread_start_response: ThreadStartResponse = serde_json::from_value(
+            client
+                .request(ClientRequest::ThreadStart {
+                    request_id: RequestId::Integer(5),
+                    params: ThreadStartParams {
+                        model: Some("mock-model".to_string()),
+                        ephemeral: Some(true),
+                        ..ThreadStartParams::default()
+                    },
+                })
+                .await
+                .expect("thread/start request should work")
+                .expect("thread/start should succeed"),
+        )
+        .expect("thread/start response should parse");
+
+        let _turn_start_response: TurnStartResponse = serde_json::from_value(
+            client
+                .request(ClientRequest::TurnStart {
+                    request_id: RequestId::Integer(6),
+                    params: TurnStartParams {
+                        thread_id: thread_start_response.thread.id,
+                        input: vec![UserInput::Text {
+                            text: "Hello".to_string(),
+                            text_elements: Vec::new(),
+                        }],
+                        metadata: Some(std::collections::BTreeMap::from([
+                            (
+                                "parentConversationId".to_string(),
+                                "parent-conversation-123".to_string(),
+                            ),
+                            (
+                                "parentMessageId".to_string(),
+                                "parent-message-123".to_string(),
+                            ),
+                            ("parentTurnId".to_string(), "parent-turn-123".to_string()),
+                        ])),
+                        ..TurnStartParams::default()
+                    },
+                })
+                .await
+                .expect("turn/start request should work")
+                .expect("turn/start should succeed"),
+        )
+        .expect("turn/start response should parse");
+
+        let turn_completed = loop {
+            let event = timeout(std::time::Duration::from_secs(10), client.next_event())
+                .await
+                .expect("timed out waiting for turn completion");
+            match event {
+                Some(InProcessServerEvent::ServerNotification(
+                    ServerNotification::TurnCompleted(notification),
+                )) => break notification,
+                Some(_) => continue,
+                None => panic!("in-process runtime exited before turn completion"),
+            }
+        };
+        assert_eq!(
+            turn_completed.turn.status,
+            TurnStatus::Completed,
+            "turn error: {:?}",
+            turn_completed.turn.error
+        );
+        assert_eq!(turn_completed.turn.error, None);
+
+        let requests = timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let requests = server
+                    .received_requests()
+                    .await
+                    .expect("received requests should be available");
+                if !requests.is_empty() {
+                    break requests;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("timed out waiting for outbound requests");
+        assert!(!requests.is_empty());
+        for request in requests {
+            let turn_metadata_header = request
+                .headers
+                .get("x-codex-turn-metadata")
+                .and_then(|value| value.to_str().ok())
+                .expect("turn metadata header should be present");
+            let turn_metadata: serde_json::Value =
+                serde_json::from_str(turn_metadata_header).expect("turn metadata should be JSON");
+
+            assert_eq!(
+                turn_metadata.pointer("/metadata/parentConversationId"),
+                Some(&serde_json::json!("parent-conversation-123"))
+            );
+            assert_eq!(
+                turn_metadata.pointer("/metadata/parentMessageId"),
+                Some(&serde_json::json!("parent-message-123"))
+            );
+            assert_eq!(
+                turn_metadata.pointer("/metadata/parentTurnId"),
+                Some(&serde_json::json!("parent-turn-123"))
+            );
+        }
+
+        client
+            .shutdown()
+            .await
+            .expect("in-process runtime should shutdown cleanly");
+    }
     #[test]
     fn guaranteed_delivery_helpers_cover_terminal_notifications() {
         assert!(server_notification_requires_delivery(

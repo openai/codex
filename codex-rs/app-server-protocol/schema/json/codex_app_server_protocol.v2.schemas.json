@@ -11714,6 +11714,16 @@
           },
           "type": "array"
         },
+        "metadata": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional string metadata attached only to this turn.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "model": {
           "description": "Override the model for this turn and subsequent turns.",
           "type": [

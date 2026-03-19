@@ -22,6 +22,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
@@ -97,6 +98,13 @@ impl CodexThread {
         self.codex
             .set_app_server_client_name(app_server_client_name)
             .await
+    }
+
+    pub async fn set_next_turn_metadata(
+        &self,
+        metadata: BTreeMap<String, String>,
+    ) -> ConstraintResult<()> {
+        self.codex.set_next_turn_metadata(metadata).await
     }
 
     /// Use sparingly: this is intended to be removed soon.
