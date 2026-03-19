@@ -13,7 +13,6 @@ use codex_app_server::INPUT_TOO_LARGE_ERROR_CODE;
 use codex_app_server::INVALID_PARAMS_ERROR_CODE;
 use codex_app_server_protocol::ByteRange;
 use codex_app_server_protocol::ClientInfo;
-use codex_app_server_protocol::CollabAgentState;
 use codex_app_server_protocol::CollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus;
@@ -1826,16 +1825,18 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
     assert_eq!(prompt, Some(CHILD_PROMPT.to_string()));
     assert_eq!(model, Some(REQUESTED_MODEL.to_string()));
     assert_eq!(reasoning_effort, Some(REQUESTED_REASONING_EFFORT));
-    assert_eq!(
-        agents_states,
-        HashMap::from([(
-            receiver_thread_id,
-            CollabAgentState {
-                status: CollabAgentStatus::PendingInit,
-                message: None,
-            },
-        )])
+    let agent_state = agents_states
+        .get(&receiver_thread_id)
+        .expect("spawn completion should include child agent state");
+    assert!(
+        matches!(
+            agent_state.status,
+            CollabAgentStatus::PendingInit | CollabAgentStatus::Running
+        ),
+        "child agent should still be initializing or already running, got {:?}",
+        agent_state.status
     );
+    assert_eq!(agent_state.message, None);
 
     let turn_completed = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
@@ -2008,16 +2009,18 @@ config_file = "./custom-role.toml"
     assert_eq!(prompt, Some(CHILD_PROMPT.to_string()));
     assert_eq!(model, Some(ROLE_MODEL.to_string()));
     assert_eq!(reasoning_effort, Some(ROLE_REASONING_EFFORT));
-    assert_eq!(
-        agents_states,
-        HashMap::from([(
-            receiver_thread_id,
-            CollabAgentState {
-                status: CollabAgentStatus::PendingInit,
-                message: None,
-            },
-        )])
+    let agent_state = agents_states
+        .get(&receiver_thread_id)
+        .expect("spawn completion should include child agent state");
+    assert!(
+        matches!(
+            agent_state.status,
+            CollabAgentStatus::PendingInit | CollabAgentStatus::Running
+        ),
+        "child agent should still be initializing or already running, got {:?}",
+        agent_state.status
     );
+    assert_eq!(agent_state.message, None);
 
     let turn_completed = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {

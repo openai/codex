@@ -1,7 +1,5 @@
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -79,7 +77,6 @@ async fn create_client(base_url: &str) -> anyhow::Result<RmcpClient> {
         None,
         None,
         OAuthCredentialsStoreMode::File,
-        Arc::new(StdMutex::new(None)),
     )
     .await?;
 

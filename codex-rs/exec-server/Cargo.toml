@@ -16,9 +16,11 @@ workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
+base64 = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 codex-app-server-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
+codex-utils-pty = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

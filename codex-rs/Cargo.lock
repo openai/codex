@@ -1998,10 +1998,12 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "clap",
  "codex-app-server-protocol",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
+ "codex-utils-pty",
  "futures",
  "pretty_assertions",
  "serde",
@@ -2338,6 +2340,7 @@ dependencies = [
  "icu_locale_core",
  "icu_provider",
  "pretty_assertions",
+ "quick-xml",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -7264,6 +7267,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
 dependencies = [
  "memchr",
+ "serde",
 ]
 
 [[package]]

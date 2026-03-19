@@ -2,15 +2,15 @@
 
 mod common;
 
-use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_exec_server::ExecResponse;
 use codex_exec_server::InitializeParams;
 use common::exec_server::exec_server;
 use pretty_assertions::assert_eq;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn exec_server_stubs_process_start_over_websocket() -> anyhow::Result<()> {
+async fn exec_server_starts_process_over_websocket() -> anyhow::Result<()> {
     let mut server = exec_server().await?;
     let initialize_id = server
         .send_request(
@@ -27,6 +27,10 @@ async fn exec_server_stubs_process_start_over_websocket() -> anyhow::Result<()> 
                 JSONRPCMessage::Response(JSONRPCResponse { id, .. }) if id == &initialize_id
             )
         })
+        .await?;
+
+    server
+        .send_notification("initialized", serde_json::json!({}))
         .await?;
 
     let process_start_id = server
@@ -46,18 +50,20 @@ async fn exec_server_stubs_process_start_over_websocket() -> anyhow::Result<()> 
         .wait_for_event(|event| {
             matches!(
                 event,
-                JSONRPCMessage::Error(JSONRPCError { id, .. }) if id == &process_start_id
+                JSONRPCMessage::Response(JSONRPCResponse { id, .. }) if id == &process_start_id
             )
         })
         .await?;
-    let JSONRPCMessage::Error(JSONRPCError { id, error }) = response else {
-        panic!("expected process/start stub error");
+    let JSONRPCMessage::Response(JSONRPCResponse { id, result }) = response else {
+        panic!("expected process/start response");
     };
     assert_eq!(id, process_start_id);
-    assert_eq!(error.code, -32601);
+    let process_start_response: ExecResponse = serde_json::from_value(result)?;
     assert_eq!(
-        error.message,
-        "exec-server stub does not implement `process/start` yet"
+        process_start_response,
+        ExecResponse {
+            process_id: "proc-1".to_string()
+        }
     );
 
     server.shutdown().await?;

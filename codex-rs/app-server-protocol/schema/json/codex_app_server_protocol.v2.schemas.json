@@ -4715,6 +4715,21 @@
       ],
       "type": "string"
     },
+    "HookPromptFragment": {
+      "properties": {
+        "hookRunId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "hookRunId",
+        "text"
+      ],
+      "type": "object"
+    },
     "HookRunStatus": {
       "enum": [
         "running",
@@ -9712,6 +9727,33 @@
             "type"
           ],
           "title": "UserMessageThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "fragments": {
+              "items": {
+                "$ref": "#/definitions/HookPromptFragment"
+              },
+              "type": "array"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "hookPrompt"
+              ],
+              "title": "HookPromptThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "fragments",
+            "id",
+            "type"
+          ],
+          "title": "HookPromptThreadItem",
           "type": "object"
         },
         {

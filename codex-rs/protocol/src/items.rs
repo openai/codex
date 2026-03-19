@@ -1,5 +1,7 @@
 use crate::memory_citation::MemoryCitation;
+use crate::models::ContentItem;
 use crate::models::MessagePhase;
+use crate::models::ResponseItem;
 use crate::models::WebSearchAction;
 use crate::protocol::AgentMessageEvent;
 use crate::protocol::AgentReasoningEvent;
@@ -12,6 +14,8 @@ use crate::protocol::WebSearchEndEvent;
 use crate::user_input::ByteRange;
 use crate::user_input::TextElement;
 use crate::user_input::UserInput;
+use quick_xml::de::from_str as from_xml_str;
+use quick_xml::se::to_string as to_xml_string;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -22,6 +26,7 @@ use ts_rs::TS;
 #[ts(tag = "type")]
 pub enum TurnItem {
     UserMessage(UserMessageItem),
+    HookPrompt(HookPromptItem),
     AgentMessage(AgentMessageItem),
     Plan(PlanItem),
     Reasoning(ReasoningItem),
@@ -34,6 +39,29 @@ pub enum TurnItem {
 pub struct UserMessageItem {
     pub id: String,
     pub content: Vec<UserInput>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+pub struct HookPromptItem {
+    pub id: String,
+    pub fragments: Vec<HookPromptFragment>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct HookPromptFragment {
+    pub text: String,
+    pub hook_run_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename = "hook_prompt")]
+struct HookPromptXml {
+    #[serde(rename = "@hook_run_id")]
+    hook_run_id: String,
+    #[serde(rename = "$text")]
+    text: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -199,6 +227,91 @@ impl UserMessageItem {
     }
 }
 
+impl HookPromptItem {
+    pub fn from_fragments(id: Option<&String>, fragments: Vec<HookPromptFragment>) -> Self {
+        Self {
+            id: id
+                .cloned()
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            fragments,
+        }
+    }
+}
+
+impl HookPromptFragment {
+    pub fn from_single_hook(text: impl Into<String>, hook_run_id: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            hook_run_id: hook_run_id.into(),
+        }
+    }
+}
+
+pub fn build_hook_prompt_message(fragments: &[HookPromptFragment]) -> Option<ResponseItem> {
+    let content = fragments
+        .iter()
+        .filter(|fragment| !fragment.hook_run_id.trim().is_empty())
+        .filter_map(|fragment| {
+            serialize_hook_prompt_fragment(&fragment.text, &fragment.hook_run_id)
+                .map(|text| ContentItem::InputText { text })
+        })
+        .collect::<Vec<_>>();
+
+    if content.is_empty() {
+        return None;
+    }
+
+    Some(ResponseItem::Message {
+        id: Some(uuid::Uuid::new_v4().to_string()),
+        role: "user".to_string(),
+        content,
+        end_turn: None,
+        phase: None,
+    })
+}
+
+pub fn parse_hook_prompt_message(
+    id: Option<&String>,
+    content: &[ContentItem],
+) -> Option<HookPromptItem> {
+    let fragments = content
+        .iter()
+        .map(|content_item| {
+            let ContentItem::InputText { text } = content_item else {
+                return None;
+            };
+            parse_hook_prompt_fragment(text)
+        })
+        .collect::<Option<Vec<_>>>()?;
+
+    if fragments.is_empty() {
+        return None;
+    }
+
+    Some(HookPromptItem::from_fragments(id, fragments))
+}
+
+pub fn parse_hook_prompt_fragment(text: &str) -> Option<HookPromptFragment> {
+    let trimmed = text.trim();
+    let HookPromptXml { text, hook_run_id } = from_xml_str::<HookPromptXml>(trimmed).ok()?;
+    if hook_run_id.trim().is_empty() {
+        return None;
+    }
+
+    Some(HookPromptFragment { text, hook_run_id })
+}
+
+fn serialize_hook_prompt_fragment(text: &str, hook_run_id: &str) -> Option<String> {
+    if hook_run_id.trim().is_empty() {
+        return None;
+    }
+    to_xml_string(&HookPromptXml {
+        text: text.to_string(),
+        hook_run_id: hook_run_id.to_string(),
+    })
+    .ok()
+}
+
 impl AgentMessageItem {
     pub fn new(content: &[AgentMessageContent]) -> Self {
         Self {
@@ -272,6 +385,7 @@ impl TurnItem {
     pub fn id(&self) -> String {
         match self {
             TurnItem::UserMessage(item) => item.id.clone(),
+            TurnItem::HookPrompt(item) => item.id.clone(),
             TurnItem::AgentMessage(item) => item.id.clone(),
             TurnItem::Plan(item) => item.id.clone(),
             TurnItem::Reasoning(item) => item.id.clone(),
@@ -284,6 +398,7 @@ impl TurnItem {
     pub fn as_legacy_events(&self, show_raw_agent_reasoning: bool) -> Vec<EventMsg> {
         match self {
             TurnItem::UserMessage(item) => vec![item.as_legacy_event()],
+            TurnItem::HookPrompt(_) => Vec::new(),
             TurnItem::AgentMessage(item) => item.as_legacy_events(),
             TurnItem::Plan(_) => Vec::new(),
             TurnItem::WebSearch(item) => vec![item.as_legacy_event()],
@@ -291,5 +406,43 @@ impl TurnItem {
             TurnItem::Reasoning(item) => item.as_legacy_events(show_raw_agent_reasoning),
             TurnItem::ContextCompaction(item) => vec![item.as_legacy_event()],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn hook_prompt_roundtrips_multiple_fragments() {
+        let original = vec![
+            HookPromptFragment::from_single_hook("Retry with care & joy.", "hook-run-1"),
+            HookPromptFragment::from_single_hook("Then summarize cleanly.", "hook-run-2"),
+        ];
+        let message = build_hook_prompt_message(&original).expect("hook prompt");
+
+        let ResponseItem::Message { content, .. } = message else {
+            panic!("expected hook prompt message");
+        };
+
+        let parsed = parse_hook_prompt_message(None, &content).expect("parsed hook prompt");
+        assert_eq!(parsed.fragments, original);
+    }
+
+    #[test]
+    fn hook_prompt_parses_legacy_single_hook_run_id() {
+        let parsed = parse_hook_prompt_fragment(
+            r#"<hook_prompt hook_run_id="hook-run-1">Retry with tests.</hook_prompt>"#,
+        )
+        .expect("legacy hook prompt");
+
+        assert_eq!(
+            parsed,
+            HookPromptFragment {
+                text: "Retry with tests.".to_string(),
+                hook_run_id: "hook-run-1".to_string(),
+            }
+        );
     }
 }
