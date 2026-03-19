@@ -163,8 +163,11 @@ jobs:
             --build_metadata=VISIBILITY=PUBLIC
             --
             //...
-            # Keep `rusty_v8` out of the ordinary Bazel CI path. The musl
-            # release workflow is the only place that should build/stage it.
+            # Keep V8 out of the ordinary Bazel CI path. Only the dedicated
+            # canary and release workflows should build `third_party/v8`.
+            -//third_party/v8:all
+            # Belt-and-suspenders exclusion for the consumer-side `rusty_v8`
+            # proof-of-concept targets.
             -//codex-rs/v8-poc:v8-poc-rusty-v8
             -//codex-rs/v8-poc:v8-poc-rusty-v8-unit-tests
             -//codex-rs/v8-poc:v8-poc-rusty-v8-unit-tests-bin
