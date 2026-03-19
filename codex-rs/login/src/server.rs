@@ -34,7 +34,7 @@ use base64::Engine;
 use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
 use codex_client::build_reqwest_client_with_custom_ca;
-use codex_core::default_client::originator;
+use codex_client::default_client::originator;
 use rand::RngCore;
 use serde_json::Value as JsonValue;
 use tiny_http::Header;

@@ -1,5 +1,5 @@
 mod custom_ca;
-mod default_client;
+pub mod default_client;
 mod error;
 mod request;
 mod retry;

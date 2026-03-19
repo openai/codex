@@ -29,7 +29,7 @@ use crate::token_data::PlanType as InternalPlanType;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
 use codex_client::CodexHttpClient;
-use codex_client::create_client;
+use codex_client::default_client::create_client;
 use codex_protocol::account::PlanType as AccountPlanType;
 use serde_json::Value;
 use thiserror::Error;
