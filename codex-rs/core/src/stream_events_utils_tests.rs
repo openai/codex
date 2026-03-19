@@ -1,5 +1,4 @@
 use super::handle_non_tool_response_item;
-use super::image_generation_artifact_dir;
 use super::image_generation_artifact_path;
 use super::last_assistant_message_from_item;
 use super::save_image_generation_result;
@@ -114,10 +113,11 @@ async fn save_image_generation_result_overwrites_existing_file() {
     let codex_home = tempfile::tempdir().expect("create codex home");
     let existing_path =
         image_generation_artifact_path(codex_home.path(), "session-1", "ig_overwrite");
-    std::fs::create_dir_all(image_generation_artifact_dir(
-        codex_home.path(),
-        "session-1",
-    ))
+    std::fs::create_dir_all(
+        existing_path
+            .parent()
+            .expect("generated image path should have a parent"),
+    )
     .expect("create image output dir");
     std::fs::write(&existing_path, b"existing").expect("seed existing image");
 

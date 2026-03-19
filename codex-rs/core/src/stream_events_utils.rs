@@ -33,38 +33,32 @@ use tracing::instrument;
 
 const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
 
-pub(crate) fn image_generation_artifact_dir(codex_home: &Path, session_id: &str) -> PathBuf {
-    codex_home
-        .join(GENERATED_IMAGE_ARTIFACTS_DIR)
-        .join(sanitize_image_artifact_component(session_id))
-}
-
 pub(crate) fn image_generation_artifact_path(
     codex_home: &Path,
     session_id: &str,
     call_id: &str,
 ) -> PathBuf {
-    image_generation_artifact_dir(codex_home, session_id).join(format!(
-        "{}.png",
-        sanitize_image_artifact_component(call_id)
-    ))
-}
+    let sanitize = |value: &str| {
+        let mut sanitized: String = value
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                    ch
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        if sanitized.is_empty() {
+            sanitized = "generated_image".to_string();
+        }
+        sanitized
+    };
 
-fn sanitize_image_artifact_component(value: &str) -> String {
-    let mut sanitized: String = value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if sanitized.is_empty() {
-        sanitized = "generated_image".to_string();
-    }
-    sanitized
+    codex_home
+        .join(GENERATED_IMAGE_ARTIFACTS_DIR)
+        .join(sanitize(session_id))
+        .join(format!("{}.png", sanitize(call_id)))
 }
 
 fn strip_hidden_assistant_markup(text: &str, plan_mode: bool) -> String {
@@ -364,14 +358,18 @@ pub(crate) async fn handle_non_tool_response_item(
                 {
                     Ok(path) => {
                         image_item.saved_path = Some(path.to_string_lossy().into_owned());
-                        let image_output_dir = image_generation_artifact_dir(
+                        let image_output_path = image_generation_artifact_path(
                             turn_context.config.codex_home.as_path(),
                             &session_id,
+                            "<image_id>",
                         );
+                        let image_output_dir = image_output_path
+                            .parent()
+                            .expect("generated image path should have a parent");
                         let message: ResponseItem = DeveloperInstructions::new(format!(
                             "Generated images are saved to {} as {} by default.",
                             image_output_dir.display(),
-                            image_output_dir.join("<image_id>.png").display(),
+                            image_output_path.display(),
                         ))
                         .into();
                         sess.record_conversation_items(
@@ -381,10 +379,14 @@ pub(crate) async fn handle_non_tool_response_item(
                         .await;
                     }
                     Err(err) => {
-                        let output_dir = image_generation_artifact_dir(
+                        let output_path = image_generation_artifact_path(
                             turn_context.config.codex_home.as_path(),
                             &session_id,
+                            &image_item.id,
                         );
+                        let output_dir = output_path
+                            .parent()
+                            .expect("generated image path should have a parent");
                         tracing::warn!(
                             call_id = %image_item.id,
                             output_dir = %output_dir.display(),

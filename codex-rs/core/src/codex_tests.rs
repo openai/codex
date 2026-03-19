@@ -3733,14 +3733,18 @@ async fn handle_output_item_done_records_image_save_history_message() {
         .expect("image generation item should succeed");
 
     let history = session.clone_history().await;
-    let image_output_dir = crate::stream_events_utils::image_generation_artifact_dir(
+    let image_output_path = crate::stream_events_utils::image_generation_artifact_path(
         turn_context.config.codex_home.as_path(),
         &session.conversation_id.to_string(),
+        "<image_id>",
     );
+    let image_output_dir = image_output_path
+        .parent()
+        .expect("generated image path should have a parent");
     let save_message: ResponseItem = DeveloperInstructions::new(format!(
         "Generated images are saved to {} as {} by default.",
         image_output_dir.display(),
-        image_output_dir.join("<image_id>.png").display(),
+        image_output_path.display(),
     ))
     .into();
     assert_eq!(history.raw_items(), &[save_message, item]);
