@@ -158,11 +158,13 @@ pub(crate) async fn handle_mcp_tool_call(
                     sess.as_ref(),
                     turn_context.as_ref(),
                     &call_id,
-                    &server,
-                    &tool_name,
-                    arguments_value.clone(),
-                    metadata.as_ref(),
-                    request_meta.clone(),
+                    McpToolExecutionInvocation {
+                        server: &server,
+                        tool_name: &tool_name,
+                        arguments_value: arguments_value.clone(),
+                        metadata: metadata.as_ref(),
+                        request_meta: request_meta.clone(),
+                    },
                 )
                 .await;
                 if let Err(e) = &result {
@@ -243,11 +245,13 @@ pub(crate) async fn handle_mcp_tool_call(
         sess.as_ref(),
         turn_context.as_ref(),
         &call_id,
-        &server,
-        &tool_name,
-        arguments_value.clone(),
-        metadata.as_ref(),
-        request_meta,
+        McpToolExecutionInvocation {
+            server: &server,
+            tool_name: &tool_name,
+            arguments_value: arguments_value.clone(),
+            metadata: metadata.as_ref(),
+            request_meta,
+        },
     )
     .await;
     if let Err(e) = &result {
@@ -280,31 +284,32 @@ async fn execute_mcp_tool_call(
     sess: &Session,
     turn_context: &TurnContext,
     call_id: &str,
-    server: &str,
-    tool_name: &str,
-    arguments_value: Option<serde_json::Value>,
-    metadata: Option<&McpToolApprovalMetadata>,
-    request_meta: Option<serde_json::Value>,
+    invocation: McpToolExecutionInvocation<'_>,
 ) -> Result<CallToolResult, String> {
     let rewritten_arguments = rewrite_mcp_tool_arguments_for_openai_files(
         sess,
         turn_context,
-        server,
-        arguments_value,
-        metadata,
+        invocation.server,
+        invocation.arguments_value,
+        invocation.metadata,
     )
     .await?;
     let result = sess
-        .call_tool(server, tool_name, rewritten_arguments, request_meta)
+        .call_tool(
+            invocation.server,
+            invocation.tool_name,
+            rewritten_arguments,
+            invocation.request_meta,
+        )
         .await
         .map_err(|e| format!("tool call error: {e:?}"))?;
     let result = rewrite_mcp_tool_result_for_openai_files(
         sess,
         turn_context,
         call_id,
-        server,
+        invocation.server,
         result,
-        metadata,
+        invocation.metadata,
     )
     .await;
     sanitize_mcp_tool_result_for_model(
@@ -314,6 +319,14 @@ async fn execute_mcp_tool_call(
             .contains(&InputModality::Image),
         Ok(result),
     )
+}
+
+struct McpToolExecutionInvocation<'a> {
+    server: &'a str,
+    tool_name: &'a str,
+    arguments_value: Option<serde_json::Value>,
+    metadata: Option<&'a McpToolApprovalMetadata>,
+    request_meta: Option<serde_json::Value>,
 }
 
 async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &TurnContext) {
