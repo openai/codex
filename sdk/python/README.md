@@ -28,6 +28,9 @@ with Codex() as codex:
     print(len(result.items))
 ```
 
+`result.final_response` is `None` when the turn completes without a final-answer
+or phase-less assistant message item.
+
 ## Docs map
 
 - Golden path tutorial: `docs/getting-started.md`

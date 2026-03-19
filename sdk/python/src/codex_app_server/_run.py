@@ -19,7 +19,7 @@ from .models import Notification
 
 @dataclass(slots=True)
 class RunResult:
-    final_response: str
+    final_response: str | None
     items: list[ThreadItem]
     usage: ThreadTokenUsage | None
 
@@ -33,7 +33,7 @@ def _agent_message_item_from_thread_item(
     return None
 
 
-def _final_assistant_response_from_items(items: list[ThreadItem]) -> str:
+def _final_assistant_response_from_items(items: list[ThreadItem]) -> str | None:
     last_unknown_phase_response: str | None = None
 
     for item in reversed(items):
@@ -45,7 +45,7 @@ def _final_assistant_response_from_items(items: list[ThreadItem]) -> str:
         if agent_message.phase is None and last_unknown_phase_response is None:
             last_unknown_phase_response = agent_message.text
 
-    return last_unknown_phase_response or ""
+    return last_unknown_phase_response
 
 
 def _raise_for_failed_turn(turn: AppServerTurn) -> None:

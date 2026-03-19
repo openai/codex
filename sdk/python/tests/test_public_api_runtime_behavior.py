@@ -408,7 +408,7 @@ def test_thread_run_prefers_explicit_final_answer_over_later_commentary() -> Non
     ]
 
 
-def test_thread_run_returns_empty_when_only_commentary_messages_complete() -> None:
+def test_thread_run_returns_none_when_only_commentary_messages_complete() -> None:
     client = AppServerClient()
     commentary_notification = _item_completed_notification(
         text="Commentary",
@@ -427,7 +427,7 @@ def test_thread_run_returns_empty_when_only_commentary_messages_complete() -> No
 
     result = Thread(client, "thread-1").run("hello")
 
-    assert result.final_response == ""
+    assert result.final_response is None
     assert result.items == [commentary_notification.payload.item]
 
 
@@ -525,6 +525,42 @@ def test_async_thread_run_uses_last_completed_assistant_message_as_final_respons
             first_item_notification.payload.item,
             second_item_notification.payload.item,
         ]
+
+    asyncio.run(scenario())
+
+
+def test_async_thread_run_returns_none_when_only_commentary_messages_complete() -> None:
+    async def scenario() -> None:
+        codex = AsyncCodex()
+
+        async def fake_ensure_initialized() -> None:
+            return None
+
+        commentary_notification = _item_completed_notification(
+            text="Commentary",
+            phase=MessagePhase.commentary,
+        )
+        notifications: deque[Notification] = deque(
+            [
+                commentary_notification,
+                _completed_notification(),
+            ]
+        )
+
+        async def fake_turn_start(thread_id: str, wire_input: object, *, params=None):  # noqa: ANN001,ANN202,ARG001
+            return SimpleNamespace(turn=SimpleNamespace(id="turn-1"))
+
+        async def fake_next_notification() -> Notification:
+            return notifications.popleft()
+
+        codex._ensure_initialized = fake_ensure_initialized  # type: ignore[method-assign]
+        codex._client.turn_start = fake_turn_start  # type: ignore[method-assign]
+        codex._client.next_notification = fake_next_notification  # type: ignore[method-assign]
+
+        result = await AsyncThread(codex, "thread-1").run("hello")
+
+        assert result.final_response is None
+        assert result.items == [commentary_notification.payload.item]
 
     asyncio.run(scenario())
 

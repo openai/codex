@@ -116,9 +116,12 @@ async with AsyncCodex() as codex:
 the turn, consumes notifications until completion, and returns a small result
 object with:
 
-- `final_response: str`
+- `final_response: str | None`
 - `items: list[ThreadItem]`
 - `usage: ThreadTokenUsage | None`
+
+`final_response` is `None` when the turn finishes without a final-answer or
+phase-less assistant message item.
 
 Use `turn(...)` when you need low-level turn control (`stream()`, `steer()`,
 `interrupt()`) or the canonical generated `Turn` from `TurnHandle.run()`.
