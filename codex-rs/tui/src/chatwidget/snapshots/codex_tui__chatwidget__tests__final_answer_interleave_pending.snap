@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests.rs
+assertion_line: 4192
+expression: pending
+---
+• 1. Your name is Tuan-Lung.
+  2. We are testing interleaving.
+  
+  restructuring answer...

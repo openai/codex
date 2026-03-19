@@ -76,6 +76,7 @@ mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
 pub mod custom_prompt_view;
+mod draft_completion_popup;
 mod experimental_features_view;
 mod file_search_popup;
 mod footer;
@@ -1096,6 +1097,15 @@ impl BottomPane {
 
     pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.composer.on_file_search_result(query, matches);
+        self.request_redraw();
+    }
+
+    pub(crate) fn on_draft_completion_result(
+        &mut self,
+        request_id: u64,
+        result: Result<Vec<String>, String>,
+    ) {
+        self.composer.on_draft_completion_result(request_id, result);
         self.request_redraw();
     }
 

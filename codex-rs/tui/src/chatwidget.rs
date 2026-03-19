@@ -38,12 +38,16 @@ use std::time::Duration;
 use std::time::Instant;
 
 use self::realtime::PendingSteerCompareKey;
+use crate::answer_interleave::AnswerInterleaveRequest;
+use crate::answer_interleave::LiveAnswerCell;
+use crate::answer_interleave::LiveAnswerHandle;
 use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
+use crate::draft_completion::DraftCompletionRequest;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
@@ -90,6 +94,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::local_image_label_text;
 use codex_protocol::parse_command::ParsedCommand;
@@ -118,6 +123,7 @@ use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::ImageGenerationBeginEvent;
 use codex_protocol::protocol::ImageGenerationEndEvent;
+use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::ListCustomPromptsResponseEvent;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::McpListToolsResponseEvent;
@@ -667,6 +673,11 @@ pub(crate) struct ChatWidget {
     adaptive_chunking: AdaptiveChunkingPolicy,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
+    agent_message_stream_kind: Option<AgentMessageStreamKind>,
+    live_answer_handle: Option<LiveAnswerHandle>,
+    pending_answer_interleave: Option<PendingAnswerInterleave>,
+    deferred_turn_complete: Option<DeferredTurnComplete>,
+    next_answer_interleave_request_id: u64,
     // Stream lifecycle controller for proposed plan output.
     plan_stream_controller: Option<PlanStreamController>,
     // Latest completed user-visible Codex output that `/copy` should place on the clipboard.
@@ -905,6 +916,25 @@ impl From<&str> for UserMessage {
 struct PendingSteer {
     user_message: UserMessage,
     compare_key: PendingSteerCompareKey,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentMessageStreamKind {
+    Unknown,
+    Commentary,
+    FinalAnswer,
+}
+
+#[derive(Debug)]
+struct PendingAnswerInterleave {
+    request_id: u64,
+    handle: LiveAnswerHandle,
+    raw_answer: String,
+}
+
+#[derive(Debug)]
+struct DeferredTurnComplete {
+    from_replay: bool,
 }
 
 pub(crate) fn create_initial_user_message(
@@ -1560,6 +1590,156 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    fn current_agent_message_stream_kind(&self) -> AgentMessageStreamKind {
+        self.agent_message_stream_kind
+            .unwrap_or(AgentMessageStreamKind::Unknown)
+    }
+
+    fn last_user_prompt_text(&self) -> Option<String> {
+        self.last_rendered_user_message_event
+            .as_ref()
+            .map(|event| event.message.trim().to_string())
+            .filter(|message| !message.is_empty())
+    }
+
+    fn current_session_cwd(&self) -> &Path {
+        self.current_cwd
+            .as_deref()
+            .unwrap_or(self.config.cwd.as_path())
+    }
+
+    fn prepare_for_new_assistant_output(&mut self) {
+        self.flush_unified_exec_wait_streak();
+        self.flush_active_cell();
+
+        if self.needs_final_message_separator && self.had_work_activity {
+            let elapsed_seconds = self
+                .bottom_pane
+                .status_widget()
+                .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
+                .map(|current| self.worked_elapsed_from(current));
+            self.add_to_history(history_cell::FinalMessageSeparator::new(
+                elapsed_seconds,
+                None,
+            ));
+            self.needs_final_message_separator = false;
+            self.had_work_activity = false;
+        } else if self.needs_final_message_separator {
+            self.needs_final_message_separator = false;
+        }
+    }
+
+    fn ensure_live_answer_handle(&mut self) -> LiveAnswerHandle {
+        if let Some(handle) = self.live_answer_handle.as_ref() {
+            return handle.clone();
+        }
+        if let Some(pending) = self.pending_answer_interleave.as_ref() {
+            return pending.handle.clone();
+        }
+
+        if self.stream_controller.is_some() {
+            self.flush_answer_stream_with_separator();
+        }
+        self.prepare_for_new_assistant_output();
+
+        let (handle, cell) = LiveAnswerHandle::new(self.current_session_cwd().to_path_buf());
+        self.live_answer_handle = Some(handle.clone());
+        self.active_cell = Some(Box::new(cell));
+        self.bump_active_cell_revision();
+        handle
+    }
+
+    fn handle_final_answer_delta(&mut self, delta: String) {
+        if delta.is_empty() {
+            return;
+        }
+        let handle = self.ensure_live_answer_handle();
+        handle.push_delta(&delta);
+        self.bump_active_cell_revision();
+        self.request_redraw();
+    }
+
+    fn finalize_live_answer_without_interleave(&mut self, raw_answer: String) {
+        let handle = self.ensure_live_answer_handle();
+        handle.set_interleaving_pending(false);
+        handle.set_markdown(raw_answer.clone());
+        self.live_answer_handle = None;
+        self.pending_answer_interleave = None;
+        self.last_copyable_output = Some(raw_answer);
+        self.bump_active_cell_revision();
+        self.flush_active_cell();
+        self.request_redraw();
+    }
+
+    fn start_answer_interleave(&mut self, raw_answer: String) {
+        let Some(user_prompt) = self.last_user_prompt_text() else {
+            self.finalize_live_answer_without_interleave(raw_answer);
+            return;
+        };
+
+        self.next_answer_interleave_request_id =
+            self.next_answer_interleave_request_id.wrapping_add(1);
+        let request_id = self.next_answer_interleave_request_id;
+        let handle = self.ensure_live_answer_handle();
+        handle.set_markdown(raw_answer.clone());
+        handle.set_interleaving_pending(true);
+        self.pending_answer_interleave = Some(PendingAnswerInterleave {
+            request_id,
+            handle,
+            raw_answer: raw_answer.clone(),
+        });
+        self.bump_active_cell_revision();
+        self.app_event_tx
+            .send(AppEvent::StartAnswerInterleave(AnswerInterleaveRequest {
+                request_id,
+                user_prompt,
+                final_answer: raw_answer,
+            }));
+        self.request_redraw();
+    }
+
+    fn on_agent_message_item_started(&mut self, item: AgentMessageItem) {
+        self.agent_message_stream_kind = Some(match item.phase {
+            Some(MessagePhase::Commentary) => AgentMessageStreamKind::Commentary,
+            Some(MessagePhase::FinalAnswer) => AgentMessageStreamKind::FinalAnswer,
+            None => AgentMessageStreamKind::Unknown,
+        });
+    }
+
+    pub(crate) fn on_answer_interleave_result(
+        &mut self,
+        request_id: u64,
+        result: Result<String, String>,
+    ) {
+        let Some(pending) = self.pending_answer_interleave.take() else {
+            return;
+        };
+        if pending.request_id != request_id {
+            self.pending_answer_interleave = Some(pending);
+            return;
+        }
+
+        let final_answer = match result {
+            Ok(answer) if !answer.trim().is_empty() => answer,
+            Ok(_) => pending.raw_answer.clone(),
+            Err(err) => {
+                tracing::warn!("answer interleave failed: {err}");
+                pending.raw_answer.clone()
+            }
+        };
+
+        pending.handle.set_interleaving_pending(false);
+        pending.handle.set_markdown(final_answer.clone());
+        self.live_answer_handle = None;
+        self.last_copyable_output = Some(final_answer.clone());
+        self.bump_active_cell_revision();
+        self.flush_active_cell();
+        if let Some(deferred) = self.deferred_turn_complete.take() {
+            self.finish_task_complete(Some(final_answer), deferred.from_replay);
+        }
+        self.request_redraw();
+    }
+
     fn finalize_completed_assistant_message(&mut self, message: Option<&str>) {
         // If we have a stream_controller, the finalized message payload is redundant because the
         // visible content has already been accumulated through deltas.
@@ -1579,7 +1759,12 @@ impl ChatWidget {
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
-        self.handle_streaming_delta(delta);
+        match self.current_agent_message_stream_kind() {
+            AgentMessageStreamKind::Unknown | AgentMessageStreamKind::Commentary => {
+                self.handle_streaming_delta(delta)
+            }
+            AgentMessageStreamKind::FinalAnswer => self.handle_final_answer_delta(delta),
+        }
     }
 
     fn on_plan_delta(&mut self, delta: String) {
@@ -1699,6 +1884,10 @@ impl ChatWidget {
         self.plan_item_active = false;
         self.adaptive_chunking.reset();
         self.plan_stream_controller = None;
+        self.agent_message_stream_kind = None;
+        self.live_answer_handle = None;
+        self.pending_answer_interleave = None;
+        self.deferred_turn_complete = None;
         self.turn_runtime_metrics = RuntimeMetricsSummary::default();
         self.session_telemetry.reset_runtime_metrics();
         self.bottom_pane.clear_quit_shortcut_hint();
@@ -1715,6 +1904,15 @@ impl ChatWidget {
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
+        if self.pending_answer_interleave.is_some() && !from_replay {
+            self.deferred_turn_complete = Some(DeferredTurnComplete { from_replay });
+            self.request_redraw();
+            return;
+        }
+        self.finish_task_complete(last_agent_message, from_replay);
+    }
+
+    fn finish_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
         self.submit_pending_steers_after_interrupt = false;
         if let Some(message) = last_agent_message.as_ref()
             && !message.trim().is_empty()
@@ -3000,16 +3198,61 @@ impl ChatWidget {
     /// Commentary completion sets a deferred restore flag so the status row
     /// returns once stream queues are idle. Final-answer completion (or absent
     /// phase for legacy models) clears the flag to preserve historical behavior.
-    fn on_agent_message_item_completed(&mut self, item: AgentMessageItem) {
+    fn on_agent_message_item_completed(&mut self, item: AgentMessageItem, from_replay: bool) {
         let mut message = String::new();
         for content in &item.content {
             match content {
                 AgentMessageContent::Text { text } => message.push_str(text),
             }
         }
-        self.finalize_completed_assistant_message(
-            (!message.is_empty()).then_some(message.as_str()),
-        );
+        let live_answer_markdown = self
+            .live_answer_handle
+            .as_ref()
+            .map(LiveAnswerHandle::markdown);
+        if from_replay || self.is_review_mode {
+            self.finalize_completed_assistant_message((!message.is_empty()).then_some(&message));
+        } else {
+            match item.phase {
+                Some(MessagePhase::Commentary) => {
+                    if self.live_answer_handle.is_some() {
+                        self.finalize_live_answer_without_interleave(message.clone());
+                    } else {
+                        self.finalize_completed_assistant_message(
+                            (!message.is_empty()).then_some(message.as_str()),
+                        );
+                    }
+                }
+                Some(MessagePhase::FinalAnswer) => {
+                    let final_answer = if message.is_empty() {
+                        live_answer_markdown.unwrap_or_default()
+                    } else {
+                        message.clone()
+                    };
+                    if !final_answer.is_empty() && self.thread_id.is_some() {
+                        self.start_answer_interleave(final_answer);
+                    } else {
+                        self.finalize_live_answer_without_interleave(final_answer);
+                    }
+                }
+                None => {
+                    if self.live_answer_handle.is_some() {
+                        let final_answer = if message.is_empty() {
+                            live_answer_markdown.unwrap_or_default()
+                        } else {
+                            message.clone()
+                        };
+                        self.finalize_live_answer_without_interleave(final_answer);
+                    } else if !message.is_empty() && self.thread_id.is_some() {
+                        self.start_answer_interleave(message.clone());
+                    } else {
+                        self.finalize_completed_assistant_message(
+                            (!message.is_empty()).then_some(message.as_str()),
+                        );
+                    }
+                }
+            }
+        }
+        self.agent_message_stream_kind = None;
         self.pending_status_indicator_restore = match item.phase {
             // Models that don't support preambles only output AgentMessageItems on turn completion.
             Some(MessagePhase::FinalAnswer) | None => false,
@@ -3097,29 +3340,8 @@ impl ChatWidget {
 
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
-        // Before streaming agent content, flush any active exec cell group.
-        self.flush_unified_exec_wait_streak();
-        self.flush_active_cell();
-
         if self.stream_controller.is_none() {
-            // If the previous turn inserted non-stream history (exec output, patch status, MCP
-            // calls), render a separator before starting the next streamed assistant message.
-            if self.needs_final_message_separator && self.had_work_activity {
-                let elapsed_seconds = self
-                    .bottom_pane
-                    .status_widget()
-                    .map(super::status_indicator_widget::StatusIndicatorWidget::elapsed_seconds)
-                    .map(|current| self.worked_elapsed_from(current));
-                self.add_to_history(history_cell::FinalMessageSeparator::new(
-                    elapsed_seconds,
-                    None,
-                ));
-                self.needs_final_message_separator = false;
-                self.had_work_activity = false;
-            } else if self.needs_final_message_separator {
-                // Reset the flag even if we don't show separator (no work was done)
-                self.needs_final_message_separator = false;
-            }
+            self.prepare_for_new_assistant_output();
             self.stream_controller = Some(StreamController::new(
                 self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
                 &self.config.cwd,
@@ -3585,6 +3807,11 @@ impl ChatWidget {
             rate_limit_poller: None,
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
+            agent_message_stream_kind: None,
+            live_answer_handle: None,
+            pending_answer_interleave: None,
+            deferred_turn_complete: None,
+            next_answer_interleave_request_id: 0,
             plan_stream_controller: None,
             last_copyable_output: None,
             running_commands: HashMap::new(),
@@ -3771,6 +3998,11 @@ impl ChatWidget {
             rate_limit_poller: None,
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
+            agent_message_stream_kind: None,
+            live_answer_handle: None,
+            pending_answer_interleave: None,
+            deferred_turn_complete: None,
+            next_answer_interleave_request_id: 0,
             plan_stream_controller: None,
             last_copyable_output: None,
             running_commands: HashMap::new(),
@@ -3949,6 +4181,11 @@ impl ChatWidget {
             rate_limit_poller: None,
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
+            agent_message_stream_kind: None,
+            live_answer_handle: None,
+            pending_answer_interleave: None,
+            deferred_turn_complete: None,
+            next_answer_interleave_request_id: 0,
             plan_stream_controller: None,
             last_copyable_output: None,
             running_commands: HashMap::new(),
@@ -4213,6 +4450,16 @@ impl ChatWidget {
                 }
                 InputResult::CommandWithArgs(cmd, args, text_elements) => {
                     self.dispatch_command_with_args(cmd, args, text_elements);
+                }
+                InputResult::RequestDraftCompletion { request_id, draft } => {
+                    self.app_event_tx.send(AppEvent::StartDraftCompletion(
+                        DraftCompletionRequest {
+                            request_id,
+                            draft,
+                            last_user_turn: self.last_user_prompt_text(),
+                            last_assistant_turn: self.last_copyable_output.clone(),
+                        },
+                    ));
                 }
                 InputResult::None => {}
             },
@@ -4792,7 +5039,14 @@ impl ChatWidget {
     }
 
     fn flush_active_cell(&mut self) {
+        let flushed_live_answer = self
+            .active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<LiveAnswerCell>());
         if let Some(active) = self.active_cell.take() {
+            if flushed_live_answer {
+                self.live_answer_handle = None;
+            }
             self.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
@@ -4810,8 +5064,16 @@ impl ChatWidget {
                 .active_cell
                 .as_ref()
                 .is_some_and(|c| c.as_any().is::<history_cell::SessionHeaderHistoryCell>());
+        let keep_interleaving_answer_active = self.live_answer_handle.is_some()
+            && self
+                .active_cell
+                .as_ref()
+                .is_some_and(|c| c.as_any().is::<LiveAnswerCell>());
 
-        if !keep_placeholder_header_active && !cell.display_lines(u16::MAX).is_empty() {
+        if !keep_placeholder_header_active
+            && !keep_interleaving_answer_active
+            && !cell.display_lines(u16::MAX).is_empty()
+        {
             // Only break exec grouping if the cell renders visible lines.
             self.flush_active_cell();
             self.needs_final_message_separator = true;
@@ -5222,6 +5484,15 @@ impl ChatWidget {
                 self.on_agent_message(message)
             }
             EventMsg::AgentMessage(AgentMessageEvent { .. }) => {}
+            EventMsg::ItemStarted(ItemStartedEvent { item, .. })
+                if !from_replay && matches!(item, TurnItem::AgentMessage(_)) =>
+            {
+                let TurnItem::AgentMessage(item) = item else {
+                    unreachable!("guard ensures agent message item");
+                };
+                self.on_agent_message_item_started(item);
+            }
+            EventMsg::ItemStarted(_) => {}
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.on_agent_message_delta(delta)
             }
@@ -5397,7 +5668,6 @@ impl ChatWidget {
                 }
             }
             EventMsg::RawResponseItem(_)
-            | EventMsg::ItemStarted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
@@ -5462,7 +5732,7 @@ impl ChatWidget {
                     self.on_plan_item_completed(plan_item.text.clone());
                 }
                 if let codex_protocol::items::TurnItem::AgentMessage(item) = item {
-                    self.on_agent_message_item_completed(item);
+                    self.on_agent_message_item_completed(item, from_replay);
                 }
             }
         }
@@ -8584,6 +8854,15 @@ impl ChatWidget {
     /// Forward file-search results to the bottom pane.
     pub(crate) fn apply_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.bottom_pane.on_file_search_result(query, matches);
+    }
+
+    pub(crate) fn on_draft_completion_result(
+        &mut self,
+        request_id: u64,
+        result: Result<Vec<String>, String>,
+    ) {
+        self.bottom_pane
+            .on_draft_completion_result(request_id, result);
     }
 
     /// Handles a Ctrl+C press at the chat-widget layer.

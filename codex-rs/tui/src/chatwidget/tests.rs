@@ -5,6 +5,7 @@
 //! changes show up as stable, reviewable diffs.
 
 use super::*;
+use crate::answer_interleave::AnswerInterleaveRequest;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
@@ -1864,6 +1865,11 @@ async fn make_chatwidget_manual(
         rate_limit_poller: None,
         adaptive_chunking: crate::streaming::chunking::AdaptiveChunkingPolicy::default(),
         stream_controller: None,
+        agent_message_stream_kind: None,
+        live_answer_handle: None,
+        pending_answer_interleave: None,
+        deferred_turn_complete: None,
+        next_answer_interleave_request_id: 0,
         plan_stream_controller: None,
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
         last_copyable_output: None,
@@ -2029,6 +2035,26 @@ fn drain_insert_history(
         }
     }
     out
+}
+
+fn take_answer_interleave_request(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> AnswerInterleaveRequest {
+    loop {
+        match rx.try_recv() {
+            Ok(AppEvent::StartAnswerInterleave(request)) => return request,
+            Ok(AppEvent::InsertHistoryCell(_)) => {
+                panic!("unexpected history insert before answer interleave result")
+            }
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => {
+                panic!("expected answer interleave request but queue was empty")
+            }
+            Err(TryRecvError::Disconnected) => {
+                panic!("expected answer interleave request but channel closed")
+            }
+        }
+    }
 }
 
 fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
@@ -4131,6 +4157,79 @@ async fn live_legacy_agent_message_after_item_completed_does_not_duplicate_assis
     });
 
     assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[tokio::test]
+async fn explicit_final_answer_requests_interleaving_and_commits_result() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    complete_user_message(
+        &mut chat,
+        "user-1",
+        "1. what's my name?\n2. what are we doing?",
+    );
+    let _ = drain_insert_history(&mut rx);
+
+    complete_assistant_message(
+        &mut chat,
+        "msg-live",
+        "1. Your name is Tuan-Lung.\n2. We are testing interleaving.",
+        Some(MessagePhase::FinalAnswer),
+    );
+
+    let pending = lines_to_single_string(
+        &chat
+            .active_cell
+            .as_ref()
+            .expect("live answer cell")
+            .display_lines(80),
+    );
+    assert_snapshot!("final_answer_interleave_pending", pending);
+
+    let request = take_answer_interleave_request(&mut rx);
+    assert_eq!(
+        request.user_prompt,
+        "1. what's my name?\n2. what are we doing?"
+    );
+    assert!(drain_insert_history(&mut rx).is_empty());
+    chat.on_answer_interleave_result(
+        request.request_id,
+        Ok("1. what's my name?\nA: Your name is Tuan-Lung.\n2. what are we doing?\nA: We are testing interleaving.".into()),
+    );
+
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    let rendered = lines_to_single_string(&inserted[0]);
+    assert_snapshot!("final_answer_interleave_committed", rendered);
+}
+
+#[tokio::test]
+async fn legacy_final_answer_without_phase_still_requests_interleaving() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    complete_user_message(
+        &mut chat,
+        "user-legacy",
+        "1. what's my name?\n2. what are we doing?",
+    );
+    let _ = drain_insert_history(&mut rx);
+
+    complete_assistant_message(
+        &mut chat,
+        "msg-legacy",
+        "1. Your name is Tuan-Lung.\n2. We are testing interleaving.",
+        None,
+    );
+
+    let request = take_answer_interleave_request(&mut rx);
+    assert_eq!(
+        request.user_prompt,
+        "1. what's my name?\n2. what are we doing?"
+    );
+    assert_eq!(
+        request.final_answer,
+        "1. Your name is Tuan-Lung.\n2. We are testing interleaving."
+    );
 }
 
 #[test]

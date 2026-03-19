@@ -153,6 +153,7 @@ use super::chat_composer_history::HistoryEntry;
 use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
 use super::command_popup::CommandPopupFlags;
+use super::draft_completion_popup::DraftCompletionPopup;
 use super::file_search_popup::FileSearchPopup;
 use super::footer::CollaborationModeIndicator;
 use super::footer::FooterMode;
@@ -258,6 +259,10 @@ pub enum InputResult {
     },
     Command(SlashCommand),
     CommandWithArgs(SlashCommand, String, Vec<TextElement>),
+    RequestDraftCompletion {
+        request_id: u64,
+        draft: String,
+    },
     None,
 }
 
@@ -404,6 +409,7 @@ pub(crate) struct ChatComposer {
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     connectors_enabled: bool,
     fast_command_enabled: bool,
+    next_draft_completion_request_id: u64,
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
     audio_device_selection_enabled: bool,
@@ -430,6 +436,7 @@ struct ComposerMentionBinding {
 enum ActivePopup {
     None,
     Command(CommandPopup),
+    Completion(DraftCompletionPopup),
     File(FileSearchPopup),
     Skill(SkillPopup),
 }
@@ -526,6 +533,7 @@ impl ChatComposer {
             collaboration_mode_indicator: None,
             connectors_enabled: false,
             fast_command_enabled: false,
+            next_draft_completion_request_id: 0,
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
             audio_device_selection_enabled: false,
@@ -664,6 +672,9 @@ impl ChatComposer {
         let footer_total_height = footer_hint_height + footer_spacing;
         let popup_constraint = match &self.active_popup {
             ActivePopup::Command(popup) => {
+                Constraint::Max(popup.calculate_required_height(area.width))
+            }
+            ActivePopup::Completion(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
             ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
@@ -1239,6 +1250,23 @@ impl ChatComposer {
         }
     }
 
+    pub(crate) fn on_draft_completion_result(
+        &mut self,
+        request_id: u64,
+        result: Result<Vec<String>, String>,
+    ) {
+        let ActivePopup::Completion(popup) = &mut self.active_popup else {
+            return;
+        };
+        if popup.request_id() != request_id {
+            return;
+        }
+        match result {
+            Ok(suggestions) => popup.set_suggestions(suggestions),
+            Err(err) => popup.set_error_message(err),
+        }
+    }
+
     /// Show the transient "press again to quit" hint for `key`.
     ///
     /// The owner (`BottomPane`/`ChatWidget`) is responsible for scheduling a
@@ -1332,6 +1360,9 @@ impl ChatComposer {
 
         let result = match &mut self.active_popup {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
+            ActivePopup::Completion(_) => {
+                self.handle_key_event_with_draft_completion_popup(key_event)
+            }
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
             ActivePopup::Skill(_) => self.handle_key_event_with_skill_popup(key_event),
             ActivePopup::None => self.handle_key_event_without_popup(key_event),
@@ -1348,6 +1379,9 @@ impl ChatComposer {
 
     /// Handle key event when the slash-command popup is visible.
     fn handle_key_event_with_slash_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        if is_draft_completion_shortcut(key_event) {
+            return (InputResult::None, true);
+        }
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
         }
@@ -1550,6 +1584,70 @@ impl ChatComposer {
         p
     }
 
+    fn handle_key_event_with_draft_completion_popup(
+        &mut self,
+        key_event: KeyEvent,
+    ) -> (InputResult, bool) {
+        if is_draft_completion_shortcut(key_event) {
+            return (InputResult::None, true);
+        }
+        if self.handle_shortcut_overlay_key(&key_event) {
+            return (InputResult::None, true);
+        }
+        self.footer_mode = reset_mode_after_activity(self.footer_mode);
+        let ActivePopup::Completion(popup) = &mut self.active_popup else {
+            unreachable!();
+        };
+
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Up, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                popup.move_up();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Down,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                popup.move_down();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                self.active_popup = ActivePopup::None;
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                let selected = popup.selected_suggestion().map(str::to_string);
+                self.active_popup = ActivePopup::None;
+                if let Some(suggestion) = selected {
+                    self.textarea.insert_str(&suggestion);
+                }
+                (InputResult::None, true)
+            }
+            input => {
+                self.active_popup = ActivePopup::None;
+                self.handle_key_event_without_popup(input)
+            }
+        }
+    }
+
     /// Handle non-ASCII character input (often IME) while still supporting paste-burst detection.
     ///
     /// This handler exists because non-ASCII input often comes from IMEs, where characters can
@@ -1636,6 +1734,9 @@ impl ChatComposer {
 
     /// Handle key events when file search popup is visible.
     fn handle_key_event_with_file_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        if is_draft_completion_shortcut(key_event) {
+            return (InputResult::None, true);
+        }
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
         }
@@ -1759,6 +1860,9 @@ impl ChatComposer {
     }
 
     fn handle_key_event_with_skill_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        if is_draft_completion_shortcut(key_event) {
+            return (InputResult::None, true);
+        }
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
         }
@@ -2779,6 +2883,25 @@ impl ChatComposer {
                 self.handle_input_basic(key_event)
             }
             KeyEvent {
+                code: KeyCode::Char('o'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } if self.popups_enabled()
+                && self.textarea.cursor() == self.textarea.text().len()
+                && !self.is_empty() =>
+            {
+                self.next_draft_completion_request_id =
+                    self.next_draft_completion_request_id.wrapping_add(1);
+                let request_id = self.next_draft_completion_request_id;
+                let draft = self.current_text_with_pending();
+                self.active_popup = ActivePopup::Completion(DraftCompletionPopup::new(request_id));
+                (
+                    InputResult::RequestDraftCompletion { request_id, draft },
+                    true,
+                )
+            }
+            KeyEvent {
                 code: KeyCode::Tab,
                 modifiers: KeyModifiers::NONE,
                 kind: KeyEventKind::Press,
@@ -3237,6 +3360,9 @@ impl ChatComposer {
     }
 
     pub(crate) fn sync_popups(&mut self) {
+        if matches!(self.active_popup, ActivePopup::Completion(_)) {
+            return;
+        }
         self.sync_slash_command_elements();
         if !self.popups_enabled() {
             self.active_popup = ActivePopup::None;
@@ -4154,6 +4280,7 @@ impl Renderable for ChatComposer {
             + match &self.active_popup {
                 ActivePopup::None => footer_total_height,
                 ActivePopup::Command(c) => c.calculate_required_height(width),
+                ActivePopup::Completion(c) => c.calculate_required_height(width),
                 ActivePopup::File(c) => c.calculate_required_height(),
                 ActivePopup::Skill(c) => c.calculate_required_height(width),
             }
@@ -4170,6 +4297,9 @@ impl ChatComposer {
             self.layout_areas(area);
         match &self.active_popup {
             ActivePopup::Command(popup) => {
+                popup.render_ref(popup_rect, buf);
+            }
+            ActivePopup::Completion(popup) => {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::File(popup) => {
@@ -4480,6 +4610,18 @@ fn prompt_selection_action(
             }
         }
     }
+}
+
+fn is_draft_completion_shortcut(key_event: KeyEvent) -> bool {
+    matches!(
+        key_event,
+        KeyEvent {
+            code: KeyCode::Char('o'),
+            modifiers: KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            ..
+        }
+    )
 }
 
 impl Drop for ChatComposer {
@@ -6537,6 +6679,160 @@ mod tests {
         }
     }
 
+    #[test]
+    fn draft_completion_popup_snapshot() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        snapshot_composer_state_with_width("draft_completion_popup", 72, false, |composer| {
+            composer.set_text_content("hell".to_string(), Vec::new(), Vec::new());
+            composer.move_cursor_to_end();
+            let (result, _needs_redraw) =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+            let InputResult::RequestDraftCompletion { request_id, .. } = result else {
+                panic!("expected draft completion request");
+            };
+            composer.on_draft_completion_result(
+                request_id,
+                Ok(vec![
+                    "o world".to_string(),
+                    " there".to_string(),
+                    " everyone".to_string(),
+                ]),
+            );
+        });
+    }
+
+    #[test]
+    fn draft_completion_popup_error_snapshot() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        snapshot_composer_state_with_width("draft_completion_popup_error", 72, false, |composer| {
+            composer.set_text_content("hell".to_string(), Vec::new(), Vec::new());
+            composer.move_cursor_to_end();
+            let (result, _needs_redraw) =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+            let InputResult::RequestDraftCompletion { request_id, .. } = result else {
+                panic!("expected draft completion request");
+            };
+            composer.on_draft_completion_result(
+                request_id,
+                Err("draft completion timed out".to_string()),
+            );
+        });
+    }
+
+    #[test]
+    fn draft_completion_enter_accepts_selected_suggestion() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_text_content("hell".to_string(), Vec::new(), Vec::new());
+        composer.move_cursor_to_end();
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        let InputResult::RequestDraftCompletion { request_id, draft } = result else {
+            panic!("expected draft completion request");
+        };
+        assert_eq!(draft, "hell");
+
+        composer.on_draft_completion_result(
+            request_id,
+            Ok(vec![
+                "o world".to_string(),
+                " there".to_string(),
+                " everyone".to_string(),
+            ]),
+        );
+        let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(result, InputResult::None);
+        assert_eq!(composer.current_text(), "hell there");
+        assert!(matches!(composer.active_popup, ActivePopup::None));
+    }
+
+    #[test]
+    fn draft_completion_popup_dismisses_on_edit() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_text_content("hell".to_string(), Vec::new(), Vec::new());
+        composer.move_cursor_to_end();
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        let InputResult::RequestDraftCompletion { request_id, .. } = result else {
+            panic!("expected draft completion request");
+        };
+        composer.on_draft_completion_result(
+            request_id,
+            Ok(vec![
+                "o world".to_string(),
+                " there".to_string(),
+                " everyone".to_string(),
+            ]),
+        );
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE));
+        flush_after_paste_burst(&mut composer);
+
+        assert_eq!(result, InputResult::None);
+        assert_eq!(composer.current_text(), "hell!");
+        assert!(matches!(composer.active_popup, ActivePopup::None));
+    }
+
+    #[test]
+    fn draft_completion_shortcut_is_ignored_while_other_popup_is_active() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        type_chars_humanlike(&mut composer, &['/', 'm', 'o']);
+        assert!(matches!(composer.active_popup, ActivePopup::Command(_)));
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+
+        assert_eq!(result, InputResult::None);
+        assert!(matches!(composer.active_popup, ActivePopup::Command(_)));
+    }
+
     fn flush_after_paste_burst(composer: &mut ChatComposer) -> bool {
         std::thread::sleep(PasteBurst::recommended_active_flush_delay());
         composer.flush_paste_burst_if_due()
@@ -6599,6 +6895,9 @@ mod tests {
             }
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch, but composer queued literal text")
+            }
+            InputResult::RequestDraftCompletion { .. } => {
+                panic!("expected command dispatch, but composer requested draft completion")
             }
             InputResult::None => panic!("expected Command result for '/init'"),
         }
@@ -7005,6 +7304,9 @@ mod tests {
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch after Tab completion, got literal queue")
             }
+            InputResult::RequestDraftCompletion { .. } => {
+                panic!("expected command dispatch after Tab completion, got draft completion")
+            }
             InputResult::None => panic!("expected Command result for '/diff'"),
         }
         assert!(composer.textarea.is_empty());
@@ -7171,6 +7473,9 @@ mod tests {
             }
             InputResult::Queued { .. } => {
                 panic!("expected command dispatch, but composer queued literal text")
+            }
+            InputResult::RequestDraftCompletion { .. } => {
+                panic!("expected command dispatch, but composer requested draft completion")
             }
             InputResult::None => panic!("expected Command result for '/mention'"),
         }

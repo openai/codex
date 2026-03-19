@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests.rs
+assertion_line: 4199
+expression: rendered
+---
+• 1. what's my name?
+     A: Your name is Tuan-Lung.
+  2. what are we doing?
+     A: We are testing interleaving.

@@ -1,3 +1,4 @@
+use crate::answer_interleave::AnswerInterleaveManager;
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
@@ -16,6 +17,7 @@ use crate::chatwidget::ExternalEditorState;
 use crate::chatwidget::ThreadInputState;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
+use crate::draft_completion::DraftCompletionManager;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::external_editor;
 use crate::file_search::FileSearchManager;
@@ -675,6 +677,8 @@ pub(crate) struct App {
     runtime_sandbox_policy_override: Option<SandboxPolicy>,
 
     pub(crate) file_search: FileSearchManager,
+    draft_completion: DraftCompletionManager,
+    answer_interleave: AnswerInterleaveManager,
 
     pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
 
@@ -2141,6 +2145,18 @@ impl App {
             .maybe_prompt_windows_sandbox_enable(should_prompt_windows_sandbox_nux_at_startup);
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let draft_completion = DraftCompletionManager::new(
+            auth_manager.clone(),
+            thread_manager.get_models_manager(),
+            app_event_tx.clone(),
+            config.clone(),
+        );
+        let answer_interleave = AnswerInterleaveManager::new(
+            auth_manager.clone(),
+            thread_manager.get_models_manager(),
+            app_event_tx.clone(),
+            config.clone(),
+        );
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
@@ -2157,6 +2173,8 @@ impl App {
             runtime_approval_policy_override: None,
             runtime_sandbox_policy_override: None,
             file_search,
+            draft_completion,
+            answer_interleave,
             enhanced_keys_supported,
             transcript_cells: Vec::new(),
             overlay: None,
@@ -2702,6 +2720,20 @@ impl App {
             }
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
+            }
+            AppEvent::StartDraftCompletion(request) => {
+                self.draft_completion.start_request(request);
+            }
+            AppEvent::DraftCompletionResult { request_id, result } => {
+                self.chat_widget
+                    .on_draft_completion_result(request_id, result);
+            }
+            AppEvent::StartAnswerInterleave(request) => {
+                self.answer_interleave.start_request(request);
+            }
+            AppEvent::AnswerInterleaveResult { request_id, result } => {
+                self.chat_widget
+                    .on_answer_interleave_result(request_id, result);
             }
             AppEvent::RateLimitSnapshotFetched(snapshot) => {
                 self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
@@ -6342,6 +6374,18 @@ guardian_approval = true
             CodexAuth::from_api_key("Test API Key"),
         );
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let draft_completion = DraftCompletionManager::new(
+            auth_manager.clone(),
+            server.get_models_manager(),
+            app_event_tx.clone(),
+            config.clone(),
+        );
+        let answer_interleave = AnswerInterleaveManager::new(
+            auth_manager.clone(),
+            server.get_models_manager(),
+            app_event_tx.clone(),
+            config.clone(),
+        );
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
 
@@ -6358,6 +6402,8 @@ guardian_approval = true
             runtime_approval_policy_override: None,
             runtime_sandbox_policy_override: None,
             file_search,
+            draft_completion,
+            answer_interleave,
             transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
@@ -6401,6 +6447,18 @@ guardian_approval = true
             CodexAuth::from_api_key("Test API Key"),
         );
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let draft_completion = DraftCompletionManager::new(
+            auth_manager.clone(),
+            server.get_models_manager(),
+            app_event_tx.clone(),
+            config.clone(),
+        );
+        let answer_interleave = AnswerInterleaveManager::new(
+            auth_manager.clone(),
+            server.get_models_manager(),
+            app_event_tx.clone(),
+            config.clone(),
+        );
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
 
@@ -6418,6 +6476,8 @@ guardian_approval = true
                 runtime_approval_policy_override: None,
                 runtime_sandbox_policy_override: None,
                 file_search,
+                draft_completion,
+                answer_interleave,
                 transcript_cells: Vec::new(),
                 overlay: None,
                 deferred_history_lines: Vec::new(),

@@ -66,6 +66,7 @@ use tracing_subscriber::prelude::*;
 use uuid::Uuid;
 
 mod additional_dirs;
+mod answer_interleave;
 mod app;
 mod app_backtrack;
 mod app_event;
@@ -84,6 +85,7 @@ pub mod custom_terminal;
 mod cwd_prompt;
 mod debug_config;
 mod diff_render;
+mod draft_completion;
 mod exec_cell;
 mod exec_command;
 mod external_editor;
