@@ -29,22 +29,17 @@ use crate::auth::CodexAuth;
 use crate::config::Config;
 use crate::config::ConfigService;
 use crate::config::ConfigServiceError;
-use crate::config::ConfigToml;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
-use crate::config::profile::ConfigProfile;
 use crate::config::types::McpServerConfig;
 use crate::config::types::PluginConfig;
 use crate::config_loader::ConfigLayerStack;
 use crate::features::Feature;
-use crate::features::FeatureOverrides;
-use crate::features::Features;
 use crate::skills::SkillMetadata;
 use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::MergeStrategy;
-use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
@@ -422,7 +417,7 @@ impl From<RemotePluginFetchError> for PluginRemoteSyncError {
 pub struct PluginsManager {
     codex_home: PathBuf,
     store: PluginStore,
-    cache_by_cwd: RwLock<HashMap<PathBuf, PluginLoadOutcome>>,
+    cached_enabled_outcome: RwLock<Option<PluginLoadOutcome>>,
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
 }
 
@@ -431,7 +426,7 @@ impl PluginsManager {
         Self {
             codex_home: codex_home.clone(),
             store: PluginStore::new(codex_home),
-            cache_by_cwd: RwLock::new(HashMap::new()),
+            cached_enabled_outcome: RwLock::new(None),
             analytics_events_client: RwLock::new(None),
         }
     }
@@ -445,49 +440,44 @@ impl PluginsManager {
     }
 
     pub fn plugins_for_config(&self, config: &Config) -> PluginLoadOutcome {
-        self.plugins_for_layer_stack(
-            &config.cwd,
-            &config.config_layer_stack,
-            /*force_reload*/ false,
-        )
+        self.plugins_for_config_with_force_reload(config, /*force_reload*/ false)
     }
 
-    pub fn plugins_for_layer_stack(
+    pub(crate) fn plugins_for_config_with_force_reload(
         &self,
-        cwd: &Path,
-        config_layer_stack: &ConfigLayerStack,
+        config: &Config,
         force_reload: bool,
     ) -> PluginLoadOutcome {
-        if !plugins_feature_enabled_from_stack(config_layer_stack) {
+        if !config.features.enabled(Feature::Plugins) {
             return PluginLoadOutcome::default();
         }
 
-        if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(cwd) {
+        if !force_reload && let Some(outcome) = self.cached_enabled_outcome() {
             return outcome;
         }
 
-        let outcome = load_plugins_from_layer_stack(config_layer_stack, &self.store);
+        let outcome = load_plugins_from_layer_stack(&config.config_layer_stack, &self.store);
         log_plugin_load_errors(&outcome);
-        let mut cache = match self.cache_by_cwd.write() {
+        let mut cache = match self.cached_enabled_outcome.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
-        cache.insert(cwd.to_path_buf(), outcome.clone());
+        *cache = Some(outcome.clone());
         outcome
     }
 
     pub fn clear_cache(&self) {
-        let mut cache_by_cwd = match self.cache_by_cwd.write() {
+        let mut cached_enabled_outcome = match self.cached_enabled_outcome.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
         };
-        cache_by_cwd.clear();
+        *cached_enabled_outcome = None;
     }
 
-    fn cached_outcome_for_cwd(&self, cwd: &Path) -> Option<PluginLoadOutcome> {
-        match self.cache_by_cwd.read() {
-            Ok(cache) => cache.get(cwd).cloned(),
-            Err(err) => err.into_inner().get(cwd).cloned(),
+    fn cached_enabled_outcome(&self) -> Option<PluginLoadOutcome> {
+        match self.cached_enabled_outcome.read() {
+            Ok(cache) => cache.clone(),
+            Err(err) => err.into_inner().clone(),
         }
     }
 
@@ -635,6 +625,10 @@ impl PluginsManager {
         config: &Config,
         auth: Option<&CodexAuth>,
     ) -> Result<RemotePluginSyncResult, PluginRemoteSyncError> {
+        if !config.features.enabled(Feature::Plugins) {
+            return Ok(RemotePluginSyncResult::default());
+        }
+
         info!("starting remote plugin sync");
         let remote_plugins = fetch_remote_plugin_status(config, auth)
             .await
@@ -818,7 +812,11 @@ impl PluginsManager {
         config: &Config,
         additional_roots: &[AbsolutePathBuf],
     ) -> Result<Vec<ConfiguredMarketplace>, MarketplaceError> {
-        let (installed_plugins, configured_plugins) = self.configured_plugin_states(config);
+        if !config.features.enabled(Feature::Plugins) {
+            return Ok(Vec::new());
+        }
+
+        let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
         let marketplaces = list_marketplaces(&self.marketplace_roots(additional_roots))?;
         let mut seen_plugin_keys = HashSet::new();
 
@@ -841,10 +839,7 @@ impl PluginsManager {
                             // resolve to the first discovered source.
                             id: plugin_key.clone(),
                             installed: installed_plugins.contains(&plugin_key),
-                            enabled: configured_plugins
-                                .get(&plugin_key)
-                                .copied()
-                                .unwrap_or(false),
+                            enabled: enabled_plugins.contains(&plugin_key),
                             name: plugin.name,
                             source: plugin.source,
                             policy: plugin.policy,
@@ -868,6 +863,10 @@ impl PluginsManager {
         config: &Config,
         request: &PluginReadRequest,
     ) -> Result<PluginReadOutcome, MarketplaceError> {
+        if !config.features.enabled(Feature::Plugins) {
+            return Err(MarketplaceError::PluginsDisabled);
+        }
+
         let marketplace = load_marketplace(&request.marketplace_path)?;
         let marketplace_name = marketplace.name.clone();
         let plugin = marketplace
@@ -887,7 +886,7 @@ impl PluginsManager {
             },
         )?;
         let plugin_key = plugin_id.as_key();
-        let (installed_plugins, configured_plugins) = self.configured_plugin_states(config);
+        let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
         let source_path = match &plugin.source {
             MarketplacePluginSource::Local { path } => path.clone(),
         };
@@ -928,10 +927,7 @@ impl PluginsManager {
                 policy: plugin.policy,
                 interface: plugin.interface,
                 installed: installed_plugins.contains(&plugin_key),
-                enabled: configured_plugins
-                    .get(&plugin_key)
-                    .copied()
-                    .unwrap_or(false),
+                enabled: enabled_plugins.contains(&plugin_key),
                 skills,
                 apps,
                 mcp_server_names,
@@ -939,12 +935,8 @@ impl PluginsManager {
         })
     }
 
-    pub fn maybe_start_curated_repo_sync_for_config(
-        self: &Arc<Self>,
-        config: &Config,
-        session_source: &SessionSource,
-    ) {
-        if plugins_feature_enabled_from_stack(&config.config_layer_stack) {
+    pub fn maybe_start_curated_repo_sync_for_config(self: &Arc<Self>, config: &Config) {
+        if config.features.enabled(Feature::Plugins) {
             let mut configured_curated_plugin_ids =
                 configured_plugins_from_stack(&config.config_layer_stack)
                     .into_keys()
@@ -966,15 +958,11 @@ impl PluginsManager {
                     })
                     .collect::<Vec<_>>();
             configured_curated_plugin_ids.sort_unstable_by_key(super::store::PluginId::as_key);
-            self.start_curated_repo_sync(configured_curated_plugin_ids, session_source.clone());
+            self.start_curated_repo_sync(configured_curated_plugin_ids);
         }
     }
 
-    fn start_curated_repo_sync(
-        self: &Arc<Self>,
-        configured_curated_plugin_ids: Vec<PluginId>,
-        session_source: SessionSource,
-    ) {
+    fn start_curated_repo_sync(self: &Arc<Self>, configured_curated_plugin_ids: Vec<PluginId>) {
         if CURATED_REPO_SYNC_STARTED.swap(true, Ordering::SeqCst) {
             return;
         }
@@ -989,7 +977,6 @@ impl PluginsManager {
                             codex_home.as_path(),
                             &curated_plugin_version,
                             &configured_curated_plugin_ids,
-                            &session_source,
                         ) {
                             Ok(cache_refreshed) => {
                                 if cache_refreshed {
@@ -1015,25 +1002,22 @@ impl PluginsManager {
         }
     }
 
-    fn configured_plugin_states(
-        &self,
-        config: &Config,
-    ) -> (HashSet<String>, HashMap<String, bool>) {
-        let installed_plugins = configured_plugins_from_stack(&config.config_layer_stack)
-            .into_keys()
+    fn configured_plugin_states(&self, config: &Config) -> (HashSet<String>, HashSet<String>) {
+        let configured_plugins = configured_plugins_from_stack(&config.config_layer_stack);
+        let installed_plugins = configured_plugins
+            .keys()
             .filter(|plugin_key| {
                 PluginId::parse(plugin_key)
                     .ok()
                     .is_some_and(|plugin_id| self.store.is_installed(&plugin_id))
             })
+            .cloned()
             .collect::<HashSet<_>>();
-        let configured_plugins = self
-            .plugins_for_config(config)
-            .plugins()
-            .iter()
-            .map(|plugin| (plugin.config_name.clone(), plugin.enabled))
-            .collect::<HashMap<String, bool>>();
-        (installed_plugins, configured_plugins)
+        let enabled_plugins = configured_plugins
+            .into_iter()
+            .filter_map(|(plugin_key, plugin)| plugin.enabled.then_some(plugin_key))
+            .collect::<HashSet<_>>();
+        (installed_plugins, enabled_plugins)
     }
 
     fn marketplace_roots(&self, additional_roots: &[AbsolutePathBuf]) -> Vec<AbsolutePathBuf> {
@@ -1117,24 +1101,6 @@ impl PluginUninstallError {
     }
 }
 
-fn plugins_feature_enabled_from_stack(config_layer_stack: &ConfigLayerStack) -> bool {
-    // Plugins are intentionally opt-in from the persisted user config only. Project config
-    // layers should not be able to enable plugin loading for a checkout.
-    let Some(user_layer) = config_layer_stack.get_user_layer() else {
-        return false;
-    };
-    let Ok(config_toml) = user_layer.config.clone().try_into::<ConfigToml>() else {
-        warn!("failed to deserialize config when checking plugin feature flag");
-        return false;
-    };
-    let config_profile = config_toml
-        .get_config_profile(config_toml.profile.clone())
-        .unwrap_or_else(|_| ConfigProfile::default());
-    let features =
-        Features::from_config(&config_toml, &config_profile, FeatureOverrides::default());
-    features.enabled(Feature::Plugins)
-}
-
 fn log_plugin_load_errors(outcome: &PluginLoadOutcome) {
     for plugin in outcome
         .plugins
@@ -1215,7 +1181,6 @@ fn refresh_curated_plugin_cache(
     codex_home: &Path,
     plugin_version: &str,
     configured_curated_plugin_ids: &[PluginId],
-    session_source: &SessionSource,
 ) -> Result<bool, String> {
     let store = PluginStore::new(codex_home.to_path_buf());
     let curated_marketplace_path = AbsolutePathBuf::try_from(
@@ -1226,12 +1191,9 @@ fn refresh_curated_plugin_cache(
         .map_err(|err| format!("failed to load curated marketplace for cache refresh: {err}"))?;
 
     let mut plugin_sources = HashMap::<String, AbsolutePathBuf>::new();
-    let mut product_restricted_plugin_names = HashSet::<String>::new();
     for plugin in curated_marketplace.plugins {
         let plugin_name = plugin.name;
-        if plugin_sources.contains_key(&plugin_name)
-            || product_restricted_plugin_names.contains(&plugin_name)
-        {
+        if plugin_sources.contains_key(&plugin_name) {
             warn!(
                 plugin = plugin_name,
                 marketplace = OPENAI_CURATED_MARKETPLACE_NAME,
@@ -1242,32 +1204,16 @@ fn refresh_curated_plugin_cache(
         let source_path = match plugin.source {
             MarketplacePluginSource::Local { path } => path,
         };
-        if session_source.matches_product_restriction(&plugin.policy.products) {
-            plugin_sources.insert(plugin_name, source_path);
-        } else {
-            product_restricted_plugin_names.insert(plugin_name);
-        }
+        plugin_sources.insert(plugin_name, source_path);
     }
 
     let mut cache_refreshed = false;
     for plugin_id in configured_curated_plugin_ids {
-        // Curated plugin cache entries are intentionally sticky across session source changes.
-        // Product restrictions gate refresh for this source, but do not retroactively evict an
-        // already-active cache entry from a shared CODEX_HOME.
         if store.active_plugin_version(plugin_id).as_deref() == Some(plugin_version) {
             continue;
         }
 
         let Some(source_path) = plugin_sources.get(&plugin_id.plugin_name).cloned() else {
-            if product_restricted_plugin_names.contains(&plugin_id.plugin_name) {
-                info!(
-                    plugin = plugin_id.plugin_name,
-                    marketplace = OPENAI_CURATED_MARKETPLACE_NAME,
-                    session_source = %session_source,
-                    "skipping curated plugin cache refresh for product-restricted plugin"
-                );
-                continue;
-            }
             warn!(
                 plugin = plugin_id.plugin_name,
                 marketplace = OPENAI_CURATED_MARKETPLACE_NAME,
@@ -1293,7 +1239,7 @@ fn refresh_curated_plugin_cache(
 fn configured_plugins_from_stack(
     config_layer_stack: &ConfigLayerStack,
 ) -> HashMap<String, PluginConfig> {
-    // Keep plugin entries aligned with the same user-layer-only semantics as the feature gate.
+    // Plugin entries remain persisted user config only.
     let Some(user_layer) = config_layer_stack.get_user_layer() else {
         return HashMap::new();
     };

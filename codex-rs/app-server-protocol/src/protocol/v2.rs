@@ -1467,7 +1467,6 @@ pub enum SessionSource {
     VsCode,
     Exec,
     AppServer,
-    Custom(String),
     SubAgent(CoreSubAgentSource),
     #[serde(other)]
     Unknown,
@@ -1480,7 +1479,6 @@ impl From<CoreSessionSource> for SessionSource {
             CoreSessionSource::VSCode => SessionSource::VsCode,
             CoreSessionSource::Exec => SessionSource::Exec,
             CoreSessionSource::Mcp => SessionSource::AppServer,
-            CoreSessionSource::Custom(source) => SessionSource::Custom(source),
             CoreSessionSource::SubAgent(sub) => SessionSource::SubAgent(sub),
             CoreSessionSource::Unknown => SessionSource::Unknown,
         }
@@ -1494,7 +1492,6 @@ impl From<SessionSource> for CoreSessionSource {
             SessionSource::VsCode => CoreSessionSource::VSCode,
             SessionSource::Exec => CoreSessionSource::Exec,
             SessionSource::AppServer => CoreSessionSource::Mcp,
-            SessionSource::Custom(source) => CoreSessionSource::Custom(source),
             SessionSource::SubAgent(sub) => CoreSessionSource::SubAgent(sub),
             SessionSource::Unknown => CoreSessionSource::Unknown,
         }
@@ -2954,7 +2951,6 @@ pub enum ThreadSourceKind {
     VsCode,
     Exec,
     AppServer,
-    Custom,
     SubAgent,
     SubAgentReview,
     SubAgentCompact,

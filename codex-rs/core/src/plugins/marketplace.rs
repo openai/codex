@@ -14,6 +14,7 @@ use std::io;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
+use tracing::warn;
 
 const MARKETPLACE_RELATIVE_PATH: &str = ".agents/plugins/marketplace.json";
 
@@ -54,6 +55,8 @@ pub enum MarketplacePluginSource {
 pub struct MarketplacePluginPolicy {
     pub installation: MarketplacePluginInstallPolicy,
     pub authentication: MarketplacePluginAuthPolicy,
+    // TODO: Surface or enforce product gating at the Codex/plugin consumer boundary instead of
+    // only carrying it through core marketplace metadata.
     pub products: Vec<Product>,
 }
 
@@ -124,6 +127,9 @@ pub enum MarketplaceError {
         plugin_name: String,
         marketplace_name: String,
     },
+
+    #[error("plugins feature is disabled")]
+    PluginsDisabled,
 
     #[error("{0}")]
     InvalidPlugin(String),
@@ -236,7 +242,16 @@ fn list_marketplaces_with_home(
     let mut marketplaces = Vec::new();
 
     for marketplace_path in discover_marketplace_paths_from_roots(additional_roots, home_dir) {
-        marketplaces.push(load_marketplace(&marketplace_path)?);
+        match load_marketplace(&marketplace_path) {
+            Ok(marketplace) => marketplaces.push(marketplace),
+            Err(err) => {
+                warn!(
+                    path = %marketplace_path.display(),
+                    error = %err,
+                    "skipping marketplace that failed to load"
+                );
+            }
+        }
     }
 
     Ok(marketplaces)

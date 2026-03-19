@@ -2385,12 +2385,11 @@ impl Session {
                 &per_turn_config,
             )
             .await;
-        let skills_outcome = Arc::new(crate::skills::filter_skill_load_outcome_for_session_source(
+        let skills_outcome = Arc::new(
             self.services
                 .skills_manager
                 .skills_for_config(&per_turn_config),
-            &session_configuration.session_source,
-        ));
+        );
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.session_telemetry,
@@ -4774,24 +4773,20 @@ mod handlers {
         cwds: Vec<PathBuf>,
         force_reload: bool,
     ) {
-        let (cwds, session_source) = if cwds.is_empty() {
+        let cwds = if cwds.is_empty() {
             let state = sess.state.lock().await;
-            (
-                vec![state.session_configuration.cwd.clone()],
-                state.session_configuration.session_source.clone(),
-            )
+            vec![state.session_configuration.cwd.clone()]
         } else {
-            let state = sess.state.lock().await;
-            (cwds, state.session_configuration.session_source.clone())
+            cwds
         };
 
         let skills_manager = &sess.services.skills_manager;
+        let config = sess.get_config().await;
         let mut skills = Vec::new();
         for cwd in cwds {
-            let outcome = crate::skills::filter_skill_load_outcome_for_session_source(
-                skills_manager.skills_for_cwd(&cwd, force_reload).await,
-                &session_source,
-            );
+            let outcome = skills_manager
+                .skills_for_cwd(&cwd, config.as_ref(), force_reload)
+                .await;
             let errors = super::errors_to_info(&outcome.errors);
             let skills_metadata = super::skills_to_info(&outcome.skills, &outcome.disabled_paths);
             skills.push(SkillsListEntry {
