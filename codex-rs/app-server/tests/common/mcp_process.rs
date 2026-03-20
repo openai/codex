@@ -723,6 +723,14 @@ impl McpProcess {
         self.send_request("account/login/start", Some(params)).await
     }
 
+    /// Send an `account/login/start` JSON-RPC request for ChatGPT device code login.
+    pub async fn send_login_account_chatgpt_device_code_request(&mut self) -> anyhow::Result<i64> {
+        let params = serde_json::json!({
+            "type": "chatgptDeviceCode"
+        });
+        self.send_request("account/login/start", Some(params)).await
+    }
+
     /// Send an `account/login/cancel` JSON-RPC request.
     pub async fn send_cancel_login_account_request(
         &mut self,
