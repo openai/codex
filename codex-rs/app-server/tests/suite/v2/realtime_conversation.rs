@@ -76,10 +76,14 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
                 "delta": "working"
             }),
             json!({
-                "type": "conversation.handoff.requested",
-                "handoff_id": "handoff_1",
-                "item_id": "item_2",
-                "input_transcript": "delegate now"
+                "type": "conversation.item.done",
+                "item": {
+                    "id": "item_2",
+                    "type": "function_call",
+                    "name": "codex",
+                    "call_id": "handoff_1",
+                    "arguments": "{\"input_transcript\":\"delegate now\"}"
+                }
             }),
             json!({
                 "type": "error",
