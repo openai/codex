@@ -1,10 +1,16 @@
 use std::mem::swap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::anyhow;
 use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::ModelProviderInfo;
@@ -28,6 +34,8 @@ use serde_json::Value;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
+use crate::RemoteEnvConfig;
+use crate::get_remote_test_env;
 use crate::load_default_config_for_test;
 use crate::responses::WebSocketTestServer;
 use crate::responses::output_value_to_text;
@@ -41,6 +49,207 @@ use wiremock::matchers::path_regex;
 type ConfigMutator = dyn FnOnce(&mut Config) + Send;
 type PreBuildHook = dyn FnOnce(&Path) + Send + 'static;
 const TEST_MODEL_WITH_EXPERIMENTAL_TOOLS: &str = "test-gpt-5.1-codex";
+const REMOTE_EXEC_SERVER_START_TIMEOUT: Duration = Duration::from_secs(5);
+const REMOTE_EXEC_SERVER_POLL_INTERVAL: Duration = Duration::from_millis(25);
+static REMOTE_EXEC_SERVER_INSTANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug)]
+struct RemoteExecServerProcess {
+    container_name: String,
+    pid: u32,
+    remote_exec_server_path: String,
+    stdout_path: String,
+}
+
+impl Drop for RemoteExecServerProcess {
+    fn drop(&mut self) {
+        let script = format!(
+            "if kill -0 {pid} 2>/dev/null; then kill {pid}; fi; rm -f {remote_exec_server_path} {stdout_path}",
+            pid = self.pid,
+            remote_exec_server_path = self.remote_exec_server_path,
+            stdout_path = self.stdout_path
+        );
+        let _ = docker_command_capture_stdout(["exec", &self.container_name, "sh", "-lc", &script]);
+    }
+}
+
+#[derive(Debug)]
+pub struct ExecutorEnvironment {
+    environment: codex_exec_server::Environment,
+    _remote_exec_server_process: Option<RemoteExecServerProcess>,
+}
+
+impl ExecutorEnvironment {
+    pub fn environment(&self) -> &codex_exec_server::Environment {
+        &self.environment
+    }
+
+    pub fn experimental_exec_server_url(&self) -> Option<&str> {
+        self.environment.experimental_exec_server_url()
+    }
+}
+
+pub async fn test_env() -> Result<ExecutorEnvironment> {
+    match get_remote_test_env() {
+        Some(remote_env) => {
+            let remote_process = start_remote_exec_server(&remote_env)?;
+            let remote_ip = remote_container_ip(&remote_env.container_name)?;
+            let websocket_url = rewrite_websocket_host(&remote_process.listen_url, &remote_ip)?;
+            let environment = codex_exec_server::Environment::create(Some(websocket_url)).await?;
+            Ok(ExecutorEnvironment {
+                environment,
+                _remote_exec_server_process: Some(remote_process.process),
+            })
+        }
+        None => {
+            let environment = codex_exec_server::Environment::create(None).await?;
+            Ok(ExecutorEnvironment {
+                environment,
+                _remote_exec_server_process: None,
+            })
+        }
+    }
+}
+
+struct RemoteExecServerStart {
+    process: RemoteExecServerProcess,
+    listen_url: String,
+}
+
+fn start_remote_exec_server(remote_env: &RemoteEnvConfig) -> Result<RemoteExecServerStart> {
+    let container_name = remote_env.container_name.as_str();
+    let instance_id = remote_exec_server_instance_id();
+    let remote_exec_server_path = format!("/tmp/codex-exec-server-{instance_id}");
+    let stdout_path = format!("/tmp/codex-exec-server-{instance_id}.stdout");
+    let local_binary = codex_utils_cargo_bin::cargo_bin("codex-exec-server")
+        .context("resolve codex-exec-server binary")?;
+    let local_binary = local_binary.to_string_lossy().to_string();
+    let remote_binary = format!("{container_name}:{remote_exec_server_path}");
+
+    docker_command_success(["cp", &local_binary, &remote_binary])?;
+    docker_command_success([
+        "exec",
+        container_name,
+        "chmod",
+        "+x",
+        &remote_exec_server_path,
+    ])?;
+
+    let start_script = format!(
+        "rm -f {stdout_path}; \
+nohup {remote_exec_server_path} --listen ws://0.0.0.0:0 > {stdout_path} 2>&1 & \
+echo $!"
+    );
+    let pid_output =
+        docker_command_capture_stdout(["exec", container_name, "sh", "-lc", &start_script])?;
+    let pid = pid_output
+        .trim()
+        .parse::<u32>()
+        .with_context(|| format!("parse remote exec-server PID from {pid_output:?}"))?;
+
+    let listen_url = wait_for_remote_listen_url(container_name, &stdout_path)?;
+
+    Ok(RemoteExecServerStart {
+        process: RemoteExecServerProcess {
+            container_name: container_name.to_string(),
+            pid,
+            remote_exec_server_path,
+            stdout_path,
+        },
+        listen_url,
+    })
+}
+
+fn wait_for_remote_listen_url(container_name: &str, stdout_path: &str) -> Result<String> {
+    let deadline = Instant::now() + REMOTE_EXEC_SERVER_START_TIMEOUT;
+    loop {
+        let line = docker_command_capture_stdout([
+            "exec",
+            container_name,
+            "sh",
+            "-lc",
+            &format!("head -n 1 {stdout_path} 2>/dev/null || true"),
+        ])?;
+        let listen_url = line.trim();
+        if listen_url.starts_with("ws://") {
+            return Ok(listen_url.to_string());
+        }
+
+        if Instant::now() >= deadline {
+            return Err(anyhow!(
+                "timed out waiting for remote exec-server listen URL in container `{container_name}` after {REMOTE_EXEC_SERVER_START_TIMEOUT:?}"
+            ));
+        }
+        std::thread::sleep(REMOTE_EXEC_SERVER_POLL_INTERVAL);
+    }
+}
+
+fn remote_exec_server_instance_id() -> String {
+    let instance = REMOTE_EXEC_SERVER_INSTANCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{}-{instance}", std::process::id())
+}
+
+fn remote_container_ip(container_name: &str) -> Result<String> {
+    let ip = docker_command_capture_stdout([
+        "inspect",
+        "-f",
+        "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+        container_name,
+    ])?;
+    let ip = ip.trim();
+    if ip.is_empty() {
+        return Err(anyhow!(
+            "container `{container_name}` has no IP address; cannot connect to remote exec-server"
+        ));
+    }
+    Ok(ip.to_string())
+}
+
+fn rewrite_websocket_host(listen_url: &str, host: &str) -> Result<String> {
+    let Some(address) = listen_url.strip_prefix("ws://") else {
+        return Err(anyhow!(
+            "unexpected websocket listen URL `{listen_url}`; expected ws://IP:PORT"
+        ));
+    };
+    let Some((_, port)) = address.rsplit_once(':') else {
+        return Err(anyhow!(
+            "unexpected websocket listen URL `{listen_url}`; expected ws://IP:PORT"
+        ));
+    };
+    Ok(format!("ws://{host}:{port}"))
+}
+
+fn docker_command_success<const N: usize>(args: [&str; N]) -> Result<()> {
+    let output = Command::new("docker")
+        .args(args)
+        .output()
+        .with_context(|| format!("run docker {:?}", args))?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "docker {:?} failed: stdout={} stderr={}",
+            args,
+            String::from_utf8_lossy(&output.stdout).trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<String> {
+    let output = Command::new("docker")
+        .args(args)
+        .output()
+        .with_context(|| format!("run docker {:?}", args))?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "docker {:?} failed: stdout={} stderr={}",
+            args,
+            String::from_utf8_lossy(&output.stdout).trim(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    String::from_utf8(output.stdout).context("docker stdout must be utf-8")
+}
 
 /// A collection of different ways the model can output an apply_patch call
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

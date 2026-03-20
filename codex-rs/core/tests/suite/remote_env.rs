@@ -1,99 +1,57 @@
-use anyhow::Context;
 use anyhow::Result;
-use anyhow::ensure;
-use core_test_support::RemoteEnvConfig;
-use core_test_support::requires_remote_env;
+use codex_exec_server::RemoveOptions;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::get_remote_test_env;
+use core_test_support::test_codex::test_env;
 use pretty_assertions::assert_eq;
-use std::io::Write;
-use std::process::Command;
-use std::process::Stdio;
+use std::path::PathBuf;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
-#[test]
-fn remote_env_connects_creates_temp_dir_and_runs_sample_script() -> Result<()> {
-    let Some(remote_env) = requires_remote_env() else {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_test_env_can_connect_and_use_filesystem() -> Result<()> {
+    let Some(_remote_env) = get_remote_test_env() else {
         return Ok(());
     };
 
-    let version_stdout = run_remote_script(
-        &remote_env,
-        r#"
-set -euo pipefail
-/tmp/codex --version
-"#,
-    )?;
-    ensure!(
-        version_stdout.contains("codex"),
-        "unexpected codex --version output: {version_stdout:?}"
-    );
+    let test_env = test_env().await?;
+    let file_system = test_env.environment().get_filesystem();
 
-    let output = run_remote_script(
-        &remote_env,
-        r#"
-set -euo pipefail
+    let file_path = remote_test_file_path();
+    let file_path_abs = absolute_path(file_path.clone())?;
+    let payload = b"remote-test-env-ok".to_vec();
 
-temp_dir="$(mktemp -d)"
-script_path="${temp_dir}/sample.sh"
+    file_system
+        .write_file(&file_path_abs, payload.clone())
+        .await?;
+    let actual = file_system.read_file(&file_path_abs).await?;
+    assert_eq!(actual, payload);
 
-printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'echo remote-env-script-ok' > "${script_path}"
-chmod +x "${script_path}"
-
-"${script_path}" > "${temp_dir}/script.out"
-
-echo "TEMP_DIR=${temp_dir}"
-cat "${temp_dir}/script.out"
-rm -rf "${temp_dir}"
-"#,
-    )?;
-
-    let lines: Vec<&str> = output.lines().collect();
-    ensure!(
-        lines.len() >= 2,
-        "remote script output must include at least two lines, got: {output:?}"
-    );
-    ensure!(
-        lines[0].starts_with("TEMP_DIR=/"),
-        "expected TEMP_DIR output from remote script, got {:?}",
-        lines[0]
-    );
-    assert_eq!(lines[1], "remote-env-script-ok");
+    file_system
+        .remove(
+            &file_path_abs,
+            RemoveOptions {
+                recursive: false,
+                force: true,
+            },
+        )
+        .await?;
 
     Ok(())
 }
 
-fn run_remote_script(remote_env: &RemoteEnvConfig, script: &str) -> Result<String> {
-    let mut command = Command::new("docker");
-    command
-        .arg("exec")
-        .arg("-i")
-        .arg(&remote_env.container_name)
-        .arg("bash")
-        .arg("-s")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+fn absolute_path(path: PathBuf) -> Result<AbsolutePathBuf> {
+    AbsolutePathBuf::try_from(path.clone())
+        .map_err(|err| anyhow::anyhow!("invalid absolute path {}: {err}", path.display()))
+}
 
-    let mut child = command.spawn().context("failed to spawn docker exec")?;
-
-    let mut stdin = child
-        .stdin
-        .take()
-        .context("failed to open stdin for docker exec command")?;
-    stdin
-        .write_all(script.as_bytes())
-        .context("failed to write remote script to docker exec stdin")?;
-    drop(stdin);
-
-    let output = child
-        .wait_with_output()
-        .context("failed to wait for docker exec command")?;
-
-    ensure!(
-        output.status.success(),
-        "remote script failed with status {}\nstdout:\n{}\nstderr:\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    String::from_utf8(output.stdout).context("remote script stdout was not valid UTF-8")
+fn remote_test_file_path() -> PathBuf {
+    let nanos = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_nanos(),
+        Err(_) => 0,
+    };
+    PathBuf::from(format!(
+        "/tmp/codex-remote-test-env-{}-{nanos}.txt",
+        std::process::id()
+    ))
 }

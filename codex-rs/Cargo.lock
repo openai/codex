@@ -3089,6 +3089,7 @@ dependencies = [
  "assert_cmd",
  "base64 0.22.1",
  "codex-core",
+ "codex-exec-server",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",

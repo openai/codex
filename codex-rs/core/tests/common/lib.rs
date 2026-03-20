@@ -271,7 +271,7 @@ pub struct RemoteEnvConfig {
     pub container_name: String,
 }
 
-pub fn requires_remote_env() -> Option<RemoteEnvConfig> {
+pub fn get_remote_test_env() -> Option<RemoteEnvConfig> {
     if std::env::var_os(REMOTE_ENV_ENV_VAR).is_none() {
         eprintln!("Skipping test because {REMOTE_ENV_ENV_VAR} is not set.");
         return None;
