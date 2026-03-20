@@ -13,8 +13,12 @@ use crate::plugins::test_support::write_curated_plugin_sha_with as write_curated
 use crate::plugins::test_support::write_file;
 use crate::plugins::test_support::write_openai_curated_marketplace;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_capabilities::plugins::curated_plugins_repo_path;
+use codex_capabilities::plugins::plugin_namespace_for_skill_path;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 use tempfile::TempDir;
 use toml::Value;
 use wiremock::Mock;

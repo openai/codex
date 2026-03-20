@@ -8,7 +8,6 @@ use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 fn test_skill_metadata(skill_doc_path: PathBuf) -> SkillMetadata {
     SkillMetadata {
@@ -52,11 +51,10 @@ fn skill_doc_read_detection_matches_absolute_path() {
     let skill_doc_path = PathBuf::from("/tmp/skill-test/SKILL.md");
     let normalized_skill_doc_path = normalize_path(skill_doc_path.as_path());
     let skill = test_skill_metadata(skill_doc_path);
-    let outcome = SkillLoadOutcome {
-        implicit_skills_by_scripts_dir: Arc::new(HashMap::new()),
-        implicit_skills_by_doc_path: Arc::new(HashMap::from([(normalized_skill_doc_path, skill)])),
-        ..Default::default()
-    };
+    let outcome = SkillLoadOutcome::with_implicit_skill_indexes(
+        HashMap::new(),
+        HashMap::from([(normalized_skill_doc_path, skill)]),
+    );
 
     let tokens = vec![
         "cat".to_string(),
@@ -77,11 +75,10 @@ fn skill_script_run_detection_matches_relative_path_from_skill_root() {
     let skill_doc_path = PathBuf::from("/tmp/skill-test/SKILL.md");
     let scripts_dir = normalize_path(Path::new("/tmp/skill-test/scripts"));
     let skill = test_skill_metadata(skill_doc_path);
-    let outcome = SkillLoadOutcome {
-        implicit_skills_by_scripts_dir: Arc::new(HashMap::from([(scripts_dir, skill)])),
-        implicit_skills_by_doc_path: Arc::new(HashMap::new()),
-        ..Default::default()
-    };
+    let outcome = SkillLoadOutcome::with_implicit_skill_indexes(
+        HashMap::from([(scripts_dir, skill)]),
+        HashMap::new(),
+    );
     let tokens = vec![
         "python3".to_string(),
         "scripts/fetch_comments.py".to_string(),
@@ -100,11 +97,10 @@ fn skill_script_run_detection_matches_absolute_path_from_any_workdir() {
     let skill_doc_path = PathBuf::from("/tmp/skill-test/SKILL.md");
     let scripts_dir = normalize_path(Path::new("/tmp/skill-test/scripts"));
     let skill = test_skill_metadata(skill_doc_path);
-    let outcome = SkillLoadOutcome {
-        implicit_skills_by_scripts_dir: Arc::new(HashMap::from([(scripts_dir, skill)])),
-        implicit_skills_by_doc_path: Arc::new(HashMap::new()),
-        ..Default::default()
-    };
+    let outcome = SkillLoadOutcome::with_implicit_skill_indexes(
+        HashMap::from([(scripts_dir, skill)]),
+        HashMap::new(),
+    );
     let tokens = vec![
         "python3".to_string(),
         "/tmp/skill-test/scripts/fetch_comments.py".to_string(),

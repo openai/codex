@@ -1636,6 +1636,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-capabilities"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "codex-app-server-protocol",
+ "codex-config",
+ "codex-login",
+ "codex-protocol",
+ "codex-skills",
+ "codex-utils-absolute-path",
+ "dirs",
+ "dunce",
+ "pretty_assertions",
+ "reqwest",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.9.11+spec-1.1.0",
+ "tracing",
+ "url",
+ "zip",
+]
+
+[[package]]
 name = "codex-chatgpt"
 version = "0.0.0"
 dependencies = [
@@ -1857,6 +1886,7 @@ dependencies = [
  "codex-arg0",
  "codex-artifacts",
  "codex-async-utils",
+ "codex-capabilities",
  "codex-config",
  "codex-connectors",
  "codex-exec-server",
@@ -1873,7 +1903,6 @@ dependencies = [
  "codex-secrets",
  "codex-shell-command",
  "codex-shell-escalation",
- "codex-skills",
  "codex-state",
  "codex-terminal-detection",
  "codex-test-macros",

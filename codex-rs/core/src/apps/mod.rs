@@ -1,3 +1,1 @@
-mod render;
-
-pub(crate) use render::render_apps_section;
+pub(crate) use codex_capabilities::apps::render_apps_section;

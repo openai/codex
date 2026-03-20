@@ -29,6 +29,7 @@ chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
 codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
+codex-capabilities = { workspace = true }
 codex-apply-patch = { workspace = true }
 codex-async-utils = { workspace = true }
 codex-connectors = { workspace = true }
@@ -37,7 +38,6 @@ codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
 codex-login = { workspace = true }
 codex-shell-command = { workspace = true }
-codex-skills = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-file-search = { workspace = true }
 codex-git = { workspace = true }

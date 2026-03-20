@@ -5,9 +5,11 @@ use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirementsToml;
 use crate::plugins::PluginsManager;
+use codex_protocol::protocol::SkillScope;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tempfile::TempDir;
 
 fn write_user_skill(codex_home: &TempDir, dir: &str, name: &str, description: &str) {

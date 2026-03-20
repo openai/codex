@@ -6,6 +6,7 @@ use crate::plugins::test_support::write_file;
 use crate::plugins::test_support::write_openai_curated_marketplace;
 use crate::plugins::test_support::write_plugins_feature_config;
 use crate::tools::discoverable::DiscoverablePluginInfo;
+use codex_capabilities::plugins::curated_plugins_repo_path;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
@@ -13,7 +14,7 @@ use tempfile::tempdir;
 #[tokio::test]
 async fn list_tool_suggest_discoverable_plugins_returns_uninstalled_curated_plugins() {
     let codex_home = tempdir().expect("tempdir should succeed");
-    let curated_root = crate::plugins::curated_plugins_repo_path(codex_home.path());
+    let curated_root = curated_plugins_repo_path(codex_home.path());
     write_openai_curated_marketplace(&curated_root, &["sample", "slack"]);
     write_plugins_feature_config(codex_home.path());
 
@@ -42,7 +43,7 @@ async fn list_tool_suggest_discoverable_plugins_returns_uninstalled_curated_plug
 #[tokio::test]
 async fn list_tool_suggest_discoverable_plugins_returns_empty_when_plugins_feature_disabled() {
     let codex_home = tempdir().expect("tempdir should succeed");
-    let curated_root = crate::plugins::curated_plugins_repo_path(codex_home.path());
+    let curated_root = curated_plugins_repo_path(codex_home.path());
     write_openai_curated_marketplace(&curated_root, &["slack"]);
 
     let config = load_plugins_config(codex_home.path()).await;
@@ -58,7 +59,7 @@ async fn list_tool_suggest_discoverable_plugins_returns_empty_when_plugins_featu
 #[tokio::test]
 async fn list_tool_suggest_discoverable_plugins_normalizes_description() {
     let codex_home = tempdir().expect("tempdir should succeed");
-    let curated_root = crate::plugins::curated_plugins_repo_path(codex_home.path());
+    let curated_root = curated_plugins_repo_path(codex_home.path());
     write_openai_curated_marketplace(&curated_root, &["slack"]);
     write_plugins_feature_config(codex_home.path());
     write_file(
@@ -92,7 +93,7 @@ async fn list_tool_suggest_discoverable_plugins_normalizes_description() {
 #[tokio::test]
 async fn list_tool_suggest_discoverable_plugins_omits_installed_curated_plugins() {
     let codex_home = tempdir().expect("tempdir should succeed");
-    let curated_root = crate::plugins::curated_plugins_repo_path(codex_home.path());
+    let curated_root = curated_plugins_repo_path(codex_home.path());
     write_openai_curated_marketplace(&curated_root, &["slack"]);
     write_curated_plugin_sha(codex_home.path());
     write_plugins_feature_config(codex_home.path());
@@ -121,7 +122,7 @@ async fn list_tool_suggest_discoverable_plugins_omits_installed_curated_plugins(
 #[tokio::test]
 async fn list_tool_suggest_discoverable_plugins_includes_configured_plugin_ids() {
     let codex_home = tempdir().expect("tempdir should succeed");
-    let curated_root = crate::plugins::curated_plugins_repo_path(codex_home.path());
+    let curated_root = curated_plugins_repo_path(codex_home.path());
     write_openai_curated_marketplace(&curated_root, &["sample"]);
     write_file(
         &codex_home.path().join(crate::config::CONFIG_TOML_FILE),

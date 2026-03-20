@@ -1,0 +1,41 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-capabilities"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_capabilities"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+codex-app-server-protocol = { workspace = true }
+codex-config = { workspace = true }
+codex-login = { workspace = true }
+codex-protocol = { workspace = true }
+codex-skills = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+dirs = { workspace = true }
+dunce = { workspace = true }
+reqwest = { workspace = true, features = ["json", "stream"] }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
+toml = { workspace = true }
+tracing = { workspace = true, features = ["log"] }
+url = { workspace = true }
+zip = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
