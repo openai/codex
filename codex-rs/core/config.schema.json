@@ -6,6 +6,19 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AgentNicknameCandidatesToml": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
     "AgentRoleToml": {
       "additionalProperties": false,
       "properties": {
@@ -53,6 +66,26 @@
           "format": "uint",
           "minimum": 1.0,
           "type": "integer"
+        },
+        "nickname_candidates": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AgentNicknameCandidatesToml"
+            }
+          ],
+          "default": null,
+          "description": "Global fallback nickname candidates for spawned agent threads.\n\nExample: ```toml [agents] nickname_candidates = [\"Scout\", \"Builder\", \"Reviewer\"]\n\n# Or select a named pack: nickname_candidates = \"succession\"\n\n[agents.nickname_packs] succession = [\"Shiv\", \"Roman\", \"Kendall\"] ```"
+        },
+        "nickname_packs": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "default": {},
+          "description": "Named global fallback nickname candidate packs keyed by pack name.",
+          "type": "object"
         }
       },
       "type": "object"

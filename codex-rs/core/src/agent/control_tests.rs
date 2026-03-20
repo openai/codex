@@ -1011,6 +1011,94 @@ async fn spawn_thread_subagent_uses_role_specific_nickname_candidates() {
 }
 
 #[tokio::test]
+async fn spawn_thread_subagent_uses_global_nickname_candidates_when_role_has_no_candidates() {
+    let mut harness = AgentControlHarness::new().await;
+    harness.config.agent_nickname_candidates = vec!["Scout".to_string()];
+    harness.config.agent_roles.insert(
+        "researcher".to_string(),
+        AgentRoleConfig {
+            description: Some("Research role".to_string()),
+            config_file: None,
+            nickname_candidates: None,
+        },
+    );
+    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
+
+    let child_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("hello child"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_nickname: None,
+                agent_role: Some("researcher".to_string()),
+            })),
+        )
+        .await
+        .expect("child spawn should succeed");
+
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+    let snapshot = child_thread.config_snapshot().await;
+
+    let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_nickname, .. }) =
+        snapshot.session_source
+    else {
+        panic!("expected thread-spawn sub-agent source");
+    };
+    assert_eq!(agent_nickname, Some("Scout".to_string()));
+}
+
+#[tokio::test]
+async fn spawn_thread_subagent_prefers_role_candidates_over_global_nickname_candidates() {
+    let mut harness = AgentControlHarness::new().await;
+    harness.config.agent_nickname_candidates = vec!["Scout".to_string()];
+    harness.config.agent_roles.insert(
+        "researcher".to_string(),
+        AgentRoleConfig {
+            description: Some("Research role".to_string()),
+            config_file: None,
+            nickname_candidates: Some(vec!["Atlas".to_string()]),
+        },
+    );
+    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
+
+    let child_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("hello child"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_nickname: None,
+                agent_role: Some("researcher".to_string()),
+            })),
+        )
+        .await
+        .expect("child spawn should succeed");
+
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+    let snapshot = child_thread.config_snapshot().await;
+
+    let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_nickname, .. }) =
+        snapshot.session_source
+    else {
+        panic!("expected thread-spawn sub-agent source");
+    };
+    assert_eq!(agent_nickname, Some("Atlas".to_string()));
+}
+
+#[tokio::test]
 async fn resume_thread_subagent_restores_stored_nickname_and_role() {
     let (home, mut config) = test_config().await;
     config

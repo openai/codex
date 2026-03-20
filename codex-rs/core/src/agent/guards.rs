@@ -193,7 +193,7 @@ impl Guards {
                 active_agents.nickname_reset_count += 1;
                 if let Some(metrics) = codex_otel::metrics::global() {
                     let _ = metrics.counter(
-                        "codex.multi_agent.nickname_pool_reset",
+                        "codex.multi_agent.nickname_candidates_reset",
                         /*inc*/ 1,
                         &[],
                     );

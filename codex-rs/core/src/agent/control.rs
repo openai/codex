@@ -69,6 +69,10 @@ fn agent_nickname_candidates(
         return candidates;
     }
 
+    if !config.agent_nickname_candidates.is_empty() {
+        return config.agent_nickname_candidates.clone();
+    }
+
     default_agent_nickname_list()
         .into_iter()
         .map(ToOwned::to_owned)
