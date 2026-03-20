@@ -4,6 +4,8 @@
 use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
+use codex_core::config::types::ToolSuggestDiscoverable;
+use codex_core::config::types::ToolSuggestDiscoverableType;
 use codex_core::features::Feature;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
@@ -21,6 +23,7 @@ use serde_json::Value;
 
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
 const TOOL_SUGGEST_TOOL_NAME: &str = "tool_suggest";
+const DISCOVERABLE_GMAIL_ID: &str = "connector_68df038e0ba48191908c8434991bbac2";
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -66,6 +69,10 @@ fn configure_apps_without_search_tool(config: &mut Config, apps_base_url: &str) 
         .expect("test config should allow feature update");
     config.chatgpt_base_url = apps_base_url.to_string();
     config.model = Some("gpt-5-codex".to_string());
+    config.tool_suggest.discoverables = vec![ToolSuggestDiscoverable {
+        kind: ToolSuggestDiscoverableType::Connector,
+        id: DISCOVERABLE_GMAIL_ID.to_string(),
+    }];
 
     let mut model_catalog: ModelsResponse =
         serde_json::from_str(include_str!("../../models.json")).expect("valid models.json");
