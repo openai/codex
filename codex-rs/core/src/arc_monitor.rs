@@ -16,9 +16,6 @@ use codex_protocol::models::ResponseItem;
 const ARC_MONITOR_TIMEOUT: Duration = Duration::from_secs(30);
 const CODEX_ARC_MONITOR_ENDPOINT_OVERRIDE: &str = "CODEX_ARC_MONITOR_ENDPOINT_OVERRIDE";
 const CODEX_ARC_MONITOR_TOKEN: &str = "CODEX_ARC_MONITOR_TOKEN";
-pub(crate) const ARC_MONITOR_CALLSITE_NORMAL: &str = "normal";
-pub(crate) const ARC_MONITOR_CALLSITE_ALWAYS_ALLOW: &str = "always_allow";
-pub(crate) const ARC_MONITOR_CALLSITE_FULL_ACCESS: &str = "full_access";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ArcMonitorOutcome {

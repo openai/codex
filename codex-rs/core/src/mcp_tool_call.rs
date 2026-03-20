@@ -11,9 +11,6 @@ use tracing::error;
 use crate::analytics_client::AppInvocation;
 use crate::analytics_client::InvocationType;
 use crate::analytics_client::build_track_events_context;
-use crate::arc_monitor::ARC_MONITOR_CALLSITE_ALWAYS_ALLOW;
-use crate::arc_monitor::ARC_MONITOR_CALLSITE_FULL_ACCESS;
-use crate::arc_monitor::ARC_MONITOR_CALLSITE_NORMAL;
 use crate::arc_monitor::ArcMonitorOutcome;
 use crate::arc_monitor::monitor_action;
 use crate::codex::Session;
@@ -460,6 +457,9 @@ const MCP_TOOL_APPROVAL_TOOL_TITLE_KEY: &str = "tool_title";
 const MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY: &str = "tool_description";
 const MCP_TOOL_APPROVAL_TOOL_PARAMS_KEY: &str = "tool_params";
 const MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY: &str = "tool_params_display";
+const MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_NORMAL: &str = "mcp_tool_call__normal";
+const MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_ALWAYS_ALLOW: &str = "mcp_tool_call__always_allow";
+const MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_FULL_ACCESS: &str = "mcp_tool_call__full_access";
 
 pub(crate) fn is_mcp_tool_approval_question_id(question_id: &str) -> bool {
     question_id
@@ -769,12 +769,12 @@ fn mcp_tool_approval_callsite_mode(
     turn_context: &TurnContext,
 ) -> &'static str {
     match approval_mode {
-        AppToolApproval::Approve => ARC_MONITOR_CALLSITE_ALWAYS_ALLOW,
+        AppToolApproval::Approve => MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_ALWAYS_ALLOW,
         AppToolApproval::Auto | AppToolApproval::Prompt => {
             if approval_mode == AppToolApproval::Auto && is_full_access_mode(turn_context) {
-                ARC_MONITOR_CALLSITE_FULL_ACCESS
+                MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_FULL_ACCESS
             } else {
-                ARC_MONITOR_CALLSITE_NORMAL
+                MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_NORMAL
             }
         }
     }

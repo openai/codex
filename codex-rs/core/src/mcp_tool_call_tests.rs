@@ -782,15 +782,15 @@ async fn approval_callsite_mode_distinguishes_normal_always_allow_and_full_acces
 
     assert_eq!(
         mcp_tool_approval_callsite_mode(AppToolApproval::Auto, &turn_context),
-        ARC_MONITOR_CALLSITE_NORMAL
+        "mcp_tool_call__normal"
     );
     assert_eq!(
         mcp_tool_approval_callsite_mode(AppToolApproval::Prompt, &turn_context),
-        ARC_MONITOR_CALLSITE_NORMAL
+        "mcp_tool_call__normal"
     );
     assert_eq!(
         mcp_tool_approval_callsite_mode(AppToolApproval::Approve, &turn_context),
-        ARC_MONITOR_CALLSITE_ALWAYS_ALLOW
+        "mcp_tool_call__always_allow"
     );
 
     turn_context
@@ -804,7 +804,7 @@ async fn approval_callsite_mode_distinguishes_normal_always_allow_and_full_acces
 
     assert_eq!(
         mcp_tool_approval_callsite_mode(AppToolApproval::Auto, &turn_context),
-        ARC_MONITOR_CALLSITE_FULL_ACCESS
+        "mcp_tool_call__full_access"
     );
 }
 
