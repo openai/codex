@@ -990,6 +990,10 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
         "blocked tool output should surface the hook reason",
     );
     assert!(
+        output.contains(&format!("Command: {command}")),
+        "blocked tool output should surface the blocked command",
+    );
+    assert!(
         !marker.exists(),
         "blocked command should not create marker file"
     );
@@ -1088,6 +1092,13 @@ async fn pre_tool_use_blocks_local_shell_before_execution() -> Result<()> {
         "blocked local shell output should surface the hook reason",
     );
     assert!(
+        output.contains(&format!(
+            "Command: {}",
+            codex_shell_command::parse_command::shlex_join(&command)
+        )),
+        "blocked local shell output should surface the blocked command",
+    );
+    assert!(
         !marker.exists(),
         "blocked local shell command should not execute"
     );
@@ -1174,6 +1185,10 @@ async fn pre_tool_use_blocks_exec_command_before_execution() -> Result<()> {
     assert!(
         output.contains("Bash command blocked by hook: blocked exec command"),
         "blocked exec command output should surface the hook reason",
+    );
+    assert!(
+        output.contains(&format!("Command: {command}")),
+        "blocked exec command output should surface the blocked command",
     );
     assert!(!marker.exists(), "blocked exec command should not execute");
 

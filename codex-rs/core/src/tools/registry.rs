@@ -252,12 +252,12 @@ impl ToolRegistry {
                 &invocation.session,
                 &invocation.turn,
                 invocation.call_id.clone(),
-                command,
+                command.clone(),
             )
             .await
         {
             return Err(FunctionCallError::RespondToModel(format!(
-                "Bash command blocked by hook: {reason}"
+                "Bash command blocked by hook: {reason}. Command: {command}"
             )));
         }
 
