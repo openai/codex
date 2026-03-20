@@ -539,7 +539,7 @@ impl GuardianReviewSessionManager {
         let mut state = self.state.lock().await;
         if state.shutdown_started {
             drop(state);
-            review_session.shutdown_in_background();
+            review_session.shutdown().await;
             return GuardianTrunkState::ShutdownStarted;
         }
         if let Some(trunk) = state.trunk.as_ref() {
@@ -995,6 +995,10 @@ async fn interrupt_and_drain_turn(codex: &Codex) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::AgentStatus;
+    use crate::codex::session_loop_termination_from_handle;
+    use codex_protocol::protocol::Submission;
+    use tokio::sync::watch;
 
     #[test]
     fn guardian_review_session_config_change_invalidates_cached_session() {
@@ -1039,6 +1043,57 @@ mod tests {
             Some(ReasoningSummaryConfig::None)
         );
         assert_eq!(guardian_config.personality, None);
+    }
+
+    #[tokio::test]
+    async fn install_spawned_trunk_waits_for_shutdown_when_manager_is_shutting_down() {
+        let manager = GuardianReviewSessionManager::default();
+        manager.state.lock().await.shutdown_started = true;
+
+        let (child_session, _child_turn_context) =
+            crate::codex_tests::make_session_and_context().await;
+        let child_session = Arc::new(child_session);
+        let child_config = child_session.get_config().await;
+        let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(child_config.as_ref());
+        let (child_tx_sub, child_rx_sub) = async_channel::bounded(4);
+        let (_child_tx_event, child_rx_event) = async_channel::unbounded();
+        let (_child_status_tx, child_agent_status) = watch::channel(AgentStatus::PendingInit);
+        let (child_shutdown_tx, child_shutdown_rx) = tokio::sync::oneshot::channel();
+        let child_session_loop_handle = tokio::spawn(async move {
+            let shutdown: Submission = child_rx_sub
+                .recv()
+                .await
+                .expect("child shutdown submission");
+            assert_eq!(shutdown.op, Op::Shutdown);
+            child_shutdown_tx
+                .send(())
+                .expect("child shutdown signal should be delivered");
+        });
+        let child_codex = Codex {
+            tx_sub: child_tx_sub,
+            rx_event: child_rx_event,
+            agent_status: child_agent_status,
+            session: child_session,
+            session_loop_termination: session_loop_termination_from_handle(
+                child_session_loop_handle,
+            ),
+        };
+        let review_session = Arc::new(GuardianReviewSession {
+            codex: child_codex,
+            cancel_token: CancellationToken::new(),
+            reuse_key,
+            has_prior_review: AtomicBool::new(false),
+            review_lock: Mutex::new(()),
+            last_committed_rollout_items: Mutex::new(None),
+        });
+
+        let trunk_state = manager.install_spawned_trunk(review_session).await;
+
+        assert!(matches!(trunk_state, GuardianTrunkState::ShutdownStarted));
+        tokio::time::timeout(Duration::from_millis(10), child_shutdown_rx)
+            .await
+            .expect("install_spawned_trunk should wait for guardian shutdown")
+            .expect("guardian shutdown signal");
     }
 
     #[tokio::test(flavor = "current_thread")]
