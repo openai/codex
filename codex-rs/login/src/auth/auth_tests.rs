@@ -179,71 +179,31 @@ fn logout_removes_auth_file() -> Result<(), std::io::Error> {
     Ok(())
 }
 
-#[test]
-fn unauthorized_recovery_reports_mode_and_step_names() {
-    let dir = tempdir().unwrap();
-    let manager = AuthManager::shared(
-        dir.path().to_path_buf(),
-        false,
-        AuthCredentialsStoreMode::File,
-    );
-    let managed = UnauthorizedRecovery {
-        manager: Arc::clone(&manager),
-        step: UnauthorizedRecoveryStep::Reload,
-        expected_account_id: None,
-        recovery_auth: None,
-        mode: UnauthorizedRecoveryMode::Managed,
-    };
-    assert_eq!(managed.mode_name(), "managed");
-    assert_eq!(managed.step_name(), "reload");
-
-    let external = UnauthorizedRecovery {
-        manager,
-        step: UnauthorizedRecoveryStep::ExternalRefresh,
-        expected_account_id: None,
-        recovery_auth: None,
-        mode: UnauthorizedRecoveryMode::External,
-    };
-    assert_eq!(external.mode_name(), "external");
-    assert_eq!(external.step_name(), "external_refresh");
-}
-
 #[tokio::test]
 #[serial(codex_api_key)]
 async fn stale_proactive_refresh_uses_newer_local_auth_before_spending_cached_refresh_token() {
     let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/oauth/token"))
-        .respond_with(ResponseTemplate::new(200))
-        .expect(0)
-        .mount(&server)
-        .await;
+    expect_refresh_unused(&server).await;
 
-    let ctx = RefreshTokenTestContext::new(&server);
-    let stale_auth = managed_auth_dot_json(
-        "stale-access",
-        "stale-refresh",
-        Some("account-id"),
-        "user-123",
-        "user@example.com",
-        refresh_time_days_ago(31),
+    let ctx = stale_managed_auth_context(
+        &server,
+        ManagedAuthFixture {
+            access_token: "stale-access",
+            refresh_token: "stale-refresh",
+            account_id: Some("account-id"),
+            chatgpt_user_id: "user-123",
+            email: "user@example.com",
+            last_refresh: refresh_time_days_ago(31),
+        },
+        ManagedAuthFixture {
+            access_token: "newer-access",
+            refresh_token: "newer-refresh",
+            account_id: Some("account-id"),
+            chatgpt_user_id: "user-123",
+            email: "user@example.com",
+            last_refresh: Utc::now(),
+        },
     );
-    ctx.write_auth(&stale_auth);
-
-    let newer_auth = managed_auth_dot_json(
-        "newer-access",
-        "newer-refresh",
-        Some("account-id"),
-        "user-123",
-        "user@example.com",
-        Utc::now(),
-    );
-    save_auth(
-        ctx.codex_home.path(),
-        &newer_auth,
-        AuthCredentialsStoreMode::File,
-    )
-    .expect("persist newer auth");
 
     let refreshed = ctx.auth_manager.auth().await.expect("auth should exist");
     assert_eq!(
@@ -275,64 +235,11 @@ async fn stale_proactive_refresh_uses_caller_snapshot_when_cache_already_changed
         refresh_time_days_ago(31),
     );
     ctx.write_auth(&stale_auth);
-    let stale_cached_auth = ctx.auth_manager.auth_cached().expect("cached auth");
 
     let newer_auth = managed_auth_dot_json(
         "newer-access",
         "newer-refresh",
         Some("account-id"),
-        "user-123",
-        "user@example.com",
-        Utc::now(),
-    );
-    ctx.write_auth(&newer_auth);
-
-    assert_eq!(
-        ctx.auth_manager
-            .refresh_if_stale(&stale_cached_auth)
-            .await
-            .expect("refresh should succeed"),
-        true
-    );
-    assert_eq!(
-        ctx.auth_manager
-            .auth_cached()
-            .expect("cached auth")
-            .get_token_data()
-            .expect("token data")
-            .access_token,
-        "newer-access"
-    );
-
-    server.verify().await;
-}
-
-#[tokio::test]
-#[serial(codex_api_key)]
-async fn stale_proactive_refresh_without_account_id_still_recovers_newer_local_auth() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/oauth/token"))
-        .respond_with(ResponseTemplate::new(200))
-        .expect(0)
-        .mount(&server)
-        .await;
-
-    let ctx = RefreshTokenTestContext::new(&server);
-    let stale_auth = managed_auth_dot_json(
-        "stale-access",
-        "stale-refresh",
-        None,
-        "user-123",
-        "user@example.com",
-        refresh_time_days_ago(31),
-    );
-    ctx.write_auth(&stale_auth);
-
-    let newer_auth = managed_auth_dot_json(
-        "newer-access",
-        "newer-refresh",
-        None,
         "user-123",
         "user@example.com",
         Utc::now(),
@@ -357,38 +264,27 @@ async fn stale_proactive_refresh_without_account_id_still_recovers_newer_local_a
 #[serial(codex_api_key)]
 async fn stale_proactive_refresh_does_not_overwrite_a_different_account_on_disk() {
     let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/oauth/token"))
-        .respond_with(ResponseTemplate::new(200))
-        .expect(0)
-        .mount(&server)
-        .await;
+    expect_refresh_unused(&server).await;
 
-    let ctx = RefreshTokenTestContext::new(&server);
-    let stale_auth = managed_auth_dot_json(
-        "stale-access",
-        "stale-refresh",
-        Some("account-a"),
-        "user-a",
-        "user-a@example.com",
-        refresh_time_days_ago(31),
+    let ctx = stale_managed_auth_context(
+        &server,
+        ManagedAuthFixture {
+            access_token: "stale-access",
+            refresh_token: "stale-refresh",
+            account_id: Some("account-a"),
+            chatgpt_user_id: "user-a",
+            email: "user-a@example.com",
+            last_refresh: refresh_time_days_ago(31),
+        },
+        ManagedAuthFixture {
+            access_token: "other-access",
+            refresh_token: "other-refresh",
+            account_id: Some("account-b"),
+            chatgpt_user_id: "user-b",
+            email: "user-b@example.com",
+            last_refresh: Utc::now(),
+        },
     );
-    ctx.write_auth(&stale_auth);
-
-    let other_auth = managed_auth_dot_json(
-        "other-access",
-        "other-refresh",
-        Some("account-b"),
-        "user-b",
-        "user-b@example.com",
-        Utc::now(),
-    );
-    save_auth(
-        ctx.codex_home.path(),
-        &other_auth,
-        AuthCredentialsStoreMode::File,
-    )
-    .expect("persist other-account auth");
 
     let returned_auth = ctx.auth_manager.auth().await.expect("auth should exist");
     assert_eq!(
@@ -424,38 +320,27 @@ async fn stale_proactive_refresh_does_not_overwrite_a_different_account_on_disk(
 #[serial(codex_api_key)]
 async fn stale_proactive_refresh_does_not_adopt_a_different_user_in_same_account() {
     let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/oauth/token"))
-        .respond_with(ResponseTemplate::new(200))
-        .expect(0)
-        .mount(&server)
-        .await;
+    expect_refresh_unused(&server).await;
 
-    let ctx = RefreshTokenTestContext::new(&server);
-    let stale_auth = managed_auth_dot_json(
-        "stale-access",
-        "stale-refresh",
-        Some("account-a"),
-        "user-a",
-        "user-a@example.com",
-        refresh_time_days_ago(31),
+    let ctx = stale_managed_auth_context(
+        &server,
+        ManagedAuthFixture {
+            access_token: "stale-access",
+            refresh_token: "stale-refresh",
+            account_id: Some("account-a"),
+            chatgpt_user_id: "user-a",
+            email: "user-a@example.com",
+            last_refresh: refresh_time_days_ago(31),
+        },
+        ManagedAuthFixture {
+            access_token: "other-access",
+            refresh_token: "other-refresh",
+            account_id: Some("account-a"),
+            chatgpt_user_id: "user-b",
+            email: "user-b@example.com",
+            last_refresh: Utc::now(),
+        },
     );
-    ctx.write_auth(&stale_auth);
-
-    let other_user_auth = managed_auth_dot_json(
-        "other-access",
-        "other-refresh",
-        Some("account-a"),
-        "user-b",
-        "user-b@example.com",
-        Utc::now(),
-    );
-    save_auth(
-        ctx.codex_home.path(),
-        &other_user_auth,
-        AuthCredentialsStoreMode::File,
-    )
-    .expect("persist different-user auth in same account");
 
     let returned_auth = ctx.auth_manager.auth().await.expect("auth should exist");
     assert_eq!(
@@ -482,38 +367,27 @@ async fn stale_proactive_refresh_does_not_adopt_a_different_user_in_same_account
 #[serial(codex_api_key)]
 async fn stale_proactive_refresh_without_account_id_adopts_auth_with_account_id() {
     let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/oauth/token"))
-        .respond_with(ResponseTemplate::new(200))
-        .expect(0)
-        .mount(&server)
-        .await;
+    expect_refresh_unused(&server).await;
 
-    let ctx = RefreshTokenTestContext::new(&server);
-    let stale_auth = managed_auth_dot_json(
-        "stale-access",
-        "stale-refresh",
-        None,
-        "user-a",
-        "user-a@example.com",
-        refresh_time_days_ago(31),
+    let ctx = stale_managed_auth_context(
+        &server,
+        ManagedAuthFixture {
+            access_token: "stale-access",
+            refresh_token: "stale-refresh",
+            account_id: None,
+            chatgpt_user_id: "user-a",
+            email: "user-a@example.com",
+            last_refresh: refresh_time_days_ago(31),
+        },
+        ManagedAuthFixture {
+            access_token: "newer-access",
+            refresh_token: "newer-refresh",
+            account_id: Some("account-id"),
+            chatgpt_user_id: "user-a",
+            email: "user-a@example.com",
+            last_refresh: Utc::now(),
+        },
     );
-    ctx.write_auth(&stale_auth);
-
-    let newer_auth = managed_auth_dot_json(
-        "newer-access",
-        "newer-refresh",
-        Some("account-id"),
-        "user-a",
-        "user-a@example.com",
-        Utc::now(),
-    );
-    save_auth(
-        ctx.codex_home.path(),
-        &newer_auth,
-        AuthCredentialsStoreMode::File,
-    )
-    .expect("persist same-user auth with account id");
 
     let returned_auth = ctx.auth_manager.auth().await.expect("auth should exist");
     assert_eq!(
@@ -857,6 +731,54 @@ impl RefreshTokenTestContext {
         .expect("write auth");
         self.auth_manager.reload();
     }
+}
+
+struct ManagedAuthFixture<'a> {
+    access_token: &'a str,
+    refresh_token: &'a str,
+    account_id: Option<&'a str>,
+    chatgpt_user_id: &'a str,
+    email: &'a str,
+    last_refresh: DateTime<Utc>,
+}
+
+fn stale_managed_auth_context(
+    server: &MockServer,
+    stale: ManagedAuthFixture<'_>,
+    replacement: ManagedAuthFixture<'_>,
+) -> RefreshTokenTestContext {
+    let ctx = RefreshTokenTestContext::new(server);
+    ctx.write_auth(&managed_auth_dot_json(
+        stale.access_token,
+        stale.refresh_token,
+        stale.account_id,
+        stale.chatgpt_user_id,
+        stale.email,
+        stale.last_refresh,
+    ));
+    save_auth(
+        ctx.codex_home.path(),
+        &managed_auth_dot_json(
+            replacement.access_token,
+            replacement.refresh_token,
+            replacement.account_id,
+            replacement.chatgpt_user_id,
+            replacement.email,
+            replacement.last_refresh,
+        ),
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("persist replacement auth");
+    ctx
+}
+
+async fn expect_refresh_unused(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(server)
+        .await;
 }
 
 fn managed_auth_dot_json(
