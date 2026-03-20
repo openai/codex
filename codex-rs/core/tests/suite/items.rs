@@ -16,6 +16,7 @@ use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_image_generation_call;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_reasoning_item;
@@ -34,6 +35,32 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
+use std::path::Path;
+use std::path::PathBuf;
+
+fn image_generation_artifact_path(codex_home: &Path, session_id: &str, call_id: &str) -> PathBuf {
+    fn sanitize(value: &str) -> String {
+        let mut sanitized: String = value
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                    ch
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        if sanitized.is_empty() {
+            sanitized = "generated_image".to_string();
+        }
+        sanitized
+    }
+
+    codex_home
+        .join("generated_images")
+        .join(sanitize(session_id))
+        .join(format!("{}.png", sanitize(call_id)))
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_message_item_is_emitted() -> anyhow::Result<()> {
@@ -263,6 +290,127 @@ async fn web_search_item_is_emitted() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn image_generation_call_event_is_emitted() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let TestCodex {
+        codex,
+        config,
+        session_configured,
+        ..
+    } = test_codex().build(&server).await?;
+    let call_id = "ig_image_saved_to_temp_dir_default";
+    let expected_saved_path = image_generation_artifact_path(
+        config.codex_home.as_path(),
+        &session_configured.session_id.to_string(),
+        call_id,
+    );
+    let _ = std::fs::remove_file(&expected_saved_path);
+
+    let first_response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_image_generation_call(call_id, "completed", "A tiny blue square", "Zm9v"),
+        ev_completed("resp-1"),
+    ]);
+    mount_sse_once(&server, first_response).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "generate a tiny blue square".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let begin = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ImageGenerationBegin(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    let end = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ImageGenerationEnd(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+
+    assert_eq!(begin.call_id, call_id);
+    assert_eq!(end.call_id, call_id);
+    assert_eq!(end.status, "completed");
+    assert_eq!(end.revised_prompt, Some("A tiny blue square".to_string()));
+    assert_eq!(end.result, "Zm9v");
+    assert_eq!(
+        end.saved_path,
+        Some(expected_saved_path.to_string_lossy().into_owned())
+    );
+    assert_eq!(std::fs::read(&expected_saved_path)?, b"foo");
+    let _ = std::fs::remove_file(&expected_saved_path);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn image_generation_call_event_is_emitted_when_image_save_fails() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let TestCodex {
+        codex,
+        config,
+        session_configured,
+        ..
+    } = test_codex().build(&server).await?;
+    let expected_saved_path = image_generation_artifact_path(
+        config.codex_home.as_path(),
+        &session_configured.session_id.to_string(),
+        "ig_invalid",
+    );
+    let _ = std::fs::remove_file(&expected_saved_path);
+
+    let first_response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_image_generation_call("ig_invalid", "completed", "broken payload", "_-8"),
+        ev_completed("resp-1"),
+    ]);
+    mount_sse_once(&server, first_response).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "generate an image".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let begin = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ImageGenerationBegin(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    let end = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ImageGenerationEnd(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+
+    assert_eq!(begin.call_id, "ig_invalid");
+    assert_eq!(end.call_id, "ig_invalid");
+    assert_eq!(end.status, "completed");
+    assert_eq!(end.revised_prompt, Some("broken payload".to_string()));
+    assert_eq!(end.result, "_-8");
+    assert_eq!(end.saved_path, None);
+    assert!(!expected_saved_path.exists());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn agent_message_content_delta_has_item_metadata() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -378,6 +526,7 @@ async fn plan_mode_emits_plan_item_from_proposed_plan_block() -> anyhow::Result<
             model: session_configured.model.clone(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
         })
@@ -453,6 +602,7 @@ async fn plan_mode_strips_plan_from_agent_messages() -> anyhow::Result<()> {
             model: session_configured.model.clone(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
         })
@@ -560,6 +710,7 @@ async fn plan_mode_streaming_citations_are_stripped_across_added_deltas_and_done
             model: session_configured.model.clone(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
         })
@@ -745,6 +896,7 @@ async fn plan_mode_streaming_proposed_plan_tag_split_across_added_and_delta_is_p
             model: session_configured.model.clone(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
         })
@@ -857,6 +1009,7 @@ async fn plan_mode_handles_missing_plan_close_tag() -> anyhow::Result<()> {
             model: session_configured.model.clone(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
         })

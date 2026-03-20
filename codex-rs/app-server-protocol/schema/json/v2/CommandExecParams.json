@@ -5,6 +5,28 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "CommandExecTerminalSize": {
+      "description": "PTY size in character cells for `command/exec` PTY sessions.",
+      "properties": {
+        "cols": {
+          "description": "Terminal width in character cells.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "rows": {
+          "description": "Terminal height in character cells.",
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cols",
+        "rows"
+      ],
+      "type": "object"
+    },
     "NetworkAccess": {
       "enum": [
         "restricted",
@@ -88,6 +110,10 @@
               "default": {
                 "type": "fullAccess"
               }
+            },
+            "networkAccess": {
+              "default": false,
+              "type": "boolean"
             },
             "type": {
               "enum": [
@@ -175,14 +201,54 @@
       ]
     }
   },
+  "description": "Run a standalone command (argv vector) in the server sandbox without creating a thread or turn.\n\nThe final `command/exec` response is deferred until the process exits and is sent only after all `command/exec/outputDelta` notifications for that connection have been emitted.",
   "properties": {
     "command": {
+      "description": "Command argv vector. Empty arrays are rejected.",
       "items": {
         "type": "string"
       },
       "type": "array"
     },
     "cwd": {
+      "description": "Optional working directory. Defaults to the server cwd.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "disableOutputCap": {
+      "description": "Disable stdout/stderr capture truncation for this request.\n\nCannot be combined with `outputBytesCap`.",
+      "type": "boolean"
+    },
+    "disableTimeout": {
+      "description": "Disable the timeout entirely for this request.\n\nCannot be combined with `timeoutMs`.",
+      "type": "boolean"
+    },
+    "env": {
+      "additionalProperties": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "description": "Optional environment overrides merged into the server-computed environment.\n\nMatching names override inherited values. Set a key to `null` to unset an inherited variable.",
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "outputBytesCap": {
+      "description": "Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies. Cannot be combined with `disableOutputCap`.",
+      "format": "uint",
+      "minimum": 0.0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "processId": {
+      "description": "Optional client-supplied, connection-scoped process id.\n\nRequired for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` calls. When omitted, buffered execution gets an internal id that is not exposed to the client.",
       "type": [
         "string",
         "null"
@@ -196,14 +262,39 @@
         {
           "type": "null"
         }
-      ]
+      ],
+      "description": "Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and defaults to the user's configured policy when omitted."
+    },
+    "size": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/CommandExecTerminalSize"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional initial PTY size in character cells. Only valid when `tty` is true."
+    },
+    "streamStdin": {
+      "description": "Allow follow-up `command/exec/write` requests to write stdin bytes.\n\nRequires a client-supplied `processId`.",
+      "type": "boolean"
+    },
+    "streamStdoutStderr": {
+      "description": "Stream stdout/stderr via `command/exec/outputDelta` notifications.\n\nStreamed bytes are not duplicated into the final response and require a client-supplied `processId`.",
+      "type": "boolean"
     },
     "timeoutMs": {
+      "description": "Optional timeout in milliseconds.\n\nWhen omitted, the server default applies. Cannot be combined with `disableTimeout`.",
       "format": "int64",
       "type": [
         "integer",
         "null"
       ]
+    },
+    "tty": {
+      "description": "Enable PTY mode.\n\nThis implies `streamStdin` and `streamStdoutStderr`.",
+      "type": "boolean"
     }
   },
   "required": [

@@ -1,6 +1,9 @@
+use anyhow::Context;
 use anyhow::Result;
+use chrono::Utc;
 use codex_core::CodexAuth;
 use codex_core::auth::OPENAI_API_KEY_ENV_VAR;
+use codex_protocol::ThreadId;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
@@ -10,7 +13,9 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
+use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeEvent;
+use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::start_mock_server;
@@ -18,15 +23,120 @@ use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
+use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
-use std::ffi::OsString;
+use std::fs;
+use std::process::Command;
 use std::time::Duration;
 use tokio::sync::oneshot;
+use tokio::time::timeout;
+
+const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
+const MEMORY_PROMPT_PHRASE: &str =
+    "You have access to a memory folder with guidance from prior runs.";
+const REALTIME_CONVERSATION_TEST_SUBPROCESS_ENV_VAR: &str =
+    "CODEX_REALTIME_CONVERSATION_TEST_SUBPROCESS";
+fn websocket_request_text(
+    request: &core_test_support::responses::WebSocketRequest,
+) -> Option<String> {
+    request.body_json()["item"]["content"][0]["text"]
+        .as_str()
+        .map(str::to_owned)
+}
+
+fn websocket_request_instructions(
+    request: &core_test_support::responses::WebSocketRequest,
+) -> Option<String> {
+    request.body_json()["session"]["instructions"]
+        .as_str()
+        .map(str::to_owned)
+}
+
+async fn wait_for_matching_websocket_request<F>(
+    server: &core_test_support::responses::WebSocketTestServer,
+    description: &str,
+    predicate: F,
+) -> core_test_support::responses::WebSocketRequest
+where
+    F: Fn(&core_test_support::responses::WebSocketRequest) -> bool,
+{
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(request) = server
+            .connections()
+            .iter()
+            .flat_map(|connection| connection.iter())
+            .find(|request| predicate(request))
+            .cloned()
+        {
+            return request;
+        }
+
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {description}"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+fn run_realtime_conversation_test_in_subprocess(
+    test_name: &str,
+    openai_api_key: Option<&str>,
+) -> Result<()> {
+    let mut command = Command::new(std::env::current_exe()?);
+    command
+        .arg("--exact")
+        .arg(test_name)
+        .env(REALTIME_CONVERSATION_TEST_SUBPROCESS_ENV_VAR, "1");
+    match openai_api_key {
+        Some(openai_api_key) => {
+            command.env(OPENAI_API_KEY_ENV_VAR, openai_api_key);
+        }
+        None => {
+            command.env_remove(OPENAI_API_KEY_ENV_VAR);
+        }
+    }
+    let output = command.output()?;
+    assert!(
+        output.status.success(),
+        "subprocess test `{test_name}` failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    Ok(())
+}
+async fn seed_recent_thread(
+    test: &TestCodex,
+    title: &str,
+    first_user_message: &str,
+    slug: &str,
+) -> Result<()> {
+    let db = test.codex.state_db().context("state db enabled")?;
+    let thread_id = ThreadId::new();
+    let updated_at = Utc::now();
+    let mut metadata_builder = codex_state::ThreadMetadataBuilder::new(
+        thread_id,
+        test.codex_home_path()
+            .join(format!("rollout-{thread_id}.jsonl")),
+        updated_at,
+        SessionSource::Cli,
+    );
+    metadata_builder.cwd = test.workspace_path(format!("workspace-{slug}"));
+    metadata_builder.model_provider = Some("test-provider".to_string());
+    metadata_builder.git_branch = Some(format!("branch-{slug}"));
+    let mut metadata = metadata_builder.build("test-provider");
+    metadata.title = title.to_string();
+    metadata.first_user_message = Some(first_user_message.to_string());
+    db.upsert_thread(&metadata).await?;
+
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
@@ -79,6 +189,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
     .await
     .unwrap_or_else(|err: ErrorEvent| panic!("conversation start failed: {err:?}"));
     assert!(started.session_id.is_some());
+    assert_eq!(started.version, RealtimeConversationVersion::V1);
 
     let session_updated = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
@@ -96,6 +207,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
                 sample_rate: 24000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
+                item_id: None,
             },
         }))
         .await?;
@@ -122,10 +234,9 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
         connection[0].body_json()["type"].as_str(),
         Some("session.update")
     );
-    assert_eq!(
-        connection[0].body_json()["session"]["instructions"].as_str(),
-        Some("backend prompt")
-    );
+    let initial_instructions = websocket_request_instructions(&connection[0])
+        .expect("initial session update instructions");
+    assert!(initial_instructions.starts_with("backend prompt"));
     assert_eq!(
         server.handshakes()[1]
             .header("x-session-id")
@@ -179,9 +290,15 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_start_uses_openai_env_key_fallback_with_chatgpt_auth() -> Result<()> {
+    if std::env::var_os(REALTIME_CONVERSATION_TEST_SUBPROCESS_ENV_VAR).is_none() {
+        return run_realtime_conversation_test_in_subprocess(
+            "suite::realtime_conversation::conversation_start_uses_openai_env_key_fallback_with_chatgpt_auth",
+            Some("env-realtime-key"),
+        );
+    }
+
     skip_if_no_network!(Ok(()));
 
-    let _env_guard = EnvGuard::set(OPENAI_API_KEY_ENV_VAR, "env-realtime-key");
     let server = start_websocket_server(vec![
         vec![],
         vec![vec![json!({
@@ -286,34 +403,6 @@ async fn conversation_transport_close_emits_closed_event() -> Result<()> {
     Ok(())
 }
 
-struct EnvGuard {
-    key: &'static str,
-    original: Option<OsString>,
-}
-
-impl EnvGuard {
-    fn set(key: &'static str, value: &str) -> Self {
-        let original = std::env::var_os(key);
-        // SAFETY: this guard restores the original value before the test exits.
-        unsafe {
-            std::env::set_var(key, value);
-        }
-        Self { key, original }
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        // SAFETY: this guard restores the original value for the modified env var.
-        unsafe {
-            match &self.original {
-                Some(value) => std::env::set_var(self.key, value),
-                None => std::env::remove_var(self.key),
-            }
-        }
-    }
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_audio_before_start_emits_error() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -329,6 +418,7 @@ async fn conversation_audio_before_start_emits_error() -> Result<()> {
                 sample_rate: 24000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
+                item_id: None,
             },
         }))
         .await?;
@@ -340,6 +430,91 @@ async fn conversation_audio_before_start_emits_error() -> Result<()> {
     .await;
     assert_eq!(err.codex_error_info, Some(CodexErrorInfo::BadRequest));
     assert_eq!(err.message, "conversation is not running");
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_start_preflight_failure_emits_realtime_error_only() -> Result<()> {
+    if std::env::var_os(REALTIME_CONVERSATION_TEST_SUBPROCESS_ENV_VAR).is_none() {
+        return run_realtime_conversation_test_in_subprocess(
+            "suite::realtime_conversation::conversation_start_preflight_failure_emits_realtime_error_only",
+            /*openai_api_key*/ None,
+        );
+    }
+
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![]).await;
+    let mut builder = test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let test = builder.build_with_websocket_server(&server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let err = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::Error(message),
+        }) => Some(message.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(err, "realtime conversation requires API key auth");
+
+    let closed = timeout(Duration::from_millis(200), async {
+        wait_for_event_match(&test.codex, |msg| match msg {
+            EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+            _ => None,
+        })
+        .await
+    })
+    .await;
+    assert!(closed.is_err(), "preflight failure should not emit closed");
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_start_connect_failure_emits_realtime_error_only() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![]).await;
+    let mut builder = test_codex().with_config(|config| {
+        config.experimental_realtime_ws_base_url = Some("http://127.0.0.1:1".to_string());
+    });
+    let test = builder.build_with_websocket_server(&server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let err = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::Error(message),
+        }) => Some(message.clone()),
+        _ => None,
+    })
+    .await;
+    assert!(!err.is_empty());
+
+    let closed = timeout(Duration::from_millis(200), async {
+        wait_for_event_match(&test.codex, |msg| match msg {
+            EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+            _ => None,
+        })
+        .await
+    })
+    .await;
+    assert!(closed.is_err(), "connect failure should not emit closed");
 
     server.shutdown().await;
     Ok(())
@@ -438,6 +613,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
                 sample_rate: 24000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
+                item_id: None,
             },
         }))
         .await?;
@@ -452,19 +628,17 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
     let connections = server.connections();
     assert_eq!(connections.len(), 3);
     assert_eq!(connections[1].len(), 1);
-    assert_eq!(
-        connections[1][0].body_json()["session"]["instructions"].as_str(),
-        Some("old")
-    );
+    let old_instructions =
+        websocket_request_instructions(&connections[1][0]).expect("old session instructions");
+    assert!(old_instructions.starts_with("old"));
     assert_eq!(
         server.handshakes()[1].header("x-session-id").as_deref(),
         Some("conv_old")
     );
     assert_eq!(connections[2].len(), 2);
-    assert_eq!(
-        connections[2][0].body_json()["session"]["instructions"].as_str(),
-        Some("new")
-    );
+    let new_instructions =
+        websocket_request_instructions(&connections[2][0]).expect("new session instructions");
+    assert!(new_instructions.starts_with("new"));
     assert_eq!(
         server.handshakes()[2].header("x-session-id").as_deref(),
         Some("conv_new")
@@ -570,12 +744,304 @@ async fn conversation_uses_experimental_realtime_ws_backend_prompt_override() ->
 
     let connections = server.connections();
     assert_eq!(connections.len(), 2);
-    assert_eq!(
-        connections[1][0].body_json()["session"]["instructions"].as_str(),
-        Some("prompt from config")
-    );
+    let overridden_instructions = websocket_request_instructions(&connections[1][0])
+        .expect("overridden session instructions");
+    assert!(overridden_instructions.starts_with("prompt from config"));
 
     server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_uses_experimental_realtime_ws_startup_context_override() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let startup_server = start_websocket_server(vec![vec![]]).await;
+    let realtime_server = start_websocket_server(vec![vec![vec![json!({
+        "type": "session.updated",
+        "session": { "id": "sess_custom_context", "instructions": "prompt from config" }
+    })]]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.experimental_realtime_ws_backend_prompt = Some("prompt from config".to_string());
+            config.experimental_realtime_ws_startup_context =
+                Some("custom startup context".to_string());
+        }
+    });
+    let test = builder.build_with_websocket_server(&startup_server).await?;
+    seed_recent_thread(
+        &test,
+        "Recent work: cleaned up startup flows and reviewed websocket routing.",
+        "Investigate realtime startup context",
+        "custom-context",
+    )
+    .await?;
+    fs::create_dir_all(test.workspace_path("docs"))?;
+    fs::write(test.workspace_path("README.md"), "workspace marker")?;
+    assert!(
+        startup_server
+            .wait_for_handshakes(1, Duration::from_secs(2))
+            .await
+    );
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "prompt from op".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let startup_context_request = wait_for_matching_websocket_request(
+        &realtime_server,
+        "startup context request with instructions",
+        |request| websocket_request_instructions(request).is_some(),
+    )
+    .await;
+    let instructions = websocket_request_instructions(&startup_context_request)
+        .expect("custom startup context request should contain instructions");
+
+    assert_eq!(instructions, "prompt from config\n\ncustom startup context");
+    assert!(!instructions.contains(STARTUP_CONTEXT_HEADER));
+    assert!(!instructions.contains("## Machine / Workspace Map"));
+
+    startup_server.shutdown().await;
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_disables_realtime_startup_context_with_empty_override() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let startup_server = start_websocket_server(vec![vec![]]).await;
+    let realtime_server = start_websocket_server(vec![vec![vec![json!({
+        "type": "session.updated",
+        "session": { "id": "sess_no_context", "instructions": "prompt from config" }
+    })]]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.experimental_realtime_ws_backend_prompt = Some("prompt from config".to_string());
+            config.experimental_realtime_ws_startup_context = Some(String::new());
+        }
+    });
+    let test = builder.build_with_websocket_server(&startup_server).await?;
+    seed_recent_thread(
+        &test,
+        "Recent work: cleaned up startup flows and reviewed websocket routing.",
+        "Investigate realtime startup context",
+        "no-context",
+    )
+    .await?;
+    fs::create_dir_all(test.workspace_path("docs"))?;
+    fs::write(test.workspace_path("README.md"), "workspace marker")?;
+    assert!(
+        startup_server
+            .wait_for_handshakes(1, Duration::from_secs(2))
+            .await
+    );
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "prompt from op".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let startup_context_request = wait_for_matching_websocket_request(
+        &realtime_server,
+        "startup context disable request with instructions",
+        |request| websocket_request_instructions(request).is_some(),
+    )
+    .await;
+    let instructions = websocket_request_instructions(&startup_context_request)
+        .expect("startup context disable request should contain instructions");
+
+    assert_eq!(instructions, "prompt from config");
+    assert!(!instructions.contains(STARTUP_CONTEXT_HEADER));
+    assert!(!instructions.contains("## Machine / Workspace Map"));
+
+    startup_server.shutdown().await;
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_start_injects_startup_context_from_thread_history() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let startup_server = start_websocket_server(vec![vec![]]).await;
+    let realtime_server = start_websocket_server(vec![vec![vec![json!({
+        "type": "session.updated",
+        "session": { "id": "sess_context", "instructions": "backend prompt" }
+    })]]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+        }
+    });
+    let test = builder.build_with_websocket_server(&startup_server).await?;
+    seed_recent_thread(
+        &test,
+        "Recent work: cleaned up startup flows and reviewed websocket routing.",
+        "Investigate realtime startup context",
+        "latest",
+    )
+    .await?;
+    fs::create_dir_all(test.workspace_path("docs"))?;
+    fs::write(test.workspace_path("README.md"), "workspace marker")?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let startup_context_request = wait_for_matching_websocket_request(
+        &realtime_server,
+        "startup context request with instructions",
+        |request| websocket_request_instructions(request).is_some(),
+    )
+    .await;
+    let startup_context = websocket_request_instructions(&startup_context_request)
+        .expect("startup context request should contain instructions");
+
+    assert!(startup_context.contains(STARTUP_CONTEXT_HEADER));
+    assert!(!startup_context.contains("## User"));
+    assert!(startup_context.contains("### "));
+    assert!(startup_context.contains("Recent sessions: 1"));
+    assert!(startup_context.contains("Latest branch: branch-latest"));
+    assert!(startup_context.contains("User asks:"));
+    assert!(startup_context.contains("Investigate realtime startup context"));
+    assert!(startup_context.contains("## Machine / Workspace Map"));
+    assert!(startup_context.contains("README.md"));
+    assert!(!startup_context.contains(MEMORY_PROMPT_PHRASE));
+
+    startup_server.shutdown().await;
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_startup_context_falls_back_to_workspace_map() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let startup_server = start_websocket_server(vec![vec![]]).await;
+    let realtime_server = start_websocket_server(vec![vec![vec![json!({
+        "type": "session.updated",
+        "session": { "id": "sess_workspace", "instructions": "backend prompt" }
+    })]]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+        }
+    });
+    let test = builder.build_with_websocket_server(&startup_server).await?;
+    fs::create_dir_all(test.workspace_path("codex-rs/core"))?;
+    fs::write(test.workspace_path("notes.txt"), "workspace marker")?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let startup_context_request = wait_for_matching_websocket_request(
+        &realtime_server,
+        "workspace-map startup context request with instructions",
+        |request| websocket_request_instructions(request).is_some(),
+    )
+    .await;
+    let startup_context = websocket_request_instructions(&startup_context_request)
+        .expect("startup context request should contain instructions");
+
+    assert!(startup_context.contains(STARTUP_CONTEXT_HEADER));
+    assert!(startup_context.contains("## Machine / Workspace Map"));
+    assert!(startup_context.contains("notes.txt"));
+    assert!(startup_context.contains("codex-rs/"));
+
+    startup_server.shutdown().await;
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_startup_context_is_truncated_and_sent_once_per_start() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let startup_server = start_websocket_server(vec![vec![]]).await;
+    let realtime_server = start_websocket_server(vec![vec![
+        vec![json!({
+            "type": "session.updated",
+            "session": { "id": "sess_truncated", "instructions": "backend prompt" }
+        })],
+        vec![],
+    ]])
+    .await;
+
+    let oversized_summary = "recent work ".repeat(3_500);
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+        }
+    });
+    let test = builder.build_with_websocket_server(&startup_server).await?;
+    seed_recent_thread(&test, &oversized_summary, "summary", "oversized").await?;
+    fs::write(test.workspace_path("marker.txt"), "marker")?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let startup_context_request = wait_for_matching_websocket_request(
+        &realtime_server,
+        "truncated startup context request with instructions",
+        |request| websocket_request_instructions(request).is_some(),
+    )
+    .await;
+    let startup_context = websocket_request_instructions(&startup_context_request)
+        .expect("startup context request should contain instructions");
+    assert!(startup_context.contains(STARTUP_CONTEXT_HEADER));
+    assert!(startup_context.len() <= 20_500);
+
+    test.codex
+        .submit(Op::RealtimeConversationText(ConversationTextParams {
+            text: "hello".to_string(),
+        }))
+        .await?;
+
+    let explicit_text_request = wait_for_matching_websocket_request(
+        &realtime_server,
+        "explicit realtime text request",
+        |request| websocket_request_text(request).as_deref() == Some("hello"),
+    )
+    .await;
+    assert_eq!(
+        websocket_request_text(&explicit_text_request),
+        Some("hello".to_string())
+    );
+
+    startup_server.shutdown().await;
+    realtime_server.shutdown().await;
     Ok(())
 }
 
@@ -601,11 +1067,14 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
                 "session": { "id": "sess_1", "instructions": "backend prompt" }
             }),
             json!({
+                "type": "conversation.input_transcript.delta",
+                "delta": "delegate hello"
+            }),
+            json!({
                 "type": "conversation.handoff.requested",
                 "handoff_id": "handoff_1",
                 "item_id": "item_1",
-                "input_transcript": "delegate hello",
-                "messages": [{ "role": "user", "text": "delegate hello" }]
+                "input_transcript": "delegate hello"
             }),
         ],
         vec![],
@@ -675,7 +1144,7 @@ async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Re
     );
     assert_eq!(
         realtime_connections[0][1].body_json()["output_text"].as_str(),
-        Some("assistant says hi")
+        Some("\"Agent Final Message\":\n\nassistant says hi")
     );
 
     realtime_server.shutdown().await;
@@ -720,11 +1189,14 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
                 "session": { "id": "sess_item_done", "instructions": "backend prompt" }
             }),
             json!({
+                "type": "conversation.input_transcript.delta",
+                "delta": "delegate now"
+            }),
+            json!({
                 "type": "conversation.handoff.requested",
                 "handoff_id": "handoff_item_done",
                 "item_id": "item_item_done",
-                "input_transcript": "delegate now",
-                "messages": [{ "role": "user", "text": "delegate now" }]
+                "input_transcript": "delegate now"
             }),
         ],
         vec![json!({
@@ -777,7 +1249,7 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
     );
     assert_eq!(
         first_append.body_json()["output_text"].as_str(),
-        Some("assistant message 1")
+        Some("\"Agent Final Message\":\n\nassistant message 1")
     );
 
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
@@ -801,7 +1273,7 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
     );
     assert_eq!(
         second_append.body_json()["output_text"].as_str(),
-        Some("assistant message 2")
+        Some("\"Agent Final Message\":\n\nassistant message 2")
     );
 
     let completion = completions
@@ -860,11 +1332,14 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
             "session": { "id": "sess_inbound", "instructions": "backend prompt" }
         }),
         json!({
+            "type": "conversation.input_transcript.delta",
+            "delta": "text from realtime"
+        }),
+        json!({
             "type": "conversation.handoff.requested",
             "handoff_id": "handoff_inbound",
             "item_id": "item_inbound",
-            "input_transcript": "text from realtime",
-            "messages": [{ "role": "user", "text": "text from realtime" }]
+            "input_transcript": "text from realtime"
         }),
     ]]])
     .await;
@@ -912,7 +1387,215 @@ async fn inbound_handoff_request_starts_turn() -> Result<()> {
 
     let request = response_mock.single_request();
     let user_texts = request.message_input_texts("user");
-    assert!(user_texts.iter().any(|text| text == "text from realtime"));
+    assert!(
+        user_texts
+            .iter()
+            .any(|text| text == "user: text from realtime")
+    );
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inbound_handoff_request_uses_active_transcript() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &api_server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-1", "ok"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let realtime_server = start_websocket_server(vec![vec![vec![
+        json!({
+            "type": "session.updated",
+            "session": { "id": "sess_inbound_multi", "instructions": "backend prompt" }
+        }),
+        json!({
+            "type": "conversation.output_transcript.delta",
+            "delta": "assistant context"
+        }),
+        json!({
+            "type": "conversation.input_transcript.delta",
+            "delta": "delegated query"
+        }),
+        json!({
+            "type": "conversation.output_transcript.delta",
+            "delta": "assist confirm"
+        }),
+        json!({
+            "type": "conversation.handoff.requested",
+            "handoff_id": "handoff_inbound_multi",
+            "item_id": "item_inbound_multi",
+            "input_transcript": "ignored"
+        }),
+    ]]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+        }
+    });
+    let test = builder.build(&api_server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let _ = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionUpdated { session_id, .. },
+        }) => Some(session_id.clone()),
+        _ => None,
+    })
+    .await;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let request = response_mock.single_request();
+    let user_texts = request.message_input_texts("user");
+    assert!(user_texts.iter().any(|text| text
+        == "assistant: assistant context\nuser: delegated query\nassistant: assist confirm"));
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inbound_handoff_request_clears_active_transcript_after_each_handoff() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &api_server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_assistant_message("msg-1", "first ok"),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-2"),
+                responses::ev_assistant_message("msg-2", "second ok"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let realtime_server = start_websocket_server(vec![vec![
+        vec![
+            json!({
+                "type": "session.updated",
+                "session": { "id": "sess_inbound_clear", "instructions": "backend prompt" }
+            }),
+            json!({
+                "type": "conversation.input_transcript.delta",
+                "delta": "first question"
+            }),
+            json!({
+                "type": "conversation.handoff.requested",
+                "handoff_id": "handoff_inbound_clear_1",
+                "item_id": "item_inbound_clear_1",
+                "input_transcript": "first question"
+            }),
+        ],
+        vec![],
+        vec![
+            json!({
+                "type": "conversation.input_transcript.delta",
+                "delta": "second question"
+            }),
+            json!({
+                "type": "conversation.handoff.requested",
+                "handoff_id": "handoff_inbound_clear_2",
+                "item_id": "item_inbound_clear_2",
+                "input_transcript": "second question"
+            }),
+        ],
+    ]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+        }
+    });
+    let test = builder.build(&api_server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let _ = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionUpdated { session_id, .. },
+        }) => Some(session_id.clone()),
+        _ => None,
+    })
+    .await;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    test.codex
+        .submit(Op::RealtimeConversationAudio(ConversationAudioParams {
+            frame: RealtimeAudioFrame {
+                data: "AQID".to_string(),
+                sample_rate: 24000,
+                num_channels: 1,
+                samples_per_channel: Some(480),
+                item_id: None,
+            },
+        }))
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+
+    let first_user_texts = requests[0].message_input_texts("user");
+    assert!(
+        first_user_texts
+            .iter()
+            .any(|text| text == "user: first question")
+    );
+
+    let second_user_texts = requests[1].message_input_texts("user");
+    assert!(
+        second_user_texts
+            .iter()
+            .any(|text| text == "user: second question")
+    );
+    assert!(
+        !second_user_texts
+            .iter()
+            .any(|text| text == "user: first question\nuser: second question")
+    );
 
     realtime_server.shutdown().await;
     Ok(())
@@ -1029,11 +1712,14 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
                 "session": { "id": "sess_echo_guard", "instructions": "backend prompt" }
             }),
             json!({
+                "type": "conversation.input_transcript.delta",
+                "delta": "delegate now"
+            }),
+            json!({
                 "type": "conversation.handoff.requested",
                 "handoff_id": "handoff_echo_guard",
                 "item_id": "item_echo_guard",
-                "input_transcript": "delegate now",
-                "messages": [{"role": "user", "text": "delegate now"}]
+                "input_transcript": "delegate now"
             }),
         ],
         vec![
@@ -1110,7 +1796,7 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
     );
     assert_eq!(
         mirrored_request_body["output_text"].as_str(),
-        Some("assistant says hi")
+        Some("\"Agent Final Message\":\n\nassistant says hi")
     );
 
     let audio_out = wait_for_event_match(&test.codex, |msg| match msg {
@@ -1177,11 +1863,14 @@ async fn inbound_handoff_request_does_not_block_realtime_event_forwarding() -> R
             "session": { "id": "sess_non_blocking", "instructions": "backend prompt" }
         }),
         json!({
+            "type": "conversation.input_transcript.delta",
+            "delta": "delegate now"
+        }),
+        json!({
             "type": "conversation.handoff.requested",
             "handoff_id": "handoff_non_blocking",
             "item_id": "item_non_blocking",
-            "input_transcript": "delegate now",
-            "messages": [{"role": "user", "text": "delegate now"}]
+            "input_transcript": "delegate now"
         }),
         json!({
             "type": "conversation.output_audio.delta",
@@ -1303,13 +1992,18 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
             "type": "session.updated",
             "session": { "id": "sess_steer", "instructions": "backend prompt" }
         })],
-        vec![json!({
-            "type": "conversation.handoff.requested",
-            "handoff_id": "handoff_steer",
-            "item_id": "item_steer",
-            "input_transcript": "steer via realtime",
-            "messages": [{ "role": "user", "text": "steer via realtime" }]
-        })],
+        vec![
+            json!({
+                "type": "conversation.input_transcript.delta",
+                "delta": "steer via realtime"
+            }),
+            json!({
+                "type": "conversation.handoff.requested",
+                "handoff_id": "handoff_steer",
+                "item_id": "item_steer",
+                "input_transcript": "steer via realtime"
+            }),
+        ],
     ]])
     .await;
 
@@ -1357,6 +2051,7 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
                 sample_rate: 24000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
+                item_id: None,
             },
         }))
         .await?;
@@ -1394,9 +2089,17 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
     let second_texts = message_input_texts(&second_body, "user");
 
     assert!(first_texts.iter().any(|text| text == "first prompt"));
-    assert!(!first_texts.iter().any(|text| text == "steer via realtime"));
+    assert!(
+        !first_texts
+            .iter()
+            .any(|text| text == "user: steer via realtime")
+    );
     assert!(second_texts.iter().any(|text| text == "first prompt"));
-    assert!(second_texts.iter().any(|text| text == "steer via realtime"));
+    assert!(
+        second_texts
+            .iter()
+            .any(|text| text == "user: steer via realtime")
+    );
 
     realtime_server.shutdown().await;
     api_server.shutdown().await;
@@ -1427,11 +2130,14 @@ async fn inbound_handoff_request_starts_turn_and_does_not_block_realtime_audio()
             "session": { "id": "sess_handoff_request", "instructions": "backend prompt" }
         }),
         json!({
+            "type": "conversation.input_transcript.delta",
+            "delta": delegated_text
+        }),
+        json!({
             "type": "conversation.handoff.requested",
             "handoff_id": "handoff_audio",
             "item_id": "item_audio",
-            "input_transcript": delegated_text,
-            "messages": [{ "role": "user", "text": delegated_text }]
+            "input_transcript": delegated_text
         }),
         json!({
             "type": "conversation.output_audio.delta",
@@ -1504,7 +2210,8 @@ async fn inbound_handoff_request_starts_turn_and_does_not_block_realtime_audio()
     assert_eq!(requests.len(), 1);
     let first_body: Value = serde_json::from_slice(&requests[0]).expect("parse first request");
     let first_texts = message_input_texts(&first_body, "user");
-    assert!(first_texts.iter().any(|text| text == delegated_text));
+    let expected_text = format!("user: {delegated_text}");
+    assert!(first_texts.iter().any(|text| text == &expected_text));
 
     realtime_server.shutdown().await;
     api_server.shutdown().await;

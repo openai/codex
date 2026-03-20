@@ -78,6 +78,7 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
             model: session_model,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })

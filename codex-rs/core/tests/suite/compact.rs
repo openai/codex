@@ -5,6 +5,7 @@ use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
+use codex_features::Feature;
 use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
@@ -93,9 +94,10 @@ fn json_fragment(text: &str) -> String {
 }
 
 fn non_openai_model_provider(server: &MockServer) -> ModelProviderInfo {
-    let mut provider = built_in_model_providers()["openai"].clone();
+    let mut provider = built_in_model_providers(/* openai_base_url */ None)["openai"].clone();
     provider.name = "OpenAI (test)".into();
     provider.base_url = Some(format!("{}/v1", server.uri()));
+    provider.supports_websockets = false;
     provider
 }
 
@@ -181,6 +183,7 @@ async fn assert_compaction_uses_turn_lifecycle_id(codex: &std::sync::Arc<codex_c
 }
 fn context_snapshot_options() -> ContextSnapshotOptions {
     ContextSnapshotOptions::default()
+        .strip_capability_instructions()
         .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 })
 }
 
@@ -1659,6 +1662,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
             model: resumed.session_configured.model.clone(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1748,6 +1752,7 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
             model: previous_model.to_string(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1771,6 +1776,7 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
             model: next_model.to_string(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1880,6 +1886,7 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
             model: previous_model.to_string(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -1927,6 +1934,7 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
             model: next_model.to_string(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -3007,11 +3015,13 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
         .submit(Op::OverrideTurnContext {
             cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             windows_sandbox_level: None,
             model: None,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -3106,9 +3116,7 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            config
-                .features
-                .enable(codex_core::features::Feature::RemoteModels);
+            let _ = config.features.enable(Feature::RemoteModels);
             config.model_auto_compact_token_limit = Some(200);
         })
         .build(&server)
@@ -3128,6 +3136,7 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
             model: previous_model.to_string(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -3151,6 +3160,7 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
             model: next_model.to_string(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })

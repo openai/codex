@@ -9,7 +9,8 @@ caching).
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecToolCallOutput;
-use crate::features::Feature;
+use crate::guardian::GUARDIAN_REJECTION_MESSAGE;
+use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::sandboxing::SandboxManager;
 use crate::tools::network_approval::DeferredNetworkApproval;
@@ -59,7 +60,6 @@ impl ToolOrchestrator {
         let network_approval = begin_network_approval(
             &tool_ctx.session,
             &tool_ctx.turn.sub_id,
-            &tool_ctx.call_id,
             has_managed_network_requirements,
             tool.network_approval_spec(req, tool_ctx),
         )
@@ -108,17 +108,18 @@ impl ToolOrchestrator {
     where
         T: ToolRuntime<Rq, Out>,
     {
-        let otel = turn_ctx.otel_manager.clone();
+        let otel = turn_ctx.session_telemetry.clone();
         let otel_tn = &tool_ctx.tool_name;
         let otel_ci = &tool_ctx.call_id;
         let otel_user = ToolDecisionSource::User;
+        let otel_automated_reviewer = ToolDecisionSource::AutomatedReviewer;
         let otel_cfg = ToolDecisionSource::Config;
 
         // 1) Approval
         let mut already_approved = false;
 
         let requirement = tool.exec_approval_requirement(req).unwrap_or_else(|| {
-            default_exec_approval_requirement(approval_policy, &turn_ctx.sandbox_policy)
+            default_exec_approval_requirement(approval_policy, &turn_ctx.file_system_sandbox_policy)
         });
         match requirement {
             ExecApprovalRequirement::Skip { .. } => {
@@ -130,18 +131,28 @@ impl ToolOrchestrator {
             ExecApprovalRequirement::NeedsApproval { reason, .. } => {
                 let approval_ctx = ApprovalCtx {
                     session: &tool_ctx.session,
-                    turn: turn_ctx,
+                    turn: &tool_ctx.turn,
                     call_id: &tool_ctx.call_id,
                     retry_reason: reason,
                     network_approval_context: None,
                 };
                 let decision = tool.start_approval_async(req, approval_ctx).await;
+                let otel_source = if routes_approval_to_guardian(turn_ctx) {
+                    otel_automated_reviewer.clone()
+                } else {
+                    otel_user.clone()
+                };
 
-                otel.tool_decision(otel_tn, otel_ci, &decision, otel_user.clone());
+                otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
 
                 match decision {
                     ReviewDecision::Denied | ReviewDecision::Abort => {
-                        return Err(ToolError::Rejected("rejected by user".to_string()));
+                        let reason = if routes_approval_to_guardian(turn_ctx) {
+                            GUARDIAN_REJECTION_MESSAGE.to_string()
+                        } else {
+                            "rejected by user".to_string()
+                        };
+                        return Err(ToolError::Rejected(reason));
                     }
                     ReviewDecision::Approved
                     | ReviewDecision::ApprovedExecpolicyAmendment { .. }
@@ -169,7 +180,8 @@ impl ToolOrchestrator {
         let initial_sandbox = match tool.sandbox_mode_for_first_attempt(req) {
             SandboxOverride::BypassSandboxFirstAttempt => crate::exec::SandboxType::None,
             SandboxOverride::NoOverride => self.sandbox.select_initial(
-                &turn_ctx.sandbox_policy,
+                &turn_ctx.file_system_sandbox_policy,
+                turn_ctx.network_sandbox_policy,
                 tool.sandbox_preference(),
                 turn_ctx.windows_sandbox_level,
                 has_managed_network_requirements,
@@ -178,16 +190,22 @@ impl ToolOrchestrator {
 
         // Platform-specific flag gating is handled by SandboxManager::select_initial
         // via crate::safety::get_platform_sandbox(..).
-        let use_linux_sandbox_bwrap = turn_ctx.features.enabled(Feature::UseLinuxSandboxBwrap);
+        let use_legacy_landlock = turn_ctx.features.use_legacy_landlock();
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
             policy: &turn_ctx.sandbox_policy,
+            file_system_policy: &turn_ctx.file_system_sandbox_policy,
+            network_policy: turn_ctx.network_sandbox_policy,
             enforce_managed_network: has_managed_network_requirements,
             manager: &self.sandbox,
             sandbox_cwd: &turn_ctx.cwd,
             codex_linux_sandbox_exe: turn_ctx.codex_linux_sandbox_exe.as_ref(),
-            use_linux_sandbox_bwrap,
+            use_legacy_landlock,
             windows_sandbox_level: turn_ctx.windows_sandbox_level,
+            windows_sandbox_private_desktop: turn_ctx
+                .config
+                .permissions
+                .windows_sandbox_private_desktop,
         };
 
         let (first_result, first_deferred_network_approval) = Self::run_attempt(
@@ -229,8 +247,9 @@ impl ToolOrchestrator {
                         network_policy_decision,
                     })));
                 }
-                // Under `Never` or `OnRequest`, do not retry without sandbox; surface a concise
-                // sandbox denial that preserves the original output.
+                // Under `Never` or `OnRequest`, do not retry without sandbox;
+                // surface a concise sandbox denial that preserves the
+                // original output.
                 if !tool.wants_no_sandbox_approval(approval_policy) {
                     let allow_on_request_network_prompt =
                         matches!(approval_policy, AskForApproval::OnRequest)
@@ -238,7 +257,7 @@ impl ToolOrchestrator {
                             && matches!(
                                 default_exec_approval_requirement(
                                     approval_policy,
-                                    &turn_ctx.sandbox_policy
+                                    &turn_ctx.file_system_sandbox_policy
                                 ),
                                 ExecApprovalRequirement::NeedsApproval { .. }
                             );
@@ -266,18 +285,28 @@ impl ToolOrchestrator {
                 if !bypass_retry_approval {
                     let approval_ctx = ApprovalCtx {
                         session: &tool_ctx.session,
-                        turn: turn_ctx,
+                        turn: &tool_ctx.turn,
                         call_id: &tool_ctx.call_id,
                         retry_reason: Some(retry_reason),
                         network_approval_context: network_approval_context.clone(),
                     };
 
                     let decision = tool.start_approval_async(req, approval_ctx).await;
-                    otel.tool_decision(otel_tn, otel_ci, &decision, otel_user);
+                    let otel_source = if routes_approval_to_guardian(turn_ctx) {
+                        otel_automated_reviewer
+                    } else {
+                        otel_user
+                    };
+                    otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
 
                     match decision {
                         ReviewDecision::Denied | ReviewDecision::Abort => {
-                            return Err(ToolError::Rejected("rejected by user".to_string()));
+                            let reason = if routes_approval_to_guardian(turn_ctx) {
+                                GUARDIAN_REJECTION_MESSAGE.to_string()
+                            } else {
+                                "rejected by user".to_string()
+                            };
+                            return Err(ToolError::Rejected(reason));
                         }
                         ReviewDecision::Approved
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
@@ -296,12 +325,18 @@ impl ToolOrchestrator {
                 let escalated_attempt = SandboxAttempt {
                     sandbox: crate::exec::SandboxType::None,
                     policy: &turn_ctx.sandbox_policy,
+                    file_system_policy: &turn_ctx.file_system_sandbox_policy,
+                    network_policy: turn_ctx.network_sandbox_policy,
                     enforce_managed_network: has_managed_network_requirements,
                     manager: &self.sandbox,
                     sandbox_cwd: &turn_ctx.cwd,
                     codex_linux_sandbox_exe: None,
-                    use_linux_sandbox_bwrap,
+                    use_legacy_landlock,
                     windows_sandbox_level: turn_ctx.windows_sandbox_level,
+                    windows_sandbox_private_desktop: turn_ctx
+                        .config
+                        .permissions
+                        .windows_sandbox_private_desktop,
                 };
 
                 // Second attempt.

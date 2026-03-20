@@ -14,7 +14,7 @@ pub(crate) fn ensure_git_repository(path: &Path) -> Result<(), GitToolingError> 
             OsString::from("rev-parse"),
             OsString::from("--is-inside-work-tree"),
         ],
-        None,
+        /*env*/ None,
     ) {
         Ok(output) if output.trim() == "true" => Ok(()),
         Ok(_) => Err(GitToolingError::NotAGitRepository {
@@ -37,7 +37,7 @@ pub(crate) fn resolve_head(path: &Path) -> Result<Option<String>, GitToolingErro
             OsString::from("--verify"),
             OsString::from("HEAD"),
         ],
-        None,
+        /*env*/ None,
     ) {
         Ok(sha) => Ok(Some(sha)),
         Err(GitToolingError::GitCommand { status, .. }) if status.code() == Some(128) => Ok(None),
@@ -84,7 +84,7 @@ pub(crate) fn resolve_repository_root(path: &Path) -> Result<PathBuf, GitTooling
             OsString::from("rev-parse"),
             OsString::from("--show-toplevel"),
         ],
-        None,
+        /*env*/ None,
     )?;
     Ok(PathBuf::from(root))
 }

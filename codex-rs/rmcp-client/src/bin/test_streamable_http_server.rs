@@ -3,10 +3,13 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
+use axum::extract::Json;
 use axum::extract::State;
+use axum::http::Method;
 use axum::http::Request;
 use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
@@ -15,6 +18,7 @@ use axum::middleware;
 use axum::middleware::Next;
 use axum::response::Response;
 use axum::routing::get;
+use axum::routing::post;
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::CallToolRequestParams;
@@ -39,7 +43,9 @@ use rmcp::transport::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use serde::Deserialize;
 use serde_json::json;
+use tokio::sync::Mutex;
 use tokio::task;
+use tokio::time::sleep;
 
 #[derive(Clone)]
 struct TestToolServer {
@@ -50,6 +56,8 @@ struct TestToolServer {
 
 const MEMO_URI: &str = "memo://codex/example-note";
 const MEMO_CONTENT: &str = "This is a sample MCP resource served by the rmcp test server.";
+const MCP_SESSION_ID_HEADER: &str = "mcp-session-id";
+const SESSION_POST_FAILURE_CONTROL_PATH: &str = "/test/control/session-post-failure";
 
 impl TestToolServer {
     fn new() -> Self {
@@ -114,6 +122,23 @@ impl TestToolServer {
     fn memo_text() -> &'static str {
         MEMO_CONTENT
     }
+}
+
+#[derive(Clone, Default)]
+struct SessionFailureState {
+    armed_failure: Arc<Mutex<Option<ArmedFailure>>>,
+}
+
+#[derive(Clone, Debug)]
+struct ArmedFailure {
+    status: StatusCode,
+    remaining: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct ArmSessionPostFailureRequest {
+    status: u16,
+    remaining: usize,
 }
 
 #[derive(Deserialize)]
@@ -251,19 +276,34 @@ fn parse_bind_addr() -> Result<SocketAddr, Box<dyn std::error::Error>> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind_addr = parse_bind_addr()?;
-    let listener = match tokio::net::TcpListener::bind(&bind_addr).await {
-        Ok(listener) => listener,
-        Err(err) if err.kind() == ErrorKind::PermissionDenied => {
-            eprintln!(
-                "failed to bind to {bind_addr}: {err}. make sure the process has network access"
-            );
-            return Ok(());
+    let session_failure_state = SessionFailureState::default();
+    const MAX_BIND_RETRIES: u32 = 20;
+    const BIND_RETRY_DELAY: Duration = Duration::from_millis(50);
+
+    let mut bind_retries = 0;
+    let listener = loop {
+        match tokio::net::TcpListener::bind(&bind_addr).await {
+            Ok(listener) => break listener,
+            Err(err) if err.kind() == ErrorKind::PermissionDenied => {
+                eprintln!(
+                    "failed to bind to {bind_addr}: {err}. make sure the process has network access"
+                );
+                return Ok(());
+            }
+            Err(err) if err.kind() == ErrorKind::AddrInUse && bind_retries < MAX_BIND_RETRIES => {
+                bind_retries += 1;
+                sleep(BIND_RETRY_DELAY).await;
+            }
+            Err(err) => return Err(err.into()),
         }
-        Err(err) => return Err(err.into()),
     };
     eprintln!("starting rmcp streamable http test server on http://{bind_addr}/mcp");
 
     let router = Router::new()
+        .route(
+            SESSION_POST_FAILURE_CONTROL_PATH,
+            post(arm_session_post_failure),
+        )
         .route(
             "/.well-known/oauth-authorization-server/mcp",
             get({
@@ -291,7 +331,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::new(LocalSessionManager::default()),
                 StreamableHttpServerConfig::default(),
             ),
-        );
+        )
+        .layer(middleware::from_fn_with_state(
+            session_failure_state.clone(),
+            fail_session_post_when_armed,
+        ))
+        .with_state(session_failure_state);
 
     let router = if let Ok(token) = std::env::var("MCP_EXPECT_BEARER") {
         let expected = Arc::new(format!("Bearer {token}"));
@@ -322,4 +367,53 @@ async fn require_bearer(
     } else {
         Err(StatusCode::UNAUTHORIZED)
     }
+}
+
+async fn arm_session_post_failure(
+    State(state): State<SessionFailureState>,
+    Json(request): Json<ArmSessionPostFailureRequest>,
+) -> Result<StatusCode, StatusCode> {
+    let status = StatusCode::from_u16(request.status).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let armed_failure = if request.remaining == 0 {
+        None
+    } else {
+        Some(ArmedFailure {
+            status,
+            remaining: request.remaining,
+        })
+    };
+    *state.armed_failure.lock().await = armed_failure;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn fail_session_post_when_armed(
+    State(state): State<SessionFailureState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if request.uri().path() != "/mcp"
+        || request.method() != Method::POST
+        || !request.headers().contains_key(MCP_SESSION_ID_HEADER)
+    {
+        return next.run(request).await;
+    }
+
+    let mut armed_failure = state.armed_failure.lock().await;
+    if let Some(failure) = armed_failure.as_mut()
+        && failure.remaining > 0
+    {
+        failure.remaining -= 1;
+        let status = failure.status;
+        if failure.remaining == 0 {
+            *armed_failure = None;
+        }
+        let mut response = Response::new(Body::from(format!(
+            "forced session failure with status {status}"
+        )));
+        *response.status_mut() = status;
+        return response;
+    }
+
+    drop(armed_failure);
+    next.run(request).await
 }

@@ -26,6 +26,8 @@ use codex_app_server_protocol::CommandExecutionApprovalDecision;
 use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
+use codex_app_server_protocol::CommandExecutionRequestApprovalSkillMetadata;
+use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ContextCompactedNotification;
 use codex_app_server_protocol::DeprecationNoticeNotification;
@@ -41,10 +43,22 @@ use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::FileUpdateChange;
+use codex_app_server_protocol::GrantedPermissionProfile as V2GrantedPermissionProfile;
+use codex_app_server_protocol::GuardianApprovalReview;
+use codex_app_server_protocol::GuardianApprovalReviewStatus;
+use codex_app_server_protocol::HookCompletedNotification;
+use codex_app_server_protocol::HookStartedNotification;
 use codex_app_server_protocol::InterruptConversationResponse;
 use codex_app_server_protocol::ItemCompletedNotification;
+use codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification;
+use codex_app_server_protocol::ItemGuardianApprovalReviewStartedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::McpServerElicitationAction;
+use codex_app_server_protocol::McpServerElicitationRequestParams;
+use codex_app_server_protocol::McpServerElicitationRequestResponse;
+use codex_app_server_protocol::McpServerStartupState;
+use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::McpToolCallError;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
@@ -53,6 +67,8 @@ use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContex
 use codex_app_server_protocol::NetworkPolicyAmendment as V2NetworkPolicyAmendment;
 use codex_app_server_protocol::NetworkPolicyRuleAction as V2NetworkPolicyRuleAction;
 use codex_app_server_protocol::PatchApplyStatus;
+use codex_app_server_protocol::PermissionsRequestApprovalParams;
+use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::PlanDeltaNotification;
 use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::ReasoningSummaryPartAddedNotification;
@@ -61,6 +77,7 @@ use codex_app_server_protocol::ReasoningTextDeltaNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
+use codex_app_server_protocol::SkillsChangedNotification;
 use codex_app_server_protocol::TerminalInteractionNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadNameUpdatedNotification;
@@ -92,9 +109,11 @@ use codex_core::ThreadManager;
 use codex_core::find_thread_name_by_id;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
+use codex_core::sandboxing::intersect_permission_profiles;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
+use codex_protocol::items::parse_hook_prompt_message;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
@@ -102,6 +121,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
+use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::Op;
@@ -110,6 +130,9 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TurnDiffEvent;
+use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
+use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
+use codex_protocol::request_permissions::RequestPermissionsResponse as CoreRequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
 use codex_shell_command::parse_command::shlex_join;
@@ -168,6 +191,66 @@ async fn resolve_server_request_on_thread_listener(
     }
 }
 
+fn guardian_auto_approval_review_notification(
+    conversation_id: &ThreadId,
+    event_turn_id: &str,
+    assessment: &GuardianAssessmentEvent,
+) -> ServerNotification {
+    // TODO(ccunningham): Attach guardian review state to the reviewed tool
+    // item's lifecycle instead of sending standalone review notifications so
+    // the app-server API can persist and replay review state via `thread/read`.
+    let turn_id = if assessment.turn_id.is_empty() {
+        event_turn_id.to_string()
+    } else {
+        assessment.turn_id.clone()
+    };
+    let review = GuardianApprovalReview {
+        status: match assessment.status {
+            codex_protocol::protocol::GuardianAssessmentStatus::InProgress => {
+                GuardianApprovalReviewStatus::InProgress
+            }
+            codex_protocol::protocol::GuardianAssessmentStatus::Approved => {
+                GuardianApprovalReviewStatus::Approved
+            }
+            codex_protocol::protocol::GuardianAssessmentStatus::Denied => {
+                GuardianApprovalReviewStatus::Denied
+            }
+            codex_protocol::protocol::GuardianAssessmentStatus::Aborted => {
+                GuardianApprovalReviewStatus::Aborted
+            }
+        },
+        risk_score: assessment.risk_score,
+        risk_level: assessment.risk_level.map(Into::into),
+        rationale: assessment.rationale.clone(),
+    };
+    match assessment.status {
+        codex_protocol::protocol::GuardianAssessmentStatus::InProgress => {
+            ServerNotification::ItemGuardianApprovalReviewStarted(
+                ItemGuardianApprovalReviewStartedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id,
+                    target_item_id: assessment.id.clone(),
+                    review,
+                    action: assessment.action.clone(),
+                },
+            )
+        }
+        codex_protocol::protocol::GuardianAssessmentStatus::Approved
+        | codex_protocol::protocol::GuardianAssessmentStatus::Denied
+        | codex_protocol::protocol::GuardianAssessmentStatus::Aborted => {
+            ServerNotification::ItemGuardianApprovalReviewCompleted(
+                ItemGuardianApprovalReviewCompletedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id,
+                    target_item_id: assessment.id.clone(),
+                    review,
+                    action: assessment.action.clone(),
+                },
+            )
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn apply_bespoke_event_handling(
     event: Event,
@@ -220,7 +303,54 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
             handle_turn_complete(conversation_id, event_turn_id, &outgoing, &thread_state).await;
         }
+        EventMsg::SkillsUpdateAvailable => {
+            if let ApiVersion::V2 = api_version {
+                outgoing
+                    .send_server_notification(ServerNotification::SkillsChanged(
+                        SkillsChangedNotification {},
+                    ))
+                    .await;
+            }
+        }
+        EventMsg::McpStartupUpdate(update) => {
+            if let ApiVersion::V2 = api_version {
+                let (status, error) = match update.status {
+                    codex_protocol::protocol::McpStartupStatus::Starting => {
+                        (McpServerStartupState::Starting, None)
+                    }
+                    codex_protocol::protocol::McpStartupStatus::Ready => {
+                        (McpServerStartupState::Ready, None)
+                    }
+                    codex_protocol::protocol::McpStartupStatus::Failed { error } => {
+                        (McpServerStartupState::Failed, Some(error))
+                    }
+                    codex_protocol::protocol::McpStartupStatus::Cancelled => {
+                        (McpServerStartupState::Cancelled, None)
+                    }
+                };
+                let notification = McpServerStatusUpdatedNotification {
+                    name: update.server,
+                    status,
+                    error,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::McpServerStatusUpdated(
+                        notification,
+                    ))
+                    .await;
+            }
+        }
         EventMsg::Warning(_warning_event) => {}
+        EventMsg::GuardianAssessment(assessment) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = guardian_auto_approval_review_notification(
+                    &conversation_id,
+                    &event_turn_id,
+                    &assessment,
+                );
+                outgoing.send_server_notification(notification).await;
+            }
+        }
         EventMsg::ModelReroute(event) => {
             if let ApiVersion::V2 = api_version {
                 let notification = ModelReroutedNotification {
@@ -240,6 +370,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let notification = ThreadRealtimeStartedNotification {
                     thread_id: conversation_id.to_string(),
                     session_id: event.session_id,
+                    version: event.version,
                 };
                 outgoing
                     .send_server_notification(ServerNotification::ThreadRealtimeStarted(
@@ -252,6 +383,22 @@ pub(crate) async fn apply_bespoke_event_handling(
             if let ApiVersion::V2 = api_version {
                 match event.payload {
                     RealtimeEvent::SessionUpdated { .. } => {}
+                    RealtimeEvent::InputAudioSpeechStarted(event) => {
+                        let notification = ThreadRealtimeItemAddedNotification {
+                            thread_id: conversation_id.to_string(),
+                            item: serde_json::json!({
+                                "type": "input_audio_buffer.speech_started",
+                                "item_id": event.item_id,
+                            }),
+                        };
+                        outgoing
+                            .send_server_notification(ServerNotification::ThreadRealtimeItemAdded(
+                                notification,
+                            ))
+                            .await;
+                    }
+                    RealtimeEvent::InputTranscriptDelta(_) => {}
+                    RealtimeEvent::OutputTranscriptDelta(_) => {}
                     RealtimeEvent::AudioOut(audio) => {
                         let notification = ThreadRealtimeOutputAudioDeltaNotification {
                             thread_id: conversation_id.to_string(),
@@ -261,6 +408,20 @@ pub(crate) async fn apply_bespoke_event_handling(
                             .send_server_notification(
                                 ServerNotification::ThreadRealtimeOutputAudioDelta(notification),
                             )
+                            .await;
+                    }
+                    RealtimeEvent::ResponseCancelled(event) => {
+                        let notification = ThreadRealtimeItemAddedNotification {
+                            thread_id: conversation_id.to_string(),
+                            item: serde_json::json!({
+                                "type": "response.cancelled",
+                                "response_id": event.response_id,
+                            }),
+                        };
+                        outgoing
+                            .send_server_notification(ServerNotification::ThreadRealtimeItemAdded(
+                                notification,
+                            ))
                             .await;
                     }
                     RealtimeEvent::ConversationItemAdded(item) => {
@@ -283,7 +444,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                                 "handoff_id": handoff.handoff_id,
                                 "item_id": handoff.item_id,
                                 "input_transcript": handoff.input_transcript,
-                                "messages": handoff.messages,
+                                "active_transcript": handoff.active_transcript,
                             }),
                         };
                         outgoing
@@ -424,6 +585,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 proposed_execpolicy_amendment,
                 proposed_network_policy_amendments,
                 additional_permissions,
+                skill_metadata,
                 parsed_cmd,
                 ..
             } = ev;
@@ -495,6 +657,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                         });
                     let additional_permissions =
                         additional_permissions.map(V2AdditionalPermissionProfile::from);
+                    let skill_metadata =
+                        skill_metadata.map(CommandExecutionRequestApprovalSkillMetadata::from);
 
                     let params = CommandExecutionRequestApprovalParams {
                         thread_id: conversation_id.to_string(),
@@ -507,6 +671,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         cwd,
                         command_actions,
                         additional_permissions,
+                        skill_metadata,
                         proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
                         proposed_network_policy_amendments: proposed_network_policy_amendments_v2,
                         available_decisions: Some(available_decisions),
@@ -596,6 +761,114 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .await
                 {
                     error!("failed to submit UserInputAnswer: {err}");
+                }
+            }
+        }
+        EventMsg::ElicitationRequest(request) => {
+            if matches!(api_version, ApiVersion::V2) {
+                let permission_guard = thread_watch_manager
+                    .note_permission_requested(&conversation_id.to_string())
+                    .await;
+                let turn_id = match request.turn_id.clone() {
+                    Some(turn_id) => Some(turn_id),
+                    None => {
+                        let state = thread_state.lock().await;
+                        state.active_turn_snapshot().map(|turn| turn.id)
+                    }
+                };
+                let server_name = request.server_name.clone();
+                let request_body = match request.request.try_into() {
+                    Ok(request_body) => request_body,
+                    Err(err) => {
+                        error!(
+                            error = %err,
+                            server_name,
+                            request_id = ?request.id,
+                            "failed to parse typed MCP elicitation schema"
+                        );
+                        if let Err(err) = conversation
+                            .submit(Op::ResolveElicitation {
+                                server_name: request.server_name,
+                                request_id: request.id,
+                                decision: codex_protocol::approvals::ElicitationAction::Cancel,
+                                content: None,
+                                meta: None,
+                            })
+                            .await
+                        {
+                            error!("failed to submit ResolveElicitation: {err}");
+                        }
+                        return;
+                    }
+                };
+                let params = McpServerElicitationRequestParams {
+                    thread_id: conversation_id.to_string(),
+                    turn_id,
+                    server_name: request.server_name.clone(),
+                    request: request_body,
+                };
+                let (pending_request_id, rx) = outgoing
+                    .send_request(ServerRequestPayload::McpServerElicitationRequest(params))
+                    .await;
+                tokio::spawn(async move {
+                    on_mcp_server_elicitation_response(
+                        request.server_name,
+                        request.id,
+                        pending_request_id,
+                        rx,
+                        conversation,
+                        thread_state,
+                        permission_guard,
+                    )
+                    .await;
+                });
+            }
+        }
+        EventMsg::RequestPermissions(request) => {
+            if matches!(api_version, ApiVersion::V2) {
+                let permission_guard = thread_watch_manager
+                    .note_permission_requested(&conversation_id.to_string())
+                    .await;
+                let requested_permissions = request.permissions.clone();
+                let params = PermissionsRequestApprovalParams {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: request.turn_id.clone(),
+                    item_id: request.call_id.clone(),
+                    reason: request.reason,
+                    permissions: request.permissions.into(),
+                };
+                let (pending_request_id, rx) = outgoing
+                    .send_request(ServerRequestPayload::PermissionsRequestApproval(params))
+                    .await;
+                tokio::spawn(async move {
+                    on_request_permissions_response(
+                        request.call_id,
+                        requested_permissions,
+                        pending_request_id,
+                        rx,
+                        conversation,
+                        thread_state,
+                        permission_guard,
+                    )
+                    .await;
+                });
+            } else {
+                error!(
+                    "request_permissions is only supported on api v2 (call_id: {})",
+                    request.call_id
+                );
+                let empty = CoreRequestPermissionsResponse {
+                    permissions: Default::default(),
+                    scope: CorePermissionGrantScope::Turn,
+                };
+                if let Err(err) = conversation
+                    .submit(Op::RequestPermissionsResponse {
+                        id: request.call_id,
+                        response: empty,
+                    })
+                    .await
+                {
+                    error!("failed to submit RequestPermissionsResponse: {err}");
                 }
             }
         }
@@ -725,6 +998,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: begin_event.sender_thread_id.to_string(),
                 receiver_thread_ids: Vec::new(),
                 prompt: Some(begin_event.prompt),
+                model: Some(begin_event.model),
+                reasoning_effort: Some(begin_event.reasoning_effort),
                 agents_states: HashMap::new(),
             };
             let notification = ItemStartedNotification {
@@ -762,6 +1037,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: end_event.sender_thread_id.to_string(),
                 receiver_thread_ids,
                 prompt: Some(end_event.prompt),
+                model: Some(end_event.model),
+                reasoning_effort: Some(end_event.reasoning_effort),
                 agents_states,
             };
             let notification = ItemCompletedNotification {
@@ -782,6 +1059,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: begin_event.sender_thread_id.to_string(),
                 receiver_thread_ids,
                 prompt: Some(begin_event.prompt),
+                model: None,
+                reasoning_effort: None,
                 agents_states: HashMap::new(),
             };
             let notification = ItemStartedNotification {
@@ -808,6 +1087,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: end_event.sender_thread_id.to_string(),
                 receiver_thread_ids: vec![receiver_id.clone()],
                 prompt: Some(end_event.prompt),
+                model: None,
+                reasoning_effort: None,
                 agents_states: [(receiver_id, received_status)].into_iter().collect(),
             };
             let notification = ItemCompletedNotification {
@@ -832,6 +1113,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: begin_event.sender_thread_id.to_string(),
                 receiver_thread_ids,
                 prompt: None,
+                model: None,
+                reasoning_effort: None,
                 agents_states: HashMap::new(),
             };
             let notification = ItemStartedNotification {
@@ -868,6 +1151,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: end_event.sender_thread_id.to_string(),
                 receiver_thread_ids,
                 prompt: None,
+                model: None,
+                reasoning_effort: None,
                 agents_states,
             };
             let notification = ItemCompletedNotification {
@@ -887,6 +1172,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: begin_event.sender_thread_id.to_string(),
                 receiver_thread_ids: vec![begin_event.receiver_thread_id.to_string()],
                 prompt: None,
+                model: None,
+                reasoning_effort: None,
                 agents_states: HashMap::new(),
             };
             let notification = ItemStartedNotification {
@@ -927,6 +1214,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: end_event.sender_thread_id.to_string(),
                 receiver_thread_ids: vec![receiver_id],
                 prompt: None,
+                model: None,
+                reasoning_effort: None,
                 agents_states,
             };
             let notification = ItemCompletedNotification {
@@ -1175,6 +1464,30 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
         }
+        EventMsg::HookStarted(event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = HookStartedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event.turn_id,
+                    run: event.run.into(),
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::HookStarted(notification))
+                    .await;
+            }
+        }
+        EventMsg::HookCompleted(event) => {
+            if let ApiVersion::V2 = api_version {
+                let notification = HookCompletedNotification {
+                    thread_id: conversation_id.to_string(),
+                    turn_id: event.turn_id,
+                    run: event.run.into(),
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::HookCompleted(notification))
+                    .await;
+            }
+        }
         EventMsg::ExitedReviewMode(review_event) => {
             let review = match review_event.review_output {
                 Some(output) => render_review_output_text(&output),
@@ -1202,6 +1515,14 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::RawResponseItem(raw_response_item_event) => {
+            maybe_emit_hook_prompt_item_completed(
+                api_version,
+                conversation_id,
+                &event_turn_id,
+                &raw_response_item_event.item,
+                &outgoing,
+            )
+            .await;
             maybe_emit_raw_response_item_completed(
                 api_version,
                 conversation_id,
@@ -1282,6 +1603,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 command,
                 cwd,
                 process_id,
+                source: exec_command_begin_event.source.into(),
                 status: CommandExecutionStatus::InProgress,
                 command_actions,
                 aggregated_output: None,
@@ -1299,7 +1621,6 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
             let item_id = exec_command_output_delta_event.call_id.clone();
-            let delta = String::from_utf8_lossy(&exec_command_output_delta_event.chunk).to_string();
             // The underlying EventMsg::ExecCommandOutputDelta is used for shell, unified_exec,
             // and apply_patch tool calls. We represent apply_patch with the FileChange item, and
             // everything else with the CommandExecution item.
@@ -1311,6 +1632,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 state.turn_summary.file_change_started.contains(&item_id)
             };
             if is_file_change {
+                let delta =
+                    String::from_utf8_lossy(&exec_command_output_delta_event.chunk).to_string();
                 let notification = FileChangeOutputDeltaNotification {
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
@@ -1327,7 +1650,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
                     item_id,
-                    delta,
+                    delta: String::from_utf8_lossy(&exec_command_output_delta_event.chunk)
+                        .to_string(),
                 };
                 outgoing
                     .send_server_notification(ServerNotification::CommandExecutionOutputDelta(
@@ -1360,6 +1684,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 aggregated_output,
                 exit_code,
                 duration,
+                source,
                 status,
                 ..
             } = exec_command_end_event;
@@ -1391,6 +1716,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 command: shlex_join(&command),
                 cwd,
                 process_id,
+                source: source.into(),
                 status,
                 command_actions,
                 aggregated_output,
@@ -1517,7 +1843,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                     thread_name: thread_name_event.thread_name,
                 };
                 outgoing
-                    .send_server_notification(ServerNotification::ThreadNameUpdated(notification))
+                    .send_global_server_notification(ServerNotification::ThreadNameUpdated(
+                        notification,
+                    ))
                     .await;
             }
         }
@@ -1652,6 +1980,7 @@ async fn complete_command_execution_item(
     command: String,
     cwd: PathBuf,
     process_id: Option<String>,
+    source: CommandExecutionSource,
     command_actions: Vec<V2ParsedCommand>,
     status: CommandExecutionStatus,
     outgoing: &ThreadScopedOutgoingMessageSender,
@@ -1661,6 +1990,7 @@ async fn complete_command_execution_item(
         command,
         cwd,
         process_id,
+        source,
         status,
         command_actions,
         aggregated_output: None,
@@ -1695,6 +2025,49 @@ async fn maybe_emit_raw_response_item_completed(
     };
     outgoing
         .send_server_notification(ServerNotification::RawResponseItemCompleted(notification))
+        .await;
+}
+
+async fn maybe_emit_hook_prompt_item_completed(
+    api_version: ApiVersion,
+    conversation_id: ThreadId,
+    turn_id: &str,
+    item: &codex_protocol::models::ResponseItem,
+    outgoing: &ThreadScopedOutgoingMessageSender,
+) {
+    let ApiVersion::V2 = api_version else {
+        return;
+    };
+
+    let codex_protocol::models::ResponseItem::Message {
+        role, content, id, ..
+    } = item
+    else {
+        return;
+    };
+
+    if role != "user" {
+        return;
+    }
+
+    let Some(hook_prompt) = parse_hook_prompt_message(id.as_ref(), content) else {
+        return;
+    };
+
+    let notification = ItemCompletedNotification {
+        thread_id: conversation_id.to_string(),
+        turn_id: turn_id.to_string(),
+        item: ThreadItem::HookPrompt {
+            id: hook_prompt.id,
+            fragments: hook_prompt
+                .fragments
+                .into_iter()
+                .map(codex_app_server_protocol::HookPromptFragment::from)
+                .collect(),
+        },
+    };
+    outgoing
+        .send_server_notification(ServerNotification::ItemCompleted(notification))
         .await;
 }
 
@@ -1734,7 +2107,7 @@ async fn handle_turn_interrupted(
         conversation_id,
         event_turn_id,
         TurnStatus::Interrupted,
-        None,
+        /*error*/ None,
         outgoing,
     )
     .await;
@@ -1979,6 +2352,143 @@ async fn on_request_user_input_response(
     }
 }
 
+async fn on_mcp_server_elicitation_response(
+    server_name: String,
+    request_id: codex_protocol::mcp::RequestId,
+    pending_request_id: RequestId,
+    receiver: oneshot::Receiver<ClientRequestResult>,
+    conversation: Arc<CodexThread>,
+    thread_state: Arc<Mutex<ThreadState>>,
+    permission_guard: ThreadWatchActiveGuard,
+) {
+    let response = receiver.await;
+    resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
+    drop(permission_guard);
+    let response = mcp_server_elicitation_response_from_client_result(response);
+
+    if let Err(err) = conversation
+        .submit(Op::ResolveElicitation {
+            server_name,
+            request_id,
+            decision: response.action.to_core(),
+            content: response.content,
+            meta: response.meta,
+        })
+        .await
+    {
+        error!("failed to submit ResolveElicitation: {err}");
+    }
+}
+
+fn mcp_server_elicitation_response_from_client_result(
+    response: std::result::Result<ClientRequestResult, oneshot::error::RecvError>,
+) -> McpServerElicitationRequestResponse {
+    match response {
+        Ok(Ok(value)) => serde_json::from_value::<McpServerElicitationRequestResponse>(value)
+            .unwrap_or_else(|err| {
+                error!("failed to deserialize McpServerElicitationRequestResponse: {err}");
+                McpServerElicitationRequestResponse {
+                    action: McpServerElicitationAction::Decline,
+                    content: None,
+                    meta: None,
+                }
+            }),
+        Ok(Err(err)) if is_turn_transition_server_request_error(&err) => {
+            McpServerElicitationRequestResponse {
+                action: McpServerElicitationAction::Cancel,
+                content: None,
+                meta: None,
+            }
+        }
+        Ok(Err(err)) => {
+            error!("request failed with client error: {err:?}");
+            McpServerElicitationRequestResponse {
+                action: McpServerElicitationAction::Decline,
+                content: None,
+                meta: None,
+            }
+        }
+        Err(err) => {
+            error!("request failed: {err:?}");
+            McpServerElicitationRequestResponse {
+                action: McpServerElicitationAction::Decline,
+                content: None,
+                meta: None,
+            }
+        }
+    }
+}
+
+async fn on_request_permissions_response(
+    call_id: String,
+    requested_permissions: CoreRequestPermissionProfile,
+    pending_request_id: RequestId,
+    receiver: oneshot::Receiver<ClientRequestResult>,
+    conversation: Arc<CodexThread>,
+    thread_state: Arc<Mutex<ThreadState>>,
+    request_permissions_guard: ThreadWatchActiveGuard,
+) {
+    let response = receiver.await;
+    resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
+    drop(request_permissions_guard);
+    let Some(response) =
+        request_permissions_response_from_client_result(requested_permissions, response)
+    else {
+        return;
+    };
+
+    if let Err(err) = conversation
+        .submit(Op::RequestPermissionsResponse {
+            id: call_id,
+            response,
+        })
+        .await
+    {
+        error!("failed to submit RequestPermissionsResponse: {err}");
+    }
+}
+
+fn request_permissions_response_from_client_result(
+    requested_permissions: CoreRequestPermissionProfile,
+    response: std::result::Result<ClientRequestResult, oneshot::error::RecvError>,
+) -> Option<CoreRequestPermissionsResponse> {
+    let value = match response {
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return None,
+        Ok(Err(err)) => {
+            error!("request failed with client error: {err:?}");
+            return Some(CoreRequestPermissionsResponse {
+                permissions: Default::default(),
+                scope: CorePermissionGrantScope::Turn,
+            });
+        }
+        Err(err) => {
+            error!("request failed: {err:?}");
+            return Some(CoreRequestPermissionsResponse {
+                permissions: Default::default(),
+                scope: CorePermissionGrantScope::Turn,
+            });
+        }
+    };
+
+    let response = serde_json::from_value::<PermissionsRequestApprovalResponse>(value)
+        .unwrap_or_else(|err| {
+            error!("failed to deserialize PermissionsRequestApprovalResponse: {err}");
+            PermissionsRequestApprovalResponse {
+                permissions: V2GrantedPermissionProfile::default(),
+                scope: codex_app_server_protocol::PermissionGrantScope::Turn,
+            }
+        });
+    Some(CoreRequestPermissionsResponse {
+        permissions: intersect_permission_profiles(
+            requested_permissions.into(),
+            response.permissions.into(),
+        )
+        .into(),
+        scope: response.scope.to_core(),
+    })
+}
+
 const REVIEW_FALLBACK_MESSAGE: &str = "Reviewer failed to output a response.";
 
 fn render_review_output_text(output: &ReviewOutputEvent) -> String {
@@ -1988,7 +2498,7 @@ fn render_review_output_text(output: &ReviewOutputEvent) -> String {
         sections.push(explanation.to_string());
     }
     if !output.findings.is_empty() {
-        let findings = format_review_findings_block(&output.findings, None);
+        let findings = format_review_findings_block(&output.findings, /*selection*/ None);
         let trimmed = findings.trim();
         if !trimmed.is_empty() {
             sections.push(trimmed.to_string());
@@ -2186,7 +2696,8 @@ async fn on_command_execution_request_approval_response(
             item_id.clone(),
             completion_item.command,
             completion_item.cwd,
-            None,
+            /*process_id*/ None,
+            CommandExecutionSource::Agent,
             completion_item.command_actions,
             status,
             &outgoing,
@@ -2216,6 +2727,8 @@ fn collab_resume_begin_item(
         sender_thread_id: begin_event.sender_thread_id.to_string(),
         receiver_thread_ids: vec![begin_event.receiver_thread_id.to_string()],
         prompt: None,
+        model: None,
+        reasoning_effort: None,
         agents_states: HashMap::new(),
     }
 }
@@ -2240,6 +2753,8 @@ fn collab_resume_end_item(end_event: codex_protocol::protocol::CollabResumeEndEv
         sender_thread_id: end_event.sender_thread_id.to_string(),
         receiver_thread_ids: vec![receiver_id],
         prompt: None,
+        model: None,
+        reasoning_effort: None,
         agents_states,
     }
 }
@@ -2324,8 +2839,14 @@ mod tests {
     use anyhow::Result;
     use anyhow::anyhow;
     use anyhow::bail;
+    use codex_app_server_protocol::GuardianApprovalReviewStatus;
+    use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::TurnPlanStepStatus;
+    use codex_protocol::items::HookPromptFragment;
+    use codex_protocol::items::build_hook_prompt_message;
     use codex_protocol::mcp::CallToolResult;
+    use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
+    use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
     use codex_protocol::plan_tool::PlanItemArg;
     use codex_protocol::plan_tool::StepStatus;
     use codex_protocol::protocol::CollabResumeBeginEvent;
@@ -2336,9 +2857,11 @@ mod tests {
     use codex_protocol::protocol::RateLimitWindow;
     use codex_protocol::protocol::TokenUsage;
     use codex_protocol::protocol::TokenUsageInfo;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use rmcp::model::Content;
     use serde_json::Value as JsonValue;
+    use serde_json::json;
     use std::time::Duration;
     use tokio::sync::Mutex;
     use tokio::sync::mpsc;
@@ -2361,11 +2884,281 @@ mod tests {
     }
 
     #[test]
+    fn guardian_assessment_started_uses_event_turn_id_fallback() {
+        let conversation_id = ThreadId::new();
+        let action = json!({
+            "tool": "shell",
+            "command": "rm -rf /tmp/example.sqlite",
+        });
+        let notification = guardian_auto_approval_review_notification(
+            &conversation_id,
+            "turn-from-event",
+            &GuardianAssessmentEvent {
+                id: "item-1".to_string(),
+                turn_id: String::new(),
+                status: codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
+                risk_score: None,
+                risk_level: None,
+                rationale: None,
+                action: Some(action.clone()),
+            },
+        );
+
+        match notification {
+            ServerNotification::ItemGuardianApprovalReviewStarted(payload) => {
+                assert_eq!(payload.thread_id, conversation_id.to_string());
+                assert_eq!(payload.turn_id, "turn-from-event");
+                assert_eq!(payload.target_item_id, "item-1");
+                assert_eq!(
+                    payload.review.status,
+                    GuardianApprovalReviewStatus::InProgress
+                );
+                assert_eq!(payload.review.risk_score, None);
+                assert_eq!(payload.review.risk_level, None);
+                assert_eq!(payload.review.rationale, None);
+                assert_eq!(payload.action, Some(action));
+            }
+            other => panic!("unexpected notification: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn guardian_assessment_completed_emits_review_payload() {
+        let conversation_id = ThreadId::new();
+        let action = json!({
+            "tool": "shell",
+            "command": "rm -rf /tmp/example.sqlite",
+        });
+        let notification = guardian_auto_approval_review_notification(
+            &conversation_id,
+            "turn-from-event",
+            &GuardianAssessmentEvent {
+                id: "item-2".to_string(),
+                turn_id: "turn-from-assessment".to_string(),
+                status: codex_protocol::protocol::GuardianAssessmentStatus::Denied,
+                risk_score: Some(91),
+                risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
+                rationale: Some("too risky".to_string()),
+                action: Some(action.clone()),
+            },
+        );
+
+        match notification {
+            ServerNotification::ItemGuardianApprovalReviewCompleted(payload) => {
+                assert_eq!(payload.thread_id, conversation_id.to_string());
+                assert_eq!(payload.turn_id, "turn-from-assessment");
+                assert_eq!(payload.target_item_id, "item-2");
+                assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
+                assert_eq!(payload.review.risk_score, Some(91));
+                assert_eq!(
+                    payload.review.risk_level,
+                    Some(codex_app_server_protocol::GuardianRiskLevel::High)
+                );
+                assert_eq!(payload.review.rationale.as_deref(), Some("too risky"));
+                assert_eq!(payload.action, Some(action));
+            }
+            other => panic!("unexpected notification: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn guardian_assessment_aborted_emits_completed_review_payload() {
+        let conversation_id = ThreadId::new();
+        let action = json!({
+            "tool": "network_access",
+            "target": "api.openai.com:443",
+        });
+        let notification = guardian_auto_approval_review_notification(
+            &conversation_id,
+            "turn-from-event",
+            &GuardianAssessmentEvent {
+                id: "item-3".to_string(),
+                turn_id: "turn-from-assessment".to_string(),
+                status: codex_protocol::protocol::GuardianAssessmentStatus::Aborted,
+                risk_score: None,
+                risk_level: None,
+                rationale: None,
+                action: Some(action.clone()),
+            },
+        );
+
+        match notification {
+            ServerNotification::ItemGuardianApprovalReviewCompleted(payload) => {
+                assert_eq!(payload.thread_id, conversation_id.to_string());
+                assert_eq!(payload.turn_id, "turn-from-assessment");
+                assert_eq!(payload.target_item_id, "item-3");
+                assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Aborted);
+                assert_eq!(payload.review.risk_score, None);
+                assert_eq!(payload.review.risk_level, None);
+                assert_eq!(payload.review.rationale, None);
+                assert_eq!(payload.action, Some(action));
+            }
+            other => panic!("unexpected notification: {other:?}"),
+        }
+    }
+
+    #[test]
     fn file_change_accept_for_session_maps_to_approved_for_session() {
         let (decision, completion_status) =
             map_file_change_approval_decision(FileChangeApprovalDecision::AcceptForSession);
         assert_eq!(decision, ReviewDecision::ApprovedForSession);
         assert_eq!(completion_status, None);
+    }
+
+    #[test]
+    fn mcp_server_elicitation_turn_transition_error_maps_to_cancel() {
+        let error = JSONRPCErrorError {
+            code: -1,
+            message: "client request resolved because the turn state was changed".to_string(),
+            data: Some(serde_json::json!({ "reason": "turnTransition" })),
+        };
+
+        let response = mcp_server_elicitation_response_from_client_result(Ok(Err(error)));
+
+        assert_eq!(
+            response,
+            McpServerElicitationRequestResponse {
+                action: McpServerElicitationAction::Cancel,
+                content: None,
+                meta: None,
+            }
+        );
+    }
+
+    #[test]
+    fn request_permissions_turn_transition_error_is_ignored() {
+        let error = JSONRPCErrorError {
+            code: -1,
+            message: "client request resolved because the turn state was changed".to_string(),
+            data: Some(serde_json::json!({ "reason": "turnTransition" })),
+        };
+
+        let response = request_permissions_response_from_client_result(
+            CoreRequestPermissionProfile::default(),
+            Ok(Err(error)),
+        );
+
+        assert_eq!(response, None);
+    }
+
+    #[test]
+    fn request_permissions_response_accepts_partial_network_and_file_system_grants() {
+        let input_path = if cfg!(target_os = "windows") {
+            r"C:\tmp\input"
+        } else {
+            "/tmp/input"
+        };
+        let output_path = if cfg!(target_os = "windows") {
+            r"C:\tmp\output"
+        } else {
+            "/tmp/output"
+        };
+        let ignored_path = if cfg!(target_os = "windows") {
+            r"C:\tmp\ignored"
+        } else {
+            "/tmp/ignored"
+        };
+        let absolute_path = |path: &str| {
+            AbsolutePathBuf::try_from(std::path::PathBuf::from(path)).expect("absolute path")
+        };
+        let requested_permissions = CoreRequestPermissionProfile {
+            network: Some(CoreNetworkPermissions {
+                enabled: Some(true),
+            }),
+            file_system: Some(CoreFileSystemPermissions {
+                read: Some(vec![absolute_path(input_path)]),
+                write: Some(vec![absolute_path(output_path)]),
+            }),
+        };
+        let cases = vec![
+            (
+                serde_json::json!({}),
+                CoreRequestPermissionProfile::default(),
+            ),
+            (
+                serde_json::json!({
+                    "network": {
+                        "enabled": true,
+                    },
+                }),
+                CoreRequestPermissionProfile {
+                    network: Some(CoreNetworkPermissions {
+                        enabled: Some(true),
+                    }),
+                    ..CoreRequestPermissionProfile::default()
+                },
+            ),
+            (
+                serde_json::json!({
+                    "fileSystem": {
+                        "write": [output_path],
+                    },
+                }),
+                CoreRequestPermissionProfile {
+                    file_system: Some(CoreFileSystemPermissions {
+                        read: None,
+                        write: Some(vec![absolute_path(output_path)]),
+                    }),
+                    ..CoreRequestPermissionProfile::default()
+                },
+            ),
+            (
+                serde_json::json!({
+                    "fileSystem": {
+                        "read": [input_path],
+                        "write": [output_path, ignored_path],
+                    },
+                    "macos": {
+                        "calendar": true,
+                    },
+                }),
+                CoreRequestPermissionProfile {
+                    file_system: Some(CoreFileSystemPermissions {
+                        read: Some(vec![absolute_path(input_path)]),
+                        write: Some(vec![absolute_path(output_path)]),
+                    }),
+                    ..CoreRequestPermissionProfile::default()
+                },
+            ),
+        ];
+
+        for (granted_permissions, expected_permissions) in cases {
+            let response = request_permissions_response_from_client_result(
+                requested_permissions.clone(),
+                Ok(Ok(serde_json::json!({
+                    "permissions": granted_permissions,
+                }))),
+            )
+            .expect("response should be accepted");
+
+            assert_eq!(
+                response,
+                CoreRequestPermissionsResponse {
+                    permissions: expected_permissions,
+                    scope: CorePermissionGrantScope::Turn,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn request_permissions_response_preserves_session_scope() {
+        let response = request_permissions_response_from_client_result(
+            CoreRequestPermissionProfile::default(),
+            Ok(Ok(serde_json::json!({
+                "scope": "session",
+                "permissions": {},
+            }))),
+        )
+        .expect("response should be accepted");
+
+        assert_eq!(
+            response,
+            CoreRequestPermissionsResponse {
+                permissions: CoreRequestPermissionProfile::default(),
+                scope: CorePermissionGrantScope::Session,
+            }
+        );
     }
 
     #[test]
@@ -2386,6 +3179,8 @@ mod tests {
             sender_thread_id: event.sender_thread_id.to_string(),
             receiver_thread_ids: vec![event.receiver_thread_id.to_string()],
             prompt: None,
+            model: None,
+            reasoning_effort: None,
             agents_states: HashMap::new(),
         };
         assert_eq!(item, expected);
@@ -2411,6 +3206,8 @@ mod tests {
             sender_thread_id: event.sender_thread_id.to_string(),
             receiver_thread_ids: vec![receiver_id.clone()],
             prompt: None,
+            model: None,
+            reasoning_effort: None,
             agents_states: [(
                 receiver_id,
                 V2CollabAgentStatus::from(codex_protocol::protocol::AgentStatus::NotFound),
@@ -3079,6 +3876,61 @@ mod tests {
         .await;
 
         assert!(rx.try_recv().is_err(), "no messages expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_hook_prompt_raw_response_emits_item_completed() -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let conversation_id = ThreadId::new();
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            conversation_id,
+        );
+        let item = build_hook_prompt_message(&[
+            HookPromptFragment::from_single_hook("Retry with tests.", "hook-run-1"),
+            HookPromptFragment::from_single_hook("Then summarize cleanly.", "hook-run-2"),
+        ])
+        .expect("hook prompt message");
+
+        maybe_emit_hook_prompt_item_completed(
+            ApiVersion::V2,
+            conversation_id,
+            "turn-1",
+            &item,
+            &outgoing,
+        )
+        .await;
+
+        let msg = recv_broadcast_message(&mut rx).await?;
+        match msg {
+            OutgoingMessage::AppServerNotification(ServerNotification::ItemCompleted(
+                notification,
+            )) => {
+                assert_eq!(notification.thread_id, conversation_id.to_string());
+                assert_eq!(notification.turn_id, "turn-1");
+                assert_eq!(
+                    notification.item,
+                    ThreadItem::HookPrompt {
+                        id: notification.item.id().to_string(),
+                        fragments: vec![
+                            codex_app_server_protocol::HookPromptFragment {
+                                text: "Retry with tests.".into(),
+                                hook_run_id: "hook-run-1".into(),
+                            },
+                            codex_app_server_protocol::HookPromptFragment {
+                                text: "Then summarize cleanly.".into(),
+                                hook_run_id: "hook-run-2".into(),
+                            },
+                        ],
+                    }
+                );
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "no extra messages expected");
         Ok(())
     }
 }

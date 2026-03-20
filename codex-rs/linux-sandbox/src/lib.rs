@@ -8,6 +8,8 @@ mod bwrap;
 #[cfg(target_os = "linux")]
 mod landlock;
 #[cfg(target_os = "linux")]
+mod launcher;
+#[cfg(target_os = "linux")]
 mod linux_run_main;
 #[cfg(target_os = "linux")]
 mod proxy_routing;

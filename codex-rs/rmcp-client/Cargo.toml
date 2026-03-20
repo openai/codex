@@ -13,6 +13,7 @@ axum = { workspace = true, default-features = false, features = [
     "http1",
     "tokio",
 ] }
+codex-client = { workspace = true }
 codex-keyring-store = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-pty = { workspace = true }
@@ -40,6 +41,8 @@ schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+sse-stream = "0.2.1"
+thiserror = { workspace = true }
 tiny_http = { workspace = true }
 tokio = { workspace = true, features = [
     "io-util",

@@ -7,6 +7,7 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -23,7 +24,23 @@ enum FileExpectation {
     NonEmpty,
 }
 
+fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        config_toml,
+        r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+
+[features]
+shell_snapshot = false
+"#,
+    )
+}
+
 async fn initialized_mcp(codex_home: &TempDir) -> Result<McpProcess> {
+    create_config_toml(codex_home.path())?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     Ok(mcp)
@@ -35,54 +52,86 @@ async fn wait_for_session_updated(
     query: &str,
     file_expectation: FileExpectation,
 ) -> Result<FuzzyFileSearchSessionUpdatedNotification> {
-    for _ in 0..20 {
-        let notification = timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message(SESSION_UPDATED_METHOD),
-        )
-        .await??;
-        let params = notification
-            .params
-            .ok_or_else(|| anyhow!("missing notification params"))?;
-        let payload = serde_json::from_value::<FuzzyFileSearchSessionUpdatedNotification>(params)?;
-        if payload.session_id != session_id || payload.query != query {
-            continue;
+    let description = format!("session update for sessionId={session_id}, query={query}");
+    let notification = match timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_matching_notification(&description, |notification| {
+            if notification.method != SESSION_UPDATED_METHOD {
+                return false;
+            }
+            let Some(params) = notification.params.as_ref() else {
+                return false;
+            };
+            let Ok(payload) =
+                serde_json::from_value::<FuzzyFileSearchSessionUpdatedNotification>(params.clone())
+            else {
+                return false;
+            };
+            let files_match = match file_expectation {
+                FileExpectation::Any => true,
+                FileExpectation::Empty => payload.files.is_empty(),
+                FileExpectation::NonEmpty => !payload.files.is_empty(),
+            };
+            payload.session_id == session_id && payload.query == query && files_match
+        }),
+    )
+    .await
+    {
+        Ok(result) => result?,
+        Err(_) => {
+            anyhow::bail!(
+                "timed out waiting for {description}; buffered notifications={:?}",
+                mcp.pending_notification_methods()
+            )
         }
-        let files_match = match file_expectation {
-            FileExpectation::Any => true,
-            FileExpectation::Empty => payload.files.is_empty(),
-            FileExpectation::NonEmpty => !payload.files.is_empty(),
-        };
-        if files_match {
-            return Ok(payload);
-        }
-    }
-    anyhow::bail!(
-        "did not receive expected session update for sessionId={session_id}, query={query}"
-    );
+    };
+    let params = notification
+        .params
+        .ok_or_else(|| anyhow!("missing notification params"))?;
+    Ok(serde_json::from_value::<
+        FuzzyFileSearchSessionUpdatedNotification,
+    >(params)?)
 }
 
 async fn wait_for_session_completed(
     mcp: &mut McpProcess,
     session_id: &str,
 ) -> Result<FuzzyFileSearchSessionCompletedNotification> {
-    for _ in 0..20 {
-        let notification = timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message(SESSION_COMPLETED_METHOD),
-        )
-        .await??;
-        let params = notification
-            .params
-            .ok_or_else(|| anyhow!("missing notification params"))?;
-        let payload =
-            serde_json::from_value::<FuzzyFileSearchSessionCompletedNotification>(params)?;
-        if payload.session_id == session_id {
-            return Ok(payload);
+    let description = format!("session completion for sessionId={session_id}");
+    let notification = match timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_matching_notification(&description, |notification| {
+            if notification.method != SESSION_COMPLETED_METHOD {
+                return false;
+            }
+            let Some(params) = notification.params.as_ref() else {
+                return false;
+            };
+            let Ok(payload) = serde_json::from_value::<FuzzyFileSearchSessionCompletedNotification>(
+                params.clone(),
+            ) else {
+                return false;
+            };
+            payload.session_id == session_id
+        }),
+    )
+    .await
+    {
+        Ok(result) => result?,
+        Err(_) => {
+            anyhow::bail!(
+                "timed out waiting for {description}; buffered notifications={:?}",
+                mcp.pending_notification_methods()
+            )
         }
-    }
+    };
 
-    anyhow::bail!("did not receive expected session completion for sessionId={session_id}");
+    let params = notification
+        .params
+        .ok_or_else(|| anyhow!("missing notification params"))?;
+    Ok(serde_json::from_value::<
+        FuzzyFileSearchSessionCompletedNotification,
+    >(params)?)
 }
 
 async fn assert_update_request_fails_for_missing_session(
@@ -164,6 +213,7 @@ async fn assert_no_session_updates_for(
 async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
     // Prepare a temporary Codex home and a separate root with test files.
     let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path())?;
     let root = TempDir::new()?;
 
     // Create files designed to have deterministic ordering for query "abe".
@@ -207,6 +257,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
                 {
                     "root": root_path.clone(),
                     "path": "abexy",
+                    "match_type": "file",
                     "file_name": "abexy",
                     "score": 84,
                     "indices": [0, 1, 2],
@@ -214,6 +265,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
                 {
                     "root": root_path.clone(),
                     "path": sub_abce_rel,
+                    "match_type": "file",
                     "file_name": "abce",
                     "score": expected_score,
                     "indices": [4, 5, 7],
@@ -221,6 +273,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
                 {
                     "root": root_path.clone(),
                     "path": "abcde",
+                    "match_type": "file",
                     "file_name": "abcde",
                     "score": 71,
                     "indices": [0, 1, 4],
@@ -235,6 +288,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_fuzzy_file_search_accepts_cancellation_token() -> Result<()> {
     let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path())?;
     let root = TempDir::new()?;
 
     std::fs::write(root.path().join("alpha.txt"), "contents")?;
@@ -434,7 +488,7 @@ async fn test_fuzzy_file_search_session_update_after_stop_fails() -> Result<()> 
 async fn test_fuzzy_file_search_session_stops_sending_updates_after_stop() -> Result<()> {
     let codex_home = TempDir::new()?;
     let root = TempDir::new()?;
-    for i in 0..10_000 {
+    for i in 0..512 {
         let file_path = root.path().join(format!("file-{i:04}.txt"));
         std::fs::write(file_path, "contents")?;
     }

@@ -5,7 +5,7 @@ use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::LoginApiKeyParams;
+use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioResponse;
@@ -23,8 +23,9 @@ use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadRealtimeStopResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
-use codex_core::features::FEATURES;
-use codex_core::features::Feature;
+use codex_features::FEATURES;
+use codex_features::Feature;
+use codex_protocol::protocol::RealtimeConversationVersion;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -36,6 +37,7 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
 
 #[tokio::test]
 async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
@@ -50,7 +52,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         vec![],
         vec![
             json!({
-                "type": "conversation.output_audio.delta",
+                "type": "response.output_audio.delta",
                 "delta": "AQID",
                 "sample_rate": 24_000,
                 "channels": 1,
@@ -69,6 +71,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
                 "message": "upstream boom"
             }),
         ],
+        vec![],
     ]])
     .await;
 
@@ -113,6 +116,19 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             .await?;
     assert_eq!(started.thread_id, thread_start.thread.id);
     assert!(started.session_id.is_some());
+    assert_eq!(started.version, RealtimeConversationVersion::V2);
+
+    let startup_context_request = realtime_server.wait_for_request(0, 0).await;
+    assert_eq!(
+        startup_context_request.body_json()["type"].as_str(),
+        Some("session.update")
+    );
+    assert!(
+        startup_context_request.body_json()["session"]["instructions"]
+            .as_str()
+            .context("expected startup context instructions")?
+            .contains(STARTUP_CONTEXT_HEADER)
+    );
 
     let audio_append_request_id = mcp
         .send_thread_realtime_append_audio_request(ThreadRealtimeAppendAudioParams {
@@ -122,6 +138,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
                 sample_rate: 24_000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
+                item_id: None,
             },
         })
         .await?;
@@ -173,15 +190,21 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         read_notification::<ThreadRealtimeClosedNotification>(&mut mcp, "thread/realtime/closed")
             .await?;
     assert_eq!(closed.thread_id, output_audio.thread_id);
-    assert_eq!(closed.reason.as_deref(), Some("transport_closed"));
+    assert_eq!(closed.reason.as_deref(), Some("error"));
 
     let connections = realtime_server.connections();
     assert_eq!(connections.len(), 1);
     let connection = &connections[0];
-    assert_eq!(connection.len(), 3);
+    assert_eq!(connection.len(), 4);
     assert_eq!(
         connection[0].body_json()["type"].as_str(),
         Some("session.update")
+    );
+    assert!(
+        connection[0].body_json()["session"]["instructions"]
+            .as_str()
+            .context("expected startup context instructions")?
+            .contains(STARTUP_CONTEXT_HEADER)
     );
     let mut request_types = [
         connection[1].body_json()["type"]
@@ -192,6 +215,10 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             .as_str()
             .context("expected websocket request type")?
             .to_string(),
+        connection[3].body_json()["type"]
+            .as_str()
+            .context("expected websocket request type")?
+            .to_string(),
     ];
     request_types.sort();
     assert_eq!(
@@ -199,6 +226,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         [
             "conversation.item.create".to_string(),
             "input_audio_buffer.append".to_string(),
+            "response.create".to_string(),
         ]
     );
 
@@ -350,17 +378,14 @@ async fn read_notification<T: DeserializeOwned>(mcp: &mut McpProcess, method: &s
 }
 
 async fn login_with_api_key(mcp: &mut McpProcess, api_key: &str) -> Result<()> {
-    let request_id = mcp
-        .send_login_api_key_request(LoginApiKeyParams {
-            api_key: api_key.to_string(),
-        })
-        .await?;
-
-    timeout(
+    let request_id = mcp.send_login_account_api_key_request(api_key).await?;
+    let response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
+    let login: LoginAccountResponse = to_response(response)?;
+    assert_eq!(login, LoginAccountResponse::ApiKey {});
 
     Ok(())
 }
@@ -386,6 +411,10 @@ approval_policy = "never"
 sandbox_mode = "read-only"
 model_provider = "mock_provider"
 experimental_realtime_ws_base_url = "{realtime_server_uri}"
+
+[realtime]
+version = "v2"
+type = "conversational"
 
 [features]
 {realtime_feature_key} = {realtime_enabled}

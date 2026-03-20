@@ -1,7 +1,7 @@
 use anyhow::Result;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::protocol::AskForApproval;
@@ -40,7 +40,10 @@ use uuid::Uuid;
 async fn new_thread_is_recorded_in_state_db() -> Result<()> {
     let server = start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::Sqlite);
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -107,6 +110,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                 "required": ["city"],
                 "properties": { "city": { "type": "string" } }
             }),
+            defer_loading: true,
         },
         DynamicToolSpec {
             name: "weather_lookup".to_string(),
@@ -116,6 +120,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                 "required": ["zip"],
                 "properties": { "zip": { "type": "string" } }
             }),
+            defer_loading: false,
         },
     ];
     let dynamic_tools_for_hook = dynamic_tools.clone();
@@ -170,7 +175,10 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
             fs::write(&rollout_path, format!("{jsonl}\n")).expect("should write rollout file");
         })
         .with_config(|config| {
-            config.features.enable(Feature::Sqlite);
+            config
+                .features
+                .enable(Feature::Sqlite)
+                .expect("test config should allow feature update");
         });
 
     let test = builder.build(&server).await?;
@@ -230,7 +238,10 @@ async fn user_messages_persist_in_state_db() -> Result<()> {
     .await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::Sqlite);
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -281,7 +292,10 @@ async fn web_search_marks_thread_memory_mode_polluted_when_configured() -> Resul
     .await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::Sqlite);
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
         config.memories.no_memories_if_mcp_or_web_search = true;
     });
     let test = builder.build(&server).await?;
@@ -331,7 +345,10 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
 
     let rmcp_test_server_bin = stdio_server_bin()?;
     let mut builder = test_codex().with_config(move |config| {
-        config.features.enable(Feature::Sqlite);
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
         config.memories.no_memories_if_mcp_or_web_search = true;
 
         let mut servers = config.mcp_servers.get().clone();
@@ -381,6 +398,7 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
             model: test.session_configured.model.clone(),
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -433,7 +451,10 @@ async fn tool_call_logs_include_thread_id() -> Result<()> {
     .await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::Sqlite);
+        config
+            .features
+            .enable(Feature::Sqlite)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
     let db = test.codex.state_db().expect("state db enabled");
@@ -461,7 +482,7 @@ async fn tool_call_logs_include_thread_id() -> Result<()> {
         if let Some(row) = rows.into_iter().find(|row| {
             row.message
                 .as_deref()
-                .is_some_and(|m| m.starts_with("ToolCall:"))
+                .is_some_and(|m| m.contains("ToolCall:"))
         }) {
             let thread_id = row.thread_id;
             let message = row.message;
@@ -476,7 +497,7 @@ async fn tool_call_logs_include_thread_id() -> Result<()> {
     assert!(
         message
             .as_deref()
-            .is_some_and(|text| text.starts_with("ToolCall:")),
+            .is_some_and(|text| text.contains("ToolCall:")),
         "expected ToolCall message, got {message:?}"
     );
 

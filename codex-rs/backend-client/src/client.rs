@@ -4,12 +4,14 @@ use crate::types::PaginatedListTaskListItem;
 use crate::types::RateLimitStatusPayload;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
+use codex_client::build_reqwest_client_with_custom_ca;
 use codex_core::auth::CodexAuth;
 use codex_core::default_client::get_codex_user_agent;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
+use reqwest::StatusCode;
 use reqwest::header::AUTHORIZATION;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
@@ -17,6 +19,65 @@ use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
 use reqwest::header::USER_AGENT;
 use serde::de::DeserializeOwned;
+use std::fmt;
+
+#[derive(Debug)]
+pub enum RequestError {
+    UnexpectedStatus {
+        method: String,
+        url: String,
+        status: StatusCode,
+        content_type: String,
+        body: String,
+    },
+    Other(anyhow::Error),
+}
+
+impl RequestError {
+    pub fn status(&self) -> Option<StatusCode> {
+        match self {
+            Self::UnexpectedStatus { status, .. } => Some(*status),
+            Self::Other(_) => None,
+        }
+    }
+
+    pub fn is_unauthorized(&self) -> bool {
+        self.status() == Some(StatusCode::UNAUTHORIZED)
+    }
+}
+
+impl fmt::Display for RequestError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnexpectedStatus {
+                method,
+                url,
+                status,
+                content_type,
+                body,
+            } => write!(
+                f,
+                "{method} {url} failed: {status}; content-type={content_type}; body={body}"
+            ),
+            Self::Other(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl std::error::Error for RequestError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::UnexpectedStatus { .. } => None,
+            Self::Other(err) => Some(err.as_ref()),
+        }
+    }
+}
+
+impl From<anyhow::Error> for RequestError {
+    fn from(err: anyhow::Error) -> Self {
+        Self::Other(err)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PathStyle {
@@ -60,7 +121,7 @@ impl Client {
         {
             base_url = format!("{base_url}/backend-api");
         }
-        let http = reqwest::Client::builder().build()?;
+        let http = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
         let path_style = PathStyle::from_base_url(&base_url);
         Ok(Self {
             base_url,
@@ -146,6 +207,33 @@ impl Client {
             anyhow::bail!("{method} {url} failed: {status}; content-type={ct}; body={body}");
         }
         Ok((body, ct))
+    }
+
+    async fn exec_request_detailed(
+        &self,
+        req: reqwest::RequestBuilder,
+        method: &str,
+        url: &str,
+    ) -> std::result::Result<(String, String), RequestError> {
+        let res = req.send().await.map_err(anyhow::Error::from)?;
+        let status = res.status();
+        let content_type = res
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let body = res.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(RequestError::UnexpectedStatus {
+                method: method.to_string(),
+                url: url.to_string(),
+                status,
+                content_type,
+                body,
+            });
+        }
+        Ok((body, content_type))
     }
 
     fn decode_json<T: DeserializeOwned>(&self, url: &str, ct: &str, body: &str) -> Result<T> {
@@ -256,14 +344,17 @@ impl Client {
     ///
     /// `GET /api/codex/config/requirements` (Codex API style) or
     /// `GET /wham/config/requirements` (ChatGPT backend-api style).
-    pub async fn get_config_requirements_file(&self) -> Result<ConfigFileResponse> {
+    pub async fn get_config_requirements_file(
+        &self,
+    ) -> std::result::Result<ConfigFileResponse, RequestError> {
         let url = match self.path_style {
             PathStyle::CodexApi => format!("{}/api/codex/config/requirements", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/config/requirements", self.base_url),
         };
         let req = self.http.get(&url).headers(self.headers());
-        let (body, ct) = self.exec_request(req, "GET", &url).await?;
+        let (body, ct) = self.exec_request_detailed(req, "GET", &url).await?;
         self.decode_json::<ConfigFileResponse>(&url, &ct, &body)
+            .map_err(RequestError::from)
     }
 
     /// Create a new task (user turn) by POSTing to the appropriate backend path
@@ -308,7 +399,7 @@ impl Client {
         let plan_type = Some(Self::map_plan_type(payload.plan_type));
         let mut snapshots = vec![Self::make_rate_limit_snapshot(
             Some("codex".to_string()),
-            None,
+            /*limit_name*/ None,
             payload.rate_limit.flatten().map(|details| *details),
             payload.credits.flatten().map(|details| *details),
             plan_type,
@@ -319,7 +410,7 @@ impl Client {
                     Some(details.metered_feature),
                     Some(details.limit_name),
                     details.rate_limit.flatten().map(|rate_limit| *rate_limit),
-                    None,
+                    /*credits*/ None,
                     plan_type,
                 )
             }));

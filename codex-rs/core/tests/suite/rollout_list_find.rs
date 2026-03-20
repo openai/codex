@@ -57,7 +57,7 @@ fn write_minimal_rollout_with_id(codex_home: &Path, id: Uuid) -> PathBuf {
 }
 
 async fn upsert_thread_metadata(codex_home: &Path, thread_id: ThreadId, rollout_path: PathBuf) {
-    let runtime = StateRuntime::init(codex_home.to_path_buf(), "test-provider".to_string(), None)
+    let runtime = StateRuntime::init(codex_home.to_path_buf(), "test-provider".to_string())
         .await
         .unwrap();
     runtime.mark_backfill_complete(None).await.unwrap();

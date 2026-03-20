@@ -1,0 +1,17 @@
+---
+source: tui/src/bottom_pane/request_user_input/mod.rs
+expression: "render_snapshot(&overlay, area)"
+---
+                                                                                                                        
+  Question 1/1 (1 unanswered)                                                                                           
+  Choose one option.                                                                                                    
+                                                                                                                        
+  › 1. Job: running/completed/failed/expired; Run/Experiment: succeeded/failed/    Keep async job statuses for          
+       unknown (Recommended when triaging long-running background work and status  progress tracking and include        
+       transitions)                                                                enough context for debugging         
+                                                                                   retries, stale workers, and          
+                                                                                   unexpected expiration paths.         
+    2. Add a short status model                                                    Simpler labels with less detail for  
+                                                                                   quick rollouts.                      
+                                                                                                                        
+  tab to add notes | enter to submit answer | esc to interrupt

@@ -1,8 +1,8 @@
 use crate::codex::Session;
 use crate::config::Config;
-use crate::features::Feature;
 use crate::memories::phase1;
 use crate::memories::phase2;
+use codex_features::Feature;
 use codex_protocol::protocol::SessionSource;
 use std::sync::Arc;
 use tracing::warn;
@@ -34,6 +34,8 @@ pub(crate) fn start_memories_startup_task(
             return;
         };
 
+        // Clean memories to make preserve DB size
+        phase1::prune(&session, &config).await;
         // Run phase 1.
         phase1::run(&session, &config).await;
         // Run phase 2.

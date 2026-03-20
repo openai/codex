@@ -18,6 +18,14 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+// Local modifications:
+// - Fix Codex bug #13945 in the Windows PTY kill path. The vendored code treated
+//   `TerminateProcess`'s nonzero success return as failure and `0` as success,
+//   which inverts kill outcomes for both `WinChild::do_kill` and
+//   `WinChildKiller::kill`.
+// - This bug still exists in the original WezTerm source as of 2026-03-08, so
+//   this is an intentional divergence from upstream.
+
 use anyhow::Context as _;
 use filedescriptor::OwnedHandle;
 use portable_pty::Child;
@@ -67,9 +75,9 @@ impl WinChild {
     fn do_kill(&mut self) -> IoResult<()> {
         let proc = self.proc.lock().unwrap().try_clone().unwrap();
         let res = unsafe { TerminateProcess(proc.as_raw_handle() as _, 1) };
-        let err = IoError::last_os_error();
-        if res != 0 {
-            Err(err)
+        // Codex bug #13945: Win32 returns nonzero on success, so only `0` is an error.
+        if res == 0 {
+            Err(IoError::last_os_error())
         } else {
             Ok(())
         }
@@ -96,9 +104,9 @@ pub struct WinChildKiller {
 impl ChildKiller for WinChildKiller {
     fn kill(&mut self) -> IoResult<()> {
         let res = unsafe { TerminateProcess(self.proc.as_raw_handle() as _, 1) };
-        let err = IoError::last_os_error();
-        if res != 0 {
-            Err(err)
+        // Codex bug #13945: Win32 returns nonzero on success, so only `0` is an error.
+        if res == 0 {
+            Err(IoError::last_os_error())
         } else {
             Ok(())
         }

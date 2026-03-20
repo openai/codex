@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -79,6 +79,7 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
     let server = start_mock_server().await;
 
     let builder = test_codex();
+    #[allow(clippy::expect_used)]
     let TestCodex {
         codex,
         cwd,
@@ -87,7 +88,10 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
     } = builder
         .with_config(move |config| {
             if mode == ModeKind::Default {
-                config.features.enable(Feature::DefaultModeRequestUserInput);
+                config
+                    .features
+                    .enable(Feature::DefaultModeRequestUserInput)
+                    .expect("test config should allow feature update");
             }
         })
         .build(&server)
@@ -138,6 +142,7 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
             model: session_model,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(CollaborationMode {
                 mode,
                 settings: Settings {
@@ -254,6 +259,7 @@ where
             model: session_model,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
         })

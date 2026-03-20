@@ -1,4 +1,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
+use codex_api::WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY;
+use codex_api::WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY;
 use codex_core::CodexAuth;
 use codex_core::ModelClient;
 use codex_core::ModelClientSession;
@@ -7,15 +9,16 @@ use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::WireApi;
 use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
-use codex_core::features::Feature;
-use codex_core::ws_version_from_features;
-use codex_otel::OtelManager;
+use codex_features::Feature;
+use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
+use codex_otel::current_span_w3c_trace_context;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -24,19 +27,19 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::WebSocketTestServer;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
-use core_test_support::responses::ev_done;
-use core_test_support::responses::ev_done_with_id;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
+use core_test_support::tracing::install_test_tracing;
 use core_test_support::wait_for_event;
 use futures::StreamExt;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
@@ -45,20 +48,48 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
+use tracing::Instrument;
 use tracing_test::traced_test;
 
 const MODEL: &str = "gpt-5.2-codex";
 const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
-const OPENAI_BETA_RESPONSES_WEBSOCKETS: &str = "responses_websockets=2026-02-04";
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
+const X_CLIENT_REQUEST_ID_HEADER: &str = "x-client-request-id";
+
+fn assert_request_trace_matches(body: &serde_json::Value, expected_trace: &W3cTraceContext) {
+    let client_metadata = body["client_metadata"]
+        .as_object()
+        .expect("missing client_metadata payload");
+    let actual_traceparent = client_metadata
+        .get(WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY)
+        .and_then(serde_json::Value::as_str)
+        .expect("missing traceparent");
+    let expected_traceparent = expected_trace
+        .traceparent
+        .as_deref()
+        .expect("missing expected traceparent");
+
+    assert_eq!(actual_traceparent, expected_traceparent);
+    assert_eq!(
+        client_metadata
+            .get(WS_REQUEST_HEADER_TRACESTATE_CLIENT_METADATA_KEY)
+            .and_then(serde_json::Value::as_str),
+        expected_trace.tracestate.as_deref()
+    );
+    assert!(
+        body.get("trace").is_none(),
+        "top-level trace should not be sent"
+    );
+}
 
 struct WebsocketTestHarness {
     _codex_home: TempDir,
     client: ModelClient,
+    conversation_id: ThreadId,
     model_info: ModelInfo,
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummary,
-    otel_manager: OtelManager,
+    session_telemetry: SessionTelemetry,
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -88,8 +119,140 @@ async fn responses_websocket_streams_request() {
     let handshake = server.single_handshake();
     assert_eq!(
         handshake.header(OPENAI_BETA_HEADER),
-        Some(OPENAI_BETA_RESPONSES_WEBSOCKETS.to_string())
+        Some(WS_V2_BETA_HEADER_VALUE.to_string())
     );
+    assert_eq!(
+        handshake.header(X_CLIENT_REQUEST_ID_HEADER),
+        Some(harness.conversation_id.to_string())
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_streams_without_feature_flag_when_provider_supports_websockets() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness_with_options(&server, false).await;
+    let mut client_session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    stream_until_complete(&mut client_session, &harness, &prompt).await;
+
+    assert_eq!(server.handshakes().len(), 1);
+    assert_eq!(server.single_connection().len(), 1);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_reuses_connection_with_per_turn_trace_payloads() {
+    skip_if_no_network!();
+
+    let _trace_test_context = install_test_tracing("client-websocket-test");
+
+    let server = start_websocket_server(vec![vec![
+        vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+        vec![ev_response_created("resp-2"), ev_completed("resp-2")],
+    ]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let prompt_one = prompt_with_input(vec![message_item("hello")]);
+    let prompt_two = prompt_with_input(vec![message_item("again")]);
+
+    let first_trace = {
+        let mut client_session = harness.client.new_session();
+        async {
+            let expected_trace =
+                current_span_w3c_trace_context().expect("current span should have trace context");
+            stream_until_complete(&mut client_session, &harness, &prompt_one).await;
+            expected_trace
+        }
+        .instrument(tracing::info_span!("client.websocket.turn_one"))
+        .await
+    };
+
+    let second_trace = {
+        let mut client_session = harness.client.new_session();
+        async {
+            let expected_trace =
+                current_span_w3c_trace_context().expect("current span should have trace context");
+            stream_until_complete(&mut client_session, &harness, &prompt_two).await;
+            expected_trace
+        }
+        .instrument(tracing::info_span!("client.websocket.turn_two"))
+        .await
+    };
+
+    assert_eq!(server.handshakes().len(), 1);
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 2);
+
+    let first_request = connection
+        .first()
+        .expect("missing first request")
+        .body_json();
+    let second_request = connection
+        .get(1)
+        .expect("missing second request")
+        .body_json();
+    assert_request_trace_matches(&first_request, &first_trace);
+    assert_request_trace_matches(&second_request, &second_trace);
+
+    let first_traceparent = first_request["client_metadata"]
+        [WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY]
+        .as_str()
+        .expect("missing first traceparent");
+    let second_traceparent = second_request["client_metadata"]
+        [WS_REQUEST_HEADER_TRACEPARENT_CLIENT_METADATA_KEY]
+        .as_str()
+        .expect("missing second traceparent");
+    assert_ne!(first_traceparent, second_traceparent);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_preconnect_does_not_replace_turn_trace_payload() {
+    skip_if_no_network!();
+
+    let _trace_test_context = install_test_tracing("client-websocket-test");
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut client_session = harness.client.new_session();
+    client_session
+        .preconnect_websocket(&harness.session_telemetry, &harness.model_info)
+        .await
+        .expect("websocket preconnect failed");
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    let expected_trace = async {
+        let expected_trace =
+            current_span_w3c_trace_context().expect("current span should have trace context");
+        stream_until_complete(&mut client_session, &harness, &prompt).await;
+        expected_trace
+    }
+    .instrument(tracing::info_span!("client.websocket.request"))
+    .await;
+
+    assert_eq!(server.handshakes().len(), 1);
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 1);
+    let request = connection.first().expect("missing request").body_json();
+    assert_request_trace_matches(&request, &expected_trace);
 
     server.shutdown().await;
 }
@@ -107,7 +270,7 @@ async fn responses_websocket_preconnect_reuses_connection() {
     let harness = websocket_harness(&server).await;
     let mut client_session = harness.client.new_session();
     client_session
-        .preconnect_websocket(&harness.otel_manager, &harness.model_info)
+        .preconnect_websocket(&harness.session_telemetry, &harness.model_info)
         .await
         .expect("websocket preconnect failed");
     let prompt = prompt_with_input(vec![message_item("hello")]);
@@ -124,21 +287,22 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
-        vec![ev_response_created("warm-1"), ev_done_with_id("warm-1")],
+        vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![ev_response_created("resp-1"), ev_completed("resp-1")],
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, false, true, true).await;
+    let harness = websocket_harness_with_options(&server, true).await;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
     client_session
         .prewarm_websocket(
             &prompt,
             &harness.model_info,
-            &harness.otel_manager,
+            &harness.session_telemetry,
             harness.effort,
             harness.summary,
+            None,
             None,
         )
         .await
@@ -208,7 +372,7 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
     let harness = websocket_harness(&server).await;
     let mut client_session = harness.client.new_session();
     client_session
-        .preconnect_websocket(&harness.otel_manager, &harness.model_info)
+        .preconnect_websocket(&harness.session_telemetry, &harness.model_info)
         .await
         .expect("websocket preconnect failed");
     let prompt = prompt_with_input(vec![message_item("hello")]);
@@ -216,9 +380,10 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
         .stream(
             &prompt,
             &harness.model_info,
-            &harness.otel_manager,
+            &harness.session_telemetry,
             harness.effort,
             harness.summary,
+            None,
             None,
         )
         .await
@@ -241,21 +406,22 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
-        vec![ev_response_created("warm-1"), ev_done_with_id("warm-1")],
+        vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![ev_response_created("resp-1"), ev_completed("resp-1")],
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, false, true, true).await;
+    let harness = websocket_harness_with_options(&server, true).await;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
     client_session
         .prewarm_websocket(
             &prompt,
             &harness.model_info,
-            &harness.otel_manager,
+            &harness.session_telemetry,
             harness.effort,
             harness.summary,
+            None,
             None,
         )
         .await
@@ -264,9 +430,10 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
         .stream(
             &prompt,
             &harness.model_info,
-            &harness.otel_manager,
+            &harness.session_telemetry,
             harness.effort,
             harness.summary,
+            None,
             None,
         )
         .await
@@ -300,7 +467,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_prewarm_uses_v2_when_model_prefers_websockets_and_feature_disabled() {
+async fn responses_websocket_prewarm_uses_v2_when_provider_supports_websockets() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![vec![
@@ -309,16 +476,17 @@ async fn responses_websocket_prewarm_uses_v2_when_model_prefers_websockets_and_f
     ]]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, false, false, true).await;
+    let harness = websocket_harness_with_options(&server, false).await;
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
     client_session
         .prewarm_websocket(
             &prompt,
             &harness.model_info,
-            &harness.otel_manager,
+            &harness.session_telemetry,
             harness.effort,
             harness.summary,
+            None,
             None,
         )
         .await
@@ -338,13 +506,6 @@ async fn responses_websocket_prewarm_uses_v2_when_model_prefers_websockets_and_f
             .map(str::trim)
             .any(|value| value == WS_V2_BETA_HEADER_VALUE)
     );
-    assert!(
-        !openai_beta_header
-            .split(',')
-            .map(str::trim)
-            .any(|value| value == OPENAI_BETA_RESPONSES_WEBSOCKETS)
-    );
-
     stream_until_complete(&mut client_session, &harness, &prompt).await;
     assert_eq!(server.handshakes().len(), 1);
     let connection = server.single_connection();
@@ -372,10 +533,10 @@ async fn responses_websocket_preconnect_runs_when_only_v2_feature_enabled() {
     ]]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, false, true, false).await;
+    let harness = websocket_harness_with_options(&server, true).await;
     let mut client_session = harness.client.new_session();
     client_session
-        .preconnect_websocket(&harness.otel_manager, &harness.model_info)
+        .preconnect_websocket(&harness.session_telemetry, &harness.model_info)
         .await
         .expect("websocket preconnect failed");
 
@@ -398,31 +559,24 @@ async fn responses_websocket_preconnect_runs_when_only_v2_feature_enabled() {
             .map(str::trim)
             .any(|value| value == WS_V2_BETA_HEADER_VALUE)
     );
-    assert!(
-        !openai_beta_header
-            .split(',')
-            .map(str::trim)
-            .any(|value| value == OPENAI_BETA_RESPONSES_WEBSOCKETS)
-    );
-
     server.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_v2_requests_use_v2_when_model_prefers_websockets() {
+async fn responses_websocket_v2_requests_use_v2_when_provider_supports_websockets() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "assistant output"),
-            ev_done_with_id("resp-1"),
+            ev_completed("resp-1"),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, false, true, true).await;
+    let harness = websocket_harness_with_options(&server, true).await;
     let mut client_session = harness.client.new_session();
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![
@@ -454,13 +608,6 @@ async fn responses_websocket_v2_requests_use_v2_when_model_prefers_websockets() 
             .map(str::trim)
             .any(|value| value == WS_V2_BETA_HEADER_VALUE)
     );
-    assert!(
-        !openai_beta_header
-            .split(',')
-            .map(str::trim)
-            .any(|value| value == OPENAI_BETA_RESPONSES_WEBSOCKETS)
-    );
-
     server.shutdown().await;
 }
 
@@ -472,13 +619,13 @@ async fn responses_websocket_v2_incremental_requests_are_reused_across_turns() {
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "assistant output"),
-            ev_done_with_id("resp-1"),
+            ev_completed("resp-1"),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, false, true, true).await;
+    let harness = websocket_harness_with_options(&server, false).await;
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![
         message_item("hello"),
@@ -516,13 +663,13 @@ async fn responses_websocket_v2_wins_when_both_features_enabled() {
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "assistant output"),
-            ev_done_with_id("resp-1"),
+            ev_completed("resp-1"),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
     .await;
 
-    let harness = websocket_harness_with_options(&server, false, true, true, false).await;
+    let harness = websocket_harness_with_options(&server, false).await;
     let mut client_session = harness.client.new_session();
     let prompt_one = prompt_with_input(vec![message_item("hello")]);
     let prompt_two = prompt_with_input(vec![
@@ -554,13 +701,6 @@ async fn responses_websocket_v2_wins_when_both_features_enabled() {
             .map(str::trim)
             .any(|value| value == WS_V2_BETA_HEADER_VALUE)
     );
-    assert!(
-        !openai_beta_header
-            .split(',')
-            .map(str::trim)
-            .any(|value| value == OPENAI_BETA_RESPONSES_WEBSOCKETS)
-    );
-
     server.shutdown().await;
 }
 
@@ -576,7 +716,7 @@ async fn responses_websocket_emits_websocket_telemetry_events() {
     .await;
 
     let harness = websocket_harness(&server).await;
-    harness.otel_manager.reset_runtime_metrics();
+    harness.session_telemetry.reset_runtime_metrics();
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
@@ -585,7 +725,7 @@ async fn responses_websocket_emits_websocket_telemetry_events() {
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     let summary = harness
-        .otel_manager
+        .session_telemetry
         .runtime_metrics_summary()
         .expect("runtime metrics summary");
     assert_eq!(summary.api_calls.count, 0);
@@ -618,7 +758,7 @@ async fn responses_websocket_includes_timing_metrics_header_when_runtime_metrics
     .await;
 
     let harness = websocket_harness_with_runtime_metrics(&server, true).await;
-    harness.otel_manager.reset_runtime_metrics();
+    harness.session_telemetry.reset_runtime_metrics();
     let mut client_session = harness.client.new_session();
     let prompt = prompt_with_input(vec![message_item("hello")]);
 
@@ -632,7 +772,7 @@ async fn responses_websocket_includes_timing_metrics_header_when_runtime_metrics
     );
 
     let summary = harness
-        .otel_manager
+        .session_telemetry
         .runtime_metrics_summary()
         .expect("runtime metrics summary");
     assert_eq!(summary.responses_api_overhead_ms, 120);
@@ -678,6 +818,7 @@ async fn responses_websocket_emits_reasoning_included_event() {
         requests: vec![vec![ev_response_created("resp-1"), ev_completed("resp-1")]],
         response_headers: vec![("X-Reasoning-Included".to_string(), "true".to_string())],
         accept_delay: None,
+        close_after_requests: true,
     }])
     .await;
 
@@ -689,9 +830,10 @@ async fn responses_websocket_emits_reasoning_included_event() {
         .stream(
             &prompt,
             &harness.model_info,
-            &harness.otel_manager,
+            &harness.session_telemetry,
             harness.effort,
             harness.summary,
+            None,
             None,
         )
         .await
@@ -749,6 +891,7 @@ async fn responses_websocket_emits_rate_limit_events() {
             ("X-Reasoning-Included".to_string(), "true".to_string()),
         ],
         accept_delay: None,
+        close_after_requests: true,
     }])
     .await;
 
@@ -760,9 +903,10 @@ async fn responses_websocket_emits_rate_limit_events() {
         .stream(
             &prompt,
             &harness.model_info,
-            &harness.otel_manager,
+            &harness.session_telemetry,
             harness.effort,
             harness.summary,
+            None,
             None,
         )
         .await
@@ -827,7 +971,14 @@ async fn responses_websocket_usage_limit_error_emits_rate_limit_event() {
         }
     });
 
-    let server = start_websocket_server(vec![vec![vec![usage_limit_error]]]).await;
+    let server = start_websocket_server(vec![vec![
+        vec![
+            ev_response_created("resp-prewarm"),
+            ev_completed("resp-prewarm"),
+        ],
+        vec![usage_limit_error],
+    ]])
+    .await;
     let mut builder = test_codex().with_config(|config| {
         config.model_provider.request_max_retries = Some(0);
         config.model_provider.stream_max_retries = Some(0);
@@ -905,7 +1056,14 @@ async fn responses_websocket_invalid_request_error_with_status_is_forwarded() {
         }
     });
 
-    let server = start_websocket_server(vec![vec![vec![invalid_request_error]]]).await;
+    let server = start_websocket_server(vec![vec![
+        vec![
+            ev_response_created("resp-prewarm"),
+            ev_completed("resp-prewarm"),
+        ],
+        vec![invalid_request_error],
+    ]])
+    .await;
     let mut builder = test_codex().with_config(|config| {
         config.model_provider.request_max_retries = Some(0);
         config.model_provider.stream_max_retries = Some(0);
@@ -982,14 +1140,14 @@ async fn responses_websocket_connection_limit_error_reconnects_and_completes() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_appends_on_prefix() {
+async fn responses_websocket_uses_incremental_create_on_prefix() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "assistant output"),
-            ev_done(),
+            ev_completed("resp-1"),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
@@ -1016,24 +1174,25 @@ async fn responses_websocket_appends_on_prefix() {
     assert_eq!(first["model"].as_str(), Some(MODEL));
     assert_eq!(first["stream"], serde_json::Value::Bool(true));
     assert_eq!(first["input"].as_array().map(Vec::len), Some(1));
-    let expected_append = serde_json::json!({
-        "type": "response.append",
-        "input": serde_json::to_value(&prompt_two.input[2..]).expect("serialize append items"),
-    });
-    assert_eq!(second, expected_append);
+    assert_eq!(second["type"].as_str(), Some("response.create"));
+    assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
+    assert_eq!(
+        second["input"],
+        serde_json::to_value(&prompt_two.input[2..]).expect("serialize incremental items")
+    );
 
     server.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_forwards_turn_metadata_on_create_and_append() {
+async fn responses_websocket_forwards_turn_metadata_on_initial_and_incremental_create() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "assistant output"),
-            ev_done(),
+            ev_completed("resp-1"),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
@@ -1054,6 +1213,7 @@ async fn responses_websocket_forwards_turn_metadata_on_create_and_append() {
         &mut client_session,
         &harness,
         &prompt_one,
+        None,
         Some(first_turn_metadata),
     )
     .await;
@@ -1061,6 +1221,7 @@ async fn responses_websocket_forwards_turn_metadata_on_create_and_append() {
         &mut client_session,
         &harness,
         &prompt_two,
+        None,
         Some(enriched_turn_metadata),
     )
     .await;
@@ -1075,7 +1236,8 @@ async fn responses_websocket_forwards_turn_metadata_on_create_and_append() {
         first["client_metadata"]["x-codex-turn-metadata"].as_str(),
         Some(first_turn_metadata)
     );
-    assert_eq!(second["type"].as_str(), Some("response.append"));
+    assert_eq!(second["type"].as_str(), Some("response.create"));
+    assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
     assert_eq!(
         second["client_metadata"]["x-codex-turn-metadata"].as_str(),
         Some(enriched_turn_metadata)
@@ -1097,7 +1259,7 @@ async fn responses_websocket_forwards_turn_metadata_on_create_and_append() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_creates_on_prefix_when_previous_completion_cannot_append() {
+async fn responses_websocket_uses_previous_response_id_when_prefix_after_completed() {
     skip_if_no_network!();
 
     let server = start_websocket_server(vec![vec![
@@ -1127,9 +1289,10 @@ async fn responses_websocket_creates_on_prefix_when_previous_completion_cannot_a
     let second = connection.get(1).expect("missing request").body_json();
 
     assert_eq!(second["type"].as_str(), Some("response.create"));
+    assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
     assert_eq!(
         second["input"],
-        serde_json::to_value(&prompt_two.input).expect("serialize full input")
+        serde_json::to_value(&prompt_two.input[2..]).expect("serialize incremental input")
     );
 
     server.shutdown().await;
@@ -1212,7 +1375,7 @@ async fn responses_websocket_v2_creates_with_previous_response_id_on_prefix() {
         vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "assistant output"),
-            ev_done_with_id("resp-1"),
+            ev_completed("resp-1"),
         ],
         vec![ev_response_created("resp-2"), ev_completed("resp-2")],
     ]])
@@ -1320,9 +1483,10 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
         .stream(
             &prompt_two,
             &harness.model_info,
-            &harness.otel_manager,
+            &harness.session_telemetry,
             harness.effort,
             harness.summary,
+            None,
             None,
         )
         .await
@@ -1373,6 +1537,65 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_v2_surfaces_terminal_error_without_close_handshake() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
+        requests: vec![
+            vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+            vec![json!({
+                "type": "response.failed",
+                "response": {
+                    "error": {
+                        "code": "invalid_prompt",
+                        "message": "synthetic websocket failure"
+                    }
+                }
+            })],
+        ],
+        response_headers: Vec::new(),
+        accept_delay: None,
+        close_after_requests: false,
+    }])
+    .await;
+
+    let harness = websocket_harness_with_v2(&server, true).await;
+    let mut session = harness.client.new_session();
+    let prompt_one = prompt_with_input(vec![message_item("hello")]);
+    let prompt_two = prompt_with_input(vec![message_item("hello"), message_item("second")]);
+
+    stream_until_complete(&mut session, &harness, &prompt_one).await;
+
+    let mut second_stream = session
+        .stream(
+            &prompt_two,
+            &harness.model_info,
+            &harness.session_telemetry,
+            harness.effort,
+            harness.summary,
+            None,
+            None,
+        )
+        .await
+        .expect("websocket stream failed");
+
+    let saw_error = tokio::time::timeout(Duration::from_secs(2), async {
+        while let Some(event) = second_stream.next().await {
+            if event.is_err() {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .expect("timed out waiting for terminal websocket error");
+
+    assert!(saw_error, "expected second websocket stream to error");
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_v2_sets_openai_beta_header() {
     skip_if_no_network!();
 
@@ -1398,13 +1621,6 @@ async fn responses_websocket_v2_sets_openai_beta_header() {
             .map(str::trim)
             .any(|value| value == WS_V2_BETA_HEADER_VALUE)
     );
-    assert!(
-        !openai_beta_header
-            .split(',')
-            .map(str::trim)
-            .any(|value| value == OPENAI_BETA_RESPONSES_WEBSOCKETS)
-    );
-
     server.shutdown().await;
 }
 
@@ -1443,6 +1659,13 @@ fn prompt_with_input_and_instructions(input: Vec<ResponseItem>, instructions: &s
 }
 
 fn websocket_provider(server: &WebSocketTestServer) -> ModelProviderInfo {
+    websocket_provider_with_connect_timeout(server, None)
+}
+
+fn websocket_provider_with_connect_timeout(
+    server: &WebSocketTestServer,
+    websocket_connect_timeout_ms: Option<u64>,
+) -> ModelProviderInfo {
     ModelProviderInfo {
         name: "mock-ws".into(),
         base_url: Some(format!("{}/v1", server.uri())),
@@ -1456,6 +1679,7 @@ fn websocket_provider(server: &WebSocketTestServer) -> ModelProviderInfo {
         request_max_retries: Some(0),
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
+        websocket_connect_timeout_ms,
         requires_openai_auth: false,
         supports_websockets: true,
     }
@@ -1469,41 +1693,39 @@ async fn websocket_harness_with_runtime_metrics(
     server: &WebSocketTestServer,
     runtime_metrics_enabled: bool,
 ) -> WebsocketTestHarness {
-    websocket_harness_with_options(server, runtime_metrics_enabled, true, false, false).await
+    websocket_harness_with_options(server, runtime_metrics_enabled).await
 }
 
 async fn websocket_harness_with_v2(
     server: &WebSocketTestServer,
-    websocket_v2_enabled: bool,
+    runtime_metrics_enabled: bool,
 ) -> WebsocketTestHarness {
-    websocket_harness_with_options(server, false, true, websocket_v2_enabled, false).await
+    websocket_harness_with_options(server, runtime_metrics_enabled).await
 }
 
 async fn websocket_harness_with_options(
     server: &WebSocketTestServer,
     runtime_metrics_enabled: bool,
-    websocket_enabled: bool,
-    websocket_v2_enabled: bool,
-    prefer_websockets: bool,
 ) -> WebsocketTestHarness {
-    let provider = websocket_provider(server);
+    websocket_harness_with_provider_options(websocket_provider(server), runtime_metrics_enabled)
+        .await
+}
+
+async fn websocket_harness_with_provider_options(
+    provider: ModelProviderInfo,
+    runtime_metrics_enabled: bool,
+) -> WebsocketTestHarness {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model = Some(MODEL.to_string());
-    if websocket_enabled {
-        config.features.enable(Feature::ResponsesWebsockets);
-    } else {
-        config.features.disable(Feature::ResponsesWebsockets);
-    }
     if runtime_metrics_enabled {
-        config.features.enable(Feature::RuntimeMetrics);
-    }
-    if websocket_v2_enabled {
-        config.features.enable(Feature::ResponsesWebsocketsV2);
+        config
+            .features
+            .enable(Feature::RuntimeMetrics)
+            .expect("test config should allow feature update");
     }
     let config = Arc::new(config);
-    let mut model_info = codex_core::test_support::construct_model_info_offline(MODEL, &config);
-    model_info.prefer_websockets = prefer_websockets;
+    let model_info = codex_core::test_support::construct_model_info_offline(MODEL, &config);
     let conversation_id = ThreadId::new();
     let auth_manager =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"));
@@ -1513,7 +1735,7 @@ async fn websocket_harness_with_options(
             .with_runtime_reader(),
     )
     .expect("in-memory metrics client");
-    let otel_manager = OtelManager::new(
+    let session_telemetry = SessionTelemetry::new(
         conversation_id,
         MODEL,
         model_info.slug.as_str(),
@@ -1534,7 +1756,6 @@ async fn websocket_harness_with_options(
         provider.clone(),
         SessionSource::Exec,
         config.model_verbosity,
-        ws_version_from_features(&config),
         false,
         runtime_metrics_enabled,
         None,
@@ -1543,10 +1764,11 @@ async fn websocket_harness_with_options(
     WebsocketTestHarness {
         _codex_home: codex_home,
         client,
+        conversation_id,
         model_info,
         effort,
         summary,
-        otel_manager,
+        session_telemetry,
     }
 }
 
@@ -1555,22 +1777,34 @@ async fn stream_until_complete(
     harness: &WebsocketTestHarness,
     prompt: &Prompt,
 ) {
-    stream_until_complete_with_turn_metadata(client_session, harness, prompt, None).await;
+    stream_until_complete_with_service_tier(client_session, harness, prompt, None).await;
+}
+
+async fn stream_until_complete_with_service_tier(
+    client_session: &mut ModelClientSession,
+    harness: &WebsocketTestHarness,
+    prompt: &Prompt,
+    service_tier: Option<ServiceTier>,
+) {
+    stream_until_complete_with_turn_metadata(client_session, harness, prompt, service_tier, None)
+        .await;
 }
 
 async fn stream_until_complete_with_turn_metadata(
     client_session: &mut ModelClientSession,
     harness: &WebsocketTestHarness,
     prompt: &Prompt,
+    service_tier: Option<ServiceTier>,
     turn_metadata_header: Option<&str>,
 ) {
     let mut stream = client_session
         .stream(
             prompt,
             &harness.model_info,
-            &harness.otel_manager,
+            &harness.session_telemetry,
             harness.effort,
             harness.summary,
+            service_tier,
             turn_metadata_header,
         )
         .await

@@ -10,6 +10,7 @@
 use super::compact::COMPACT_WARNING_MESSAGE;
 use super::compact::FIRST_REPLY;
 use super::compact::SUMMARY_TEXT;
+use anyhow::Result;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::compact::SUMMARIZATION_PROMPT;
@@ -19,10 +20,15 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use core_test_support::context_snapshot;
+use core_test_support::context_snapshot::ContextSnapshotOptions;
+use core_test_support::context_snapshot::ContextSnapshotRenderMode;
 use core_test_support::responses::ResponseMock;
+use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::mount_sse_once_match;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -34,6 +40,7 @@ use tempfile::TempDir;
 use wiremock::MockServer;
 
 const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
+const AFTER_ROLLBACK: &str = "AFTER_ROLLBACK";
 
 fn network_disabled() -> bool {
     std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok()
@@ -156,7 +163,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
     user_turn(&base, "AFTER_COMPACT").await;
-    let base_path = fetch_conversation_path(&base).await;
+    let base_path = fetch_conversation_path(&base);
     assert!(
         base_path.exists(),
         "compact+resume test expects base path {base_path:?} to exist",
@@ -164,7 +171,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
 
     let resumed = resume_conversation(&manager, &config, base_path).await;
     user_turn(&resumed, "AFTER_RESUME").await;
-    let resumed_path = fetch_conversation_path(&resumed).await;
+    let resumed_path = fetch_conversation_path(&resumed);
     assert!(
         resumed_path.exists(),
         "compact+resume test expects resumed path {resumed_path:?} to exist",
@@ -294,10 +301,10 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 /// Scenario: after the forked branch is compacted, resuming again should reuse
 /// the compacted history and only append the new user message.
-async fn compact_resume_after_second_compaction_preserves_history() {
+async fn compact_resume_after_second_compaction_preserves_history() -> Result<()> {
     if network_disabled() {
         println!("Skipping test because network is disabled in this sandbox");
-        return;
+        return Ok(());
     }
 
     // 1. Arrange mocked SSE responses for the initial flow plus the second compact.
@@ -311,7 +318,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
     user_turn(&base, "AFTER_COMPACT").await;
-    let base_path = fetch_conversation_path(&base).await;
+    let base_path = fetch_conversation_path(&base);
     assert!(
         base_path.exists(),
         "second compact test expects base path {base_path:?} to exist",
@@ -319,7 +326,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
 
     let resumed = resume_conversation(&manager, &config, base_path).await;
     user_turn(&resumed, "AFTER_RESUME").await;
-    let resumed_path = fetch_conversation_path(&resumed).await;
+    let resumed_path = fetch_conversation_path(&resumed);
     assert!(
         resumed_path.exists(),
         "second compact test expects resumed path {resumed_path:?} to exist",
@@ -330,7 +337,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
 
     compact_conversation(&forked).await;
     user_turn(&forked, "AFTER_COMPACT_2").await;
-    let forked_path = fetch_conversation_path(&forked).await;
+    let forked_path = fetch_conversation_path(&forked);
     assert!(
         forked_path.exists(),
         "second compact test expects forked path {forked_path:?} to exist",
@@ -402,6 +409,97 @@ async fn compact_resume_after_second_compaction_preserves_history() {
             assert_eq!(chunk, seeded_user_prefix);
         }
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// Scenario: rolling back behind a pre-turn compaction should replay
+/// append-only history from the rollout file and keep earlier compacted
+/// history visible.
+async fn snapshot_rollback_past_compaction_replays_append_only_history() -> Result<()> {
+    if network_disabled() {
+        println!("Skipping test because network is disabled in this sandbox");
+        return Ok(());
+    }
+
+    const EDITED_AFTER_COMPACT: &str = "EDITED_AFTER_COMPACT";
+    const SECOND_REPLY: &str = "SECOND_REPLY";
+
+    let server = MockServer::start().await;
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed("r1"),
+    ]);
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", SUMMARY_TEXT),
+        ev_completed("r2"),
+    ]);
+    let sse3 = sse(vec![
+        ev_assistant_message("m3", SECOND_REPLY),
+        ev_completed("r3"),
+    ]);
+    let sse4 = sse(vec![ev_completed("r4")]);
+
+    let request_log = mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4]).await;
+
+    let (_home, _config, _manager, base) = start_test_conversation(&server, None).await;
+
+    user_turn(&base, "hello world").await;
+    compact_conversation(&base).await;
+    user_turn(&base, EDITED_AFTER_COMPACT).await;
+
+    base.submit(Op::ThreadRollback { num_turns: 1 })
+        .await
+        .expect("submit thread rollback");
+    let rollback_event =
+        wait_for_event(&base, |ev| matches!(ev, EventMsg::ThreadRolledBack(_))).await;
+    let EventMsg::ThreadRolledBack(rollback_event) = rollback_event else {
+        panic!("expected thread rolled back event");
+    };
+    assert_eq!(rollback_event.num_turns, 1);
+
+    user_turn(&base, AFTER_ROLLBACK).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 4);
+    assert!(requests[1].body_contains_text(SUMMARIZATION_PROMPT));
+    assert!(requests[2].body_contains_text("hello world"));
+    assert!(requests[2].body_contains_text(SUMMARY_TEXT));
+    assert!(requests[2].body_contains_text(EDITED_AFTER_COMPACT));
+    let after_rollback_user_texts = requests[3].message_input_texts("user");
+    let after_rollback_last = after_rollback_user_texts
+        .last()
+        .unwrap_or_else(|| panic!("post-rollback request missing user messages"));
+    assert_eq!(after_rollback_last, AFTER_ROLLBACK);
+    assert!(
+        requests[3].body_contains_text("hello world"),
+        "the first turn should remain visible after rollback behind compaction",
+    );
+    assert!(
+        !requests[3].body_contains_text(EDITED_AFTER_COMPACT),
+        "the edited post-compaction turn should be removed by rollback",
+    );
+    assert!(
+        requests[3].body_contains_text(SUMMARY_TEXT),
+        "compaction summary should remain for the preserved first turn",
+    );
+
+    insta::assert_snapshot!(
+        "rollback_past_compaction_shapes",
+        context_snapshot::format_labeled_requests_snapshot(
+            "rollback past compaction replay after rollback",
+            &[
+                ("compaction request", &requests[1]),
+                ("before rollback", &requests[2]),
+                ("after rollback", &requests[3]),
+            ],
+            &ContextSnapshotOptions::default()
+                .strip_capability_instructions()
+                .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 }),
+        )
+    );
+
+    Ok(())
 }
 
 fn normalize_line_endings(value: &mut Value) {
@@ -425,10 +523,16 @@ fn normalize_line_endings(value: &mut Value) {
     }
 }
 
-fn gather_request_bodies(request_log: &[ResponseMock]) -> Vec<Value> {
-    let mut bodies = request_log
+fn gather_requests(request_log: &[ResponseMock]) -> Vec<ResponsesRequest> {
+    request_log
         .iter()
         .flat_map(ResponseMock::requests)
+        .collect::<Vec<_>>()
+}
+
+fn gather_request_bodies(request_log: &[ResponseMock]) -> Vec<Value> {
+    let mut bodies = gather_requests(request_log)
+        .into_iter()
         .map(|request| request.body_json())
         .collect::<Vec<_>>();
     bodies.iter_mut().for_each(normalize_line_endings);
@@ -533,7 +637,9 @@ async fn start_test_conversation(
             config.model = Some(model);
         }
     });
-    let test = builder.build(server).await.expect("create conversation");
+    let test = Box::pin(builder.build(server))
+        .await
+        .expect("create conversation");
     (test.home, test.config, test.thread_manager, test.codex)
 }
 
@@ -570,7 +676,7 @@ async fn compact_conversation(conversation: &Arc<CodexThread>) {
     wait_for_event(conversation, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 }
 
-async fn fetch_conversation_path(conversation: &Arc<CodexThread>) -> std::path::PathBuf {
+fn fetch_conversation_path(conversation: &Arc<CodexThread>) -> std::path::PathBuf {
     conversation.rollout_path().expect("rollout path")
 }
 
@@ -582,8 +688,7 @@ async fn resume_conversation(
     let auth_manager = codex_core::test_support::auth_manager_from_auth(
         codex_core::CodexAuth::from_api_key("dummy"),
     );
-    manager
-        .resume_thread_from_rollout(config.clone(), path, auth_manager)
+    Box::pin(manager.resume_thread_from_rollout(config.clone(), path, auth_manager, None))
         .await
         .expect("resume conversation")
         .thread
@@ -596,8 +701,7 @@ async fn fork_thread(
     path: std::path::PathBuf,
     nth_user_message: usize,
 ) -> Arc<CodexThread> {
-    manager
-        .fork_thread(nth_user_message, config.clone(), path, false)
+    Box::pin(manager.fork_thread(nth_user_message, config.clone(), path, false, None))
         .await
         .expect("fork conversation")
         .thread

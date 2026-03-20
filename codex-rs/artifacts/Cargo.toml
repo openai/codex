@@ -1,0 +1,28 @@
+[package]
+name = "codex-artifacts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+codex-package-manager = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "process", "time"] }
+url = { workspace = true }
+which = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+flate2 = { workspace = true }
+pretty_assertions = { workspace = true }
+sha2 = { workspace = true }
+tar = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "rt-multi-thread", "time"] }
+wiremock = { workspace = true }
+zip = { workspace = true }

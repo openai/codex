@@ -16,4 +16,4 @@ export type AppInfo = { id: string, name: string, description: string | null, lo
  * enabled = false
  * ```
  */
-isEnabled: boolean, };
+isEnabled: boolean, pluginDisplayNames: Array<string>, };

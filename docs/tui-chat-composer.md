@@ -118,6 +118,12 @@ the input starts with `!` (shell command).
 The same preparation path is reused for slash commands with arguments (for example `/plan` and
 `/review`) so pasted content and text elements are preserved when extracting args.
 
+The composer also treats the textarea kill buffer as separate editing state from the visible draft.
+After submit or slash-command dispatch clears the textarea, the most recent `Ctrl+K` payload is
+still available for `Ctrl+Y`. This supports flows where a user kills part of a draft, runs a
+composer action such as changing reasoning level, and then yanks that text back into the cleared
+draft.
+
 ### Numeric auto-submit path
 
 When the slash popup is open and the first line matches a numeric-only custom prompt with

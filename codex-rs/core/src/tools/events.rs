@@ -162,7 +162,14 @@ impl ToolEmitter {
             ) => {
                 emit_exec_stage(
                     ctx,
-                    ExecCommandInput::new(command, cwd.as_path(), parsed_cmd, *source, None, None),
+                    ExecCommandInput::new(
+                        command,
+                        cwd.as_path(),
+                        parsed_cmd,
+                        *source,
+                        /*interaction_input*/ None,
+                        /*process_id*/ None,
+                    ),
                     stage,
                 )
                 .await;
@@ -233,7 +240,7 @@ impl ToolEmitter {
                     changes.clone(),
                     String::new(),
                     (*message).to_string(),
-                    false,
+                    /*success*/ false,
                     PatchApplyStatus::Failed,
                 )
                 .await;
@@ -247,7 +254,7 @@ impl ToolEmitter {
                     changes.clone(),
                     String::new(),
                     (*message).to_string(),
-                    false,
+                    /*success*/ false,
                     PatchApplyStatus::Declined,
                 )
                 .await;
@@ -269,7 +276,7 @@ impl ToolEmitter {
                         cwd.as_path(),
                         parsed_cmd,
                         *source,
-                        None,
+                        /*interaction_input*/ None,
                         process_id.as_deref(),
                     ),
                     stage,

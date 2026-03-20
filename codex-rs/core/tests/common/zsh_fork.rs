@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 
@@ -24,8 +24,14 @@ impl ZshForkRuntime {
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
     ) {
-        config.features.enable(Feature::ShellTool);
-        config.features.enable(Feature::ShellZshFork);
+        config
+            .features
+            .enable(Feature::ShellTool)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::ShellZshFork)
+            .expect("test config should allow feature update");
         config.zsh_path = Some(self.zsh_path.clone());
         config.main_execve_wrapper_exe = Some(self.main_execve_wrapper_exe.clone());
         config.permissions.allow_login_shell = false;
@@ -96,7 +102,7 @@ fn find_test_zsh_path() -> Result<Option<PathBuf>> {
         return Ok(None);
     }
 
-    match crate::fetch_dotslash_file(&dotslash_zsh, None) {
+    match crate::fetch_dotslash_file(&dotslash_zsh, /*dotslash_cache*/ None) {
         Ok(path) => Ok(Some(path)),
         Err(error) => {
             eprintln!("skipping zsh-fork test: failed to fetch zsh via dotslash: {error:#}");

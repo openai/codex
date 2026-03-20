@@ -13,16 +13,17 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ReviewOutputEvent;
+use codex_protocol::protocol::SubAgentSource;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::config::Constrained;
-use crate::features::Feature;
 use crate::review_format::format_review_findings_block;
 use crate::review_format::render_review_output_text;
 use crate::state::TaskKind;
+use codex_features::Feature;
 use codex_protocol::user_input::UserInput;
 
 use super::SessionTask;
@@ -43,6 +44,10 @@ impl SessionTask for ReviewTask {
         TaskKind::Review
     }
 
+    fn span_name(&self) -> &'static str {
+        "session_task.review"
+    }
+
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
@@ -50,11 +55,11 @@ impl SessionTask for ReviewTask {
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String> {
-        let _ = session
-            .session
-            .services
-            .otel_manager
-            .counter("codex.task.review", 1, &[]);
+        let _ = session.session.services.session_telemetry.counter(
+            "codex.task.review",
+            /*inc*/ 1,
+            &[],
+        );
 
         // Start sub-codex conversation and get the receiver for events.
         let output = match start_review_conversation(
@@ -75,7 +80,7 @@ impl SessionTask for ReviewTask {
     }
 
     async fn abort(&self, session: Arc<SessionTaskContext>, ctx: Arc<TurnContext>) {
-        exit_review_mode(session.clone_session(), None, ctx).await;
+        exit_review_mode(session.clone_session(), /*review_output*/ None, ctx).await;
     }
 }
 
@@ -95,7 +100,8 @@ async fn start_review_conversation(
     {
         panic!("by construction Constrained<WebSearchMode> must always support Disabled: {err}");
     }
-    sub_agent_config.features.disable(Feature::Collab);
+    let _ = sub_agent_config.features.disable(Feature::SpawnCsv);
+    let _ = sub_agent_config.features.disable(Feature::Collab);
 
     // Set explicit review rubric for the sub-agent
     sub_agent_config.base_instructions = Some(crate::REVIEW_PROMPT.to_string());
@@ -114,7 +120,9 @@ async fn start_review_conversation(
         session.clone_session(),
         ctx.clone(),
         cancellation_token,
-        None,
+        SubAgentSource::Review,
+        /*final_output_json_schema*/ None,
+        /*initial_history*/ None,
     )
     .await)
         .ok()
@@ -209,7 +217,7 @@ pub(crate) async fn exit_review_mode(
             findings_str.push_str(text);
         }
         if !out.findings.is_empty() {
-            let block = format_review_findings_block(&out.findings, None);
+            let block = format_review_findings_block(&out.findings, /*selection*/ None);
             findings_str.push_str(&format!("\n{block}"));
         }
         let rendered =

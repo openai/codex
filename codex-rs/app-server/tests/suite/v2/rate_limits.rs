@@ -6,7 +6,7 @@ use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::LoginApiKeyParams;
+use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RateLimitWindow;
 use codex_app_server_protocol::RequestId;
@@ -221,17 +221,14 @@ async fn get_account_rate_limits_returns_snapshot() -> Result<()> {
 }
 
 async fn login_with_api_key(mcp: &mut McpProcess, api_key: &str) -> Result<()> {
-    let request_id = mcp
-        .send_login_api_key_request(LoginApiKeyParams {
-            api_key: api_key.to_string(),
-        })
-        .await?;
-
-    timeout(
+    let request_id = mcp.send_login_account_api_key_request(api_key).await?;
+    let response: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
+    let login: LoginAccountResponse = to_response(response)?;
+    assert_eq!(login, LoginAccountResponse::ApiKey {});
 
     Ok(())
 }

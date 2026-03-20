@@ -6,13 +6,13 @@ use tokio::process::Child;
 use tokio::process::Command;
 use tracing::trace;
 
-use crate::protocol::SandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 
 /// Experimental environment variable that will be set to some non-empty value
 /// if both of the following are true:
 ///
 /// 1. The process was spawned by Codex as part of a shell tool call.
-/// 2. SandboxPolicy.has_full_network_access() was false for the tool call.
+/// 2. NetworkSandboxPolicy is restricted for the tool call.
 ///
 /// We may try to have just one environment variable for all sandboxing
 /// attributes, so this may change in the future.
@@ -33,15 +33,15 @@ pub enum StdioPolicy {
 /// ensuring the args and environment variables used to create the `Command`
 /// (and `Child`) honor the configuration.
 ///
-/// For now, we take `SandboxPolicy` as a parameter to spawn_child() because
-/// we need to determine whether to set the
+/// For now, we take `NetworkSandboxPolicy` as a parameter to spawn_child()
+/// because we need to determine whether to set the
 /// `CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR` environment variable.
 pub(crate) struct SpawnChildRequest<'a> {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub arg0: Option<&'a str>,
     pub cwd: PathBuf,
-    pub sandbox_policy: &'a SandboxPolicy,
+    pub network_sandbox_policy: NetworkSandboxPolicy,
     pub network: Option<&'a NetworkProxy>,
     pub stdio_policy: StdioPolicy,
     pub env: HashMap<String, String>,
@@ -53,14 +53,14 @@ pub(crate) async fn spawn_child_async(request: SpawnChildRequest<'_>) -> std::io
         args,
         arg0,
         cwd,
-        sandbox_policy,
+        network_sandbox_policy,
         network,
         stdio_policy,
         mut env,
     } = request;
 
     trace!(
-        "spawn_child_async: {program:?} {args:?} {arg0:?} {cwd:?} {sandbox_policy:?} {stdio_policy:?} {env:?}"
+        "spawn_child_async: {program:?} {args:?} {arg0:?} {cwd:?} {network_sandbox_policy:?} {stdio_policy:?} {env:?}"
     );
 
     let mut cmd = Command::new(&program);
@@ -74,7 +74,7 @@ pub(crate) async fn spawn_child_async(request: SpawnChildRequest<'_>) -> std::io
     cmd.env_clear();
     cmd.envs(env);
 
-    if !sandbox_policy.has_full_network_access() {
+    if !network_sandbox_policy.is_enabled() {
         cmd.env(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR, "1");
     }
 

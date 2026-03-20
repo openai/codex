@@ -1,4 +1,3 @@
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::EventMsg;
@@ -7,23 +6,25 @@ use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::get_shell_by_model_provided_path;
 use crate::skills::maybe_emit_implicit_skill_invocation;
+use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
+use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use crate::tools::spec::UnifiedExecShellMode;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecProcessManager;
-use crate::unified_exec::UnifiedExecResponse;
 use crate::unified_exec::WriteStdinRequest;
 use async_trait::async_trait;
-use codex_protocol::models::FunctionCallOutputBody;
+use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -69,7 +70,7 @@ struct WriteStdinArgs {
 }
 
 fn default_exec_yield_time_ms() -> u64 {
-    10000
+    10_000
 }
 
 fn default_write_stdin_yield_time_ms() -> u64 {
@@ -82,6 +83,8 @@ fn default_tty() -> bool {
 
 #[async_trait]
 impl ToolHandler for UnifiedExecHandler {
+    type Output = ExecCommandToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -105,6 +108,7 @@ impl ToolHandler for UnifiedExecHandler {
         let command = match get_command(
             &params,
             invocation.session.user_shell(),
+            &invocation.turn.tools_config.unified_exec_shell_mode,
             invocation.turn.tools_config.allow_login_shell,
         ) {
             Ok(command) => command,
@@ -113,7 +117,7 @@ impl ToolHandler for UnifiedExecHandler {
         !is_known_safe_command(&command)
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -152,9 +156,11 @@ impl ToolHandler for UnifiedExecHandler {
                 let command = get_command(
                     &args,
                     session.user_shell(),
+                    &turn.tools_config.unified_exec_shell_mode,
                     turn.tools_config.allow_login_shell,
                 )
                 .map_err(FunctionCallError::RespondToModel)?;
+                let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
 
                 let ExecCommandArgs {
                     workdir,
@@ -168,17 +174,32 @@ impl ToolHandler for UnifiedExecHandler {
                     ..
                 } = args;
 
-                let request_permission_enabled =
-                    session.features().enabled(Feature::RequestPermissions);
+                let exec_permission_approvals_enabled =
+                    session.features().enabled(Feature::ExecPermissionApprovals);
+                let requested_additional_permissions = additional_permissions.clone();
+                let effective_additional_permissions = apply_granted_turn_permissions(
+                    context.session.as_ref(),
+                    sandbox_permissions,
+                    additional_permissions,
+                )
+                .await;
+                let additional_permissions_allowed = exec_permission_approvals_enabled
+                    || (session.features().enabled(Feature::RequestPermissionsTool)
+                        && effective_additional_permissions.permissions_preapproved);
 
-                if sandbox_permissions.requires_additional_permissions()
+                // Sticky turn permissions have already been approved, so they should
+                // continue through the normal exec approval flow for the command.
+                if effective_additional_permissions
+                    .sandbox_permissions
+                    .requests_sandbox_override()
+                    && !effective_additional_permissions.permissions_preapproved
                     && !matches!(
                         context.turn.approval_policy.value(),
                         codex_protocol::protocol::AskForApproval::OnRequest
                     )
                 {
                     let approval_policy = context.turn.approval_policy.value();
-                    manager.release_process_id(&process_id).await;
+                    manager.release_process_id(process_id).await;
                     return Err(FunctionCallError::RespondToModel(format!(
                         "approval policy is {approval_policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {approval_policy:?}"
                     )));
@@ -188,20 +209,30 @@ impl ToolHandler for UnifiedExecHandler {
 
                 let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
                 let cwd = workdir.clone().unwrap_or(cwd);
-                let normalized_additional_permissions =
-                    match normalize_and_validate_additional_permissions(
-                        request_permission_enabled,
-                        context.turn.approval_policy.value(),
-                        sandbox_permissions,
-                        additional_permissions,
-                        &cwd,
-                    ) {
-                        Ok(normalized) => normalized,
-                        Err(err) => {
-                            manager.release_process_id(&process_id).await;
-                            return Err(FunctionCallError::RespondToModel(err));
-                        }
-                    };
+                let normalized_additional_permissions = match implicit_granted_permissions(
+                    sandbox_permissions,
+                    requested_additional_permissions.as_ref(),
+                    &effective_additional_permissions,
+                )
+                .map_or_else(
+                    || {
+                        normalize_and_validate_additional_permissions(
+                            additional_permissions_allowed,
+                            context.turn.approval_policy.value(),
+                            effective_additional_permissions.sandbox_permissions,
+                            effective_additional_permissions.additional_permissions,
+                            effective_additional_permissions.permissions_preapproved,
+                            &cwd,
+                        )
+                    },
+                    |permissions| Ok(Some(permissions)),
+                ) {
+                    Ok(normalized) => normalized,
+                    Err(err) => {
+                        manager.release_process_id(process_id).await;
+                        return Err(FunctionCallError::RespondToModel(err));
+                    }
+                };
 
                 if let Some(output) = intercept_apply_patch(
                     &command,
@@ -215,8 +246,18 @@ impl ToolHandler for UnifiedExecHandler {
                 )
                 .await?
                 {
-                    manager.release_process_id(&process_id).await;
-                    return Ok(output);
+                    manager.release_process_id(process_id).await;
+                    return Ok(ExecCommandToolOutput {
+                        event_call_id: String::new(),
+                        chunk_id: String::new(),
+                        wall_time: std::time::Duration::ZERO,
+                        raw_output: output.into_text().into_bytes(),
+                        max_output_tokens: None,
+                        process_id: None,
+                        exit_code: None,
+                        original_token_count: None,
+                        session_command: None,
+                    });
                 }
 
                 manager
@@ -229,8 +270,11 @@ impl ToolHandler for UnifiedExecHandler {
                             workdir,
                             network: context.turn.network.clone(),
                             tty,
-                            sandbox_permissions,
+                            sandbox_permissions: effective_additional_permissions
+                                .sandbox_permissions,
                             additional_permissions: normalized_additional_permissions,
+                            additional_permissions_preapproved: effective_additional_permissions
+                                .permissions_preapproved,
                             justification,
                             prefix_rule,
                         },
@@ -238,14 +282,16 @@ impl ToolHandler for UnifiedExecHandler {
                     )
                     .await
                     .map_err(|err| {
-                        FunctionCallError::RespondToModel(format!("exec_command failed: {err:?}"))
+                        FunctionCallError::RespondToModel(format!(
+                            "exec_command failed for `{command_for_display}`: {err:?}"
+                        ))
                     })?
             }
             "write_stdin" => {
                 let args: WriteStdinArgs = parse_arguments(&arguments)?;
                 let response = manager
                     .write_stdin(WriteStdinRequest {
-                        process_id: &args.session_id.to_string(),
+                        process_id: args.session_id,
                         input: &args.chars,
                         yield_time_ms: args.yield_time_ms,
                         max_output_tokens: args.max_output_tokens,
@@ -273,27 +319,16 @@ impl ToolHandler for UnifiedExecHandler {
             }
         };
 
-        let content = format_response(&response);
-
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
-            success: Some(true),
-        })
+        Ok(response)
     }
 }
 
 pub(crate) fn get_command(
     args: &ExecCommandArgs,
     session_shell: Arc<Shell>,
+    shell_mode: &UnifiedExecShellMode,
     allow_login_shell: bool,
 ) -> Result<Vec<String>, String> {
-    let model_shell = args.shell.as_ref().map(|shell_str| {
-        let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
-        shell.shell_snapshot = crate::shell::empty_shell_snapshot_receiver();
-        shell
-    });
-
-    let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
     let use_login_shell = match args.login {
         Some(true) if !allow_login_shell => {
             return Err(
@@ -304,164 +339,24 @@ pub(crate) fn get_command(
         None => allow_login_shell,
     };
 
-    Ok(shell.derive_exec_args(&args.cmd, use_login_shell))
-}
-
-fn format_response(response: &UnifiedExecResponse) -> String {
-    let mut sections = Vec::new();
-
-    if !response.chunk_id.is_empty() {
-        sections.push(format!("Chunk ID: {}", response.chunk_id));
+    match shell_mode {
+        UnifiedExecShellMode::Direct => {
+            let model_shell = args.shell.as_ref().map(|shell_str| {
+                let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
+                shell.shell_snapshot = crate::shell::empty_shell_snapshot_receiver();
+                shell
+            });
+            let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
+            Ok(shell.derive_exec_args(&args.cmd, use_login_shell))
+        }
+        UnifiedExecShellMode::ZshFork(zsh_fork_config) => Ok(vec![
+            zsh_fork_config.shell_zsh_path.to_string_lossy().to_string(),
+            if use_login_shell { "-lc" } else { "-c" }.to_string(),
+            args.cmd.clone(),
+        ]),
     }
-
-    let wall_time_seconds = response.wall_time.as_secs_f64();
-    sections.push(format!("Wall time: {wall_time_seconds:.4} seconds"));
-
-    if let Some(exit_code) = response.exit_code {
-        sections.push(format!("Process exited with code {exit_code}"));
-    }
-
-    if let Some(process_id) = &response.process_id {
-        // Training still uses "session ID".
-        sections.push(format!("Process running with session ID {process_id}"));
-    }
-
-    if let Some(original_token_count) = response.original_token_count {
-        sections.push(format!("Original token count: {original_token_count}"));
-    }
-
-    sections.push("Output:".to_string());
-    sections.push(response.output.clone());
-
-    sections.join("\n")
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::shell::default_user_shell;
-    use crate::tools::handlers::parse_arguments_with_base_path;
-    use crate::tools::handlers::resolve_workdir_base_path;
-    use codex_protocol::models::FileSystemPermissions;
-    use codex_protocol::models::PermissionProfile;
-    use codex_utils_absolute_path::AbsolutePathBuf;
-    use pretty_assertions::assert_eq;
-    use std::fs;
-    use std::sync::Arc;
-    use tempfile::tempdir;
-
-    #[test]
-    fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> {
-        let json = r#"{"cmd": "echo hello"}"#;
-
-        let args: ExecCommandArgs = parse_arguments(json)?;
-
-        assert!(args.shell.is_none());
-
-        let command =
-            get_command(&args, Arc::new(default_user_shell()), true).map_err(anyhow::Error::msg)?;
-
-        assert_eq!(command.len(), 3);
-        assert_eq!(command[2], "echo hello");
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_command_respects_explicit_bash_shell() -> anyhow::Result<()> {
-        let json = r#"{"cmd": "echo hello", "shell": "/bin/bash"}"#;
-
-        let args: ExecCommandArgs = parse_arguments(json)?;
-
-        assert_eq!(args.shell.as_deref(), Some("/bin/bash"));
-
-        let command =
-            get_command(&args, Arc::new(default_user_shell()), true).map_err(anyhow::Error::msg)?;
-
-        assert_eq!(command.last(), Some(&"echo hello".to_string()));
-        if command
-            .iter()
-            .any(|arg| arg.eq_ignore_ascii_case("-Command"))
-        {
-            assert!(command.contains(&"-NoProfile".to_string()));
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_command_respects_explicit_powershell_shell() -> anyhow::Result<()> {
-        let json = r#"{"cmd": "echo hello", "shell": "powershell"}"#;
-
-        let args: ExecCommandArgs = parse_arguments(json)?;
-
-        assert_eq!(args.shell.as_deref(), Some("powershell"));
-
-        let command =
-            get_command(&args, Arc::new(default_user_shell()), true).map_err(anyhow::Error::msg)?;
-
-        assert_eq!(command[2], "echo hello");
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_command_respects_explicit_cmd_shell() -> anyhow::Result<()> {
-        let json = r#"{"cmd": "echo hello", "shell": "cmd"}"#;
-
-        let args: ExecCommandArgs = parse_arguments(json)?;
-
-        assert_eq!(args.shell.as_deref(), Some("cmd"));
-
-        let command =
-            get_command(&args, Arc::new(default_user_shell()), true).map_err(anyhow::Error::msg)?;
-
-        assert_eq!(command[2], "echo hello");
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_command_rejects_explicit_login_when_disallowed() -> anyhow::Result<()> {
-        let json = r#"{"cmd": "echo hello", "login": true}"#;
-
-        let args: ExecCommandArgs = parse_arguments(json)?;
-        let err = get_command(&args, Arc::new(default_user_shell()), false)
-            .expect_err("explicit login should be rejected");
-
-        assert!(
-            err.contains("login shell is disabled by config"),
-            "unexpected error: {err}"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn exec_command_args_resolve_relative_additional_permissions_against_workdir()
-    -> anyhow::Result<()> {
-        let cwd = tempdir()?;
-        let workdir = cwd.path().join("nested");
-        fs::create_dir_all(&workdir)?;
-        let expected_write = workdir.join("relative-write.txt");
-        let json = r#"{
-            "cmd": "echo hello",
-            "workdir": "nested",
-            "additional_permissions": {
-                "file_system": {
-                    "write": ["./relative-write.txt"]
-                }
-            }
-        }"#;
-
-        let base_path = resolve_workdir_base_path(json, cwd.path())?;
-        let args: ExecCommandArgs = parse_arguments_with_base_path(json, base_path.as_path())?;
-
-        assert_eq!(
-            args.additional_permissions,
-            Some(PermissionProfile {
-                file_system: Some(FileSystemPermissions {
-                    read: None,
-                    write: Some(vec![AbsolutePathBuf::try_from(expected_write)?]),
-                }),
-                ..Default::default()
-            })
-        );
-        Ok(())
-    }
-}
+#[path = "unified_exec_tests.rs"]
+mod tests;

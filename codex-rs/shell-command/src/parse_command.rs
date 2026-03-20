@@ -37,7 +37,26 @@ pub fn parse_command(command: &[String]) -> Vec<ParsedCommand> {
         }
         deduped.push(cmd);
     }
-    deduped
+    if deduped
+        .iter()
+        .any(|cmd| matches!(cmd, ParsedCommand::Unknown { .. }))
+    {
+        vec![single_unknown_for_command(command)]
+    } else {
+        deduped
+    }
+}
+
+fn single_unknown_for_command(command: &[String]) -> ParsedCommand {
+    if let Some((_, shell_command)) = extract_shell_command(command) {
+        ParsedCommand::Unknown {
+            cmd: shell_command.to_string(),
+        }
+    } else {
+        ParsedCommand::Unknown {
+            cmd: shlex_join(command),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -119,7 +138,7 @@ mod tests {
         assert_parsed(
             &vec_str(&["bash", "-lc", inner]),
             vec![ParsedCommand::Unknown {
-                cmd: "git status".to_string(),
+                cmd: inner.to_string(),
             }],
         );
     }
@@ -141,24 +160,9 @@ mod tests {
             "rg --version && node -v && pnpm -v && rg --files | wc -l && rg --files | head -n 40";
         assert_parsed(
             &vec_str(&["bash", "-lc", inner]),
-            vec![
-                // Expect commands in left-to-right execution order
-                ParsedCommand::Search {
-                    cmd: "rg --version".to_string(),
-                    query: None,
-                    path: None,
-                },
-                ParsedCommand::Unknown {
-                    cmd: "node -v".to_string(),
-                },
-                ParsedCommand::Unknown {
-                    cmd: "pnpm -v".to_string(),
-                },
-                ParsedCommand::ListFiles {
-                    cmd: "rg --files".to_string(),
-                    path: None,
-                },
-            ],
+            vec![ParsedCommand::Unknown {
+                cmd: inner.to_string(),
+            }],
         );
     }
 
@@ -218,16 +222,33 @@ mod tests {
         let inner = r#"rg -l QkBindingController presentation/src/main/java | xargs perl -pi -e 's/QkBindingController/QkController/g'"#;
         assert_parsed(
             &vec_str(&["bash", "-lc", inner]),
-            vec![
-                ParsedCommand::Search {
-                    cmd: "rg -l QkBindingController presentation/src/main/java".to_string(),
-                    query: Some("QkBindingController".to_string()),
-                    path: Some("java".to_string()),
-                },
-                ParsedCommand::Unknown {
-                    cmd: "xargs perl -pi -e s/QkBindingController/QkController/g".to_string(),
-                },
-            ],
+            vec![ParsedCommand::Unknown {
+                cmd: inner.to_string(),
+            }],
+        );
+    }
+
+    #[test]
+    fn collapses_plain_pipeline_when_any_stage_is_unknown() {
+        let command = shlex_split_safe(
+            "rg -l QkBindingController presentation/src/main/java | xargs perl -pi -e 's/QkBindingController/QkController/g'",
+        );
+        assert_parsed(
+            &command,
+            vec![ParsedCommand::Unknown {
+                cmd: shlex_join(&command),
+            }],
+        );
+    }
+
+    #[test]
+    fn collapses_pipeline_with_helper_when_later_stage_is_unknown() {
+        let command = shlex_split_safe("rg --files | nl -ba | foo");
+        assert_parsed(
+            &command,
+            vec![ParsedCommand::Unknown {
+                cmd: shlex_join(&command),
+            }],
         );
     }
 
@@ -395,7 +416,7 @@ mod tests {
         assert_parsed(
             &shlex_split_safe("bash -lc 'cd foo && bar'"),
             vec![ParsedCommand::Unknown {
-                cmd: "bar".to_string(),
+                cmd: "cd foo && bar".to_string(),
             }],
         );
     }
@@ -920,85 +941,6 @@ mod tests {
                 path: None,
             }],
         );
-    }
-
-    #[test]
-    fn trim_on_semicolon() {
-        assert_parsed(
-            &shlex_split_safe("rg foo ; echo done"),
-            vec![
-                ParsedCommand::Search {
-                    cmd: "rg foo".to_string(),
-                    query: Some("foo".to_string()),
-                    path: None,
-                },
-                ParsedCommand::Unknown {
-                    cmd: "echo done".to_string(),
-                },
-            ],
-        );
-    }
-
-    #[test]
-    fn split_on_or_connector() {
-        // Ensure we split commands on the logical OR operator as well.
-        assert_parsed(
-            &shlex_split_safe("rg foo || echo done"),
-            vec![
-                ParsedCommand::Search {
-                    cmd: "rg foo".to_string(),
-                    query: Some("foo".to_string()),
-                    path: None,
-                },
-                ParsedCommand::Unknown {
-                    cmd: "echo done".to_string(),
-                },
-            ],
-        );
-    }
-
-    #[test]
-    fn parses_mixed_sequence_with_pipes_semicolons_and_or() {
-        // Provided long command sequence combining sequencing, pipelines, and ORs.
-        let inner = "pwd; ls -la; rg --files -g '!target' | wc -l; rg -n '^\\[workspace\\]' -n Cargo.toml || true; rg -n '^\\[package\\]' -n */Cargo.toml || true; cargo --version; rustc --version; cargo clippy --workspace --all-targets --all-features -q";
-        let args = vec_str(&["bash", "-lc", inner]);
-
-        let expected = vec![
-            ParsedCommand::Unknown {
-                cmd: "pwd".to_string(),
-            },
-            ParsedCommand::ListFiles {
-                cmd: shlex_join(&shlex_split_safe("ls -la")),
-                path: None,
-            },
-            ParsedCommand::ListFiles {
-                cmd: shlex_join(&shlex_split_safe("rg --files -g '!target'")),
-                path: None,
-            },
-            ParsedCommand::Search {
-                cmd: shlex_join(&shlex_split_safe("rg -n '^\\[workspace\\]' -n Cargo.toml")),
-                query: Some("^\\[workspace\\]".to_string()),
-                path: Some("Cargo.toml".to_string()),
-            },
-            ParsedCommand::Search {
-                cmd: shlex_join(&shlex_split_safe("rg -n '^\\[package\\]' -n */Cargo.toml")),
-                query: Some("^\\[package\\]".to_string()),
-                path: Some("Cargo.toml".to_string()),
-            },
-            ParsedCommand::Unknown {
-                cmd: shlex_join(&shlex_split_safe("cargo --version")),
-            },
-            ParsedCommand::Unknown {
-                cmd: shlex_join(&shlex_split_safe("rustc --version")),
-            },
-            ParsedCommand::Unknown {
-                cmd: shlex_join(&shlex_split_safe(
-                    "cargo clippy --workspace --all-targets --all-features -q",
-                )),
-            },
-        ];
-
-        assert_parsed(&args, expected);
     }
 
     #[test]
@@ -1926,6 +1868,7 @@ fn parse_shell_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
             };
             commands.push(parsed);
         }
+
         if commands.len() > 1 {
             commands.retain(|pc| !matches!(pc, ParsedCommand::Unknown { cmd } if cmd == "true"));
             // Apply the same simplifications used for non-bash parsing, e.g., drop leading `cd`.

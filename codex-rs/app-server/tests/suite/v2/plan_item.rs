@@ -1,7 +1,8 @@
 use anyhow::Result;
 use anyhow::anyhow;
+use anyhow::bail;
 use app_test_support::McpProcess;
-use app_test_support::create_mock_responses_server_sequence;
+use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
@@ -17,8 +18,8 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_core::features::FEATURES;
-use codex_core::features::Feature;
+use codex_features::FEATURES;
+use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -28,11 +29,13 @@ use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::path::Path;
 use tempfile::TempDir;
+use tokio::time::sleep;
 use tokio::time::timeout;
+use wiremock::MockServer;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn plan_mode_uses_proposed_plan_block_for_plan_item() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -45,7 +48,7 @@ async fn plan_mode_uses_proposed_plan_block_for_plan_item() -> Result<()> {
         responses::ev_assistant_message("msg-1", &full_message),
         responses::ev_completed("resp-1"),
     ])];
-    let server = create_mock_responses_server_sequence(responses).await;
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -56,6 +59,7 @@ async fn plan_mode_uses_proposed_plan_block_for_plan_item() -> Result<()> {
     let turn = start_plan_mode_turn(&mut mcp).await?;
     let (_, completed_items, plan_deltas, turn_completed) =
         collect_turn_notifications(&mut mcp).await?;
+    wait_for_responses_request_count(&server, 1).await?;
 
     assert_eq!(turn_completed.turn.id, turn.id);
     assert_eq!(turn_completed.turn.status, TurnStatus::Completed);
@@ -93,7 +97,7 @@ async fn plan_mode_uses_proposed_plan_block_for_plan_item() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn plan_mode_without_proposed_plan_does_not_emit_plan_item() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -102,7 +106,7 @@ async fn plan_mode_without_proposed_plan_does_not_emit_plan_item() -> Result<()>
         responses::ev_assistant_message("msg-1", "Done"),
         responses::ev_completed("resp-1"),
     ])];
-    let server = create_mock_responses_server_sequence(responses).await;
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -112,6 +116,7 @@ async fn plan_mode_without_proposed_plan_does_not_emit_plan_item() -> Result<()>
 
     let _turn = start_plan_mode_turn(&mut mcp).await?;
     let (_, completed_items, plan_deltas, _) = collect_turn_notifications(&mut mcp).await?;
+    wait_for_responses_request_count(&server, 1).await?;
 
     let has_plan_item = completed_items
         .iter()
@@ -212,6 +217,36 @@ async fn collect_turn_notifications(
             _ => {}
         }
     }
+}
+
+async fn wait_for_responses_request_count(
+    server: &MockServer,
+    expected_count: usize,
+) -> Result<()> {
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let Some(requests) = server.received_requests().await else {
+                bail!("wiremock did not record requests");
+            };
+            let responses_request_count = requests
+                .iter()
+                .filter(|request| {
+                    request.method == "POST" && request.url.path().ends_with("/responses")
+                })
+                .count();
+            if responses_request_count == expected_count {
+                return Ok::<(), anyhow::Error>(());
+            }
+            if responses_request_count > expected_count {
+                bail!(
+                    "expected exactly {expected_count} /responses requests, got {responses_request_count}"
+                );
+            }
+            sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    Ok(())
 }
 
 fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {

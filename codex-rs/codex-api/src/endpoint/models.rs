@@ -44,9 +44,15 @@ impl<T: HttpTransport, A: AuthProvider> ModelsClient<T, A> {
     ) -> Result<(Vec<ModelInfo>, Option<String>), ApiError> {
         let resp = self
             .session
-            .execute_with(Method::GET, Self::path(), extra_headers, None, |req| {
-                Self::append_client_version_query(req, client_version);
-            })
+            .execute_with(
+                Method::GET,
+                Self::path(),
+                extra_headers,
+                /*body*/ None,
+                |req| {
+                    Self::append_client_version_query(req, client_version);
+                },
+            )
             .await?;
 
         let header_etag = resp
@@ -208,6 +214,7 @@ mod tests {
                     "apply_patch_tool_type": null,
                     "truncation_policy": {"mode": "bytes", "limit": 10_000},
                     "supports_parallel_tool_calls": false,
+                    "supports_image_detail_original": false,
                     "context_window": 272_000,
                     "experimental_supported_tools": [],
                 }))

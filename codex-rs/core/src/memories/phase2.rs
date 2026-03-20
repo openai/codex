@@ -2,7 +2,6 @@ use crate::agent::AgentStatus;
 use crate::agent::status::is_final as is_final_agent_status;
 use crate::codex::Session;
 use crate::config::Config;
-use crate::features::Feature;
 use crate::memories::memory_root;
 use crate::memories::metrics;
 use crate::memories::phase_two;
@@ -11,6 +10,7 @@ use crate::memories::storage::rebuild_raw_memories_file_from_memories;
 use crate::memories::storage::rollout_summary_file_stem;
 use crate::memories::storage::sync_rollout_summaries_from_memories;
 use codex_config::Constrained;
+use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
@@ -43,7 +43,7 @@ struct Counters {
 pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     let phase_two_e2e_timer = session
         .services
-        .otel_manager
+        .session_telemetry
         .start_timer(metrics::MEMORY_PHASE_TWO_E2E_MS, &[])
         .ok();
 
@@ -59,9 +59,9 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     let claim = match job::claim(session, db).await {
         Ok(claim) => claim,
         Err(e) => {
-            session.services.otel_manager.counter(
+            session.services.session_telemetry.counter(
                 metrics::MEMORY_PHASE_TWO_JOBS,
-                1,
+                /*inc*/ 1,
                 &[("status", e)],
             );
             return;
@@ -183,7 +183,7 @@ mod job {
         session: &Arc<Session>,
         db: &StateRuntime,
     ) -> Result<Claim, &'static str> {
-        let otel_manager = &session.services.otel_manager;
+        let session_telemetry = &session.services.session_telemetry;
         let claim = db
             .try_claim_global_phase2_job(session.conversation_id, phase_two::JOB_LEASE_SECONDS)
             .await
@@ -196,7 +196,11 @@ mod job {
                 ownership_token,
                 input_watermark,
             } => {
-                otel_manager.counter(metrics::MEMORY_PHASE_TWO_JOBS, 1, &[("status", "claimed")]);
+                session_telemetry.counter(
+                    metrics::MEMORY_PHASE_TWO_JOBS,
+                    /*inc*/ 1,
+                    &[("status", "claimed")],
+                );
                 (ownership_token, input_watermark)
             }
             codex_state::Phase2JobClaimOutcome::SkippedNotDirty => return Err("skipped_not_dirty"),
@@ -212,9 +216,9 @@ mod job {
         claim: &Claim,
         reason: &'static str,
     ) {
-        session.services.otel_manager.counter(
+        session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_TWO_JOBS,
-            1,
+            /*inc*/ 1,
             &[("status", reason)],
         );
         if matches!(
@@ -244,9 +248,9 @@ mod job {
         selected_outputs: &[codex_state::Stage1Output],
         reason: &'static str,
     ) {
-        session.services.otel_manager.counter(
+        session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_TWO_JOBS,
-            1,
+            /*inc*/ 1,
             &[("status", reason)],
         );
         let _ = db
@@ -263,10 +267,14 @@ mod agent {
         let mut agent_config = config.as_ref().clone();
 
         agent_config.cwd = root;
+        // Consolidation threads must never feed back into phase-1 memory generation.
+        agent_config.memories.generate_memories = false;
         // Approval policy
         agent_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
         // Consolidation runs as an internal sub-agent and must not recursively delegate.
-        agent_config.features.disable(Feature::Collab);
+        let _ = agent_config.features.disable(Feature::SpawnCsv);
+        let _ = agent_config.features.disable(Feature::Collab);
+        let _ = agent_config.features.disable(Feature::MemoryTool);
 
         // Sandbox policy
         let mut writable_roots = Vec::new();
@@ -373,7 +381,7 @@ mod agent {
             // Fire and forget close of the agent.
             if !matches!(final_status, AgentStatus::Shutdown | AgentStatus::NotFound) {
                 tokio::spawn(async move {
-                    if let Err(err) = agent_control.shutdown_agent(thread_id).await {
+                    if let Err(err) = agent_control.shutdown_live_agent(thread_id).await {
                         warn!(
                             "failed to auto-close global memory consolidation agent {thread_id}: {err}"
                         );
@@ -450,20 +458,20 @@ pub(super) fn get_watermark(
 }
 
 fn emit_metrics(session: &Arc<Session>, counters: Counters) {
-    let otel = session.services.otel_manager.clone();
+    let otel = session.services.session_telemetry.clone();
     if counters.input > 0 {
         otel.counter(metrics::MEMORY_PHASE_TWO_INPUT, counters.input, &[]);
     }
 
     otel.counter(
         metrics::MEMORY_PHASE_TWO_JOBS,
-        1,
+        /*inc*/ 1,
         &[("status", "agent_spawned")],
     );
 }
 
 fn emit_token_usage_metrics(session: &Arc<Session>, token_usage: &TokenUsage) {
-    let otel = session.services.otel_manager.clone();
+    let otel = session.services.session_telemetry.clone();
     otel.histogram(
         metrics::MEMORY_PHASE_TWO_TOKEN_USAGE,
         token_usage.total_tokens.max(0),

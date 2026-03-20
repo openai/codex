@@ -789,8 +789,10 @@ fn minimal_jwt() -> String {
 }
 
 fn build_tokens(access_token: &str, refresh_token: &str) -> TokenData {
-    let mut id_token = IdTokenInfo::default();
-    id_token.raw_jwt = minimal_jwt();
+    let id_token = IdTokenInfo {
+        raw_jwt: minimal_jwt(),
+        ..Default::default()
+    };
     TokenData {
         id_token,
         access_token: access_token.to_string(),

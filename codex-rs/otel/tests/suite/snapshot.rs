@@ -1,6 +1,6 @@
 use crate::harness::attributes_to_map;
 use crate::harness::find_metric;
-use codex_otel::OtelManager;
+use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
@@ -69,7 +69,7 @@ fn manager_snapshot_metrics_collects_without_shutdown() -> Result<()> {
         .with_tag("service", "codex-cli")?
         .with_runtime_reader();
     let metrics = MetricsClient::new(config)?;
-    let manager = OtelManager::new(
+    let manager = SessionTelemetry::new(
         ThreadId::new(),
         "gpt-5.1",
         "gpt-5.1",

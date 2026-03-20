@@ -1,6 +1,7 @@
 use super::storage::rebuild_raw_memories_file_from_memories;
 use super::storage::sync_rollout_summaries_from_memories;
 use crate::config::types::DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION;
+use crate::memories::clear_memory_root_contents;
 use crate::memories::ensure_layout;
 use crate::memories::memory_root;
 use crate::memories::raw_memories_file;
@@ -61,6 +62,72 @@ fn stage_one_output_schema_requires_rollout_slug_and_keeps_it_nullable() {
         vec!["raw_memory", "rollout_slug", "rollout_summary"]
     );
     assert_eq!(rollout_slug_types, vec!["null", "string"]);
+}
+
+#[tokio::test]
+async fn clear_memory_root_contents_preserves_root_directory() {
+    let dir = tempdir().expect("tempdir");
+    let root = dir.path().join("memory");
+    let nested_dir = root.join("rollout_summaries");
+    tokio::fs::create_dir_all(&nested_dir)
+        .await
+        .expect("create rollout summaries dir");
+    tokio::fs::write(root.join("MEMORY.md"), "stale memory index\n")
+        .await
+        .expect("write memory index");
+    tokio::fs::write(nested_dir.join("rollout.md"), "stale rollout\n")
+        .await
+        .expect("write rollout summary");
+
+    clear_memory_root_contents(&root)
+        .await
+        .expect("clear memory root contents");
+
+    assert!(
+        tokio::fs::try_exists(&root)
+            .await
+            .expect("check memory root existence"),
+        "memory root should still exist after clearing contents"
+    );
+    let mut entries = tokio::fs::read_dir(&root)
+        .await
+        .expect("read memory root after clear");
+    assert!(
+        entries
+            .next_entry()
+            .await
+            .expect("read next entry")
+            .is_none(),
+        "memory root should be empty after clearing contents"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn clear_memory_root_contents_rejects_symlinked_root() {
+    let dir = tempdir().expect("tempdir");
+    let target = dir.path().join("outside");
+    tokio::fs::create_dir_all(&target)
+        .await
+        .expect("create symlink target dir");
+    let target_file = target.join("keep.txt");
+    tokio::fs::write(&target_file, "keep\n")
+        .await
+        .expect("write target file");
+
+    let root = dir.path().join("memory");
+    std::os::unix::fs::symlink(&target, &root).expect("create memory root symlink");
+
+    let err = clear_memory_root_contents(&root)
+        .await
+        .expect_err("symlinked memory root should be rejected");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        tokio::fs::try_exists(&target_file)
+            .await
+            .expect("check target file existence"),
+        "rejecting a symlinked memory root should not delete the symlink target"
+    );
 }
 
 #[tokio::test]
@@ -370,6 +437,7 @@ mod phase2 {
     use codex_state::ThreadMetadataBuilder;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::time::Duration;
     use tempfile::TempDir;
 
     fn stage1_output_with_source_updated_at(source_updated_at: i64) -> Stage1Output {
@@ -407,7 +475,6 @@ mod phase2 {
             let state_db = codex_state::StateRuntime::init(
                 config.codex_home.clone(),
                 config.model_provider_id.clone(),
-                None,
             )
             .await
             .expect("initialize state db");
@@ -481,10 +548,12 @@ mod phase2 {
         }
 
         async fn shutdown_threads(&self) {
-            self.manager
-                .remove_and_close_all_threads()
-                .await
-                .expect("shutdown spawned threads");
+            let report = self
+                .manager
+                .shutdown_all_threads_bounded(std::time::Duration::from_secs(10))
+                .await;
+            assert!(report.submit_failed.is_empty());
+            assert!(report.timed_out.is_empty());
         }
 
         fn user_input_ops_count(&self) -> usize {
@@ -595,9 +664,10 @@ mod phase2 {
         pretty_assertions::assert_eq!(user_input_ops, 1);
         let thread_ids = harness.manager.list_thread_ids().await;
         pretty_assertions::assert_eq!(thread_ids.len(), 1);
+        let thread_id = thread_ids[0];
         let subagent = harness
             .manager
-            .get_thread(thread_ids[0])
+            .get_thread(thread_id)
             .await
             .expect("get consolidation thread");
         let config_snapshot = subagent.config_snapshot().await;
@@ -614,6 +684,34 @@ mod phase2 {
             }
             other => panic!("unexpected sandbox policy: {other:?}"),
         }
+        subagent.codex.session.ensure_rollout_materialized().await;
+        subagent.codex.session.flush_rollout().await;
+        let rollout_path = subagent
+            .rollout_path()
+            .expect("consolidation thread should have a rollout path");
+        crate::state_db::read_repair_rollout_path(
+            Some(harness.state_db.as_ref()),
+            Some(thread_id),
+            Some(/*archived_only*/ false),
+            rollout_path.as_path(),
+        )
+        .await;
+        let memory_mode = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let memory_mode = harness
+                    .state_db
+                    .get_thread_memory_mode(thread_id)
+                    .await
+                    .expect("read consolidation thread memory mode");
+                if memory_mode.is_some() {
+                    break memory_mode;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("timed out waiting for consolidation thread memory mode to persist");
+        pretty_assertions::assert_eq!(memory_mode.as_deref(), Some("disabled"));
 
         harness.shutdown_threads().await;
     }
@@ -790,7 +888,6 @@ mod phase2 {
         let state_db = codex_state::StateRuntime::init(
             config.codex_home.clone(),
             config.model_provider_id.clone(),
-            None,
         )
         .await
         .expect("initialize state db");

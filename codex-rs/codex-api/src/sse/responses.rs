@@ -45,7 +45,12 @@ pub fn stream_from_fixture(
     let reader = std::io::Cursor::new(content);
     let stream = ReaderStream::new(reader).map_err(|err| TransportError::Network(err.to_string()));
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
-    tokio::spawn(process_sse(Box::pin(stream), tx_event, idle_timeout, None));
+    tokio::spawn(process_sse(
+        Box::pin(stream),
+        tx_event,
+        idle_timeout,
+        /*telemetry*/ None,
+    ));
     Ok(ResponseStream { rx_event })
 }
 
@@ -114,14 +119,6 @@ struct Error {
 #[allow(dead_code)]
 struct ResponseCompleted {
     id: String,
-    #[serde(default)]
-    usage: Option<ResponseCompletedUsage>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ResponseDone {
-    #[serde(default)]
-    id: Option<String>,
     #[serde(default)]
     usage: Option<ResponseCompletedUsage>,
 }
@@ -324,7 +321,6 @@ pub fn process_responses_event(
                         return Ok(Some(ResponseEvent::Completed {
                             response_id: resp.id,
                             token_usage: resp.usage.map(Into::into),
-                            can_append: false,
                         }));
                     }
                     Err(err) => {
@@ -334,31 +330,6 @@ pub fn process_responses_event(
                     }
                 }
             }
-        }
-        "response.done" => {
-            if let Some(resp_val) = event.response {
-                match serde_json::from_value::<ResponseDone>(resp_val) {
-                    Ok(resp) => {
-                        return Ok(Some(ResponseEvent::Completed {
-                            response_id: resp.id.unwrap_or_default(),
-                            token_usage: resp.usage.map(Into::into),
-                            can_append: true,
-                        }));
-                    }
-                    Err(err) => {
-                        let error = format!("failed to parse ResponseCompleted: {err}");
-                        debug!("{error}");
-                        return Err(ResponsesEventError::Api(ApiError::Stream(error)));
-                    }
-                }
-            }
-
-            debug!("response.done missing response payload");
-            return Ok(Some(ResponseEvent::Completed {
-                response_id: String::new(),
-                token_usage: None,
-                can_append: true,
-            }));
         }
         "response.output_item.added" => {
             if let Some(item_val) = event.item {
@@ -639,11 +610,9 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
-                can_append,
             }) => {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
-                assert!(!can_append);
             }
             other => panic!("unexpected third event: {other:?}"),
         }
@@ -678,66 +647,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn response_done_emits_incremental_completed() {
-        let done = json!({
-            "type": "response.done",
-            "response": {
-                "usage": {
-                    "input_tokens": 1,
-                    "input_tokens_details": null,
-                    "output_tokens": 2,
-                    "output_tokens_details": null,
-                    "total_tokens": 3
+    async fn parses_tool_search_call_items() {
+        let events = run_sse(vec![
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "tool_search_call",
+                    "call_id": "search-1",
+                    "execution": "client",
+                    "arguments": {
+                        "query": "calendar create",
+                        "limit": 1
+                    }
                 }
-            }
-        })
-        .to_string();
+            }),
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp1" }
+            }),
+        ])
+        .await;
 
-        let sse1 = format!("event: response.done\ndata: {done}\n\n");
-
-        let events = collect_events(&[sse1.as_bytes()]).await;
-
-        assert_eq!(events.len(), 1);
-
-        match &events[0] {
-            Ok(ResponseEvent::Completed {
-                response_id,
-                token_usage,
-                can_append,
-            }) => {
-                assert_eq!(response_id, "");
-                assert!(token_usage.is_some());
-                assert!(*can_append);
-            }
-            other => panic!("unexpected event: {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn response_done_without_payload_emits_completed() {
-        let done = json!({
-            "type": "response.done"
-        })
-        .to_string();
-
-        let sse1 = format!("event: response.done\ndata: {done}\n\n");
-
-        let events = collect_events(&[sse1.as_bytes()]).await;
-
-        assert_eq!(events.len(), 1);
-
-        match &events[0] {
-            Ok(ResponseEvent::Completed {
-                response_id,
-                token_usage,
-                can_append,
-            }) => {
-                assert_eq!(response_id, "");
-                assert!(token_usage.is_none());
-                assert!(*can_append);
-            }
-            other => panic!("unexpected event: {other:?}"),
-        }
+        assert_eq!(events.len(), 2);
+        assert_matches!(
+            &events[0],
+            ResponseEvent::OutputItemDone(ResponseItem::ToolSearchCall {
+                call_id,
+                execution,
+                arguments,
+                ..
+            }) if call_id.as_deref() == Some("search-1")
+                && execution == "client"
+                && arguments == &json!({"query": "calendar create", "limit": 1})
+        );
     }
 
     #[tokio::test]
@@ -770,11 +712,9 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
-                can_append,
             }) => {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
-                assert!(!can_append);
             }
             other => panic!("unexpected event: {other:?}"),
         }
@@ -996,8 +936,7 @@ mod tests {
             &events[1],
             ResponseEvent::Completed {
                 response_id,
-                token_usage: None,
-                can_append: false
+                token_usage: None
             } if response_id == "resp-1"
         );
     }
@@ -1033,8 +972,7 @@ mod tests {
             &events[2],
             ResponseEvent::Completed {
                 response_id,
-                token_usage: None,
-                can_append: false
+                token_usage: None
             } if response_id == "resp-1"
         );
     }

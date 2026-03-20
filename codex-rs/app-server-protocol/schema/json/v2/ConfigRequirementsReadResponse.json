@@ -15,15 +15,23 @@
         {
           "additionalProperties": false,
           "properties": {
-            "reject": {
+            "granular": {
               "properties": {
                 "mcp_elicitations": {
+                  "type": "boolean"
+                },
+                "request_permissions": {
+                  "default": false,
                   "type": "boolean"
                 },
                 "rules": {
                   "type": "boolean"
                 },
                 "sandbox_approval": {
+                  "type": "boolean"
+                },
+                "skill_approval": {
+                  "default": false,
                   "type": "boolean"
                 }
               },
@@ -36,9 +44,9 @@
             }
           },
           "required": [
-            "reject"
+            "granular"
           ],
-          "title": "RejectAskForApproval",
+          "title": "GranularAskForApproval",
           "type": "object"
         }
       ]
@@ -81,6 +89,15 @@
               "type": "null"
             }
           ]
+        },
+        "featureRequirements": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -118,12 +135,6 @@
           ]
         },
         "dangerouslyAllowAllUnixSockets": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "dangerouslyAllowNonLoopbackAdmin": {
           "type": [
             "boolean",
             "null"

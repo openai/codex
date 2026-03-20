@@ -12,13 +12,13 @@ use owo_colors::OwoColorize;
 
 #[derive(Debug, Parser)]
 #[command(name = "codex-state-logs")]
-#[command(about = "Tail Codex logs from the state SQLite DB with simple filters")]
+#[command(about = "Tail Codex logs from the dedicated logs SQLite DB with simple filters")]
 struct Args {
     /// Path to CODEX_HOME. Defaults to $CODEX_HOME or ~/.codex.
     #[arg(long, env = "CODEX_HOME")]
     codex_home: Option<PathBuf>,
 
-    /// Direct path to the SQLite database. Overrides --codex-home.
+    /// Direct path to the logs SQLite database. Overrides --codex-home.
     #[arg(long)]
     db: Option<PathBuf>,
 
@@ -46,7 +46,7 @@ struct Args {
     #[arg(long = "thread-id")]
     thread_id: Vec<String>,
 
-    /// Substring match against the log message.
+    /// Substring match against the rendered log body.
     #[arg(long)]
     search: Option<String>,
 
@@ -62,7 +62,7 @@ struct Args {
     #[arg(long, default_value_t = 500)]
     poll_ms: u64,
 
-    /// Show compact output with only time, level, and message.
+    /// Show compact output with only time, level, and rendered log body.
     #[arg(long)]
     compact: bool,
 }
@@ -88,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
         .parent()
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| PathBuf::from("."));
-    let runtime = StateRuntime::init(codex_home, "logs-client".to_string(), None).await?;
+    let runtime = StateRuntime::init(codex_home, "logs-client".to_string()).await?;
 
     let mut last_id =
         print_backfill(runtime.as_ref(), &filter, args.backfill, args.compact).await?;
@@ -113,7 +113,7 @@ fn resolve_db_path(args: &Args) -> anyhow::Result<PathBuf> {
     }
 
     let codex_home = args.codex_home.clone().unwrap_or_else(default_codex_home);
-    Ok(codex_state::state_db_path(codex_home.as_path()))
+    Ok(codex_state::logs_db_path(codex_home.as_path()))
 }
 
 fn default_codex_home() -> PathBuf {
@@ -205,7 +205,12 @@ async fn fetch_backfill(
     filter: &LogFilter,
     backfill: usize,
 ) -> anyhow::Result<Vec<LogRow>> {
-    let query = to_log_query(filter, Some(backfill), None, true);
+    let query = to_log_query(
+        filter,
+        Some(backfill),
+        /*after_id*/ None,
+        /*descending*/ true,
+    );
     runtime
         .query_logs(&query)
         .await
@@ -217,7 +222,12 @@ async fn fetch_new_rows(
     filter: &LogFilter,
     last_id: i64,
 ) -> anyhow::Result<Vec<LogRow>> {
-    let query = to_log_query(filter, None, Some(last_id), false);
+    let query = to_log_query(
+        filter,
+        /*limit*/ None,
+        Some(last_id),
+        /*descending*/ false,
+    );
     runtime
         .query_logs(&query)
         .await
@@ -225,7 +235,9 @@ async fn fetch_new_rows(
 }
 
 async fn fetch_max_id(runtime: &StateRuntime, filter: &LogFilter) -> anyhow::Result<i64> {
-    let query = to_log_query(filter, None, None, false);
+    let query = to_log_query(
+        filter, /*limit*/ None, /*after_id*/ None, /*descending*/ false,
+    );
     runtime
         .max_log_id(&query)
         .await
@@ -283,7 +295,7 @@ fn heuristic_formatting(message: &str) -> String {
 
 mod matcher {
     pub(super) fn apply_patch(message: &str) -> bool {
-        message.starts_with("ToolCall: apply_patch")
+        message.contains("ToolCall: apply_patch")
     }
 }
 

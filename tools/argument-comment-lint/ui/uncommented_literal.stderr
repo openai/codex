@@ -1,0 +1,26 @@
+warning: anonymous literal-like argument for parameter `base_url`
+  --> $DIR/uncommented_literal.rs:16:31
+   |
+LL |     let _ = create_openai_url(None, 3);
+   |                               ^^^^ help: prepend the parameter name comment: `/*base_url*/ None`
+   |
+note: the lint level is defined here
+  --> $DIR/uncommented_literal.rs:1:9
+   |
+LL | #![warn(uncommented_anonymous_literal_argument)]
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: anonymous literal-like argument for parameter `retry_count`
+  --> $DIR/uncommented_literal.rs:16:37
+   |
+LL |     let _ = create_openai_url(None, 3);
+   |                                     ^ help: prepend the parameter name comment: `/*retry_count*/ 3`
+
+warning: anonymous literal-like argument for parameter `enabled`
+  --> $DIR/uncommented_literal.rs:17:21
+   |
+LL |     client.set_flag(true);
+   |                     ^^^^ help: prepend the parameter name comment: `/*enabled*/ true`
+
+warning: 3 warnings emitted
+

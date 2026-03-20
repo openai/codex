@@ -335,7 +335,7 @@ jobs:
   comment-on-issue:
     name: Comment with potential duplicates
     needs: select-final
-    if: ${{ needs.select-final.result != 'skipped' }}
+    if: ${{ always() && needs.select-final.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -396,6 +396,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
-          gh issue edit "${{ github.event.issue.number }}" --remove-label codex-deduplicate || true
+          gh issue edit "$ISSUE_NUMBER" --remove-label codex-deduplicate || true
           echo "Attempted to remove label: codex-deduplicate"

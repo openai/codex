@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Debug)]
 pub struct Stopwatch {
-    limit: Duration,
+    limit: Option<Duration>,
     inner: Arc<Mutex<StopwatchState>>,
     notify: Arc<Notify>,
 }
@@ -30,13 +30,27 @@ impl Stopwatch {
                 active_pauses: 0,
             })),
             notify: Arc::new(Notify::new()),
-            limit,
+            limit: Some(limit),
+        }
+    }
+
+    pub fn unlimited() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(StopwatchState {
+                elapsed: Duration::ZERO,
+                running_since: Some(Instant::now()),
+                active_pauses: 0,
+            })),
+            notify: Arc::new(Notify::new()),
+            limit: None,
         }
     }
 
     pub fn cancellation_token(&self) -> CancellationToken {
-        let limit = self.limit;
         let token = CancellationToken::new();
+        let Some(limit) = self.limit else {
+            return token;
+        };
         let cancel = token.clone();
         let inner = Arc::clone(&self.inner);
         let notify = Arc::clone(&self.notify);
@@ -207,5 +221,17 @@ mod tests {
 
         // Now the stopwatch should resume and hit the limit shortly after.
         token.cancelled().await;
+    }
+
+    #[tokio::test]
+    async fn unlimited_stopwatch_never_cancels() {
+        let stopwatch = Stopwatch::unlimited();
+        let token = stopwatch.cancellation_token();
+
+        assert!(
+            timeout(Duration::from_millis(30), token.cancelled())
+                .await
+                .is_err()
+        );
     }
 }

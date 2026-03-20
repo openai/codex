@@ -4,6 +4,7 @@
 //! are used to preserve compatibility when older payloads omit newly introduced attributes.
 
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -46,6 +47,15 @@ pub enum ReasoningEffort {
     Medium,
     High,
     XHigh,
+}
+
+impl FromStr for ReasoningEffort {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_value(serde_json::Value::String(s.to_string()))
+            .map_err(|_| format!("invalid reasoning_effort: {s}"))
+    }
 }
 
 /// Canonical user-input modality tags advertised by a model.
@@ -181,6 +191,16 @@ pub enum ApplyPatchToolType {
     Function,
 }
 
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, TS, JsonSchema, Default,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum WebSearchToolType {
+    #[default]
+    Text,
+    TextAndImage,
+}
+
 /// Server-provided truncation policy metadata for a model.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, TS, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -243,8 +263,12 @@ pub struct ModelInfo {
     pub support_verbosity: bool,
     pub default_verbosity: Option<Verbosity>,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
+    #[serde(default)]
+    pub web_search_tool_type: WebSearchToolType,
     pub truncation_policy: TruncationPolicyConfig,
     pub supports_parallel_tool_calls: bool,
+    #[serde(default)]
+    pub supports_image_detail_original: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<i64>,
     /// Token threshold for automatic compaction. When omitted, core derives it
@@ -260,14 +284,13 @@ pub struct ModelInfo {
     /// Input modalities accepted by the backend for this model.
     #[serde(default = "default_input_modalities")]
     pub input_modalities: Vec<InputModality>,
-    /// When true, this model should use websocket transport even when websocket features are off.
-    #[serde(default)]
-    pub prefer_websockets: bool,
     /// Internal-only marker set by core when a model slug resolved to fallback metadata.
     #[serde(default, skip_serializing, skip_deserializing)]
     #[schemars(skip)]
     #[ts(skip)]
     pub used_fallback_model_metadata: bool,
+    #[serde(default)]
+    pub supports_search_tool: bool,
 }
 
 impl ModelInfo {
@@ -513,15 +536,17 @@ mod tests {
             support_verbosity: false,
             default_verbosity: None,
             apply_patch_tool_type: None,
+            web_search_tool_type: WebSearchToolType::Text,
             truncation_policy: TruncationPolicyConfig::bytes(10_000),
             supports_parallel_tool_calls: false,
+            supports_image_detail_original: false,
             context_window: None,
             auto_compact_token_limit: None,
             effective_context_window_percent: 95,
             experimental_supported_tools: vec![],
             input_modalities: default_input_modalities(),
-            prefer_websockets: false,
             used_fallback_model_metadata: false,
+            supports_search_tool: false,
         }
     }
 
@@ -531,6 +556,20 @@ mod tests {
             personality_friendly: Some("friendly".to_string()),
             personality_pragmatic: Some("pragmatic".to_string()),
         }
+    }
+
+    #[test]
+    fn reasoning_effort_from_str_accepts_known_values() {
+        assert_eq!("high".parse(), Ok(ReasoningEffort::High));
+        assert_eq!("minimal".parse(), Ok(ReasoningEffort::Minimal));
+    }
+
+    #[test]
+    fn reasoning_effort_from_str_rejects_unknown_values() {
+        assert_eq!(
+            "unsupported".parse::<ReasoningEffort>(),
+            Err("invalid reasoning_effort: unsupported".to_string())
+        );
     }
 
     #[test]
@@ -703,16 +742,19 @@ mod tests {
                 "limit": 10000
             },
             "supports_parallel_tool_calls": false,
+            "supports_image_detail_original": false,
             "context_window": null,
             "auto_compact_token_limit": null,
             "effective_context_window_percent": 95,
             "experimental_supported_tools": [],
-            "input_modalities": ["text", "image"],
-            "prefer_websockets": false
+            "input_modalities": ["text", "image"]
         }))
         .expect("deserialize model info");
 
         assert_eq!(model.availability_nux, None);
+        assert!(!model.supports_image_detail_original);
+        assert_eq!(model.web_search_tool_type, WebSearchToolType::Text);
+        assert!(!model.supports_search_tool);
     }
 
     #[test]

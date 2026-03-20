@@ -69,7 +69,7 @@ pub enum SessionSourceFilter {
 impl SessionSourceFilter {
     fn allowed_sources(self) -> &'static [codex_protocol::protocol::SessionSource] {
         match self {
-            SessionSourceFilter::InteractiveOnly => INTERACTIVE_SESSION_SOURCES,
+            SessionSourceFilter::InteractiveOnly => INTERACTIVE_SESSION_SOURCES.as_slice(),
             SessionSourceFilter::IncludeNonInteractive => &[],
         }
     }
@@ -200,7 +200,7 @@ async fn run_session_picker(
                 allowed_sources,
                 Some(provider_filter.as_slice()),
                 request.default_provider.as_str(),
-                None,
+                /*search_term*/ None,
             )
             .await;
             let _ = tx.send(BackgroundEvent::PageLoaded {
@@ -423,7 +423,7 @@ impl PickerState {
             show_all,
             filter_cwd,
             action,
-            sort_key: ThreadSortKey::CreatedAt,
+            sort_key: ThreadSortKey::UpdatedAt,
             thread_name_cache: HashMap::new(),
             inline_error: None,
         }
@@ -449,7 +449,13 @@ impl PickerState {
                     let path = row.path.clone();
                     let thread_id = match row.thread_id {
                         Some(thread_id) => Some(thread_id),
-                        None => crate::resolve_session_thread_id(path.as_path(), None).await,
+                        None => {
+                            crate::resolve_session_thread_id(
+                                path.as_path(),
+                                /*id_str_if_uuid*/ None,
+                            )
+                            .await
+                        }
                     };
                     if let Some(thread_id) = thread_id {
                         return Ok(Some(self.action.selection(path, thread_id)));
@@ -1288,14 +1294,14 @@ fn calculate_column_metrics(rows: &[Row], include_cwd: bool) -> ColumnMetrics {
         let created = format_created_label(row);
         let updated = format_updated_label(row);
         let branch_raw = row.git_branch.clone().unwrap_or_default();
-        let branch = right_elide(&branch_raw, 24);
+        let branch = right_elide(&branch_raw, /*max*/ 24);
         let cwd = if include_cwd {
             let cwd_raw = row
                 .cwd
                 .as_ref()
                 .map(|p| display_path_for(p, std::path::Path::new("/")))
                 .unwrap_or_default();
-            right_elide(&cwd_raw, 24)
+            right_elide(&cwd_raw, /*max*/ 24)
         } else {
             String::new()
         };
@@ -2141,7 +2147,7 @@ mod tests {
         {
             let guard = recorded_requests.lock().unwrap();
             assert_eq!(guard.len(), 1);
-            assert_eq!(guard[0].sort_key, ThreadSortKey::CreatedAt);
+            assert_eq!(guard[0].sort_key, ThreadSortKey::UpdatedAt);
         }
 
         state
@@ -2151,7 +2157,7 @@ mod tests {
 
         let guard = recorded_requests.lock().unwrap();
         assert_eq!(guard.len(), 2);
-        assert_eq!(guard[1].sort_key, ThreadSortKey::UpdatedAt);
+        assert_eq!(guard[1].sort_key, ThreadSortKey::CreatedAt);
     }
 
     #[tokio::test]

@@ -706,7 +706,7 @@ impl RequestUserInputOverlay {
                 self.submit_answers();
             }
         } else {
-            self.move_question(true);
+            self.move_question(/*next*/ true);
         }
     }
 
@@ -958,10 +958,10 @@ impl RequestUserInputOverlay {
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                state.move_up_wrap(2);
+                state.move_up_wrap(/*len*/ 2);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                state.move_down_wrap(2);
+                state.move_down_wrap(/*len*/ 2);
             }
             KeyCode::Enter => {
                 let selected = state.selected_idx.unwrap_or(0);
@@ -1024,7 +1024,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.move_question(false);
+                self.move_question(/*next*/ false);
                 return;
             }
             KeyEvent {
@@ -1037,7 +1037,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.move_question(true);
+                self.move_question(/*next*/ true);
                 return;
             }
             KeyEvent {
@@ -1045,7 +1045,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } if self.has_options() && matches!(self.focus, Focus::Options) => {
-                self.move_question(false);
+                self.move_question(/*next*/ false);
                 return;
             }
             KeyEvent {
@@ -1053,7 +1053,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } if self.has_options() && matches!(self.focus, Focus::Options) => {
-                self.move_question(false);
+                self.move_question(/*next*/ false);
                 return;
             }
             KeyEvent {
@@ -1061,7 +1061,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } if self.has_options() && matches!(self.focus, Focus::Options) => {
-                self.move_question(true);
+                self.move_question(/*next*/ true);
                 return;
             }
             KeyEvent {
@@ -1069,7 +1069,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } if self.has_options() && matches!(self.focus, Focus::Options) => {
-                self.move_question(true);
+                self.move_question(/*next*/ true);
                 return;
             }
             _ => {}
@@ -1105,7 +1105,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                         }
                     }
                     KeyCode::Char(' ') => {
-                        self.select_current_option(true);
+                        self.select_current_option(/*committed*/ true);
                     }
                     KeyCode::Backspace | KeyCode::Delete => {
                         self.clear_selection();
@@ -1119,7 +1119,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                     KeyCode::Enter => {
                         let has_selection = self.selected_option_index().is_some();
                         if has_selection {
-                            self.select_current_option(true);
+                            self.select_current_option(/*committed*/ true);
                         }
                         self.go_next_or_submit();
                     }
@@ -1128,7 +1128,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                             if let Some(answer) = self.current_answer_mut() {
                                 answer.options_state.selected_idx = Some(option_idx);
                             }
-                            self.select_current_option(true);
+                            self.select_current_option(/*committed*/ true);
                             self.go_next_or_submit();
                         }
                     }
@@ -1158,7 +1158,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                     if !self.handle_composer_input_result(result) {
                         self.pending_submission_draft = None;
                         if self.has_options() {
-                            self.select_current_option(true);
+                            self.select_current_option(/*committed*/ true);
                         }
                         self.go_next_or_submit();
                     }

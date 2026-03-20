@@ -1,0 +1,15 @@
+---
+source: tui_app_server/src/chatwidget/tests.rs
+expression: popup
+---
+  Upload logs?
+
+  The following files will be sent:
+    • codex-logs.log
+    • codex-connectivity-diagnostics.txt
+
+› 1. Yes  Share the current Codex session logs with the team for
+          troubleshooting.
+  2. No
+
+  Press enter to confirm or esc to go back

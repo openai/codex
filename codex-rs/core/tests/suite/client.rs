@@ -4,16 +4,15 @@ use codex_core::ModelProviderInfo;
 use codex_core::NewThread;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
-use codex_core::ResponsesWebsocketVersion;
 use codex_core::ThreadManager;
 use codex_core::WireApi;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::built_in_model_providers;
 use codex_core::default_client::originator;
 use codex_core::error::CodexErr;
-use codex_core::features::Feature;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use codex_otel::OtelManager;
+use codex_features::Feature;
+use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
@@ -22,7 +21,9 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::LocalShellExecAction;
 use codex_protocol::models::LocalShellStatus;
@@ -388,6 +389,7 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
             timestamp: "2024-01-01T00:00:02.000Z".to_string(),
             item: RolloutItem::ResponseItem(ResponseItem::CustomToolCallOutput {
                 call_id: "legacy-js-call".to_string(),
+                name: None,
                 output: FunctionCallOutputPayload::from_text("legacy js_repl stdout".to_string()),
             }),
         },
@@ -484,6 +486,129 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
 
     assert!(legacy_output_index < new_user_index);
     assert!(legacy_image_index < new_user_index);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_replays_image_tool_outputs_with_detail() {
+    skip_if_no_network!();
+
+    let image_url = "data:image/webp;base64,UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEAAUAmJaACdLoB+AADsAD+8ut//NgVzXPv9//S4P0uD9Lg/9KQAAA=";
+    let function_call_id = "view-image-call";
+    let custom_call_id = "js-repl-call";
+    let rollout = vec![
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:00.000Z".to_string(),
+            item: RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    id: ThreadId::default(),
+                    timestamp: "2024-01-01T00:00:00Z".to_string(),
+                    cwd: ".".into(),
+                    originator: "test_originator".to_string(),
+                    cli_version: "test_version".to_string(),
+                    model_provider: Some("test-provider".to_string()),
+                    ..Default::default()
+                },
+                git: None,
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:01.000Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::FunctionCall {
+                id: None,
+                name: "view_image".to_string(),
+                namespace: None,
+                arguments: "{\"path\":\"/tmp/example.webp\"}".to_string(),
+                call_id: function_call_id.to_string(),
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:01.500Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+                call_id: function_call_id.to_string(),
+                output: FunctionCallOutputPayload::from_content_items(vec![
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: image_url.to_string(),
+                        detail: Some(ImageDetail::Original),
+                    },
+                ]),
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:02.000Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::CustomToolCall {
+                id: None,
+                status: Some("completed".to_string()),
+                call_id: custom_call_id.to_string(),
+                name: "js_repl".to_string(),
+                input: "console.log('image flow')".to_string(),
+            }),
+        },
+        RolloutLine {
+            timestamp: "2024-01-01T00:00:02.500Z".to_string(),
+            item: RolloutItem::ResponseItem(ResponseItem::CustomToolCallOutput {
+                call_id: custom_call_id.to_string(),
+                name: None,
+                output: FunctionCallOutputPayload::from_content_items(vec![
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: image_url.to_string(),
+                        detail: Some(ImageDetail::Original),
+                    },
+                ]),
+            }),
+        },
+    ];
+
+    let tmpdir = TempDir::new().unwrap();
+    let session_path = tmpdir
+        .path()
+        .join("resume-image-tool-outputs-with-detail.jsonl");
+    let mut file = std::fs::File::create(&session_path).unwrap();
+    for line in rollout {
+        writeln!(file, "{}", serde_json::to_string(&line).unwrap()).unwrap();
+    }
+
+    let server = MockServer::start().await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new().unwrap());
+    let mut builder = test_codex().with_model("gpt-5.1");
+    let test = builder
+        .resume(&server, codex_home, session_path.clone())
+        .await
+        .expect("resume conversation");
+    test.submit_turn("after resume").await.unwrap();
+
+    let function_output = resp_mock
+        .single_request()
+        .function_call_output(function_call_id);
+    assert_eq!(
+        function_output.get("output"),
+        Some(&serde_json::json!([
+            {
+                "type": "input_image",
+                "image_url": image_url,
+                "detail": "original"
+            }
+        ]))
+    );
+
+    let custom_output = resp_mock
+        .single_request()
+        .custom_tool_call_output(custom_call_id);
+    assert_eq!(
+        custom_output.get("output"),
+        Some(&serde_json::json!([
+            {
+                "type": "input_image",
+                "image_url": image_url,
+                "detail": "original"
+            }
+        ]))
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -592,8 +717,9 @@ async fn chatgpt_auth_sends_correct_request() {
     )
     .await;
 
-    let mut model_provider = built_in_model_providers()["openai"].clone();
+    let mut model_provider = built_in_model_providers(/* openai_base_url */ None)["openai"].clone();
     model_provider.base_url = Some(format!("{}/api/codex", server.uri()));
+    model_provider.supports_websockets = false;
     let mut builder = test_codex()
         .with_auth(create_dummy_codex_auth())
         .with_config(move |config| {
@@ -668,7 +794,8 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
+        supports_websockets: false,
+        ..built_in_model_providers(/* openai_base_url */ None)["openai"].clone()
     };
 
     // Init session
@@ -693,10 +820,9 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
             Err(e) => panic!("Failed to load CodexAuth: {e}"),
         };
     let thread_manager = ThreadManager::new(
-        codex_home.path().to_path_buf(),
+        &config,
         auth_manager,
         SessionSource::Exec,
-        config.model_catalog.clone(),
         CollaborationModesConfig {
             default_mode_request_user_input: config
                 .features
@@ -800,7 +926,7 @@ async fn includes_user_instructions_message_in_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn includes_apps_guidance_as_developer_message_when_enabled() {
+async fn includes_apps_guidance_as_developer_message_for_chatgpt_auth() {
     skip_if_no_network!();
     let server = MockServer::start().await;
     let apps_server = AppsTestServer::mount(&server)
@@ -815,10 +941,12 @@ async fn includes_apps_guidance_as_developer_message_when_enabled() {
     .await;
 
     let mut builder = test_codex()
-        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_auth(create_dummy_codex_auth())
         .with_config(move |config| {
-            config.features.enable(Feature::Apps);
-            config.features.disable(Feature::AppsMcpGateway);
+            config
+                .features
+                .enable(Feature::Apps)
+                .expect("test config should allow feature update");
             config.chatgpt_base_url = apps_base_url;
         });
     let codex = builder
@@ -843,7 +971,8 @@ async fn includes_apps_guidance_as_developer_message_when_enabled() {
     let request = resp_mock.single_request();
     let request_body = request.body_json();
     let input = request_body["input"].as_array().expect("input array");
-    let apps_snippet = "Apps are mentioned in the prompt in the format";
+    let apps_snippet =
+        "Apps (Connectors) can be explicitly triggered in user messages in the format";
 
     let has_developer_apps_guidance = input.iter().any(|item| {
         item.get("role").and_then(|value| value.as_str()) == Some("developer")
@@ -885,7 +1014,74 @@ async fn includes_apps_guidance_as_developer_message_when_enabled() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn skills_append_to_instructions() {
+async fn omits_apps_guidance_for_api_key_auth_even_when_feature_enabled() {
+    skip_if_no_network!();
+    let server = MockServer::start().await;
+    let apps_server = AppsTestServer::mount(&server)
+        .await
+        .expect("mount apps MCP mock");
+    let apps_base_url = apps_server.chatgpt_base_url.clone();
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Apps)
+                .expect("test config should allow feature update");
+            config.chatgpt_base_url = apps_base_url;
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = resp_mock.single_request();
+    let request_body = request.body_json();
+    let input = request_body["input"].as_array().expect("input array");
+    let apps_snippet =
+        "Apps (Connectors) can be explicitly triggered in user messages in the format";
+
+    let has_apps_guidance = input.iter().any(|item| {
+        item.get("content")
+            .and_then(|value| value.as_array())
+            .is_some_and(|content| {
+                content.iter().any(|entry| {
+                    entry
+                        .get("text")
+                        .and_then(|value| value.as_str())
+                        .is_some_and(|text| text.contains(apps_snippet))
+                })
+            })
+    });
+    assert!(
+        !has_apps_guidance,
+        "did not expect apps guidance for API key auth, got {input:#?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn skills_append_to_developer_message() {
     skip_if_no_network!();
     let server = MockServer::start().await;
 
@@ -931,27 +1127,21 @@ async fn skills_append_to_instructions() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = resp_mock.single_request();
-    let request_body = request.body_json();
-
-    assert_message_role(&request_body["input"][0], "developer");
-
-    assert_message_role(&request_body["input"][1], "user");
-    let instructions_text = request_body["input"][1]["content"][0]["text"]
-        .as_str()
-        .expect("instructions text");
+    let developer_messages = request.message_input_texts("developer");
+    let developer_text = developer_messages.join("\n\n");
     assert!(
-        instructions_text.contains("## Skills"),
-        "expected skills section present"
+        developer_text.contains("## Skills"),
+        "expected skills section present: {developer_messages:?}"
     );
     assert!(
-        instructions_text.contains("demo: build charts"),
-        "expected skill summary"
+        developer_text.contains("demo: build charts"),
+        "expected skill summary: {developer_messages:?}"
     );
     let expected_path = normalize_path(skill_dir.join("SKILL.md")).unwrap();
     let expected_path_str = expected_path.to_string_lossy().replace('\\', "/");
     assert!(
-        instructions_text.contains(&expected_path_str),
-        "expected path {expected_path_str} in instructions"
+        developer_text.contains(&expected_path_str),
+        "expected path {expected_path_str} in developer message: {developer_messages:?}"
     );
     let _codex_home_guard = codex_home;
 }
@@ -1128,6 +1318,7 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
                     .model_reasoning_summary
                     .unwrap_or(ReasoningSummary::Auto),
             ),
+            service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             final_output_json_schema: None,
             personality: None,
@@ -1240,6 +1431,7 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
             model: session_configured.model,
             effort: None,
             summary: Some(ReasoningSummary::Concise),
+            service_tier: None,
             collaboration_mode: None,
             final_output_json_schema: None,
             personality: None,
@@ -1604,6 +1796,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         request_max_retries: Some(0),
         stream_max_retries: Some(0),
         stream_idle_timeout_ms: Some(5_000),
+        websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
     };
@@ -1622,7 +1815,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     let conversation_id = ThreadId::new();
     let auth_manager =
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"));
-    let otel_manager = OtelManager::new(
+    let session_telemetry = SessionTelemetry::new(
         conversation_id,
         model.as_str(),
         model_info.slug.as_str(),
@@ -1641,7 +1834,6 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         provider.clone(),
         SessionSource::Exec,
         config.model_verbosity,
-        None::<ResponsesWebsocketVersion>,
         false,
         false,
         None,
@@ -1679,6 +1871,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     prompt.input.push(ResponseItem::FunctionCall {
         id: Some("function-id".into()),
         name: "do_thing".into(),
+        namespace: None,
         arguments: "{}".into(),
         call_id: "function-call-id".into(),
     });
@@ -1707,6 +1900,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     });
     prompt.input.push(ResponseItem::CustomToolCallOutput {
         call_id: "custom-tool-call-id".into(),
+        name: None,
         output: FunctionCallOutputPayload::from_text("ok".into()),
     });
 
@@ -1714,9 +1908,10 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         .stream(
             &prompt,
             &model_info,
-            &otel_manager,
+            &session_telemetry,
             effort,
             summary.unwrap_or(ReasoningSummary::Auto),
+            None,
             None,
         )
         .await
@@ -1775,8 +1970,9 @@ async fn token_count_includes_rate_limits_snapshot() {
         .mount(&server)
         .await;
 
-    let mut provider = built_in_model_providers()["openai"].clone();
+    let mut provider = built_in_model_providers(/* openai_base_url */ None)["openai"].clone();
     provider.base_url = Some(format!("{}/v1", server.uri()));
+    provider.supports_websockets = false;
 
     let mut builder = test_codex()
         .with_auth(CodexAuth::from_api_key("test"))
@@ -2203,6 +2399,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         request_max_retries: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
     };
@@ -2287,6 +2484,7 @@ async fn env_var_overrides_loaded_auth() {
         request_max_retries: None,
         stream_max_retries: None,
         stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
         requires_openai_auth: false,
         supports_websockets: false,
     };

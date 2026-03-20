@@ -3,6 +3,7 @@ use chrono::DateTime;
 use chrono::Timelike;
 use chrono::Utc;
 use codex_protocol::ThreadId;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
@@ -70,6 +71,10 @@ pub struct ThreadMetadata {
     pub agent_role: Option<String>,
     /// The model provider identifier.
     pub model_provider: String,
+    /// The latest observed model for the thread.
+    pub model: Option<String>,
+    /// The latest observed reasoning effort for the thread.
+    pub reasoning_effort: Option<ReasoningEffort>,
     /// The working directory for the thread.
     pub cwd: PathBuf,
     /// Version of the CLI that created the thread.
@@ -181,6 +186,8 @@ impl ThreadMetadataBuilder {
                 .model_provider
                 .clone()
                 .unwrap_or_else(|| default_provider.to_string()),
+            model: None,
+            reasoning_effort: None,
             cwd: self.cwd.clone(),
             cli_version: self.cli_version.clone().unwrap_or_default(),
             title: String::new(),
@@ -197,6 +204,19 @@ impl ThreadMetadataBuilder {
 }
 
 impl ThreadMetadata {
+    /// Preserve existing non-null Git fields when rollout-derived metadata is reconciled.
+    pub fn prefer_existing_git_info(&mut self, existing: &Self) {
+        if existing.git_sha.is_some() {
+            self.git_sha = existing.git_sha.clone();
+        }
+        if existing.git_branch.is_some() {
+            self.git_branch = existing.git_branch.clone();
+        }
+        if existing.git_origin_url.is_some() {
+            self.git_origin_url = existing.git_origin_url.clone();
+        }
+    }
+
     /// Return the list of field names that differ between `self` and `other`.
     pub fn diff_fields(&self, other: &Self) -> Vec<&'static str> {
         let mut diffs = Vec::new();
@@ -223,6 +243,12 @@ impl ThreadMetadata {
         }
         if self.model_provider != other.model_provider {
             diffs.push("model_provider");
+        }
+        if self.model != other.model {
+            diffs.push("model");
+        }
+        if self.reasoning_effort != other.reasoning_effort {
+            diffs.push("reasoning_effort");
         }
         if self.cwd != other.cwd {
             diffs.push("cwd");
@@ -275,6 +301,8 @@ pub(crate) struct ThreadRow {
     agent_nickname: Option<String>,
     agent_role: Option<String>,
     model_provider: String,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
     cwd: String,
     cli_version: String,
     title: String,
@@ -299,6 +327,8 @@ impl ThreadRow {
             agent_nickname: row.try_get("agent_nickname")?,
             agent_role: row.try_get("agent_role")?,
             model_provider: row.try_get("model_provider")?,
+            model: row.try_get("model")?,
+            reasoning_effort: row.try_get("reasoning_effort")?,
             cwd: row.try_get("cwd")?,
             cli_version: row.try_get("cli_version")?,
             title: row.try_get("title")?,
@@ -327,6 +357,8 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             agent_nickname,
             agent_role,
             model_provider,
+            model,
+            reasoning_effort,
             cwd,
             cli_version,
             title,
@@ -348,6 +380,9 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             agent_nickname,
             agent_role,
             model_provider,
+            model,
+            reasoning_effort: reasoning_effort
+                .and_then(|value| value.parse::<ReasoningEffort>().ok()),
             cwd: PathBuf::from(cwd),
             cli_version,
             title,
@@ -390,4 +425,88 @@ pub struct BackfillStats {
     pub upserted: usize,
     /// The number of rows that failed to upsert.
     pub failed: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ThreadMetadata;
+    use super::ThreadRow;
+    use chrono::DateTime;
+    use chrono::Utc;
+    use codex_protocol::ThreadId;
+    use codex_protocol::openai_models::ReasoningEffort;
+    use pretty_assertions::assert_eq;
+    use std::path::PathBuf;
+
+    fn thread_row(reasoning_effort: Option<&str>) -> ThreadRow {
+        ThreadRow {
+            id: "00000000-0000-0000-0000-000000000123".to_string(),
+            rollout_path: "/tmp/rollout-123.jsonl".to_string(),
+            created_at: 1_700_000_000,
+            updated_at: 1_700_000_100,
+            source: "cli".to_string(),
+            agent_nickname: None,
+            agent_role: None,
+            model_provider: "openai".to_string(),
+            model: Some("gpt-5".to_string()),
+            reasoning_effort: reasoning_effort.map(str::to_string),
+            cwd: "/tmp/workspace".to_string(),
+            cli_version: "0.0.0".to_string(),
+            title: String::new(),
+            sandbox_policy: "read-only".to_string(),
+            approval_mode: "on-request".to_string(),
+            tokens_used: 1,
+            first_user_message: String::new(),
+            archived_at: None,
+            git_sha: None,
+            git_branch: None,
+            git_origin_url: None,
+        }
+    }
+
+    fn expected_thread_metadata(reasoning_effort: Option<ReasoningEffort>) -> ThreadMetadata {
+        ThreadMetadata {
+            id: ThreadId::from_string("00000000-0000-0000-0000-000000000123")
+                .expect("valid thread id"),
+            rollout_path: PathBuf::from("/tmp/rollout-123.jsonl"),
+            created_at: DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("timestamp"),
+            updated_at: DateTime::<Utc>::from_timestamp(1_700_000_100, 0).expect("timestamp"),
+            source: "cli".to_string(),
+            agent_nickname: None,
+            agent_role: None,
+            model_provider: "openai".to_string(),
+            model: Some("gpt-5".to_string()),
+            reasoning_effort,
+            cwd: PathBuf::from("/tmp/workspace"),
+            cli_version: "0.0.0".to_string(),
+            title: String::new(),
+            sandbox_policy: "read-only".to_string(),
+            approval_mode: "on-request".to_string(),
+            tokens_used: 1,
+            first_user_message: None,
+            archived_at: None,
+            git_sha: None,
+            git_branch: None,
+            git_origin_url: None,
+        }
+    }
+
+    #[test]
+    fn thread_row_parses_reasoning_effort() {
+        let metadata = ThreadMetadata::try_from(thread_row(Some("high")))
+            .expect("thread metadata should parse");
+
+        assert_eq!(
+            metadata,
+            expected_thread_metadata(Some(ReasoningEffort::High))
+        );
+    }
+
+    #[test]
+    fn thread_row_ignores_unknown_reasoning_effort_values() {
+        let metadata = ThreadMetadata::try_from(thread_row(Some("future")))
+            .expect("thread metadata should parse");
+
+        assert_eq!(metadata, expected_thread_metadata(None));
+    }
 }
