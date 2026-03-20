@@ -14,7 +14,6 @@ use std::sync::Mutex;
 use std::sync::RwLock;
 
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
-use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 
 use crate::auth::error::RefreshTokenFailedError;
@@ -33,26 +32,6 @@ use codex_client::CodexHttpClient;
 use codex_protocol::account::PlanType as AccountPlanType;
 use serde_json::Value;
 use thiserror::Error;
-
-/// Account type for the current user.
-///
-/// This is used internally to determine the base URL for generating responses,
-/// and to gate ChatGPT-only behaviors like rate limits and available models (as
-/// opposed to API key-based auth).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AuthMode {
-    ApiKey,
-    Chatgpt,
-}
-
-impl From<AuthMode> for TelemetryAuthMode {
-    fn from(mode: AuthMode) -> Self {
-        match mode {
-            AuthMode::ApiKey => TelemetryAuthMode::ApiKey,
-            AuthMode::Chatgpt => TelemetryAuthMode::Chatgpt,
-        }
-    }
-}
 
 /// Authentication mechanism used by the current user.
 #[derive(Debug, Clone)]
