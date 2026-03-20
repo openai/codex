@@ -1623,15 +1623,44 @@ fn scenarios() -> Vec<ScenarioSpec> {
     ]
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn approval_matrix_covers_all_modes() -> Result<()> {
+async fn run_scenario_chunk(start: usize, len: usize) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    for scenario in scenarios() {
+    for scenario in scenarios().into_iter().skip(start).take(len) {
         run_scenario(&scenario).await?;
     }
 
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_matrix_covers_all_modes_chunk_1() -> Result<()> {
+    run_scenario_chunk(/*start*/ 0, /*len*/ 8).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_matrix_covers_all_modes_chunk_2() -> Result<()> {
+    run_scenario_chunk(/*start*/ 8, /*len*/ 8).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_matrix_covers_all_modes_chunk_3() -> Result<()> {
+    run_scenario_chunk(/*start*/ 16, /*len*/ 8).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_matrix_covers_all_modes_chunk_4() -> Result<()> {
+    run_scenario_chunk(/*start*/ 24, /*len*/ 8).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_matrix_covers_all_modes_chunk_5() -> Result<()> {
+    run_scenario_chunk(/*start*/ 32, /*len*/ 8).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_matrix_covers_all_modes_chunk_6() -> Result<()> {
+    run_scenario_chunk(/*start*/ 40, /*len*/ 8).await
 }
 
 async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
