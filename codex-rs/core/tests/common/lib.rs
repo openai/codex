@@ -289,6 +289,29 @@ pub fn sandbox_network_env_var() -> &'static str {
     codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
 }
 
+const REMOTE_ENV_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemoteEnvConfig {
+    pub container_name: String,
+}
+
+pub fn get_remote_test_env() -> Option<RemoteEnvConfig> {
+    if std::env::var_os(REMOTE_ENV_ENV_VAR).is_none() {
+        eprintln!("Skipping test because {REMOTE_ENV_ENV_VAR} is not set.");
+        return None;
+    }
+
+    let container_name = std::env::var(REMOTE_ENV_ENV_VAR)
+        .unwrap_or_else(|_| panic!("{REMOTE_ENV_ENV_VAR} must be set"));
+    assert!(
+        !container_name.trim().is_empty(),
+        "{REMOTE_ENV_ENV_VAR} must not be empty"
+    );
+
+    Some(RemoteEnvConfig { container_name })
+}
+
 pub fn format_with_current_shell(command: &str) -> Vec<String> {
     codex_core::shell::default_user_shell().derive_exec_args(command, /*use_login_shell*/ true)
 }
