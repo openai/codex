@@ -36,7 +36,6 @@ use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
-use codex_features::Feature;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
