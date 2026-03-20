@@ -1909,7 +1909,7 @@ async fn make_chatwidget_manual(
         task_complete_pending: false,
         unified_exec_processes: Vec::new(),
         agent_turn_running: false,
-        manual_compact_turn_pending_or_running: false,
+        manual_compact_turn_state: ManualCompactTurnState::Idle,
         mcp_startup_status: None,
         connectors_cache: ConnectorsCacheState::default(),
         connectors_partial_snapshot: None,
@@ -3715,7 +3715,7 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         agent_turn_running: true,
-        manual_compact_turn_pending_or_running: false,
+        manual_compact_turn_state: ManualCompactTurnState::Idle,
     }));
 
     assert!(chat.agent_turn_running);
@@ -3730,7 +3730,7 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
 }
 
 #[tokio::test]
-async fn replayed_turn_complete_keeps_manual_compact_queue_gate_from_restored_input_state() {
+async fn replayed_turn_complete_for_other_turn_keeps_manual_compact_queue_gate() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
 
@@ -3741,12 +3741,14 @@ async fn replayed_turn_complete_keeps_manual_compact_queue_gate_from_restored_in
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         agent_turn_running: true,
-        manual_compact_turn_pending_or_running: true,
+        manual_compact_turn_state: ManualCompactTurnState::Running {
+            turn_id: "turn-1".to_string(),
+        },
     }));
 
     chat.replay_thread_turns(
         vec![AppServerTurn {
-            id: "turn-1".to_string(),
+            id: "turn-0".to_string(),
             items: Vec::new(),
             status: AppServerTurnStatus::Completed,
             error: None,
@@ -3754,7 +3756,12 @@ async fn replayed_turn_complete_keeps_manual_compact_queue_gate_from_restored_in
         ReplayKind::ThreadSnapshot,
     );
 
-    assert!(chat.manual_compact_turn_pending_or_running);
+    assert_eq!(
+        chat.manual_compact_turn_state,
+        ManualCompactTurnState::Running {
+            turn_id: "turn-1".to_string()
+        }
+    );
 
     chat.submit_user_message(UserMessage::from("queued after replayed completion"));
 
@@ -3764,6 +3771,30 @@ async fn replayed_turn_complete_keeps_manual_compact_queue_gate_from_restored_in
         vec!["queued after replayed completion"]
     );
     assert_no_submit_op(&mut op_rx);
+
+    chat.handle_server_notification(
+        ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: chat.thread_id.expect("thread id").to_string(),
+            turn: AppServerTurn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::Completed,
+                error: None,
+            },
+        }),
+        None,
+    );
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "queued after replayed completion".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected queued compact follow-up Op::UserTurn, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -4104,8 +4135,21 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     let thread_id = ThreadId::new();
     chat.thread_id = Some(thread_id);
-    chat.manual_compact_turn_pending_or_running = true;
-    chat.on_task_started();
+    chat.handle_server_notification(
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: thread_id.to_string(),
+            turn: AppServerTurn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::InProgress,
+                error: None,
+            },
+        }),
+        None,
+    );
+    chat.manual_compact_turn_state = ManualCompactTurnState::Running {
+        turn_id: "turn-1".to_string(),
+    };
 
     chat.submit_user_message(UserMessage::from("queued while compacting"));
 
@@ -4116,7 +4160,18 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
     );
     assert_no_submit_op(&mut op_rx);
 
-    chat.on_task_complete(None, /*from_replay*/ false);
+    chat.handle_server_notification(
+        ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: thread_id.to_string(),
+            turn: AppServerTurn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::Completed,
+                error: None,
+            },
+        }),
+        None,
+    );
 
     match next_submit_op(&mut op_rx) {
         Op::UserTurn { items, .. } => assert_eq!(
@@ -4133,7 +4188,7 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
 #[tokio::test]
 async fn submit_user_message_queues_after_compact_is_submitted() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
-    chat.manual_compact_turn_pending_or_running = true;
+    chat.manual_compact_turn_state = ManualCompactTurnState::Submitted;
 
     chat.submit_user_message(UserMessage::from("queued before compact starts"));
 
@@ -4143,6 +4198,21 @@ async fn submit_user_message_queues_after_compact_is_submitted() {
         vec!["queued before compact starts"]
     );
     assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn submitted_manual_compact_gate_is_not_persisted_in_thread_input_state() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.manual_compact_turn_state = ManualCompactTurnState::Submitted;
+
+    let input_state = chat
+        .capture_thread_input_state()
+        .expect("thread input state should exist");
+
+    assert_eq!(
+        input_state.manual_compact_turn_state,
+        ManualCompactTurnState::Idle
+    );
 }
 
 #[tokio::test]

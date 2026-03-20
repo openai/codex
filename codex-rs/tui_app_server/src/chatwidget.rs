@@ -743,8 +743,8 @@ pub(crate) struct ChatWidget {
     /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
     /// can update the status header without accidentally clearing the spinner for an active turn.
     agent_turn_running: bool,
-    /// True after the user submits `/compact` until that manually-started turn ends.
-    manual_compact_turn_pending_or_running: bool,
+    /// Tracks the local queueing gate for a manually-started `/compact` turn.
+    manual_compact_turn_state: ManualCompactTurnState,
     /// Tracks per-server MCP startup state while startup is in progress.
     ///
     /// The map is `Some(_)` from the first `McpStartupUpdate` until `McpStartupComplete`, and the
@@ -945,7 +945,34 @@ pub(crate) struct ThreadInputState {
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
     agent_turn_running: bool,
-    manual_compact_turn_pending_or_running: bool,
+    manual_compact_turn_state: ManualCompactTurnState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+enum ManualCompactTurnState {
+    #[default]
+    Idle,
+    Submitted,
+    Running {
+        turn_id: String,
+    },
+}
+
+impl ManualCompactTurnState {
+    fn is_active(&self) -> bool {
+        !matches!(self, Self::Idle)
+    }
+
+    // The `/compact` pre-start latch is local UI state; only a started compact turn should survive
+    // thread-switch snapshots and replay.
+    fn snapshot_state(&self) -> Self {
+        match self {
+            Self::Idle | Self::Submitted => Self::Idle,
+            Self::Running { turn_id } => Self::Running {
+                turn_id: turn_id.clone(),
+            },
+        }
+    }
 }
 
 impl From<String> for UserMessage {
@@ -1771,6 +1798,7 @@ impl ChatWidget {
         self.last_copyable_output = None;
         let forked_from_id = event.forked_from_id;
         let model_for_header = event.model.clone();
+        self.manual_compact_turn_state = ManualCompactTurnState::Idle;
         self.session_header.set_model(&model_for_header);
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
             Some(model_for_header.clone()),
@@ -2103,9 +2131,6 @@ impl ChatWidget {
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
         self.submit_pending_steers_after_interrupt = false;
-        if !from_replay {
-            self.manual_compact_turn_pending_or_running = false;
-        }
         if let Some(message) = last_agent_message.as_ref()
             && !message.trim().is_empty()
         {
@@ -2174,6 +2199,30 @@ impl ChatWidget {
         });
 
         self.maybe_show_pending_rate_limit_prompt();
+    }
+
+    fn note_turn_started(&mut self, turn_id: &str) {
+        if matches!(
+            self.manual_compact_turn_state,
+            ManualCompactTurnState::Submitted
+        ) {
+            self.manual_compact_turn_state = ManualCompactTurnState::Running {
+                turn_id: turn_id.to_string(),
+            };
+        }
+    }
+
+    fn note_turn_completed(&mut self, turn_id: &str) {
+        match &self.manual_compact_turn_state {
+            ManualCompactTurnState::Running {
+                turn_id: compact_turn_id,
+            } if compact_turn_id == turn_id => {
+                self.manual_compact_turn_state = ManualCompactTurnState::Idle;
+            }
+            ManualCompactTurnState::Idle
+            | ManualCompactTurnState::Submitted
+            | ManualCompactTurnState::Running { .. } => {}
+        }
     }
 
     fn maybe_prompt_plan_implementation(&mut self) {
@@ -2449,7 +2498,7 @@ impl ChatWidget {
         self.finalize_active_cell_as_failed();
         // Reset running state and clear streaming buffers.
         self.agent_turn_running = false;
-        self.manual_compact_turn_pending_or_running = false;
+        self.manual_compact_turn_state = ManualCompactTurnState::Idle;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
         self.update_task_running_state();
@@ -2701,7 +2750,7 @@ impl ChatWidget {
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             agent_turn_running: self.agent_turn_running,
-            manual_compact_turn_pending_or_running: self.manual_compact_turn_pending_or_running,
+            manual_compact_turn_state: self.manual_compact_turn_state.snapshot_state(),
         })
     }
 
@@ -2710,8 +2759,7 @@ impl ChatWidget {
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
             self.agent_turn_running = input_state.agent_turn_running;
-            self.manual_compact_turn_pending_or_running =
-                input_state.manual_compact_turn_pending_or_running;
+            self.manual_compact_turn_state = input_state.manual_compact_turn_state;
             self.update_collaboration_mode_indicator();
             self.refresh_model_display();
             if let Some(composer) = input_state.composer {
@@ -2745,7 +2793,7 @@ impl ChatWidget {
                 .extend(input_state.queued_user_messages);
         } else {
             self.agent_turn_running = false;
-            self.manual_compact_turn_pending_or_running = false;
+            self.manual_compact_turn_state = ManualCompactTurnState::Idle;
             self.pending_steers.clear();
             self.set_remote_image_urls(Vec::new());
             self.bottom_pane.set_composer_text_with_mention_bindings(
@@ -4217,7 +4265,7 @@ impl ChatWidget {
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
-            manual_compact_turn_pending_or_running: false,
+            manual_compact_turn_state: ManualCompactTurnState::Idle,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_partial_snapshot: None,
@@ -4597,7 +4645,7 @@ impl ChatWidget {
             }
             SlashCommand::Compact => {
                 self.clear_token_usage();
-                self.manual_compact_turn_pending_or_running = true;
+                self.manual_compact_turn_state = ManualCompactTurnState::Submitted;
                 self.app_event_tx.compact();
             }
             SlashCommand::Review => {
@@ -5090,6 +5138,7 @@ impl ChatWidget {
         if !self.is_session_configured()
             || self.bottom_pane.is_task_running()
             || self.is_review_mode
+            || self.manual_compact_turn_state.is_active()
         {
             self.queued_user_messages.push_back(user_message);
             self.refresh_pending_input_preview();
@@ -5110,7 +5159,7 @@ impl ChatWidget {
             self.refresh_pending_input_preview();
             return;
         }
-        if self.manual_compact_turn_pending_or_running {
+        if self.manual_compact_turn_state.is_active() {
             self.queued_user_messages.push_back(user_message);
             self.refresh_pending_input_preview();
             return;
@@ -5435,6 +5484,7 @@ impl ChatWidget {
             } = turn;
             if matches!(status, TurnStatus::InProgress) {
                 self.last_non_retry_error = None;
+                self.note_turn_started(&turn_id);
                 self.on_task_started();
             }
             for item in items {
@@ -5863,8 +5913,9 @@ impl ChatWidget {
                     }
                 }
             }
-            ServerNotification::TurnStarted(_) => {
+            ServerNotification::TurnStarted(notification) => {
                 self.last_non_retry_error = None;
+                self.note_turn_started(&notification.turn.id);
                 if !matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages)) {
                     self.on_task_started();
                 }
@@ -6129,13 +6180,16 @@ impl ChatWidget {
         match notification.turn.status {
             TurnStatus::Completed => {
                 self.last_non_retry_error = None;
+                self.note_turn_completed(&notification.turn.id);
                 self.on_task_complete(/*last_agent_message*/ None, replay_kind.is_some())
             }
             TurnStatus::Interrupted => {
                 self.last_non_retry_error = None;
+                self.note_turn_completed(&notification.turn.id);
                 self.on_interrupted_turn(TurnAbortReason::Interrupted);
             }
             TurnStatus::Failed => {
+                self.note_turn_completed(&notification.turn.id);
                 if let Some(error) = notification.turn.error {
                     if self.last_non_retry_error.as_ref()
                         == Some(&(notification.turn.id.clone(), error.message.clone()))
@@ -6390,14 +6444,19 @@ impl ChatWidget {
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TurnStarted(event) => {
+                self.note_turn_started(&event.turn_id);
                 if !is_resume_initial_replay {
                     self.apply_turn_started_context_window(event.model_context_window);
                     self.on_task_started();
                 }
             }
             EventMsg::TurnComplete(TurnCompleteEvent {
-                last_agent_message, ..
-            }) => self.on_task_complete(last_agent_message, from_replay),
+                turn_id,
+                last_agent_message,
+            }) => {
+                self.note_turn_completed(&turn_id);
+                self.on_task_complete(last_agent_message, from_replay);
+            }
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);
