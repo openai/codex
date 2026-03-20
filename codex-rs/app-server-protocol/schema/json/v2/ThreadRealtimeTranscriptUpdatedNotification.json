@@ -1,37 +1,21 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "definitions": {
-    "ThreadRealtimeTranscriptEntry": {
-      "properties": {
-        "role": {
-          "type": "string"
-        },
-        "text": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "role",
-        "text"
-      ],
-      "type": "object"
-    }
-  },
-  "description": "EXPERIMENTAL - flat transcript snapshot emitted whenever realtime transcript text changes.",
+  "description": "EXPERIMENTAL - flat transcript delta emitted whenever realtime transcript text changes.",
   "properties": {
-    "threadId": {
+    "role": {
       "type": "string"
     },
-    "transcript": {
-      "items": {
-        "$ref": "#/definitions/ThreadRealtimeTranscriptEntry"
-      },
-      "type": "array"
+    "text": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
     }
   },
   "required": [
-    "threadId",
-    "transcript"
+    "role",
+    "text",
+    "threadId"
   ],
   "title": "ThreadRealtimeTranscriptUpdatedNotification",
   "type": "object"

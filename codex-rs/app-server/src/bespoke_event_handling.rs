@@ -86,7 +86,6 @@ use codex_app_server_protocol::ThreadRealtimeErrorNotification;
 use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
 use codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
-use codex_app_server_protocol::ThreadRealtimeTranscriptEntry;
 use codex_app_server_protocol::ThreadRealtimeTranscriptUpdatedNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadTokenUsage;
@@ -402,10 +401,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                     RealtimeEvent::InputTranscriptDelta(event) => {
                         let notification = ThreadRealtimeTranscriptUpdatedNotification {
                             thread_id: conversation_id.to_string(),
-                            transcript: vec![ThreadRealtimeTranscriptEntry {
-                                role: "user".to_string(),
-                                text: event.delta,
-                            }],
+                            role: "user".to_string(),
+                            text: event.delta,
                         };
                         outgoing
                             .send_server_notification(
@@ -416,10 +413,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                     RealtimeEvent::OutputTranscriptDelta(event) => {
                         let notification = ThreadRealtimeTranscriptUpdatedNotification {
                             thread_id: conversation_id.to_string(),
-                            transcript: vec![ThreadRealtimeTranscriptEntry {
-                                role: "assistant".to_string(),
-                                text: event.delta,
-                            }],
+                            role: "assistant".to_string(),
+                            text: event.delta,
                         };
                         outgoing
                             .send_server_notification(

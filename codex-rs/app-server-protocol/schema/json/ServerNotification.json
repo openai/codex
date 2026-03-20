@@ -3068,37 +3068,23 @@
       ],
       "type": "object"
     },
-    "ThreadRealtimeTranscriptEntry": {
+    "ThreadRealtimeTranscriptUpdatedNotification": {
+      "description": "EXPERIMENTAL - flat transcript delta emitted whenever realtime transcript text changes.",
       "properties": {
         "role": {
           "type": "string"
         },
         "text": {
           "type": "string"
+        },
+        "threadId": {
+          "type": "string"
         }
       },
       "required": [
         "role",
-        "text"
-      ],
-      "type": "object"
-    },
-    "ThreadRealtimeTranscriptUpdatedNotification": {
-      "description": "EXPERIMENTAL - flat transcript snapshot emitted whenever realtime transcript text changes.",
-      "properties": {
-        "threadId": {
-          "type": "string"
-        },
-        "transcript": {
-          "items": {
-            "$ref": "#/definitions/ThreadRealtimeTranscriptEntry"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "threadId",
-        "transcript"
+        "text",
+        "threadId"
       ],
       "type": "object"
     },

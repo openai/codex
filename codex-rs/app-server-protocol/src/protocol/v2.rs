@@ -3794,13 +3794,6 @@ pub struct ThreadRealtimeItemAddedNotification {
 #[ts(export_to = "v2/")]
 pub struct ThreadRealtimeTranscriptUpdatedNotification {
     pub thread_id: String,
-    pub transcript: Vec<ThreadRealtimeTranscriptEntry>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ThreadRealtimeTranscriptEntry {
     pub role: String,
     pub text: String,
 }

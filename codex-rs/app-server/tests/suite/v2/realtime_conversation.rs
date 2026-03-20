@@ -21,7 +21,6 @@ use codex_app_server_protocol::ThreadRealtimeStartResponse;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadRealtimeStopResponse;
-use codex_app_server_protocol::ThreadRealtimeTranscriptEntry;
 use codex_app_server_protocol::ThreadRealtimeTranscriptUpdatedNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -196,13 +195,8 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     )
     .await?;
     assert_eq!(first_transcript_update.thread_id, output_audio.thread_id);
-    assert_eq!(
-        first_transcript_update.transcript,
-        vec![ThreadRealtimeTranscriptEntry {
-            role: "user".to_string(),
-            text: "delegate now".to_string(),
-        }]
-    );
+    assert_eq!(first_transcript_update.role, "user");
+    assert_eq!(first_transcript_update.text, "delegate now");
 
     let second_transcript_update =
         read_notification::<ThreadRealtimeTranscriptUpdatedNotification>(
@@ -211,13 +205,8 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         )
         .await?;
     assert_eq!(second_transcript_update.thread_id, output_audio.thread_id);
-    assert_eq!(
-        second_transcript_update.transcript,
-        vec![ThreadRealtimeTranscriptEntry {
-            role: "assistant".to_string(),
-            text: "working".to_string(),
-        }]
-    );
+    assert_eq!(second_transcript_update.role, "assistant");
+    assert_eq!(second_transcript_update.text, "working");
 
     let realtime_error =
         read_notification::<ThreadRealtimeErrorNotification>(&mut mcp, "thread/realtime/error")
