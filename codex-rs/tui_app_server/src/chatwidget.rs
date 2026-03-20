@@ -5725,13 +5725,14 @@ impl ChatWidget {
                 status,
                 revised_prompt,
                 result,
+                saved_path,
             } => {
                 self.on_image_generation_end(ImageGenerationEndEvent {
                     call_id: id,
                     result,
                     revised_prompt,
                     status,
-                    saved_path: None,
+                    saved_path,
                 });
             }
             ThreadItem::EnteredReviewMode { review, .. } => {

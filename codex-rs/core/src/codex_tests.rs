@@ -3751,7 +3751,12 @@ async fn handle_output_item_done_records_image_save_history_message() {
         image_output_path.display(),
     ))
     .into();
-    assert_eq!(history.raw_items(), &[save_message, item]);
+    let copy_message: ResponseItem = DeveloperInstructions::new(
+        "If you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it."
+            .to_string(),
+    )
+    .into();
+    assert_eq!(history.raw_items(), &[save_message, copy_message, item]);
     assert_eq!(
         std::fs::read(&expected_saved_path).expect("saved file"),
         b"foo"
