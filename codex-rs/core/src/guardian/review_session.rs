@@ -2,9 +2,14 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use codex_features::Feature;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -28,7 +33,6 @@ use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::Permissions;
 use crate::config::types::McpServerConfig;
-use crate::features::Feature;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::protocol::SandboxPolicy;
 use crate::rollout::recorder::RolloutRecorder;
@@ -39,6 +43,12 @@ use super::prompt::guardian_policy_prompt;
 
 const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 const GUARDIAN_EAGER_INIT_SPAWN_TIMEOUT: Duration = Duration::from_secs(5);
+const GUARDIAN_FOLLOWUP_REVIEW_REMINDER: &str = concat!(
+    "Use prior reviews as context, not binding precedent. ",
+    "Follow the Workspace Policy. ",
+    "If the user explicitly approves a previously rejected action after being informed of the ",
+    "concrete risks, treat the action as authorized and assign low/medium risk."
+);
 
 #[derive(Debug)]
 pub(crate) enum GuardianReviewSessionOutcome {
@@ -88,6 +98,7 @@ struct GuardianReviewSession {
     codex: Codex,
     cancel_token: CancellationToken,
     reuse_key: GuardianReviewSessionReuseKey,
+    has_prior_review: AtomicBool,
     review_lock: Mutex<()>,
     last_committed_rollout_items: Mutex<Option<Vec<RolloutItem>>>,
 }
@@ -491,6 +502,7 @@ impl GuardianReviewSessionManager {
             reuse_key,
             codex,
             cancel_token: CancellationToken::new(),
+            has_prior_review: AtomicBool::new(false),
             review_lock: Mutex::new(()),
             last_committed_rollout_items: Mutex::new(None),
         }));
@@ -509,6 +521,7 @@ impl GuardianReviewSessionManager {
                 reuse_key,
                 codex,
                 cancel_token: CancellationToken::new(),
+                has_prior_review: AtomicBool::new(false),
                 review_lock: Mutex::new(()),
                 last_committed_rollout_items: Mutex::new(None),
             }));
@@ -542,11 +555,15 @@ impl GuardianReviewSessionManager {
             Ok(Err(err)) => return GuardianReviewSessionOutcome::Completed(Err(err)),
             Err(outcome) => return outcome,
         };
-        self.state
-            .lock()
-            .await
-            .active_forks
-            .push(Arc::clone(&review_session));
+        {
+            let mut state = self.state.lock().await;
+            if state.shutdown_started {
+                drop(state);
+                review_session.shutdown_in_background();
+                return GuardianReviewSessionOutcome::Aborted;
+            }
+            state.active_forks.push(Arc::clone(&review_session));
+        }
 
         let execution_result =
             run_review_on_session(review_session.as_ref(), &params, deadline).await;
@@ -572,6 +589,7 @@ async fn spawn_guardian_review_session(
     cancel_token: CancellationToken,
     initial_history: Option<InitialHistory>,
 ) -> anyhow::Result<GuardianReviewSession> {
+    let has_prior_review = initial_history.is_some();
     let codex = run_codex_thread_interactive(
         spawn_config,
         params.parent_session.services.auth_manager.clone(),
@@ -588,6 +606,7 @@ async fn spawn_guardian_review_session(
         codex,
         cancel_token,
         reuse_key,
+        has_prior_review: AtomicBool::new(has_prior_review),
         review_lock: Mutex::new(()),
         last_committed_rollout_items: Mutex::new(None),
     })
@@ -598,6 +617,10 @@ async fn run_review_on_session(
     params: &GuardianReviewSessionParams,
     deadline: tokio::time::Instant,
 ) -> GuardianReviewExecutionResult {
+    if review_session.has_prior_review.load(Ordering::Relaxed) {
+        append_guardian_followup_reminder(review_session).await;
+    }
+
     let submit_result = run_before_review_deadline(
         deadline,
         params.external_cancel.as_ref(),
@@ -646,7 +669,17 @@ async fn run_review_on_session(
         };
     }
 
-    wait_for_guardian_review(review_session, deadline, params.external_cancel.as_ref()).await
+    let execution_result =
+        wait_for_guardian_review(review_session, deadline, params.external_cancel.as_ref()).await;
+    if matches!(
+        execution_result.outcome,
+        GuardianReviewSessionOutcome::Completed(_)
+    ) {
+        review_session
+            .has_prior_review
+            .store(true, Ordering::Relaxed);
+    }
+    execution_result
 }
 
 pub(super) async fn resolve_guardian_review_config(
@@ -718,6 +751,17 @@ async fn load_rollout_items_for_fork(
     };
     let history = RolloutRecorder::get_rollout_history(rollout_path.as_path()).await?;
     Ok(Some(history.get_rollout_items()))
+}
+
+async fn append_guardian_followup_reminder(review_session: &GuardianReviewSession) {
+    let turn_context = review_session.codex.session.new_default_turn().await;
+    let reminder: ResponseItem =
+        DeveloperInstructions::new(GUARDIAN_FOLLOWUP_REVIEW_REMINDER).into();
+    review_session
+        .codex
+        .session
+        .record_into_history(std::slice::from_ref(&reminder), turn_context.as_ref())
+        .await;
 }
 
 async fn wait_for_guardian_review(
