@@ -45,9 +45,10 @@ use super::prompt::guardian_policy_prompt;
 
 const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 const GUARDIAN_FOLLOWUP_REVIEW_REMINDER: &str = concat!(
-    "Use prior reviews as background context, not binding precedent. ",
-    "If the transcript now shows the user explicitly approved a previously denied action, ",
-    "reassess using that new authorization."
+    "Use prior reviews as context, not binding precedent. ",
+    "Follow the Workspace Policy. ",
+    "If the user explicitly approves a previously rejected action after being informed of the ",
+    "concrete risks, treat the action as authorized and assign low/medium risk."
 );
 
 #[derive(Debug)]

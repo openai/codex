@@ -678,9 +678,13 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
         second_body["prompt_cache_key"]
     );
     assert!(
-        second_body
-            .to_string()
-            .contains("Use prior reviews as background context, not binding precedent."),
+        second_body.to_string().contains(concat!(
+            "Use prior reviews as context, not binding precedent. ",
+            "Follow the Workspace Policy. ",
+            "If the user explicitly approves a previously rejected action after being ",
+            "informed of the concrete risks, treat the action as authorized and assign ",
+            "low/medium risk."
+        )),
         "follow-up guardian request should include the follow-up reminder"
     );
     assert!(
