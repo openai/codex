@@ -99,6 +99,19 @@ pub struct TestEnv {
 }
 
 impl TestEnv {
+    pub async fn local() -> Result<Self> {
+        let local_cwd_temp_dir = TempDir::new()?;
+        let cwd = local_cwd_temp_dir.path().to_path_buf();
+        let environment =
+            codex_exec_server::Environment::create(/*experimental_exec_server_url*/ None).await?;
+        Ok(Self {
+            environment,
+            cwd,
+            _local_cwd_temp_dir: Some(local_cwd_temp_dir),
+            _remote_exec_server_process: None,
+        })
+    }
+
     pub fn environment(&self) -> &codex_exec_server::Environment {
         &self.environment
     }
@@ -131,19 +144,7 @@ pub async fn test_env() -> Result<TestEnv> {
                 _remote_exec_server_process: Some(remote_process.process),
             })
         }
-        None => {
-            let local_cwd_temp_dir = TempDir::new()?;
-            let cwd = local_cwd_temp_dir.path().to_path_buf();
-            let environment =
-                codex_exec_server::Environment::create(/*experimental_exec_server_url*/ None)
-                    .await?;
-            Ok(TestEnv {
-                environment,
-                cwd,
-                _local_cwd_temp_dir: Some(local_cwd_temp_dir),
-                _remote_exec_server_process: None,
-            })
-        }
+        None => TestEnv::local().await,
     }
 }
 
@@ -452,7 +453,8 @@ impl TestCodexBuilder {
     ) -> anyhow::Result<TestCodex> {
         let base_url = format!("{}/v1", server.uri());
         let (config, cwd) = self.prepare_config(base_url, &home).await?;
-        Box::pin(self.build_from_config(config, cwd, home, resume_from, test_env().await?)).await
+        Box::pin(self.build_from_config(config, cwd, home, resume_from, TestEnv::local().await?))
+            .await
     }
 
     async fn build_with_home_and_base_url(
@@ -462,7 +464,8 @@ impl TestCodexBuilder {
         resume_from: Option<PathBuf>,
     ) -> anyhow::Result<TestCodex> {
         let (config, cwd) = self.prepare_config(base_url, &home).await?;
-        Box::pin(self.build_from_config(config, cwd, home, resume_from, test_env().await?)).await
+        Box::pin(self.build_from_config(config, cwd, home, resume_from, TestEnv::local().await?))
+            .await
     }
 
     async fn build_from_config(
