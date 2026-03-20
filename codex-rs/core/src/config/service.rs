@@ -242,9 +242,9 @@ impl ConfigService {
             .map_err(|err| ConfigServiceError::io("failed to load configuration", err))?;
 
         let toml_value = layers.effective_config();
-        let cfg: ConfigToml = toml_value
-            .try_into()
-            .map_err(|err| ConfigServiceError::toml("failed to parse config.toml", err))?;
+        let cfg: ConfigToml =
+            crate::config::deserialize_merged_config_toml(toml_value, &self.codex_home)
+                .map_err(|err| ConfigServiceError::toml("failed to parse config.toml", err))?;
         Ok(cfg.into())
     }
 
@@ -371,7 +371,7 @@ impl ConfigService {
 
         let updated_layers = layers.with_user_config(&provided_path, user_config.clone());
         let effective = updated_layers.effective_config();
-        validate_config(&effective).map_err(|err| {
+        validate_merged_config(&effective, &self.codex_home).map_err(|err| {
             ConfigServiceError::write(
                 ConfigWriteErrorCode::ConfigValidationError,
                 format!("Invalid configuration: {err}"),
@@ -616,6 +616,14 @@ fn toml_value_to_value(value: &TomlValue) -> anyhow::Result<toml_edit::Value> {
 
 fn validate_config(value: &TomlValue) -> Result<(), toml::de::Error> {
     let _: ConfigToml = value.clone().try_into()?;
+    Ok(())
+}
+
+fn validate_merged_config(
+    value: &TomlValue,
+    config_base_dir: &Path,
+) -> Result<(), toml::de::Error> {
+    crate::config::deserialize_merged_config_toml(value.clone(), config_base_dir)?;
     Ok(())
 }
 

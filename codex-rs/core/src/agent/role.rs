@@ -222,7 +222,7 @@ mod reload {
         config: &Config,
         config_layer_stack: &ConfigLayerStack,
     ) -> anyhow::Result<crate::config::ConfigToml> {
-        Ok(deserialize_config_toml_with_base(
+        Ok(crate::config::deserialize_merged_config_toml(
             config_layer_stack.effective_config(),
             &config.codex_home,
         )?)
