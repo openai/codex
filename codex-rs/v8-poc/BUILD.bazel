@@ -45,5 +45,4 @@ codex_rust_crate(
     name = "v8-poc-rusty-v8",
     crate_features = ["rusty_v8"],
     crate_name = "codex_v8_poc",
-    test_tags = ["manual"],
 )
