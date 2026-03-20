@@ -11610,12 +11610,12 @@ async fn deltas_then_same_final_message_are_rendered_snapshot() {
 }
 
 #[tokio::test]
-async fn hook_events_render_snapshot() {
+async fn pre_tool_use_hook_events_render_snapshot() {
     assert_hook_events_snapshot(
         codex_protocol::protocol::HookEventName::PreToolUse,
         "pre-tool-use:0:/tmp/hooks.json",
         "warming the shell",
-        "hook_events_render_snapshot",
+        "pre_tool_use_hook_events_render_snapshot",
     )
     .await;
 }
