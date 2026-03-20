@@ -1,5 +1,5 @@
-use crate::features::Feature;
-use crate::features::Features;
+use codex_features::Feature;
+use codex_features::Features;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::openai_models::ModelInfo;
 

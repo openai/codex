@@ -3,7 +3,7 @@
 use std::fs;
 
 use assert_matches::assert_matches;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;

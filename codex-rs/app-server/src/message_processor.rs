@@ -59,6 +59,7 @@ use codex_core::default_client::get_codex_user_agent;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_features::Feature;
 use codex_feedback::CodexFeedback;
 use codex_login::auth::ExternalAuthRefreshContext;
 use codex_login::auth::ExternalAuthRefreshReason;
@@ -212,7 +213,7 @@ impl MessageProcessor {
                     CollaborationModesConfig {
                         default_mode_request_user_input: config
                             .features
-                            .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
+                            .enabled(Feature::DefaultModeRequestUserInput),
                     },
                 ));
                 (auth_manager, thread_manager)

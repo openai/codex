@@ -14,6 +14,7 @@ use crate::models_manager::model_info;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
 
+use codex_features::Features;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -3408,7 +3409,7 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
 #[tokio::test]
 async fn record_model_warning_appends_user_message() {
     let (mut session, turn_context) = make_session_and_context().await;
-    let features = crate::features::Features::with_defaults().into();
+    let features = Features::with_defaults().into();
     session.features = features;
 
     session

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;

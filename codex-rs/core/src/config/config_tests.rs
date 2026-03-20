@@ -13,9 +13,10 @@ use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
 use crate::config::types::ToolSuggestDiscoverableType;
 use crate::config_loader::RequirementSource;
-use crate::features::Feature;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
+use codex_features::Feature;
+use codex_features::FeaturesToml;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -1662,7 +1663,7 @@ fn feature_table_overrides_legacy_flags() -> std::io::Result<()> {
     let mut entries = BTreeMap::new();
     entries.insert("apply_patch_freeform".to_string(), false);
     let cfg = ConfigToml {
-        features: Some(crate::features::FeaturesToml { entries }),
+        features: Some(FeaturesToml { entries }),
         ..Default::default()
     };
 
@@ -1710,7 +1711,7 @@ fn responses_websocket_features_do_not_change_wire_api() -> std::io::Result<()> 
         let mut entries = BTreeMap::new();
         entries.insert(feature_key.to_string(), true);
         let cfg = ConfigToml {
-            features: Some(crate::features::FeaturesToml { entries }),
+            features: Some(FeaturesToml { entries }),
             ..Default::default()
         };
 

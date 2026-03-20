@@ -39,7 +39,6 @@ pub mod exec;
 pub mod exec_env;
 mod exec_policy;
 pub mod external_agent_config;
-pub mod features;
 mod file_watcher;
 mod flags;
 pub mod git_info;

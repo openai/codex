@@ -1,30 +1,24 @@
 //! Centralized feature flags and metadata.
 //!
-//! This module defines a small set of toggles that gate experimental and
-//! optional behavior across the codebase. Instead of wiring individual
-//! booleans through multiple types, call sites consult a single `Features`
-//! container attached to `Config`.
+//! This crate defines the feature registry plus the logic used to resolve an
+//! effective feature set from config-like inputs.
 
-use crate::auth::AuthManager;
-use crate::auth::CodexAuth;
-use crate::config::Config;
-use crate::config::ConfigToml;
-use crate::config::profile::ConfigProfile;
-use crate::protocol::Event;
-use crate::protocol::EventMsg;
-use crate::protocol::WarningEvent;
-use codex_config::CONFIG_TOML_FILE;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
 use codex_otel::SessionTelemetry;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::WarningEvent;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use toml::Value as TomlValue;
+use toml::Table;
 
 mod legacy;
-pub(crate) use legacy::LegacyFeatureToggles;
-pub(crate) use legacy::legacy_feature_keys;
+use legacy::LegacyFeatureToggles;
+pub use legacy::legacy_feature_keys;
 
 /// High-level lifecycle stage for a feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +43,7 @@ impl Stage {
     pub fn experimental_menu_name(self) -> Option<&'static str> {
         match self {
             Stage::Experimental { name, .. } => Some(name),
-            _ => None,
+            Stage::UnderDevelopment | Stage::Stable | Stage::Deprecated | Stage::Removed => None,
         }
     }
 
@@ -58,7 +52,7 @@ impl Stage {
             Stage::Experimental {
                 menu_description, ..
             } => Some(menu_description),
-            _ => None,
+            Stage::UnderDevelopment | Stage::Stable | Stage::Deprecated | Stage::Removed => None,
         }
     }
 
@@ -68,7 +62,7 @@ impl Stage {
                 announcement: "", ..
             } => None,
             Stage::Experimental { announcement, .. } => Some(announcement),
-            _ => None,
+            Stage::UnderDevelopment | Stage::Stable | Stage::Deprecated | Stage::Removed => None,
         }
     }
 }
@@ -207,7 +201,7 @@ impl Feature {
         FEATURES
             .iter()
             .find(|spec| spec.id == self)
-            .unwrap_or_else(|| unreachable!("missing FeatureSpec for {:?}", self))
+            .unwrap_or_else(|| unreachable!("missing FeatureSpec for {self:?}"))
     }
 }
 
@@ -230,6 +224,14 @@ pub struct Features {
 pub struct FeatureOverrides {
     pub include_apply_patch_tool: Option<bool>,
     pub web_search_request: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FeatureConfigSource<'a> {
+    pub features: Option<&'a FeaturesToml>,
+    pub include_apply_patch_tool: Option<bool>,
+    pub experimental_use_freeform_apply_patch: Option<bool>,
+    pub experimental_use_unified_exec_tool: Option<bool>,
 }
 
 impl FeatureOverrides {
@@ -286,7 +288,7 @@ impl Features {
         self.apps_enabled_for_auth(auth.as_ref())
     }
 
-    pub(crate) fn apps_enabled_for_auth(&self, auth: Option<&CodexAuth>) -> bool {
+    pub fn apps_enabled_for_auth(&self, auth: Option<&CodexAuth>) -> bool {
         self.enabled(Feature::Apps) && auth.is_some_and(CodexAuth::is_chatgpt_auth)
     }
 
@@ -387,34 +389,24 @@ impl Features {
         }
     }
 
-    pub fn from_config(
-        cfg: &ConfigToml,
-        config_profile: &ConfigProfile,
+    pub fn from_sources(
+        base: FeatureConfigSource<'_>,
+        profile: FeatureConfigSource<'_>,
         overrides: FeatureOverrides,
     ) -> Self {
         let mut features = Features::with_defaults();
 
-        let base_legacy = LegacyFeatureToggles {
-            experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
-            experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
-            ..Default::default()
-        };
-        base_legacy.apply(&mut features);
+        for source in [base, profile] {
+            LegacyFeatureToggles {
+                include_apply_patch_tool: source.include_apply_patch_tool,
+                experimental_use_freeform_apply_patch: source.experimental_use_freeform_apply_patch,
+                experimental_use_unified_exec_tool: source.experimental_use_unified_exec_tool,
+            }
+            .apply(&mut features);
 
-        if let Some(base_features) = cfg.features.as_ref() {
-            features.apply_map(&base_features.entries);
-        }
-
-        let profile_legacy = LegacyFeatureToggles {
-            include_apply_patch_tool: config_profile.include_apply_patch_tool,
-            experimental_use_freeform_apply_patch: config_profile
-                .experimental_use_freeform_apply_patch,
-
-            experimental_use_unified_exec_tool: config_profile.experimental_use_unified_exec_tool,
-        };
-        profile_legacy.apply(&mut features);
-        if let Some(profile_features) = config_profile.features.as_ref() {
-            features.apply_map(&profile_features.entries);
+            if let Some(feature_entries) = source.features {
+                features.apply_map(&feature_entries.entries);
+            }
         }
 
         overrides.apply(&mut features);
@@ -427,7 +419,7 @@ impl Features {
         self.enabled.iter().copied().collect()
     }
 
-    pub(crate) fn normalize_dependencies(&mut self) {
+    pub fn normalize_dependencies(&mut self) {
         if self.enabled(Feature::SpawnCsv) && !self.enabled(Feature::Collab) {
             self.enable(Feature::Collab);
         }
@@ -483,7 +475,7 @@ fn web_search_details() -> &'static str {
 }
 
 /// Keys accepted in `[features]` tables.
-pub(crate) fn feature_for_key(key: &str) -> Option<Feature> {
+pub fn feature_for_key(key: &str) -> Option<Feature> {
     for spec in FEATURES {
         if spec.key == key {
             return Some(spec.id);
@@ -492,7 +484,7 @@ pub(crate) fn feature_for_key(key: &str) -> Option<Feature> {
     legacy::feature_for_key(key)
 }
 
-pub(crate) fn canonical_feature_for_key(key: &str) -> Option<Feature> {
+pub fn canonical_feature_for_key(key: &str) -> Option<Feature> {
     FEATURES
         .iter()
         .find(|spec| spec.key == key)
@@ -871,22 +863,18 @@ pub const FEATURES: &[FeatureSpec] = &[
     },
 ];
 
-/// Push a warning event if any under-development features are enabled.
-pub fn maybe_push_unstable_features_warning(
-    config: &Config,
-    post_session_configured_events: &mut Vec<Event>,
-) {
-    if config.suppress_unstable_features_warning {
-        return;
+pub fn unstable_features_warning_event(
+    effective_features: Option<&Table>,
+    suppress_unstable_features_warning: bool,
+    features: &Features,
+    config_path: &str,
+) -> Option<Event> {
+    if suppress_unstable_features_warning {
+        return None;
     }
 
     let mut under_development_feature_keys = Vec::new();
-    if let Some(table) = config
-        .config_layer_stack
-        .effective_config()
-        .get("features")
-        .and_then(TomlValue::as_table)
-    {
+    if let Some(table) = effective_features {
         for (key, value) in table {
             if value.as_bool() != Some(true) {
                 continue;
@@ -894,7 +882,7 @@ pub fn maybe_push_unstable_features_warning(
             let Some(spec) = FEATURES.iter().find(|spec| spec.key == key.as_str()) else {
                 continue;
             };
-            if !config.features.enabled(spec.id) {
+            if !features.enabled(spec.id) {
                 continue;
             }
             if matches!(spec.stage, Stage::UnderDevelopment) {
@@ -904,24 +892,18 @@ pub fn maybe_push_unstable_features_warning(
     }
 
     if under_development_feature_keys.is_empty() {
-        return;
+        return None;
     }
 
     let under_development_feature_keys = under_development_feature_keys.join(", ");
-    let config_path = config
-        .codex_home
-        .join(CONFIG_TOML_FILE)
-        .display()
-        .to_string();
     let message = format!(
         "Under-development features enabled: {under_development_feature_keys}. Under-development features are incomplete and may behave unpredictably. To suppress this warning, set `suppress_unstable_features_warning = true` in {config_path}."
     );
-    post_session_configured_events.push(Event {
-        id: "".to_owned(),
+    Some(Event {
+        id: String::new(),
         msg: EventMsg::Warning(WarningEvent { message }),
-    });
+    })
 }
 
 #[cfg(test)]
-#[path = "features_tests.rs"]
 mod tests;

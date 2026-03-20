@@ -6,7 +6,7 @@ use codex_core::config_loader::ConfigLayerEntry;
 use codex_core::config_loader::ConfigLayerStack;
 use codex_core::config_loader::ConfigRequirements;
 use codex_core::config_loader::ConfigRequirementsToml;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::protocol::DeprecationNoticeEvent;
 use codex_protocol::protocol::EventMsg;
 use core_test_support::responses::start_mock_server;

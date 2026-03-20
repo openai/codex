@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::responses;

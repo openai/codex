@@ -409,6 +409,7 @@ dependencies = [
  "chrono",
  "codex-app-server-protocol",
  "codex-core",
+ "codex-features",
  "codex-protocol",
  "codex-utils-cargo-bin",
  "core_test_support",
@@ -1428,6 +1429,7 @@ dependencies = [
  "codex-cloud-requirements",
  "codex-core",
  "codex-exec-server",
+ "codex-features",
  "codex-feedback",
  "codex-file-search",
  "codex-login",
@@ -1474,6 +1476,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-arg0",
  "codex-core",
+ "codex-features",
  "codex-feedback",
  "codex-protocol",
  "futures",
@@ -1657,6 +1660,7 @@ dependencies = [
  "codex-core",
  "codex-exec",
  "codex-execpolicy",
+ "codex-features",
  "codex-login",
  "codex-mcp-server",
  "codex-protocol",
@@ -1845,6 +1849,7 @@ dependencies = [
  "codex-connectors",
  "codex-exec-server",
  "codex-execpolicy",
+ "codex-features",
  "codex-file-search",
  "codex-git",
  "codex-hooks",
@@ -2061,6 +2066,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-features"
+version = "0.0.0"
+dependencies = [
+ "codex-login",
+ "codex-otel",
+ "codex-protocol",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "toml 0.9.11+spec-1.1.0",
+ "tracing",
+]
+
+[[package]]
 name = "codex-feedback"
 version = "0.0.0"
 dependencies = [
@@ -2209,6 +2228,7 @@ dependencies = [
  "anyhow",
  "codex-arg0",
  "codex-core",
+ "codex-features",
  "codex-protocol",
  "codex-shell-command",
  "codex-utils-cli",
@@ -2554,6 +2574,7 @@ dependencies = [
  "codex-client",
  "codex-cloud-requirements",
  "codex-core",
+ "codex-features",
  "codex-feedback",
  "codex-file-search",
  "codex-login",
@@ -2646,6 +2667,7 @@ dependencies = [
  "codex-client",
  "codex-cloud-requirements",
  "codex-core",
+ "codex-features",
  "codex-feedback",
  "codex-file-search",
  "codex-login",
@@ -3096,7 +3118,9 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "base64 0.22.1",
+ "codex-arg0",
  "codex-core",
+ "codex-features",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",

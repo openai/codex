@@ -1,9 +1,9 @@
 use super::*;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
-use crate::features::Feature;
 use crate::plugins::AppConnectorId;
 use crate::plugins::PluginCapabilitySummary;
+use codex_features::Feature;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::Path;

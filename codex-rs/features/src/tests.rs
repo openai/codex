@@ -1,10 +1,21 @@
-use super::*;
-
+use crate::Feature;
+use crate::FeatureConfigSource;
+use crate::FeatureOverrides;
+use crate::Features;
+use crate::FeaturesToml;
+use crate::Stage;
+use crate::feature_for_key;
+use crate::unstable_features_warning_event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::WarningEvent;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeMap;
+use toml::Table;
+use toml::Value as TomlValue;
 
 #[test]
 fn under_development_features_are_disabled_by_default() {
-    for spec in FEATURES {
+    for spec in crate::FEATURES {
         if matches!(spec.stage, Stage::UnderDevelopment) {
             assert_eq!(
                 spec.default_enabled, false,
@@ -17,7 +28,7 @@ fn under_development_features_are_disabled_by_default() {
 
 #[test]
 fn default_enabled_features_are_stable() {
-    for spec in FEATURES {
+    for spec in crate::FEATURES {
         if spec.default_enabled {
             assert!(
                 matches!(spec.stage, Stage::Stable | Stage::Removed),
@@ -177,9 +188,72 @@ fn apps_require_feature_flag_and_chatgpt_auth() {
     features.enable(Feature::Apps);
     assert!(!features.apps_enabled_for_auth(None));
 
-    let api_key_auth = CodexAuth::from_api_key("test-api-key");
+    let api_key_auth = codex_login::CodexAuth::from_api_key("test-api-key");
     assert!(!features.apps_enabled_for_auth(Some(&api_key_auth)));
 
-    let chatgpt_auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let chatgpt_auth = codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing();
     assert!(features.apps_enabled_for_auth(Some(&chatgpt_auth)));
+}
+
+#[test]
+fn from_sources_applies_base_profile_and_overrides() {
+    let mut base_entries = BTreeMap::new();
+    base_entries.insert("plugins".to_string(), true);
+    let base_features = FeaturesToml {
+        entries: base_entries,
+    };
+
+    let mut profile_entries = BTreeMap::new();
+    profile_entries.insert("code_mode_only".to_string(), true);
+    let profile_features = FeaturesToml {
+        entries: profile_entries,
+    };
+
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&base_features),
+            ..Default::default()
+        },
+        FeatureConfigSource {
+            features: Some(&profile_features),
+            include_apply_patch_tool: Some(true),
+            ..Default::default()
+        },
+        FeatureOverrides {
+            web_search_request: Some(false),
+            ..Default::default()
+        },
+    );
+
+    assert_eq!(features.enabled(Feature::Plugins), true);
+    assert_eq!(features.enabled(Feature::CodeModeOnly), true);
+    assert_eq!(features.enabled(Feature::CodeMode), true);
+    assert_eq!(features.enabled(Feature::ApplyPatchFreeform), true);
+    assert_eq!(features.enabled(Feature::WebSearchRequest), false);
+}
+
+#[test]
+fn unstable_warning_event_only_mentions_enabled_under_development_features() {
+    let mut configured_features = Table::new();
+    configured_features.insert("child_agents_md".to_string(), TomlValue::Boolean(true));
+    configured_features.insert("personality".to_string(), TomlValue::Boolean(true));
+    configured_features.insert("unknown".to_string(), TomlValue::Boolean(true));
+
+    let mut features = Features::with_defaults();
+    features.enable(Feature::ChildAgentsMd);
+
+    let warning = unstable_features_warning_event(
+        Some(&configured_features),
+        false,
+        &features,
+        "/tmp/config.toml",
+    )
+    .expect("warning event");
+
+    let EventMsg::Warning(WarningEvent { message }) = warning.msg else {
+        panic!("expected warning event");
+    };
+    assert!(message.contains("child_agents_md"));
+    assert!(!message.contains("personality"));
+    assert!(message.contains("/tmp/config.toml"));
 }

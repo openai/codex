@@ -4,7 +4,7 @@
 use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
