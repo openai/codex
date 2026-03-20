@@ -1920,6 +1920,7 @@ async fn make_chatwidget_manual(
         current_status: StatusIndicatorState::working(),
         retry_status_header: None,
         pending_status_indicator_restore: false,
+        live_agent_message_item_id: None,
         suppress_queue_autosend: false,
         thread_id: None,
         thread_name: None,
@@ -3868,7 +3869,7 @@ async fn streaming_final_answer_keeps_task_running_state() {
     chat.thread_id = Some(ThreadId::new());
 
     chat.on_task_started();
-    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_agent_message_delta(None, "Final answer line\n".to_string());
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
@@ -3901,7 +3902,7 @@ async fn idle_commit_ticks_do_not_restore_status_without_commentary_completion()
     chat.on_task_started();
     assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
 
-    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_agent_message_delta(None, "Final answer line\n".to_string());
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
@@ -3920,7 +3921,7 @@ async fn commentary_completion_restores_status_indicator_before_exec_begin() {
     chat.on_task_started();
     assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
 
-    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_agent_message_delta(None, "Preamble line\n".to_string());
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
@@ -3972,7 +3973,7 @@ async fn preamble_keeps_working_status_snapshot() {
     // Regression sequence: a preamble line is committed to history before any exec/tool event.
     // After commentary completes, the status row should be restored before subsequent work.
     chat.on_task_started();
-    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_agent_message_delta(None, "Preamble line\n".to_string());
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
     complete_assistant_message(
@@ -4013,7 +4014,7 @@ async fn unified_exec_begin_restores_working_status_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.on_task_started();
-    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_agent_message_delta(None, "Preamble line\n".to_string());
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
@@ -4097,7 +4098,7 @@ async fn steer_enter_uses_pending_steers_while_final_answer_stream_is_active() {
     chat.on_task_started();
     // Keep the assistant stream open (no commit tick/finalize) to model the repro window:
     // user presses Enter while the final answer is still streaming.
-    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_agent_message_delta(None, "Final answer line\n".to_string());
 
     chat.bottom_pane.set_composer_text(
         "queued while streaming".to_string(),
@@ -5014,7 +5015,7 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
     chat.on_task_started();
     // Simulate "dead mode" repro timing by keeping a final-answer stream active while the
     // user submits multiple follow-up prompts.
-    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_agent_message_delta(None, "Final answer line\n".to_string());
 
     chat.bottom_pane
         .set_composer_text("first follow-up".to_string(), Vec::new(), Vec::new());
@@ -5083,6 +5084,7 @@ async fn manual_interrupt_restores_pending_steers_to_composer() {
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
     chat.on_agent_message_delta(
+        None,
         "Final answer line
 "
         .to_string(),
@@ -5127,7 +5129,7 @@ async fn esc_interrupt_sends_all_pending_steers_immediately_and_keeps_existing_d
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
-    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_agent_message_delta(None, "Final answer line\n".to_string());
 
     chat.bottom_pane
         .set_composer_text("first pending steer".to_string(), Vec::new(), Vec::new());
@@ -5228,7 +5230,7 @@ async fn manual_interrupt_restores_pending_steer_mention_bindings_to_composer() 
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
-    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_agent_message_delta(None, "Final answer line\n".to_string());
 
     let mention_bindings = vec![MentionBinding {
         mention: "figma".to_string(),
@@ -5272,6 +5274,7 @@ async fn manual_interrupt_restores_pending_steers_before_queued_messages() {
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
     chat.on_agent_message_delta(
+        None,
         "Final answer line
 "
         .to_string(),
@@ -5314,6 +5317,7 @@ async fn replaced_turn_clears_pending_steers_but_keeps_queued_drafts() {
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
     chat.on_agent_message_delta(
+        None,
         "Final answer line
 "
         .to_string(),
@@ -11183,7 +11187,7 @@ async fn replayed_interrupted_reconnect_footer_row_snapshot() {
 async fn stream_error_restores_hidden_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
-    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_agent_message_delta(None, "Preamble line\n".to_string());
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
     assert!(!chat.bottom_pane.status_indicator_visible());

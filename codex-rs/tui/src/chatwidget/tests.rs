@@ -60,6 +60,7 @@ use codex_protocol::parse_command::ParsedCommand;
 use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
+use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AgentMessageDeltaEvent;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AgentReasoningDeltaEvent;
@@ -2024,6 +2025,8 @@ async fn make_chatwidget_manual(
         terminal_title_status_kind: TerminalTitleStatusKind::Working,
         retry_status_header: None,
         pending_status_indicator_restore: false,
+        live_agent_message_item_id: None,
+        pending_live_agent_message_legacy_echo: None,
         thread_snapshot_replay_saw_final_agent_message_item: false,
         thread_snapshot_replay_last_agent_message_item: None,
         thread_snapshot_replay_agent_delta_turn_id: None,
@@ -4281,6 +4284,76 @@ async fn task_complete_flushes_non_plan_active_cell_before_finalized_plan() {
         "expected finalized plan history cell, got {plan:?}"
     );
     assert!(chat.active_cell.is_none());
+}
+
+#[tokio::test]
+async fn live_agent_message_content_delta_flushes_previous_item_and_skips_legacy_echo() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let thread_id = ThreadId::new().to_string();
+
+    chat.handle_codex_event(Event {
+        id: "turn-started".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    chat.handle_codex_event(Event {
+        id: "item-1-content".into(),
+        msg: EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent {
+            thread_id: thread_id.clone(),
+            turn_id: "turn-1".to_string(),
+            item_id: "item-1".to_string(),
+            delta: "first item\n".to_string(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "item-1-legacy".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "first item\n".to_string(),
+        }),
+    });
+    chat.on_commit_tick();
+
+    let first_active = chat
+        .active_cell_transcript_lines(u16::MAX)
+        .expect("expected active streamed cell after first item");
+    assert_eq!(
+        lines_to_single_string(&first_active).trim_end(),
+        "• first item"
+    );
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.handle_codex_event(Event {
+        id: "item-2-content".into(),
+        msg: EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent {
+            thread_id,
+            turn_id: "turn-1".to_string(),
+            item_id: "item-2".to_string(),
+            delta: "second item\n".to_string(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "item-2-legacy".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "second item\n".to_string(),
+        }),
+    });
+    chat.on_commit_tick();
+
+    let history = drain_insert_history(&mut rx);
+    assert_eq!(history.len(), 1);
+    assert_eq!(lines_to_single_string(&history[0]).trim_end(), "• first item");
+
+    let second_active = chat
+        .active_cell_transcript_lines(u16::MAX)
+        .expect("expected active streamed cell after second item");
+    assert_eq!(
+        lines_to_single_string(&second_active).trim_end(),
+        "• second item"
+    );
 }
 
 #[tokio::test]

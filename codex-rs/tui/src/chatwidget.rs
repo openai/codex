@@ -731,6 +731,12 @@ pub(crate) struct ChatWidget {
     retry_status_header: Option<String>,
     // Set when commentary output completes; once stream queues go idle we restore the status row.
     pending_status_indicator_restore: bool,
+    // Tracks the live assistant message item currently streaming into `stream_controller`.
+    live_agent_message_item_id: Option<String>,
+    // Core emits item-scoped content deltas plus a back-compat legacy delta immediately after.
+    // Keep the last item-scoped chunk so the live path can ignore the echoed legacy event while
+    // still accepting legacy-only producers.
+    pending_live_agent_message_legacy_echo: Option<String>,
     // Older thread snapshots may lack a final `AgentMessageItem` and only preserve
     // `TurnComplete.last_agent_message`. Track whether the replayed turn already produced a
     // final assistant item, plus the latest replayed assistant item text, so replay can fall
@@ -1640,6 +1646,17 @@ impl ChatWidget {
         self.handle_streaming_delta(delta);
     }
 
+    fn on_agent_message_content_delta(&mut self, item_id: String, delta: String) {
+        if self.live_agent_message_item_id.as_deref() != Some(item_id.as_str()) {
+            if self.live_agent_message_item_id.is_some() {
+                self.flush_answer_stream_with_separator();
+            }
+            self.live_agent_message_item_id = Some(item_id);
+        }
+        self.pending_live_agent_message_legacy_echo = Some(delta.clone());
+        self.handle_streaming_delta(delta);
+    }
+
     fn on_plan_delta(&mut self, delta: String) {
         if self.active_mode_kind() != ModeKind::Plan {
             return;
@@ -1785,6 +1802,8 @@ impl ChatWidget {
         self.update_task_running_state();
         self.retry_status_header = None;
         self.pending_status_indicator_restore = false;
+        self.live_agent_message_item_id = None;
+        self.pending_live_agent_message_legacy_echo = None;
         self.thread_snapshot_replay_saw_final_agent_message_item = false;
         self.thread_snapshot_replay_last_agent_message_item = None;
         self.bottom_pane
@@ -1868,6 +1887,8 @@ impl ChatWidget {
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
         self.update_task_running_state();
+        self.live_agent_message_item_id = None;
+        self.pending_live_agent_message_legacy_echo = None;
         self.thread_snapshot_replay_agent_deltas_active = false;
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
@@ -3154,6 +3175,10 @@ impl ChatWidget {
         if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot)) && !message.is_empty() {
             self.thread_snapshot_replay_last_agent_message_item = Some(message.clone());
         }
+        if replay_kind.is_none() {
+            self.live_agent_message_item_id = None;
+            self.pending_live_agent_message_legacy_echo = None;
+        }
         self.finalize_completed_assistant_message(
             (!message.is_empty()).then_some(message.as_str()),
             replay_kind,
@@ -3767,6 +3792,8 @@ impl ChatWidget {
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            live_agent_message_item_id: None,
+            pending_live_agent_message_legacy_echo: None,
             thread_snapshot_replay_saw_final_agent_message_item: false,
             thread_snapshot_replay_last_agent_message_item: None,
             thread_snapshot_replay_agent_delta_turn_id: None,
@@ -3969,6 +3996,8 @@ impl ChatWidget {
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            live_agent_message_item_id: None,
+            pending_live_agent_message_legacy_echo: None,
             thread_snapshot_replay_saw_final_agent_message_item: false,
             thread_snapshot_replay_last_agent_message_item: None,
             thread_snapshot_replay_agent_delta_turn_id: None,
@@ -4163,6 +4192,8 @@ impl ChatWidget {
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            live_agent_message_item_id: None,
+            pending_live_agent_message_legacy_echo: None,
             thread_snapshot_replay_saw_final_agent_message_item: false,
             thread_snapshot_replay_last_agent_message_item: None,
             thread_snapshot_replay_agent_delta_turn_id: None,
@@ -5462,11 +5493,22 @@ impl ChatWidget {
                 self.on_agent_message(message)
             }
             EventMsg::AgentMessage(AgentMessageEvent { .. }) => {}
+            EventMsg::AgentMessageContentDelta(event) if !from_replay => {
+                self.on_agent_message_content_delta(event.item_id, event.delta)
+            }
+            EventMsg::AgentMessageContentDelta(_) => {}
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta })
                 if !matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
                     || self.thread_snapshot_replay_agent_deltas_active =>
             {
-                self.on_agent_message_delta(delta)
+                if !from_replay
+                    && self.pending_live_agent_message_legacy_echo.as_deref()
+                        == Some(delta.as_str())
+                {
+                    self.pending_live_agent_message_legacy_echo = None;
+                } else {
+                    self.on_agent_message_delta(delta)
+                }
             }
             EventMsg::AgentMessageDelta(_) => {}
             EventMsg::PlanDelta(event) => self.on_plan_delta(event.delta),
@@ -5647,7 +5689,6 @@ impl ChatWidget {
             }
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
-            | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_)

@@ -770,6 +770,8 @@ pub(crate) struct ChatWidget {
     retry_status_header: Option<String>,
     // Set when commentary output completes; once stream queues go idle we restore the status row.
     pending_status_indicator_restore: bool,
+    // Tracks the live assistant message item currently streaming into `stream_controller`.
+    live_agent_message_item_id: Option<String>,
     suppress_queue_autosend: bool,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
@@ -1962,7 +1964,15 @@ impl ChatWidget {
         self.finalize_completed_assistant_message(Some(&message));
     }
 
-    fn on_agent_message_delta(&mut self, delta: String) {
+    fn on_agent_message_delta(&mut self, item_id: Option<String>, delta: String) {
+        if let Some(item_id) = item_id
+            && self.live_agent_message_item_id.as_deref() != Some(item_id.as_str())
+        {
+            if self.live_agent_message_item_id.is_some() {
+                self.flush_answer_stream_with_separator();
+            }
+            self.live_agent_message_item_id = Some(item_id);
+        }
         self.handle_streaming_delta(delta);
     }
 
@@ -2110,6 +2120,7 @@ impl ChatWidget {
         self.update_task_running_state();
         self.retry_status_header = None;
         self.pending_status_indicator_restore = false;
+        self.live_agent_message_item_id = None;
         self.bottom_pane
             .set_interrupt_hint_visible(/*visible*/ true);
         self.set_status_header(String::from("Working"));
@@ -2143,6 +2154,7 @@ impl ChatWidget {
             self.flush_active_cell();
         }
         self.flush_unified_exec_wait_streak();
+        self.live_agent_message_item_id = None;
         if !from_replay {
             self.collect_runtime_metrics_delta();
             let runtime_metrics =
@@ -3628,6 +3640,7 @@ impl ChatWidget {
     /// returns once stream queues are idle. Final-answer completion (or absent
     /// phase for legacy models) clears the flag to preserve historical behavior.
     fn on_agent_message_item_completed(&mut self, item: AgentMessageItem) {
+        self.live_agent_message_item_id = None;
         let mut message = String::new();
         for content in &item.content {
             match content {
@@ -4255,6 +4268,7 @@ impl ChatWidget {
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            live_agent_message_item_id: None,
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
@@ -5898,7 +5912,7 @@ impl ChatWidget {
                 self.handle_item_completed_notification(notification, replay_kind);
             }
             ServerNotification::AgentMessageDelta(notification) => {
-                self.on_agent_message_delta(notification.delta);
+                self.on_agent_message_delta(Some(notification.item_id), notification.delta);
             }
             ServerNotification::PlanDelta(notification) => self.on_plan_delta(notification.delta),
             ServerNotification::ReasoningSummaryTextDelta(notification) => {
@@ -6395,7 +6409,7 @@ impl ChatWidget {
             }
             EventMsg::AgentMessage(AgentMessageEvent { .. }) => {}
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
-                self.on_agent_message_delta(delta)
+                self.on_agent_message_delta(None, delta)
             }
             EventMsg::PlanDelta(event) => self.on_plan_delta(event.delta),
             EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta })
