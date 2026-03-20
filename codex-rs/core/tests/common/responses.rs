@@ -31,6 +31,7 @@ use wiremock::ResponseTemplate;
 use wiremock::http::HeaderName;
 use wiremock::http::HeaderValue;
 use wiremock::matchers::method;
+use wiremock::matchers::path;
 use wiremock::matchers::path_regex;
 
 use crate::test_codex::ApplyPatchModelOutput;
@@ -1175,6 +1176,33 @@ pub async fn start_mock_server() -> MockServer {
     let _ = mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
 
     server
+}
+
+pub async fn start_chatgpt_mock_server() -> MockServer {
+    let server = MockServer::builder()
+        .body_print_limit(BodyPrintLimit::Limited(80_000))
+        .start()
+        .await;
+
+    mount_chatgpt_cloud_requirements_ok(&server).await;
+
+    server
+}
+
+pub async fn mount_chatgpt_cloud_requirements_ok(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/backend-api/wham/config/requirements"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .mount(server)
+        .await;
+}
+
+pub async fn mount_realtime_client_secret(server: &MockServer, response: ResponseTemplate) {
+    Mock::given(method("POST"))
+        .and(path("/codex/realtime/client_secrets"))
+        .respond_with(response)
+        .mount(server)
+        .await;
 }
 
 /// Starts a lightweight WebSocket server for `/v1/responses` tests.

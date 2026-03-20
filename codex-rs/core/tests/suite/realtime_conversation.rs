@@ -2,7 +2,6 @@ use anyhow::Context;
 use anyhow::Result;
 use chrono::Utc;
 use codex_core::CodexAuth;
-use codex_core::auth::OPENAI_API_KEY_ENV_VAR;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
@@ -18,6 +17,8 @@ use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
+use core_test_support::responses::mount_realtime_client_secret;
+use core_test_support::responses::start_chatgpt_mock_server;
 use core_test_support::responses::start_mock_server;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
@@ -31,16 +32,14 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::fs;
-use std::process::Command;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
+use wiremock::ResponseTemplate;
 
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
 const MEMORY_PROMPT_PHRASE: &str =
     "You have access to a memory folder with guidance from prior runs.";
-const REALTIME_CONVERSATION_TEST_SUBPROCESS_ENV_VAR: &str =
-    "CODEX_REALTIME_CONVERSATION_TEST_SUBPROCESS";
 fn websocket_request_text(
     request: &core_test_support::responses::WebSocketRequest,
 ) -> Option<String> {
@@ -85,32 +84,6 @@ where
     }
 }
 
-fn run_realtime_conversation_test_in_subprocess(
-    test_name: &str,
-    openai_api_key: Option<&str>,
-) -> Result<()> {
-    let mut command = Command::new(std::env::current_exe()?);
-    command
-        .arg("--exact")
-        .arg(test_name)
-        .env(REALTIME_CONVERSATION_TEST_SUBPROCESS_ENV_VAR, "1");
-    match openai_api_key {
-        Some(openai_api_key) => {
-            command.env(OPENAI_API_KEY_ENV_VAR, openai_api_key);
-        }
-        None => {
-            command.env_remove(OPENAI_API_KEY_ENV_VAR);
-        }
-    }
-    let output = command.output()?;
-    assert!(
-        output.status.success(),
-        "subprocess test `{test_name}` failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
-    );
-    Ok(())
-}
 async fn seed_recent_thread(
     test: &TestCodex,
     title: &str,
@@ -289,17 +262,19 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conversation_start_uses_openai_env_key_fallback_with_chatgpt_auth() -> Result<()> {
-    if std::env::var_os(REALTIME_CONVERSATION_TEST_SUBPROCESS_ENV_VAR).is_none() {
-        return run_realtime_conversation_test_in_subprocess(
-            "suite::realtime_conversation::conversation_start_uses_openai_env_key_fallback_with_chatgpt_auth",
-            Some("env-realtime-key"),
-        );
-    }
-
+async fn conversation_start_mints_client_secret_with_chatgpt_auth() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_websocket_server(vec![
+    let chatgpt_server = start_chatgpt_mock_server().await;
+    mount_realtime_client_secret(
+        &chatgpt_server,
+        ResponseTemplate::new(200).set_body_json(json!({
+            "value": "ek-test-secret"
+        })),
+    )
+    .await;
+
+    let realtime_server = start_websocket_server(vec![
         vec![],
         vec![vec![json!({
             "type": "session.updated",
@@ -308,9 +283,22 @@ async fn conversation_start_uses_openai_env_key_fallback_with_chatgpt_auth() -> 
     ])
     .await;
 
-    let mut builder = test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let test = builder.build_with_websocket_server(&server).await?;
-    assert!(server.wait_for_handshakes(1, Duration::from_secs(2)).await);
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config({
+            let chatgpt_base_url = chatgpt_server.uri();
+            move |config| {
+                config.chatgpt_base_url = chatgpt_base_url;
+            }
+        });
+    let test = builder
+        .build_with_websocket_server(&realtime_server)
+        .await?;
+    assert!(
+        realtime_server
+            .wait_for_handshakes(1, Duration::from_secs(2))
+            .await
+    );
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
@@ -338,9 +326,35 @@ async fn conversation_start_uses_openai_env_key_fallback_with_chatgpt_auth() -> 
     assert_eq!(session_updated, "sess_env");
 
     assert_eq!(
-        server.handshakes()[1].header("authorization").as_deref(),
-        Some("Bearer env-realtime-key")
+        realtime_server.handshakes()[1]
+            .header("authorization")
+            .as_deref(),
+        Some("Bearer ek-test-secret")
     );
+    let requests = chatgpt_server.received_requests().await.unwrap_or_default();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method.as_str(), "POST");
+    assert_eq!(requests[0].url.path(), "/codex/realtime/client_secrets");
+    assert_eq!(
+        requests[0]
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer Access Token")
+    );
+    assert_eq!(
+        requests[0]
+            .headers
+            .get("chatgpt-account-id")
+            .and_then(|value| value.to_str().ok()),
+        Some("account_id")
+    );
+    let request_body: Value = serde_json::from_slice(&requests[0].body)?;
+    assert_eq!(
+        request_body["session"]["model"],
+        json!("realtime-test-model")
+    );
+    assert_eq!(request_body["session"]["type"], json!("quicksilver"));
 
     test.codex.submit(Op::RealtimeConversationClose).await?;
     let _closed = wait_for_event_match(&test.codex, |msg| match msg {
@@ -349,7 +363,8 @@ async fn conversation_start_uses_openai_env_key_fallback_with_chatgpt_auth() -> 
     })
     .await;
 
-    server.shutdown().await;
+    realtime_server.shutdown().await;
+    drop(chatgpt_server);
     Ok(())
 }
 
@@ -437,17 +452,25 @@ async fn conversation_audio_before_start_emits_error() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_start_preflight_failure_emits_realtime_error_only() -> Result<()> {
-    if std::env::var_os(REALTIME_CONVERSATION_TEST_SUBPROCESS_ENV_VAR).is_none() {
-        return run_realtime_conversation_test_in_subprocess(
-            "suite::realtime_conversation::conversation_start_preflight_failure_emits_realtime_error_only",
-            /*openai_api_key*/ None,
-        );
-    }
-
     skip_if_no_network!(Ok(()));
 
+    let chatgpt_server = start_chatgpt_mock_server().await;
+    mount_realtime_client_secret(
+        &chatgpt_server,
+        ResponseTemplate::new(401).set_body_json(json!({
+            "detail": "Could not parse your authentication token. Please try signing in again."
+        })),
+    )
+    .await;
     let server = start_websocket_server(vec![]).await;
-    let mut builder = test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config({
+            let chatgpt_base_url = chatgpt_server.uri();
+            move |config| {
+                config.chatgpt_base_url = chatgpt_base_url;
+            }
+        });
     let test = builder.build_with_websocket_server(&server).await?;
 
     test.codex
@@ -464,7 +487,7 @@ async fn conversation_start_preflight_failure_emits_realtime_error_only() -> Res
         _ => None,
     })
     .await;
-    assert_eq!(err, "realtime conversation requires API key auth");
+    assert!(err.contains("401 Unauthorized"), "unexpected error: {err}");
 
     let closed = timeout(Duration::from_millis(200), async {
         wait_for_event_match(&test.codex, |msg| match msg {
@@ -517,6 +540,53 @@ async fn conversation_start_connect_failure_emits_realtime_error_only() -> Resul
     assert!(closed.is_err(), "connect failure should not emit closed");
 
     server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_start_does_not_mint_client_secret_for_non_openai_provider() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let chatgpt_server = wiremock::MockServer::start().await;
+    let realtime_server = start_websocket_server(vec![vec![]]).await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config({
+            let chatgpt_base_url = chatgpt_server.uri();
+            move |config| {
+                config.chatgpt_base_url = chatgpt_base_url;
+                config.model_provider.name = "Custom Provider".to_string();
+            }
+        });
+    let test = builder
+        .build_with_websocket_server(&realtime_server)
+        .await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let err = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::Error(message),
+        }) => Some(message.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(
+        err,
+        "realtime conversation requires API key or ChatGPT auth"
+    );
+
+    let requests = chatgpt_server.received_requests().await.unwrap_or_default();
+    assert_eq!(requests.len(), 0);
+
+    realtime_server.shutdown().await;
+    drop(chatgpt_server);
     Ok(())
 }
 

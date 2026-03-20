@@ -10,11 +10,13 @@ use crate::endpoint::realtime_websocket::protocol::RealtimeEventParser;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
 use crate::endpoint::realtime_websocket::protocol::SessionUpdateSession;
+use crate::error::ApiError;
+use serde_json::Value;
 
 pub(super) const REALTIME_AUDIO_SAMPLE_RATE: u32 = 24_000;
 const AGENT_FINAL_MESSAGE_PREFIX: &str = "\"Agent Final Message\":\n\n";
 
-pub(super) fn normalized_session_mode(
+pub(crate) fn normalized_session_mode(
     event_parser: RealtimeEventParser,
     session_mode: RealtimeSessionMode,
 ) -> RealtimeSessionMode {
@@ -48,7 +50,7 @@ pub(super) fn conversation_handoff_append_message(
     }
 }
 
-pub(super) fn session_update_session(
+pub(crate) fn session_update_session(
     event_parser: RealtimeEventParser,
     instructions: String,
     session_mode: RealtimeSessionMode,
@@ -58,6 +60,19 @@ pub(super) fn session_update_session(
         RealtimeEventParser::V1 => v1_session_update_session(instructions),
         RealtimeEventParser::RealtimeV2 => v2_session_update_session(instructions, session_mode),
     }
+}
+
+pub(crate) fn session_update_session_json(
+    event_parser: RealtimeEventParser,
+    instructions: String,
+    session_mode: RealtimeSessionMode,
+) -> Result<Value, ApiError> {
+    serde_json::to_value(session_update_session(
+        event_parser,
+        instructions,
+        session_mode,
+    ))
+    .map_err(|err| ApiError::Stream(format!("failed to encode realtime session config: {err}")))
 }
 
 pub(super) fn websocket_intent(event_parser: RealtimeEventParser) -> Option<&'static str> {
