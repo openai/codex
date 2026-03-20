@@ -62,6 +62,15 @@ struct GuardianReviewExecutionResult {
     session_healthy: bool,
 }
 
+#[derive(Clone, Copy)]
+enum GuardianTrunkSpawnMode<'a> {
+    BestEffort,
+    Blocking {
+        deadline: tokio::time::Instant,
+        external_cancel: Option<&'a CancellationToken>,
+    },
+}
+
 enum GuardianTrunkState {
     Ready(Arc<GuardianReviewSession>),
     NeedsSpawn {
@@ -241,67 +250,9 @@ impl GuardianReviewSessionManager {
             reasoning_effort: resolved.reasoning_effort,
             external_cancel: None,
         };
-        match self.prepare_trunk(&next_reuse_key).await {
-            GuardianTrunkState::Ready(_) | GuardianTrunkState::ShutdownStarted => return,
-            GuardianTrunkState::NeedsSpawn {
-                stale_trunk_to_shutdown,
-            } => {
-                if let Some(review_session) = stale_trunk_to_shutdown {
-                    review_session.shutdown_in_background();
-                }
-            }
-        }
-
-        let Ok(_spawn_guard) = self.spawn_lock.try_lock() else {
-            return;
-        };
-        match self.prepare_trunk(&next_reuse_key).await {
-            GuardianTrunkState::Ready(_) | GuardianTrunkState::ShutdownStarted => return,
-            GuardianTrunkState::NeedsSpawn {
-                stale_trunk_to_shutdown,
-            } => {
-                if let Some(review_session) = stale_trunk_to_shutdown {
-                    review_session.shutdown_in_background();
-                }
-            }
-        }
-
-        let spawn_cancel_token = CancellationToken::new();
-        let review_session = match run_before_review_deadline_with_cancel(
-            tokio::time::Instant::now() + GUARDIAN_EAGER_INIT_SPAWN_TIMEOUT,
-            /*external_cancel*/ None,
-            &spawn_cancel_token,
-            Box::pin(spawn_guardian_review_session(
-                &params,
-                params.spawn_config.clone(),
-                next_reuse_key,
-                spawn_cancel_token.clone(),
-                /*initial_history*/ None,
-            )),
-        )
-        .await
-        {
-            Ok(Ok(review_session)) => Arc::new(review_session),
-            Ok(Err(err)) => {
-                warn!("failed to eagerly initialize guardian review session: {err}");
-                return;
-            }
-            Err(GuardianReviewSessionOutcome::TimedOut) => {
-                warn!("timed out while eagerly initializing guardian review session");
-                return;
-            }
-            Err(GuardianReviewSessionOutcome::Aborted) => {
-                warn!("unexpected abort while eagerly initializing guardian review session");
-                return;
-            }
-            Err(GuardianReviewSessionOutcome::Completed(_)) => unreachable!(),
-        };
-        match self.install_spawned_trunk(review_session).await {
-            GuardianTrunkState::Ready(_) | GuardianTrunkState::ShutdownStarted => {}
-            GuardianTrunkState::NeedsSpawn { .. } => {
-                warn!("guardian review session was not available after eager initialization");
-            }
-        }
+        let _ = self
+            .prepare_or_spawn_trunk(&params, &next_reuse_key, GuardianTrunkSpawnMode::BestEffort)
+            .await;
     }
 
     pub(crate) async fn shutdown(&self) {
@@ -324,76 +275,22 @@ impl GuardianReviewSessionManager {
     ) -> GuardianReviewSessionOutcome {
         let deadline = tokio::time::Instant::now() + GUARDIAN_REVIEW_TIMEOUT;
         let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&params.spawn_config);
-        loop {
-            let trunk = match self.prepare_trunk(&next_reuse_key).await {
-                GuardianTrunkState::Ready(trunk) => trunk,
-                GuardianTrunkState::ShutdownStarted => {
-                    return GuardianReviewSessionOutcome::Aborted;
-                }
-                GuardianTrunkState::NeedsSpawn {
-                    stale_trunk_to_shutdown,
-                } => {
-                    if let Some(review_session) = stale_trunk_to_shutdown {
-                        review_session.shutdown_in_background();
-                    }
-
-                    let _spawn_guard = match run_before_review_deadline(
-                        deadline,
-                        params.external_cancel.as_ref(),
-                        self.spawn_lock.lock(),
-                    )
-                    .await
-                    {
-                        Ok(spawn_guard) => spawn_guard,
-                        Err(outcome) => return outcome,
-                    };
-
-                    match self.prepare_trunk(&next_reuse_key).await {
-                        GuardianTrunkState::Ready(trunk) => trunk,
-                        GuardianTrunkState::ShutdownStarted => {
-                            return GuardianReviewSessionOutcome::Aborted;
-                        }
-                        GuardianTrunkState::NeedsSpawn {
-                            stale_trunk_to_shutdown,
-                        } => {
-                            if let Some(review_session) = stale_trunk_to_shutdown {
-                                review_session.shutdown_in_background();
-                            }
-
-                            let spawn_cancel_token = CancellationToken::new();
-                            let review_session = match run_before_review_deadline_with_cancel(
-                                deadline,
-                                params.external_cancel.as_ref(),
-                                &spawn_cancel_token,
-                                Box::pin(spawn_guardian_review_session(
-                                    &params,
-                                    params.spawn_config.clone(),
-                                    next_reuse_key.clone(),
-                                    spawn_cancel_token.clone(),
-                                    /*initial_history*/ None,
-                                )),
-                            )
-                            .await
-                            {
-                                Ok(Ok(review_session)) => Arc::new(review_session),
-                                Ok(Err(err)) => {
-                                    return GuardianReviewSessionOutcome::Completed(Err(err));
-                                }
-                                Err(outcome) => return outcome,
-                            };
-
-                            match self.install_spawned_trunk(review_session).await {
-                                GuardianTrunkState::Ready(trunk) => trunk,
-                                GuardianTrunkState::ShutdownStarted => {
-                                    return GuardianReviewSessionOutcome::Aborted;
-                                }
-                                GuardianTrunkState::NeedsSpawn { .. } => continue,
-                            }
-                        }
-                    }
-                }
-            };
-            if trunk.reuse_key != next_reuse_key {
+        let trunk = match self
+            .prepare_or_spawn_trunk(
+                &params,
+                &next_reuse_key,
+                GuardianTrunkSpawnMode::Blocking {
+                    deadline,
+                    external_cancel: params.external_cancel.as_ref(),
+                },
+            )
+            .await
+        {
+            Ok(GuardianTrunkState::Ready(trunk)) => trunk,
+            Ok(GuardianTrunkState::ShutdownStarted) => {
+                return GuardianReviewSessionOutcome::Aborted;
+            }
+            Ok(GuardianTrunkState::NeedsSpawn { .. }) => {
                 return self
                     .run_forked_review(
                         params,
@@ -403,48 +300,119 @@ impl GuardianReviewSessionManager {
                     )
                     .await;
             }
+            Err(outcome) => return outcome,
+        };
 
-            let trunk_guard = match trunk.review_lock.try_lock() {
-                Ok(trunk_guard) => trunk_guard,
-                Err(_) => {
-                    let initial_history = trunk.fork_initial_history().await;
-                    return self
-                        .run_forked_review(params, next_reuse_key, deadline, initial_history)
-                        .await;
-                }
-            };
-
-            let execution_result = run_review_on_session(trunk.as_ref(), &params, deadline).await;
-            if execution_result.session_healthy
-                && matches!(
-                    execution_result.outcome,
-                    GuardianReviewSessionOutcome::Completed(_)
+        if trunk.reuse_key != next_reuse_key {
+            return self
+                .run_forked_review(
+                    params,
+                    next_reuse_key,
+                    deadline,
+                    /*initial_history*/ None,
                 )
-            {
-                trunk.refresh_last_committed_rollout_items().await;
-            }
-            drop(trunk_guard);
+                .await;
+        }
 
-            return if execution_result.session_healthy {
-                execution_result.outcome
-            } else {
-                let review_session = {
-                    let mut state = self.state.lock().await;
-                    if state
-                        .trunk
-                        .as_ref()
-                        .is_some_and(|current| Arc::ptr_eq(current, &trunk))
-                    {
-                        state.trunk.take()
-                    } else {
-                        None
-                    }
-                };
-                if let Some(review_session) = review_session {
-                    review_session.shutdown_in_background();
+        let trunk_guard = match trunk.review_lock.try_lock() {
+            Ok(trunk_guard) => trunk_guard,
+            Err(_) => {
+                let initial_history = trunk.fork_initial_history().await;
+                return self
+                    .run_forked_review(params, next_reuse_key, deadline, initial_history)
+                    .await;
+            }
+        };
+
+        let execution_result = run_review_on_session(trunk.as_ref(), &params, deadline).await;
+        if execution_result.session_healthy
+            && matches!(
+                execution_result.outcome,
+                GuardianReviewSessionOutcome::Completed(_)
+            )
+        {
+            trunk.refresh_last_committed_rollout_items().await;
+        }
+        drop(trunk_guard);
+
+        if execution_result.session_healthy {
+            execution_result.outcome
+        } else {
+            let review_session = {
+                let mut state = self.state.lock().await;
+                if state
+                    .trunk
+                    .as_ref()
+                    .is_some_and(|current| Arc::ptr_eq(current, &trunk))
+                {
+                    state.trunk.take()
+                } else {
+                    None
                 }
-                execution_result.outcome
             };
+            if let Some(review_session) = review_session {
+                review_session.shutdown_in_background();
+            }
+            execution_result.outcome
+        }
+    }
+
+    async fn prepare_or_spawn_trunk(
+        &self,
+        params: &GuardianReviewSessionParams,
+        next_reuse_key: &GuardianReviewSessionReuseKey,
+        spawn_mode: GuardianTrunkSpawnMode<'_>,
+    ) -> Result<GuardianTrunkState, GuardianReviewSessionOutcome> {
+        loop {
+            match self.prepare_trunk(next_reuse_key).await {
+                state @ (GuardianTrunkState::Ready(_) | GuardianTrunkState::ShutdownStarted) => {
+                    return Ok(state);
+                }
+                GuardianTrunkState::NeedsSpawn {
+                    stale_trunk_to_shutdown,
+                } => {
+                    if let Some(review_session) = stale_trunk_to_shutdown {
+                        review_session.shutdown_in_background();
+                    }
+                }
+            }
+
+            let Some(_spawn_guard) = self.acquire_spawn_guard(spawn_mode).await? else {
+                return Ok(self.prepare_trunk(next_reuse_key).await);
+            };
+
+            match self.prepare_trunk(next_reuse_key).await {
+                state @ (GuardianTrunkState::Ready(_) | GuardianTrunkState::ShutdownStarted) => {
+                    return Ok(state);
+                }
+                GuardianTrunkState::NeedsSpawn {
+                    stale_trunk_to_shutdown,
+                } => {
+                    if let Some(review_session) = stale_trunk_to_shutdown {
+                        review_session.shutdown_in_background();
+                    }
+                }
+            }
+
+            let Some(review_session) = self
+                .spawn_trunk(params, next_reuse_key.clone(), spawn_mode)
+                .await?
+            else {
+                return Ok(self.prepare_trunk(next_reuse_key).await);
+            };
+
+            match self.install_spawned_trunk(review_session).await {
+                state @ (GuardianTrunkState::Ready(_) | GuardianTrunkState::ShutdownStarted) => {
+                    return Ok(state);
+                }
+                GuardianTrunkState::NeedsSpawn {
+                    stale_trunk_to_shutdown,
+                } => {
+                    if let Some(review_session) = stale_trunk_to_shutdown {
+                        review_session.shutdown_in_background();
+                    }
+                }
+            }
         }
     }
 
@@ -491,6 +459,89 @@ impl GuardianReviewSessionManager {
         }
         state.trunk = Some(Arc::clone(&review_session));
         GuardianTrunkState::Ready(review_session)
+    }
+
+    async fn acquire_spawn_guard<'a>(
+        &'a self,
+        spawn_mode: GuardianTrunkSpawnMode<'_>,
+    ) -> Result<Option<tokio::sync::MutexGuard<'a, ()>>, GuardianReviewSessionOutcome> {
+        match spawn_mode {
+            GuardianTrunkSpawnMode::BestEffort => Ok(self.spawn_lock.try_lock().ok()),
+            GuardianTrunkSpawnMode::Blocking {
+                deadline,
+                external_cancel,
+            } => run_before_review_deadline(deadline, external_cancel, self.spawn_lock.lock())
+                .await
+                .map(Some),
+        }
+    }
+
+    async fn spawn_trunk(
+        &self,
+        params: &GuardianReviewSessionParams,
+        reuse_key: GuardianReviewSessionReuseKey,
+        spawn_mode: GuardianTrunkSpawnMode<'_>,
+    ) -> Result<Option<Arc<GuardianReviewSession>>, GuardianReviewSessionOutcome> {
+        let spawn_cancel_token = CancellationToken::new();
+        let spawn_result = match spawn_mode {
+            GuardianTrunkSpawnMode::BestEffort => {
+                run_before_review_deadline_with_cancel(
+                    tokio::time::Instant::now() + GUARDIAN_EAGER_INIT_SPAWN_TIMEOUT,
+                    /*external_cancel*/ None,
+                    &spawn_cancel_token,
+                    Box::pin(spawn_guardian_review_session(
+                        params,
+                        params.spawn_config.clone(),
+                        reuse_key,
+                        spawn_cancel_token.clone(),
+                        /*initial_history*/ None,
+                    )),
+                )
+                .await
+            }
+            GuardianTrunkSpawnMode::Blocking {
+                deadline,
+                external_cancel,
+            } => {
+                run_before_review_deadline_with_cancel(
+                    deadline,
+                    external_cancel,
+                    &spawn_cancel_token,
+                    Box::pin(spawn_guardian_review_session(
+                        params,
+                        params.spawn_config.clone(),
+                        reuse_key,
+                        spawn_cancel_token.clone(),
+                        /*initial_history*/ None,
+                    )),
+                )
+                .await
+            }
+        };
+
+        match spawn_mode {
+            GuardianTrunkSpawnMode::BestEffort => match spawn_result {
+                Ok(Ok(review_session)) => Ok(Some(Arc::new(review_session))),
+                Ok(Err(err)) => {
+                    warn!("failed to eagerly initialize guardian review session: {err}");
+                    Ok(None)
+                }
+                Err(GuardianReviewSessionOutcome::TimedOut) => {
+                    warn!("timed out while eagerly initializing guardian review session");
+                    Ok(None)
+                }
+                Err(GuardianReviewSessionOutcome::Aborted) => {
+                    warn!("unexpected abort while eagerly initializing guardian review session");
+                    Ok(None)
+                }
+                Err(GuardianReviewSessionOutcome::Completed(_)) => unreachable!(),
+            },
+            GuardianTrunkSpawnMode::Blocking { .. } => match spawn_result {
+                Ok(Ok(review_session)) => Ok(Some(Arc::new(review_session))),
+                Ok(Err(err)) => Err(GuardianReviewSessionOutcome::Completed(Err(err))),
+                Err(outcome) => Err(outcome),
+            },
+        }
     }
 
     #[cfg(test)]
