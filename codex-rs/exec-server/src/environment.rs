@@ -23,10 +23,18 @@ pub struct Environment {
 
 impl Default for Environment {
     fn default() -> Self {
+        let local_process = LocalProcess::default();
+        local_process
+            .initialize()
+            .expect("default local process initialization should succeed");
+        local_process
+            .initialized()
+            .expect("default local process should accept initialized notification");
+
         Self {
             experimental_exec_server_url: None,
             remote_exec_server_client: None,
-            executor: Arc::new(LocalProcess::default()),
+            executor: Arc::new(local_process),
         }
     }
 }
@@ -119,5 +127,30 @@ mod tests {
 
         assert_eq!(environment.experimental_exec_server_url(), None);
         assert!(environment.remote_exec_server_client().is_none());
+    }
+
+    #[tokio::test]
+    async fn default_environment_has_ready_local_executor() {
+        let environment = Environment::default();
+
+        let response = environment
+            .get_executor()
+            .start(crate::ExecParams {
+                process_id: "default-env-proc".to_string(),
+                argv: vec!["true".to_string()],
+                cwd: std::env::current_dir().expect("read current dir"),
+                env: Default::default(),
+                tty: false,
+                arg0: None,
+            })
+            .await
+            .expect("start process");
+
+        assert_eq!(
+            response,
+            crate::ExecResponse {
+                process_id: "default-env-proc".to_string(),
+            }
+        );
     }
 }
