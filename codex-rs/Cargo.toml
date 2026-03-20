@@ -371,7 +371,8 @@ ignored = [
     "icu_provider",
     "openssl-sys",
     "codex-utils-readiness",
-    "codex-secrets"
+    "codex-secrets",
+    "codex-v8-poc"
 ]
 
 [profile.release]
