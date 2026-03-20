@@ -4278,20 +4278,20 @@
           "properties": {
             "method": {
               "enum": [
-                "thread/realtime/transcriptAdded"
+                "thread/realtime/transcriptUpdated"
               ],
-              "title": "Thread/realtime/transcriptAddedNotificationMethod",
+              "title": "Thread/realtime/transcriptUpdatedNotificationMethod",
               "type": "string"
             },
             "params": {
-              "$ref": "#/definitions/v2/ThreadRealtimeTranscriptAddedNotification"
+              "$ref": "#/definitions/v2/ThreadRealtimeTranscriptUpdatedNotification"
             }
           },
           "required": [
             "method",
             "params"
           ],
-          "title": "Thread/realtime/transcriptAddedNotification",
+          "title": "Thread/realtime/transcriptUpdatedNotification",
           "type": "object"
         },
         {
@@ -13062,35 +13062,6 @@
         "title": "ThreadRealtimeStartedNotification",
         "type": "object"
       },
-      "ThreadRealtimeTranscriptAddedNotification": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "EXPERIMENTAL - flat transcript snapshot emitted when realtime hands off to the main agent.",
-        "properties": {
-          "handoffId": {
-            "type": "string"
-          },
-          "itemId": {
-            "type": "string"
-          },
-          "threadId": {
-            "type": "string"
-          },
-          "transcript": {
-            "items": {
-              "$ref": "#/definitions/v2/ThreadRealtimeTranscriptEntry"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "handoffId",
-          "itemId",
-          "threadId",
-          "transcript"
-        ],
-        "title": "ThreadRealtimeTranscriptAddedNotification",
-        "type": "object"
-      },
       "ThreadRealtimeTranscriptEntry": {
         "properties": {
           "role": {
@@ -13104,6 +13075,27 @@
           "role",
           "text"
         ],
+        "type": "object"
+      },
+      "ThreadRealtimeTranscriptUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "EXPERIMENTAL - flat transcript snapshot emitted whenever realtime transcript text changes.",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          },
+          "transcript": {
+            "items": {
+              "$ref": "#/definitions/v2/ThreadRealtimeTranscriptEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "threadId",
+          "transcript"
+        ],
+        "title": "ThreadRealtimeTranscriptUpdatedNotification",
         "type": "object"
       },
       "ThreadResumeParams": {

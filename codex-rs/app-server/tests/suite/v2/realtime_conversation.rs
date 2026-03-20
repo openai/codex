@@ -21,8 +21,8 @@ use codex_app_server_protocol::ThreadRealtimeStartResponse;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
 use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadRealtimeStopResponse;
-use codex_app_server_protocol::ThreadRealtimeTranscriptAddedNotification;
 use codex_app_server_protocol::ThreadRealtimeTranscriptEntry;
+use codex_app_server_protocol::ThreadRealtimeTranscriptUpdatedNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_features::FEATURES;
@@ -75,12 +75,6 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
             json!({
                 "type": "conversation.output_transcript.delta",
                 "delta": "working"
-            }),
-            json!({
-                "type": "conversation.handoff.requested",
-                "handoff_id": "handoff_1",
-                "item_id": "item_2",
-                "input_transcript": "delegate now"
             }),
             json!({
                 "type": "error",
@@ -196,16 +190,29 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     assert_eq!(item_added.thread_id, output_audio.thread_id);
     assert_eq!(item_added.item["type"], json!("message"));
 
-    let transcript_added = read_notification::<ThreadRealtimeTranscriptAddedNotification>(
+    let first_transcript_update = read_notification::<ThreadRealtimeTranscriptUpdatedNotification>(
         &mut mcp,
-        "thread/realtime/transcriptAdded",
+        "thread/realtime/transcriptUpdated",
     )
     .await?;
-    assert_eq!(transcript_added.thread_id, output_audio.thread_id);
-    assert_eq!(transcript_added.handoff_id, "handoff_1");
-    assert_eq!(transcript_added.item_id, "item_2");
+    assert_eq!(first_transcript_update.thread_id, output_audio.thread_id);
     assert_eq!(
-        transcript_added.transcript,
+        first_transcript_update.transcript,
+        vec![ThreadRealtimeTranscriptEntry {
+            role: "user".to_string(),
+            text: "delegate now".to_string(),
+        }]
+    );
+
+    let second_transcript_update =
+        read_notification::<ThreadRealtimeTranscriptUpdatedNotification>(
+            &mut mcp,
+            "thread/realtime/transcriptUpdated",
+        )
+        .await?;
+    assert_eq!(second_transcript_update.thread_id, output_audio.thread_id);
+    assert_eq!(
+        second_transcript_update.transcript,
         vec![
             ThreadRealtimeTranscriptEntry {
                 role: "user".to_string(),

@@ -2,6 +2,7 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadHistoryBuilder;
+use codex_app_server_protocol::ThreadRealtimeTranscriptEntry;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_core::CodexThread;
@@ -54,6 +55,7 @@ pub(crate) struct ThreadState {
     pub(crate) pending_interrupts: PendingInterruptQueue,
     pub(crate) pending_rollbacks: Option<ConnectionRequestId>,
     pub(crate) turn_summary: TurnSummary,
+    pub(crate) realtime_transcript: Vec<ThreadRealtimeTranscriptEntry>,
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
     pub(crate) experimental_raw_events: bool,
     pub(crate) listener_generation: u64,
@@ -91,6 +93,7 @@ impl ThreadState {
         }
         self.listener_command_tx = None;
         self.current_turn_history.reset();
+        self.realtime_transcript.clear();
         self.listener_thread = None;
     }
 
@@ -113,6 +116,34 @@ impl ThreadState {
         if !self.current_turn_history.has_active_turn() {
             self.current_turn_history.reset();
         }
+    }
+
+    pub(crate) fn reset_realtime_transcript(&mut self) {
+        self.realtime_transcript.clear();
+    }
+
+    pub(crate) fn append_realtime_transcript_delta(
+        &mut self,
+        role: &str,
+        delta: &str,
+    ) -> Vec<ThreadRealtimeTranscriptEntry> {
+        if delta.is_empty() {
+            return self.realtime_transcript.clone();
+        }
+
+        if let Some(last_entry) = self.realtime_transcript.last_mut()
+            && last_entry.role == role
+        {
+            last_entry.text.push_str(delta);
+            return self.realtime_transcript.clone();
+        }
+
+        self.realtime_transcript
+            .push(ThreadRealtimeTranscriptEntry {
+                role: role.to_string(),
+                text: delta.to_string(),
+            });
+        self.realtime_transcript.clone()
     }
 }
 

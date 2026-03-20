@@ -86,7 +86,7 @@ use codex_app_server_protocol::ThreadRealtimeErrorNotification;
 use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
 use codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
-use codex_app_server_protocol::ThreadRealtimeTranscriptAddedNotification;
+use codex_app_server_protocol::ThreadRealtimeTranscriptUpdatedNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
@@ -367,6 +367,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             }
         }
         EventMsg::RealtimeConversationStarted(event) => {
+            thread_state.lock().await.reset_realtime_transcript();
             if let ApiVersion::V2 = api_version {
                 let notification = ThreadRealtimeStartedNotification {
                     thread_id: conversation_id.to_string(),
@@ -398,8 +399,36 @@ pub(crate) async fn apply_bespoke_event_handling(
                             ))
                             .await;
                     }
-                    RealtimeEvent::InputTranscriptDelta(_) => {}
-                    RealtimeEvent::OutputTranscriptDelta(_) => {}
+                    RealtimeEvent::InputTranscriptDelta(event) => {
+                        let transcript = thread_state
+                            .lock()
+                            .await
+                            .append_realtime_transcript_delta("user", &event.delta);
+                        let notification = ThreadRealtimeTranscriptUpdatedNotification {
+                            thread_id: conversation_id.to_string(),
+                            transcript,
+                        };
+                        outgoing
+                            .send_server_notification(
+                                ServerNotification::ThreadRealtimeTranscriptUpdated(notification),
+                            )
+                            .await;
+                    }
+                    RealtimeEvent::OutputTranscriptDelta(event) => {
+                        let transcript = thread_state
+                            .lock()
+                            .await
+                            .append_realtime_transcript_delta("assistant", &event.delta);
+                        let notification = ThreadRealtimeTranscriptUpdatedNotification {
+                            thread_id: conversation_id.to_string(),
+                            transcript,
+                        };
+                        outgoing
+                            .send_server_notification(
+                                ServerNotification::ThreadRealtimeTranscriptUpdated(notification),
+                            )
+                            .await;
+                    }
                     RealtimeEvent::AudioOut(audio) => {
                         let notification = ThreadRealtimeOutputAudioDeltaNotification {
                             thread_id: conversation_id.to_string(),
@@ -437,23 +466,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                             .await;
                     }
                     RealtimeEvent::ConversationItemDone { .. } => {}
-                    RealtimeEvent::HandoffRequested(handoff) => {
-                        let notification = ThreadRealtimeTranscriptAddedNotification {
-                            thread_id: conversation_id.to_string(),
-                            handoff_id: handoff.handoff_id,
-                            item_id: handoff.item_id,
-                            transcript: handoff
-                                .active_transcript
-                                .into_iter()
-                                .map(Into::into)
-                                .collect(),
-                        };
-                        outgoing
-                            .send_server_notification(
-                                ServerNotification::ThreadRealtimeTranscriptAdded(notification),
-                            )
-                            .await;
-                    }
+                    RealtimeEvent::HandoffRequested(_) => {}
                     RealtimeEvent::Error(message) => {
                         let notification = ThreadRealtimeErrorNotification {
                             thread_id: conversation_id.to_string(),
@@ -469,6 +482,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             }
         }
         EventMsg::RealtimeConversationClosed(event) => {
+            thread_state.lock().await.reset_realtime_transcript();
             if let ApiVersion::V2 = api_version {
                 let notification = ThreadRealtimeClosedNotification {
                     thread_id: conversation_id.to_string(),

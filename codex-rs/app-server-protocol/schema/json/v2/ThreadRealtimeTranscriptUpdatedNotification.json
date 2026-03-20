@@ -17,14 +17,8 @@
       "type": "object"
     }
   },
-  "description": "EXPERIMENTAL - flat transcript snapshot emitted when realtime hands off to the main agent.",
+  "description": "EXPERIMENTAL - flat transcript snapshot emitted whenever realtime transcript text changes.",
   "properties": {
-    "handoffId": {
-      "type": "string"
-    },
-    "itemId": {
-      "type": "string"
-    },
     "threadId": {
       "type": "string"
     },
@@ -36,11 +30,9 @@
     }
   },
   "required": [
-    "handoffId",
-    "itemId",
     "threadId",
     "transcript"
   ],
-  "title": "ThreadRealtimeTranscriptAddedNotification",
+  "title": "ThreadRealtimeTranscriptUpdatedNotification",
   "type": "object"
 }

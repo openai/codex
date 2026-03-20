@@ -3068,33 +3068,6 @@
       ],
       "type": "object"
     },
-    "ThreadRealtimeTranscriptAddedNotification": {
-      "description": "EXPERIMENTAL - flat transcript snapshot emitted when realtime hands off to the main agent.",
-      "properties": {
-        "handoffId": {
-          "type": "string"
-        },
-        "itemId": {
-          "type": "string"
-        },
-        "threadId": {
-          "type": "string"
-        },
-        "transcript": {
-          "items": {
-            "$ref": "#/definitions/ThreadRealtimeTranscriptEntry"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "handoffId",
-        "itemId",
-        "threadId",
-        "transcript"
-      ],
-      "type": "object"
-    },
     "ThreadRealtimeTranscriptEntry": {
       "properties": {
         "role": {
@@ -3107,6 +3080,25 @@
       "required": [
         "role",
         "text"
+      ],
+      "type": "object"
+    },
+    "ThreadRealtimeTranscriptUpdatedNotification": {
+      "description": "EXPERIMENTAL - flat transcript snapshot emitted whenever realtime transcript text changes.",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "transcript": {
+          "items": {
+            "$ref": "#/definitions/ThreadRealtimeTranscriptEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "threadId",
+        "transcript"
       ],
       "type": "object"
     },
@@ -4611,20 +4603,20 @@
       "properties": {
         "method": {
           "enum": [
-            "thread/realtime/transcriptAdded"
+            "thread/realtime/transcriptUpdated"
           ],
-          "title": "Thread/realtime/transcriptAddedNotificationMethod",
+          "title": "Thread/realtime/transcriptUpdatedNotificationMethod",
           "type": "string"
         },
         "params": {
-          "$ref": "#/definitions/ThreadRealtimeTranscriptAddedNotification"
+          "$ref": "#/definitions/ThreadRealtimeTranscriptUpdatedNotification"
         }
       },
       "required": [
         "method",
         "params"
       ],
-      "title": "Thread/realtime/transcriptAddedNotification",
+      "title": "Thread/realtime/transcriptUpdatedNotification",
       "type": "object"
     },
     {
