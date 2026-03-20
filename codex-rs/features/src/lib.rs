@@ -138,6 +138,8 @@ pub enum Feature {
     EnableRequestCompression,
     /// Enable collab tools.
     Collab,
+    /// Enable task-path-based multi-agent routing.
+    MultiAgentV2,
     /// Enable CSV-backed agent job tools.
     SpawnCsv,
     /// Enable apps.
@@ -710,6 +712,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "multi_agent",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::MultiAgentV2,
+        key: "multi_agent_v2",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::SpawnCsv,

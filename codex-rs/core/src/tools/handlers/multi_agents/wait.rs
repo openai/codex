@@ -34,28 +34,27 @@ impl ToolHandler for Handler {
         } = invocation;
         let arguments = function_arguments(payload)?;
         let args: WaitArgs = parse_arguments(&arguments)?;
-        if args.ids.is_empty() {
-            return Err(FunctionCallError::RespondToModel(
-                "ids must be non-empty".to_owned(),
-            ));
-        }
-        let receiver_thread_ids = args
-            .ids
-            .iter()
-            .map(|id| agent_id(id))
-            .collect::<Result<Vec<_>, _>>()?;
+        let receiver_thread_ids = resolve_agent_targets(&session, &turn, args.targets).await?;
         let mut receiver_agents = Vec::with_capacity(receiver_thread_ids.len());
+        let mut target_by_thread_id = HashMap::with_capacity(receiver_thread_ids.len());
         for receiver_thread_id in &receiver_thread_ids {
-            let (agent_nickname, agent_role) = session
+            let agent_metadata = session
                 .services
                 .agent_control
-                .get_agent_nickname_and_role(*receiver_thread_id)
-                .await
-                .unwrap_or((None, None));
+                .get_agent_metadata(*receiver_thread_id)
+                .unwrap_or_default();
+            target_by_thread_id.insert(
+                *receiver_thread_id,
+                agent_metadata
+                    .agent_path
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| receiver_thread_id.to_string()),
+            );
             receiver_agents.push(CollabAgentRef {
                 thread_id: *receiver_thread_id,
-                agent_nickname,
-                agent_role,
+                agent_nickname: agent_metadata.agent_nickname,
+                agent_role: agent_metadata.agent_role,
             });
         }
 
@@ -151,11 +150,20 @@ impl ToolHandler for Handler {
             results
         };
 
-        let statuses_map = statuses.clone().into_iter().collect::<HashMap<_, _>>();
-        let agent_statuses = build_wait_agent_statuses(&statuses_map, &receiver_agents);
+        let timed_out = statuses.is_empty();
+        let statuses_by_id = statuses.clone().into_iter().collect::<HashMap<_, _>>();
+        let agent_statuses = build_wait_agent_statuses(&statuses_by_id, &receiver_agents);
         let result = WaitAgentResult {
-            status: statuses_map.clone(),
-            timed_out: statuses.is_empty(),
+            status: statuses
+                .into_iter()
+                .filter_map(|(thread_id, status)| {
+                    target_by_thread_id
+                        .get(&thread_id)
+                        .cloned()
+                        .map(|target| (target, status))
+                })
+                .collect(),
+            timed_out,
         };
 
         session
@@ -165,7 +173,7 @@ impl ToolHandler for Handler {
                     sender_thread_id: session.conversation_id,
                     call_id,
                     agent_statuses,
-                    statuses: statuses_map,
+                    statuses: statuses_by_id,
                 }
                 .into(),
             )
@@ -177,13 +185,14 @@ impl ToolHandler for Handler {
 
 #[derive(Debug, Deserialize)]
 struct WaitArgs {
-    ids: Vec<String>,
+    #[serde(default)]
+    targets: Vec<String>,
     timeout_ms: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct WaitAgentResult {
-    pub(crate) status: HashMap<ThreadId, AgentStatus>,
+    pub(crate) status: HashMap<String, AgentStatus>,
     pub(crate) timed_out: bool,
 }
 

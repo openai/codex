@@ -1,11 +1,13 @@
 use crate::error::CodexErr;
 use crate::error::Result;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use rand::prelude::IndexedRandom;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
@@ -25,10 +27,17 @@ pub(crate) struct Guards {
 
 #[derive(Default)]
 struct ActiveAgents {
-    threads_set: HashSet<ThreadId>,
-    thread_agent_nicknames: HashMap<ThreadId, String>,
+    agent_tree: HashMap<String, AgentMetadata>,
     used_agent_nicknames: HashSet<String>,
     nickname_reset_count: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct AgentMetadata {
+    pub(crate) agent_id: Option<ThreadId>,
+    pub(crate) agent_path: Option<AgentPath>,
+    pub(crate) agent_nickname: Option<String>,
+    pub(crate) agent_role: Option<String>,
 }
 
 fn format_agent_nickname(name: &str, nickname_reset_count: usize) -> String {
@@ -82,38 +91,83 @@ impl Guards {
             state: Arc::clone(self),
             active: true,
             reserved_agent_nickname: None,
+            reserved_agent_path: None,
         })
     }
 
     pub(crate) fn release_spawned_thread(&self, thread_id: ThreadId) {
-        let removed = {
+        let removed_counted_agent = {
             let mut active_agents = self
                 .active_agents
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let removed = active_agents.threads_set.remove(&thread_id);
-            active_agents.thread_agent_nicknames.remove(&thread_id);
-            removed
+            let removed_key = active_agents
+                .agent_tree
+                .iter()
+                .find_map(|(key, metadata)| (metadata.agent_id == Some(thread_id)).then_some(key))
+                .cloned();
+            removed_key
+                .and_then(|key| active_agents.agent_tree.remove(key.as_str()))
+                .is_some_and(|metadata| {
+                    !metadata.agent_path.as_ref().is_some_and(AgentPath::is_root)
+                })
         };
-        if removed {
+        if removed_counted_agent {
             self.total_count.fetch_sub(1, Ordering::AcqRel);
         }
     }
 
-    fn register_spawned_thread(&self, thread_id: ThreadId, agent_nickname: Option<String>) {
+    pub(crate) fn register_root_thread(&self, thread_id: ThreadId) {
         let mut active_agents = self
             .active_agents
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        active_agents.threads_set.insert(thread_id);
-        if let Some(agent_nickname) = agent_nickname {
-            active_agents
-                .used_agent_nicknames
-                .insert(agent_nickname.clone());
-            active_agents
-                .thread_agent_nicknames
-                .insert(thread_id, agent_nickname);
+        active_agents
+            .agent_tree
+            .entry(AgentPath::ROOT.to_string())
+            .or_insert_with(|| AgentMetadata {
+                agent_id: Some(thread_id),
+                agent_path: Some(AgentPath::root()),
+                ..Default::default()
+            });
+    }
+
+    pub(crate) fn agent_id_for_path(&self, agent_path: &AgentPath) -> Option<ThreadId> {
+        self.active_agents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .agent_tree
+            .get(agent_path.as_str())
+            .and_then(|metadata| metadata.agent_id)
+    }
+
+    pub(crate) fn agent_metadata_for_thread(&self, thread_id: ThreadId) -> Option<AgentMetadata> {
+        self.active_agents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .agent_tree
+            .values()
+            .find(|metadata| metadata.agent_id == Some(thread_id))
+            .cloned()
+    }
+
+    fn register_spawned_thread(&self, agent_metadata: AgentMetadata) {
+        let Some(thread_id) = agent_metadata.agent_id else {
+            return;
+        };
+        let mut active_agents = self
+            .active_agents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let key = agent_metadata
+            .agent_path
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| format!("thread:{thread_id}"));
+        if let Some(agent_nickname) = agent_metadata.agent_nickname.clone() {
+            active_agents.used_agent_nicknames.insert(agent_nickname);
         }
+        active_agents.agent_tree.insert(key, agent_metadata);
     }
 
     fn reserve_agent_nickname(&self, names: &[&str], preferred: Option<&str>) -> Option<String> {
@@ -156,6 +210,39 @@ impl Guards {
         Some(agent_nickname)
     }
 
+    fn reserve_agent_path(&self, agent_path: &AgentPath) -> Result<()> {
+        let mut active_agents = self
+            .active_agents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match active_agents.agent_tree.entry(agent_path.to_string()) {
+            Entry::Occupied(_) => Err(CodexErr::UnsupportedOperation(format!(
+                "agent path `{agent_path}` already exists"
+            ))),
+            Entry::Vacant(entry) => {
+                entry.insert(AgentMetadata {
+                    agent_path: Some(agent_path.clone()),
+                    ..Default::default()
+                });
+                Ok(())
+            }
+        }
+    }
+
+    fn release_reserved_agent_path(&self, agent_path: &AgentPath) {
+        let mut active_agents = self
+            .active_agents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if active_agents
+            .agent_tree
+            .get(agent_path.as_str())
+            .is_some_and(|metadata| metadata.agent_id.is_none())
+        {
+            active_agents.agent_tree.remove(agent_path.as_str());
+        }
+    }
+
     fn try_increment_spawned(&self, max_threads: usize) -> bool {
         let mut current = self.total_count.load(Ordering::Acquire);
         loop {
@@ -179,13 +266,10 @@ pub(crate) struct SpawnReservation {
     state: Arc<Guards>,
     active: bool,
     reserved_agent_nickname: Option<String>,
+    reserved_agent_path: Option<AgentPath>,
 }
 
 impl SpawnReservation {
-    pub(crate) fn reserve_agent_nickname(&mut self, names: &[&str]) -> Result<String> {
-        self.reserve_agent_nickname_with_preference(names, /*preferred*/ None)
-    }
-
     pub(crate) fn reserve_agent_nickname_with_preference(
         &mut self,
         names: &[&str],
@@ -201,18 +285,16 @@ impl SpawnReservation {
         Ok(agent_nickname)
     }
 
-    pub(crate) fn commit(self, thread_id: ThreadId) {
-        self.commit_with_agent_nickname(thread_id, /*agent_nickname*/ None);
+    pub(crate) fn reserve_agent_path(&mut self, agent_path: &AgentPath) -> Result<()> {
+        self.state.reserve_agent_path(agent_path)?;
+        self.reserved_agent_path = Some(agent_path.clone());
+        Ok(())
     }
 
-    pub(crate) fn commit_with_agent_nickname(
-        mut self,
-        thread_id: ThreadId,
-        agent_nickname: Option<String>,
-    ) {
-        let agent_nickname = self.reserved_agent_nickname.take().or(agent_nickname);
-        self.state
-            .register_spawned_thread(thread_id, agent_nickname);
+    pub(crate) fn commit(mut self, agent_metadata: AgentMetadata) {
+        self.reserved_agent_nickname = None;
+        self.reserved_agent_path = None;
+        self.state.register_spawned_thread(agent_metadata);
         self.active = false;
     }
 }
@@ -220,6 +302,9 @@ impl SpawnReservation {
 impl Drop for SpawnReservation {
     fn drop(&mut self) {
         if self.active {
+            if let Some(agent_path) = self.reserved_agent_path.take() {
+                self.state.release_reserved_agent_path(&agent_path);
+            }
             self.state.total_count.fetch_sub(1, Ordering::AcqRel);
         }
     }
