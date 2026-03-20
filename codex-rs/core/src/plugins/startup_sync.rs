@@ -1,15 +1,14 @@
 use crate::default_client::build_reqwest_client;
-use reqwest::Client;
-use serde::Deserialize;
-use std::fs;
-use std::io::Cursor;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
+use std::process::Output;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
+
+use reqwest::Client;
+use serde::Deserialize;
 use tracing::info;
 use tracing::warn;
 use zip::ZipArchive;
@@ -26,6 +25,7 @@ const OPENAI_PLUGINS_OWNER: &str = "openai";
 const OPENAI_PLUGINS_REPO: &str = "plugins";
 const CURATED_PLUGINS_RELATIVE_DIR: &str = ".tmp/plugins";
 const CURATED_PLUGINS_SHA_FILE: &str = ".tmp/plugins.sha";
+const CURATED_PLUGINS_GIT_TIMEOUT: Duration = Duration::from_secs(30);
 const CURATED_PLUGINS_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const STARTUP_REMOTE_PLUGIN_SYNC_MARKER_FILE: &str = ".tmp/app-server-remote-plugin-sync-v1";
 const STARTUP_REMOTE_PLUGIN_SYNC_PREREQUISITE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -45,6 +45,11 @@ struct GitHubGitRefObject {
     sha: String,
 }
 
+enum GitCuratedRepoSyncError {
+    GitUnavailable(String),
+    SyncFailed(String),
+}
+
 pub(crate) fn curated_plugins_repo_path(codex_home: &Path) -> PathBuf {
     codex_home.join(CURATED_PLUGINS_RELATIVE_DIR)
 }
@@ -54,10 +59,74 @@ pub(crate) fn read_curated_plugins_sha(codex_home: &Path) -> Option<String> {
 }
 
 pub(crate) fn sync_openai_plugins_repo(codex_home: &Path) -> Result<String, String> {
-    sync_openai_plugins_repo_with_api_base_url(codex_home, GITHUB_API_BASE_URL)
+    sync_openai_plugins_repo_with_transport_overrides(codex_home, "git", GITHUB_API_BASE_URL)
 }
 
-fn sync_openai_plugins_repo_with_api_base_url(
+fn sync_openai_plugins_repo_with_transport_overrides(
+    codex_home: &Path,
+    git_binary: &str,
+    api_base_url: &str,
+) -> Result<String, String> {
+    match sync_openai_plugins_repo_via_git(codex_home, git_binary) {
+        Ok(remote_sha) => Ok(remote_sha),
+        Err(GitCuratedRepoSyncError::GitUnavailable(err)) => {
+            warn!(
+                error = %err,
+                git_binary,
+                "git unavailable for curated plugin sync; falling back to GitHub HTTP"
+            );
+            sync_openai_plugins_repo_via_http(codex_home, api_base_url)
+        }
+        Err(GitCuratedRepoSyncError::SyncFailed(err)) => Err(err),
+    }
+}
+
+fn sync_openai_plugins_repo_via_git(
+    codex_home: &Path,
+    git_binary: &str,
+) -> Result<String, GitCuratedRepoSyncError> {
+    let repo_path = curated_plugins_repo_path(codex_home);
+    let sha_path = codex_home.join(CURATED_PLUGINS_SHA_FILE);
+    let remote_sha = git_ls_remote_head_sha(git_binary)?;
+    let local_sha = read_local_git_or_sha_file(&repo_path, &sha_path, git_binary);
+
+    if local_sha.as_deref() == Some(remote_sha.as_str()) && repo_path.join(".git").is_dir() {
+        return Ok(remote_sha);
+    }
+
+    let cloned_repo_path = prepare_curated_repo_parent_and_temp_dir(&repo_path)
+        .map_err(GitCuratedRepoSyncError::SyncFailed)?;
+    let clone_output = run_git_command_with_timeout(
+        Command::new(git_binary)
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .arg("clone")
+            .arg("--depth")
+            .arg("1")
+            .arg("https://github.com/openai/plugins.git")
+            .arg(&cloned_repo_path),
+        "git clone curated plugins repo",
+        CURATED_PLUGINS_GIT_TIMEOUT,
+    )?;
+    ensure_git_success(&clone_output, "git clone curated plugins repo")
+        .map_err(GitCuratedRepoSyncError::SyncFailed)?;
+
+    let cloned_sha = git_head_sha(&cloned_repo_path, git_binary)?;
+    if cloned_sha != remote_sha {
+        return Err(GitCuratedRepoSyncError::SyncFailed(format!(
+            "curated plugins clone HEAD mismatch: expected {remote_sha}, got {cloned_sha}"
+        )));
+    }
+
+    ensure_marketplace_manifest_exists(&cloned_repo_path)
+        .map_err(GitCuratedRepoSyncError::SyncFailed)?;
+    activate_curated_repo(&repo_path, &cloned_repo_path)
+        .map_err(GitCuratedRepoSyncError::SyncFailed)?;
+    write_curated_plugins_sha(&sha_path, &remote_sha)
+        .map_err(GitCuratedRepoSyncError::SyncFailed)?;
+    Ok(remote_sha)
+}
+
+fn sync_openai_plugins_repo_via_http(
     codex_home: &Path,
     api_base_url: &str,
 ) -> Result<String, String> {
@@ -80,7 +149,6 @@ fn sync_openai_plugins_repo_with_api_base_url(
     ensure_marketplace_manifest_exists(&cloned_repo_path)?;
     activate_curated_repo(&repo_path, &cloned_repo_path)?;
     write_curated_plugins_sha(&sha_path, &remote_sha)?;
-
     Ok(remote_sha)
 }
 
@@ -180,7 +248,7 @@ fn prepare_curated_repo_parent_and_temp_dir(repo_path: &Path) -> Result<PathBuf,
             repo_path.display()
         ));
     };
-    fs::create_dir_all(parent).map_err(|err| {
+    std::fs::create_dir_all(parent).map_err(|err| {
         format!(
             "failed to create curated plugins parent directory {}: {err}",
             parent.display()
@@ -196,7 +264,6 @@ fn prepare_curated_repo_parent_and_temp_dir(repo_path: &Path) -> Result<PathBuf,
                 parent.display()
             )
         })?;
-
     Ok(clone_dir.keep())
 }
 
@@ -204,7 +271,6 @@ fn ensure_marketplace_manifest_exists(repo_path: &Path) -> Result<(), String> {
     if repo_path.join(".agents/plugins/marketplace.json").is_file() {
         return Ok(());
     }
-
     Err(format!(
         "curated plugins archive missing marketplace manifest at {}",
         repo_path.join(".agents/plugins/marketplace.json").display()
@@ -230,15 +296,15 @@ fn activate_curated_repo(repo_path: &Path, staged_repo_path: &Path) -> Result<()
             })?;
         let backup_repo_path = backup_dir.path().join("repo");
 
-        fs::rename(repo_path, &backup_repo_path).map_err(|err| {
+        std::fs::rename(repo_path, &backup_repo_path).map_err(|err| {
             format!(
                 "failed to move previous curated plugins repo out of the way at {}: {err}",
                 repo_path.display()
             )
         })?;
 
-        if let Err(err) = fs::rename(staged_repo_path, repo_path) {
-            let rollback_result = fs::rename(&backup_repo_path, repo_path);
+        if let Err(err) = std::fs::rename(staged_repo_path, repo_path) {
+            let rollback_result = std::fs::rename(&backup_repo_path, repo_path);
             return match rollback_result {
                 Ok(()) => Err(format!(
                     "failed to activate new curated plugins repo at {}: {err}",
@@ -255,7 +321,7 @@ fn activate_curated_repo(repo_path: &Path, staged_repo_path: &Path) -> Result<()
             };
         }
     } else {
-        fs::rename(staged_repo_path, repo_path).map_err(|err| {
+        std::fs::rename(staged_repo_path, repo_path).map_err(|err| {
             format!(
                 "failed to activate curated plugins repo at {}: {err}",
                 repo_path.display()
@@ -268,19 +334,187 @@ fn activate_curated_repo(repo_path: &Path, staged_repo_path: &Path) -> Result<()
 
 fn write_curated_plugins_sha(sha_path: &Path, remote_sha: &str) -> Result<(), String> {
     if let Some(parent) = sha_path.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
+        std::fs::create_dir_all(parent).map_err(|err| {
             format!(
                 "failed to create curated plugins sha directory {}: {err}",
                 parent.display()
             )
         })?;
     }
-    fs::write(sha_path, format!("{remote_sha}\n")).map_err(|err| {
+    std::fs::write(sha_path, format!("{remote_sha}\n")).map_err(|err| {
         format!(
             "failed to write curated plugins sha file {}: {err}",
             sha_path.display()
         )
     })
+}
+
+fn read_local_git_or_sha_file(
+    repo_path: &Path,
+    sha_path: &Path,
+    git_binary: &str,
+) -> Option<String> {
+    if repo_path.join(".git").is_dir()
+        && let Ok(sha) = git_head_sha(repo_path, git_binary)
+    {
+        return Some(sha);
+    }
+
+    read_sha_file(sha_path)
+}
+
+fn git_ls_remote_head_sha(git_binary: &str) -> Result<String, GitCuratedRepoSyncError> {
+    let output = run_git_command_with_timeout(
+        Command::new(git_binary)
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .arg("ls-remote")
+            .arg("https://github.com/openai/plugins.git")
+            .arg("HEAD"),
+        "git ls-remote curated plugins repo",
+        CURATED_PLUGINS_GIT_TIMEOUT,
+    )?;
+    ensure_git_success(&output, "git ls-remote curated plugins repo")
+        .map_err(GitCuratedRepoSyncError::SyncFailed)?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let Some(first_line) = stdout.lines().next() else {
+        return Err(GitCuratedRepoSyncError::SyncFailed(
+            "git ls-remote returned empty output for curated plugins repo".to_string(),
+        ));
+    };
+    let Some((sha, _)) = first_line.split_once('\t') else {
+        return Err(GitCuratedRepoSyncError::SyncFailed(format!(
+            "unexpected git ls-remote output for curated plugins repo: {first_line}"
+        )));
+    };
+    if sha.is_empty() {
+        return Err(GitCuratedRepoSyncError::SyncFailed(
+            "git ls-remote returned empty sha for curated plugins repo".to_string(),
+        ));
+    }
+    Ok(sha.to_string())
+}
+
+fn git_head_sha(repo_path: &Path, git_binary: &str) -> Result<String, GitCuratedRepoSyncError> {
+    let output = Command::new(git_binary)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .arg("-C")
+        .arg(repo_path)
+        .arg("rev-parse")
+        .arg("HEAD")
+        .output()
+        .map_err(|err| match err.kind() {
+            std::io::ErrorKind::NotFound => GitCuratedRepoSyncError::GitUnavailable(format!(
+                "failed to run git rev-parse HEAD in {}: {err}",
+                repo_path.display()
+            )),
+            _ => GitCuratedRepoSyncError::SyncFailed(format!(
+                "failed to run git rev-parse HEAD in {}: {err}",
+                repo_path.display()
+            )),
+        })?;
+    ensure_git_success(&output, "git rev-parse HEAD")
+        .map_err(GitCuratedRepoSyncError::SyncFailed)?;
+
+    let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if sha.is_empty() {
+        return Err(GitCuratedRepoSyncError::SyncFailed(format!(
+            "git rev-parse HEAD returned empty output in {}",
+            repo_path.display()
+        )));
+    }
+    Ok(sha)
+}
+
+fn run_git_command_with_timeout(
+    command: &mut Command,
+    context: &str,
+    timeout: Duration,
+) -> Result<Output, GitCuratedRepoSyncError> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| match err.kind() {
+            std::io::ErrorKind::NotFound => {
+                GitCuratedRepoSyncError::GitUnavailable(format!("failed to run {context}: {err}"))
+            }
+            _ => GitCuratedRepoSyncError::SyncFailed(format!("failed to run {context}: {err}")),
+        })?;
+
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                return child.wait_with_output().map_err(|err| {
+                    GitCuratedRepoSyncError::SyncFailed(format!(
+                        "failed to wait for {context}: {err}"
+                    ))
+                });
+            }
+            Ok(None) => {}
+            Err(err) => {
+                return Err(GitCuratedRepoSyncError::SyncFailed(format!(
+                    "failed to poll {context}: {err}"
+                )));
+            }
+        }
+
+        if start.elapsed() >= timeout {
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    return child.wait_with_output().map_err(|err| {
+                        GitCuratedRepoSyncError::SyncFailed(format!(
+                            "failed to wait for {context}: {err}"
+                        ))
+                    });
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    return Err(GitCuratedRepoSyncError::SyncFailed(format!(
+                        "failed to poll {context}: {err}"
+                    )));
+                }
+            }
+
+            let _ = child.kill();
+            let output = child.wait_with_output().map_err(|err| {
+                GitCuratedRepoSyncError::SyncFailed(format!(
+                    "failed to wait for {context} after timeout: {err}"
+                ))
+            })?;
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return if stderr.is_empty() {
+                Err(GitCuratedRepoSyncError::SyncFailed(format!(
+                    "{context} timed out after {}s",
+                    timeout.as_secs()
+                )))
+            } else {
+                Err(GitCuratedRepoSyncError::SyncFailed(format!(
+                    "{context} timed out after {}s: {stderr}",
+                    timeout.as_secs()
+                )))
+            };
+        }
+
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn ensure_git_success(output: &Output, context: &str) -> Result<(), String> {
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if stderr.is_empty() {
+        Err(format!("{context} failed with status {}", output.status))
+    } else {
+        Err(format!(
+            "{context} failed with status {}: {stderr}",
+            output.status
+        ))
+    }
 }
 
 async fn fetch_curated_repo_remote_sha(api_base_url: &str) -> Result<String, String> {
@@ -367,21 +601,21 @@ fn github_request(client: &Client, url: &str) -> reqwest::RequestBuilder {
 }
 
 fn read_sha_file(sha_path: &Path) -> Option<String> {
-    fs::read_to_string(sha_path)
+    std::fs::read_to_string(sha_path)
         .ok()
         .map(|sha| sha.trim().to_string())
         .filter(|sha| !sha.is_empty())
 }
 
 fn extract_zipball_to_dir(bytes: &[u8], destination: &Path) -> Result<(), String> {
-    fs::create_dir_all(destination).map_err(|err| {
+    std::fs::create_dir_all(destination).map_err(|err| {
         format!(
             "failed to create curated plugins extraction directory {}: {err}",
             destination.display()
         )
     })?;
 
-    let cursor = Cursor::new(bytes);
+    let cursor = std::io::Cursor::new(bytes);
     let mut archive = ZipArchive::new(cursor)
         .map_err(|err| format!("failed to open curated plugins zip archive: {err}"))?;
 
@@ -397,12 +631,12 @@ fn extract_zipball_to_dir(bytes: &[u8], destination: &Path) -> Result<(), String
         };
 
         let mut components = relative_path.components();
-        let Some(Component::Normal(_)) = components.next() else {
+        let Some(std::path::Component::Normal(_)) = components.next() else {
             continue;
         };
 
         let output_relative = components.fold(PathBuf::new(), |mut path, component| {
-            if let Component::Normal(segment) = component {
+            if let std::path::Component::Normal(segment) = component {
                 path.push(segment);
             }
             path
@@ -413,7 +647,7 @@ fn extract_zipball_to_dir(bytes: &[u8], destination: &Path) -> Result<(), String
 
         let output_path = destination.join(&output_relative);
         if entry.is_dir() {
-            fs::create_dir_all(&output_path).map_err(|err| {
+            std::fs::create_dir_all(&output_path).map_err(|err| {
                 format!(
                     "failed to create curated plugins directory {}: {err}",
                     output_path.display()
@@ -423,14 +657,14 @@ fn extract_zipball_to_dir(bytes: &[u8], destination: &Path) -> Result<(), String
         }
 
         if let Some(parent) = output_path.parent() {
-            fs::create_dir_all(parent).map_err(|err| {
+            std::fs::create_dir_all(parent).map_err(|err| {
                 format!(
                     "failed to create curated plugins directory {}: {err}",
                     parent.display()
                 )
             })?;
         }
-        let mut output = fs::File::create(&output_path).map_err(|err| {
+        let mut output = std::fs::File::create(&output_path).map_err(|err| {
             format!(
                 "failed to create curated plugins file {}: {err}",
                 output_path.display()
@@ -450,10 +684,12 @@ fn extract_zipball_to_dir(bytes: &[u8], destination: &Path) -> Result<(), String
 
 #[cfg(unix)]
 fn apply_zip_permissions(entry: &zip::read::ZipFile<'_>, output_path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
     let Some(mode) = entry.unix_mode() else {
         return Ok(());
     };
-    fs::set_permissions(output_path, fs::Permissions::from_mode(mode)).map_err(|err| {
+    std::fs::set_permissions(output_path, std::fs::Permissions::from_mode(mode)).map_err(|err| {
         format!(
             "failed to set permissions on curated plugins file {}: {err}",
             output_path.display()

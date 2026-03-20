@@ -38,8 +38,71 @@ fn read_curated_plugins_sha_reads_trimmed_sha_file() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn sync_openai_plugins_repo_prefers_git_when_available() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempdir().expect("tempdir");
+    let bin_dir = tempfile::Builder::new()
+        .prefix("fake-git-")
+        .tempdir()
+        .expect("tempdir");
+    let git_path = bin_dir.path().join("git");
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+
+    std::fs::write(
+        &git_path,
+        format!(
+            r#"#!/bin/sh
+if [ "$1" = "ls-remote" ]; then
+  printf '%s\tHEAD\n' "{sha}"
+  exit 0
+fi
+if [ "$1" = "clone" ]; then
+  dest="$5"
+  mkdir -p "$dest/.git" "$dest/.agents/plugins" "$dest/plugins/gmail/.codex-plugin"
+  cat > "$dest/.agents/plugins/marketplace.json" <<'EOF'
+{{"name":"openai-curated","plugins":[{{"name":"gmail","source":{{"source":"local","path":"./plugins/gmail"}}}}]}}
+EOF
+  printf '%s\n' '{{"name":"gmail"}}' > "$dest/plugins/gmail/.codex-plugin/plugin.json"
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$3" = "rev-parse" ] && [ "$4" = "HEAD" ]; then
+  printf '%s\n' "{sha}"
+  exit 0
+fi
+echo "unexpected git invocation: $@" >&2
+exit 1
+"#
+        ),
+    )
+    .expect("write fake git");
+    let mut permissions = std::fs::metadata(&git_path)
+        .expect("metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&git_path, permissions).expect("chmod");
+
+    let synced_sha = sync_openai_plugins_repo_with_transport_overrides(
+        tmp.path(),
+        git_path.to_str().expect("utf8 path"),
+        "http://127.0.0.1:9",
+    )
+    .expect("git sync should succeed");
+
+    assert_eq!(synced_sha, sha);
+    assert!(curated_plugins_repo_path(tmp.path()).join(".git").is_dir());
+    assert!(
+        curated_plugins_repo_path(tmp.path())
+            .join(".agents/plugins/marketplace.json")
+            .is_file()
+    );
+    assert_eq!(read_curated_plugins_sha(tmp.path()).as_deref(), Some(sha));
+}
+
 #[tokio::test]
-async fn sync_openai_plugins_repo_downloads_zipball_and_records_sha() {
+async fn sync_openai_plugins_repo_falls_back_to_http_when_git_is_unavailable() {
     let tmp = tempdir().expect("tempdir");
     let server = MockServer::start().await;
     let sha = "0123456789abcdef0123456789abcdef01234567";
@@ -69,14 +132,19 @@ async fn sync_openai_plugins_repo_downloads_zipball_and_records_sha() {
 
     let server_uri = server.uri();
     let tmp_path = tmp.path().to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        sync_openai_plugins_repo_with_api_base_url(tmp_path.as_path(), &server_uri)
+    let synced_sha = tokio::task::spawn_blocking(move || {
+        sync_openai_plugins_repo_with_transport_overrides(
+            tmp_path.as_path(),
+            "missing-git-for-test",
+            &server_uri,
+        )
     })
     .await
     .expect("sync task should join")
-    .expect("sync should succeed");
+    .expect("fallback sync should succeed");
 
     let repo_path = curated_plugins_repo_path(tmp.path());
+    assert_eq!(synced_sha, sha);
     assert!(repo_path.join(".agents/plugins/marketplace.json").is_file());
     assert!(
         repo_path
@@ -118,7 +186,11 @@ async fn sync_openai_plugins_repo_skips_archive_download_when_sha_matches() {
     let server_uri = server.uri();
     let tmp_path = tmp.path().to_path_buf();
     tokio::task::spawn_blocking(move || {
-        sync_openai_plugins_repo_with_api_base_url(tmp_path.as_path(), &server_uri)
+        sync_openai_plugins_repo_with_transport_overrides(
+            tmp_path.as_path(),
+            "missing-git-for-test",
+            &server_uri,
+        )
     })
     .await
     .expect("sync task should join")
@@ -199,7 +271,7 @@ enabled = false
 }
 
 fn curated_repo_zipball_bytes(sha: &str) -> Vec<u8> {
-    let cursor = Cursor::new(Vec::new());
+    let cursor = std::io::Cursor::new(Vec::new());
     let mut writer = ZipWriter::new(cursor);
     let options = SimpleFileOptions::default();
     let root = format!("openai-plugins-{sha}");
