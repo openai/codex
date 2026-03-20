@@ -6,6 +6,7 @@ mod manifest;
 mod marketplace;
 mod remote;
 mod render;
+mod startup_sync;
 mod store;
 #[cfg(test)]
 pub(crate) mod test_support;

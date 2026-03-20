@@ -425,16 +425,16 @@ impl CodexMessageProcessor {
         self.thread_manager.skills_manager().clear_cache();
     }
 
-    pub(crate) async fn maybe_start_curated_repo_sync_for_latest_config(&self) {
+    pub(crate) async fn maybe_start_plugin_startup_tasks_for_latest_config(&self) {
         match self.load_latest_config(/*fallback_cwd*/ None).await {
             Ok(config) => self
                 .thread_manager
                 .plugins_manager()
-                .maybe_start_curated_repo_sync_for_config(
+                .maybe_start_plugin_startup_tasks_for_config(
                     &config,
                     self.thread_manager.auth_manager(),
                 ),
-            Err(err) => warn!("failed to load latest config for curated plugin sync: {err:?}"),
+            Err(err) => warn!("failed to load latest config for plugin startup tasks: {err:?}"),
         }
     }
 
