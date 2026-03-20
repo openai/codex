@@ -1,4 +1,3 @@
-mod curated_repo;
 mod discoverable;
 mod injection;
 mod manager;
@@ -12,9 +11,6 @@ mod store;
 pub(crate) mod test_support;
 mod toggles;
 
-pub(crate) use curated_repo::curated_plugins_repo_path;
-pub(crate) use curated_repo::read_curated_plugins_sha;
-pub(crate) use curated_repo::sync_openai_plugins_repo;
 pub(crate) use discoverable::list_tool_suggest_discoverable_plugins;
 pub(crate) use injection::build_plugin_injections;
 pub use manager::AppConnectorId;
@@ -52,5 +48,8 @@ pub use remote::RemotePluginFetchError;
 pub use remote::fetch_remote_featured_plugin_ids;
 pub(crate) use render::render_explicit_plugin_instructions;
 pub(crate) use render::render_plugins_section;
+pub(crate) use startup_sync::curated_plugins_repo_path;
+pub(crate) use startup_sync::read_curated_plugins_sha;
+pub(crate) use startup_sync::sync_openai_plugins_repo;
 pub use store::PluginId;
 pub use toggles::collect_plugin_enabled_candidates;
