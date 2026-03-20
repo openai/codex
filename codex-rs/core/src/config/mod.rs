@@ -879,9 +879,9 @@ pub async fn load_config_as_toml_with_cli_overrides(
     .await?;
 
     let merged_toml = config_layer_stack.effective_config();
-    let cfg = deserialize_config_toml_with_base(merged_toml, codex_home).map_err(|e| {
+    let cfg = deserialize_merged_config_toml(merged_toml, codex_home).map_err(|e| {
         tracing::error!("Failed to deserialize overridden config: {e}");
-        e
+        std::io::Error::new(std::io::ErrorKind::InvalidData, e)
     })?;
 
     Ok(cfg)
