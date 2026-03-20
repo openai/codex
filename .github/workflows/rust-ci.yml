@@ -527,7 +527,7 @@ jobs:
           key: apt-${{ matrix.runner }}-${{ matrix.target }}-v1
 
   tests:
-    name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}
+    name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.remote_env == 'true' && ' (remote)' || '' }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 30
     needs: changed
@@ -553,6 +553,7 @@ jobs:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             profile: dev
+            remote_env: "true"
             runs_on:
               group: codex-runners
               labels: codex-linux-x64
@@ -590,6 +591,7 @@ jobs:
             sudo apt-get update -y
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
           fi
+
       # Some integration tests rely on DotSlash being installed.
       # See https://github.com/openai/codex/pull/7617.
       - name: Install DotSlash
@@ -674,6 +676,15 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
 
+      - name: Set up remote test env (Docker)
+        if: ${{ runner.os == 'Linux' && matrix.remote_env == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CODEX_TEST_REMOTE_ENV_CONTAINER_NAME=codex-remote-test-env
+          source "${GITHUB_WORKSPACE}/scripts/test-remote-env.sh"
+          echo "CODEX_TEST_REMOTE_ENV=${CODEX_TEST_REMOTE_ENV}" >> "$GITHUB_ENV"
+
       - name: tests
         id: test
         run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings
@@ -725,6 +736,16 @@ jobs:
             sccache --show-stats || true;
             echo '```';
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Tear down remote test env
+        if: ${{ always() && runner.os == 'Linux' && matrix.remote_env == 'true' }}
+        shell: bash
+        run: |
+          set +e
+          if [[ "${{ steps.test.outcome }}" != "success" ]]; then
+            docker logs codex-remote-test-env || true
+          fi
+          docker rm -f codex-remote-test-env >/dev/null 2>&1 || true
 
       - name: verify tests passed
         if: steps.test.outcome == 'failure'

@@ -3121,6 +3121,7 @@ dependencies = [
  "base64 0.22.1",
  "codex-arg0",
  "codex-core",
+ "codex-exec-server",
  "codex-features",
  "codex-protocol",
  "codex-utils-absolute-path",

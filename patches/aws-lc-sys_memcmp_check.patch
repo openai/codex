@@ -10,7 +10,7 @@ diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
  
  #[non_exhaustive]
  #[derive(PartialEq, Eq)]
-@@ -661,6 +661,16 @@
+@@ -681,6 +681,16 @@
          }
          let mut memcmp_compile_args = Vec::from(memcmp_compiler.args());
  
@@ -27,7 +27,7 @@ diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
          // This check invokes the compiled executable and hence needs to link
          // it. CMake handles this via LDFLAGS but `cc` doesn't. In setups with
          // custom linker setups this could lead to a mismatch between the
-@@ -672,6 +682,15 @@
+@@ -692,6 +702,15 @@
              }
          }
  
@@ -43,7 +43,7 @@ diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
          memcmp_compile_args.push(
              self.manifest_dir
                  .join("aws-lc")
-@@ -725,6 +744,40 @@
+@@ -742,6 +761,40 @@
          }
          let _ = fs::remove_file(exec_path);
      }
