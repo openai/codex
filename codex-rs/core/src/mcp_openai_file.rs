@@ -234,19 +234,25 @@ mod tests {
             tool_name: "tool".to_string(),
             tool_namespace: "ns".to_string(),
             tool: rmcp::model::Tool {
-                name: "tool".to_string(),
+                name: "tool".to_string().into(),
                 title: None,
                 description: None,
                 input_schema: std::sync::Arc::new(rmcp::model::JsonObject::default()),
                 output_schema: None,
                 annotations: None,
+                execution: None,
                 icons: None,
-                meta: Some(serde_json::json!({
-                    "openai/fileParams": ["file"],
-                    "openai/fileOutputs": ["outputFile"],
-                    "_codex_apps": {"connector_id": "calendar"},
-                    "other": true
-                })),
+                meta: Some(rmcp::model::Meta(
+                    serde_json::json!({
+                        "openai/fileParams": ["file"],
+                        "openai/fileOutputs": ["outputFile"],
+                        "_codex_apps": {"connector_id": "calendar"},
+                        "other": true
+                    })
+                    .as_object()
+                    .expect("meta object")
+                    .clone(),
+                )),
             },
             connector_id: None,
             connector_name: None,
