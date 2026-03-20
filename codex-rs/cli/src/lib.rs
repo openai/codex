@@ -11,6 +11,10 @@ pub struct SeatbeltCommand {
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,
 
+    /// Route intercepted child execs through the zsh-fork execve wrapper using the turn sandbox.
+    #[arg(long = "zsh-fork", default_value_t = false)]
+    pub zsh_fork: bool,
+
     /// While the command runs, capture macOS sandbox denials via `log stream` and print them after exit
     #[arg(long = "log-denials", default_value_t = false)]
     pub log_denials: bool,

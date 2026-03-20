@@ -2,6 +2,8 @@
 mod pid_tracker;
 #[cfg(target_os = "macos")]
 mod seatbelt;
+#[cfg(target_os = "macos")]
+mod zsh_fork;
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -36,20 +38,26 @@ use seatbelt::DenialLogger;
 pub async fn run_command_under_seatbelt(
     command: SeatbeltCommand,
     codex_linux_sandbox_exe: Option<PathBuf>,
+    main_execve_wrapper_exe: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     let SeatbeltCommand {
         full_auto,
+        zsh_fork,
         log_denials,
         config_overrides,
         command,
     } = command;
     run_command_under_sandbox(
-        full_auto,
+        SandboxRunOptions {
+            full_auto,
+            zsh_fork,
+            log_denials,
+        },
         command,
         config_overrides,
         codex_linux_sandbox_exe,
+        main_execve_wrapper_exe,
         SandboxType::Seatbelt,
-        log_denials,
     )
     .await
 }
@@ -58,6 +66,7 @@ pub async fn run_command_under_seatbelt(
 pub async fn run_command_under_seatbelt(
     _command: SeatbeltCommand,
     _codex_linux_sandbox_exe: Option<PathBuf>,
+    _main_execve_wrapper_exe: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     anyhow::bail!("Seatbelt sandbox is only available on macOS");
 }
@@ -72,12 +81,16 @@ pub async fn run_command_under_landlock(
         command,
     } = command;
     run_command_under_sandbox(
-        full_auto,
+        SandboxRunOptions {
+            full_auto,
+            zsh_fork: false,
+            log_denials: false,
+        },
         command,
         config_overrides,
         codex_linux_sandbox_exe,
+        None,
         SandboxType::Landlock,
-        /*log_denials*/ false,
     )
     .await
 }
@@ -92,12 +105,16 @@ pub async fn run_command_under_windows(
         command,
     } = command;
     run_command_under_sandbox(
-        full_auto,
+        SandboxRunOptions {
+            full_auto,
+            zsh_fork: false,
+            log_denials: false,
+        },
         command,
         config_overrides,
         codex_linux_sandbox_exe,
+        None,
         SandboxType::Windows,
-        /*log_denials*/ false,
     )
     .await
 }
@@ -109,20 +126,27 @@ enum SandboxType {
     Windows,
 }
 
-async fn run_command_under_sandbox(
+struct SandboxRunOptions {
     full_auto: bool,
+    zsh_fork: bool,
+    log_denials: bool,
+}
+
+async fn run_command_under_sandbox(
+    options: SandboxRunOptions,
     command: Vec<String>,
     config_overrides: CliConfigOverrides,
     codex_linux_sandbox_exe: Option<PathBuf>,
+    main_execve_wrapper_exe: Option<PathBuf>,
     sandbox_type: SandboxType,
-    log_denials: bool,
 ) -> anyhow::Result<()> {
     let config = load_debug_sandbox_config(
         config_overrides
             .parse_overrides()
             .map_err(anyhow::Error::msg)?,
         codex_linux_sandbox_exe,
-        full_auto,
+        main_execve_wrapper_exe,
+        options.full_auto,
     )
     .await?;
 
@@ -138,6 +162,18 @@ async fn run_command_under_sandbox(
         &config.permissions.shell_environment_policy,
         /*thread_id*/ None,
     );
+
+    #[cfg(target_os = "macos")]
+    if matches!(sandbox_type, SandboxType::Seatbelt) && options.zsh_fork {
+        return zsh_fork::run_command_under_zsh_fork(
+            command,
+            config,
+            cwd,
+            env,
+            options.log_denials,
+        )
+        .await;
+    }
 
     // Special-case Windows sandbox: execute and exit the process to emulate inherited stdio.
     if let SandboxType::Windows = sandbox_type {
@@ -218,9 +254,9 @@ async fn run_command_under_sandbox(
     }
 
     #[cfg(target_os = "macos")]
-    let mut denial_logger = log_denials.then(DenialLogger::new).flatten();
+    let mut denial_logger = options.log_denials.then(DenialLogger::new).flatten();
     #[cfg(not(target_os = "macos"))]
-    let _ = log_denials;
+    let _ = options.log_denials;
 
     let managed_network_requirements_enabled = config.managed_network_requirements_enabled();
 
@@ -374,11 +410,13 @@ async fn spawn_debug_sandbox_child(
 async fn load_debug_sandbox_config(
     cli_overrides: Vec<(String, TomlValue)>,
     codex_linux_sandbox_exe: Option<PathBuf>,
+    main_execve_wrapper_exe: Option<PathBuf>,
     full_auto: bool,
 ) -> anyhow::Result<Config> {
     load_debug_sandbox_config_with_codex_home(
         cli_overrides,
         codex_linux_sandbox_exe,
+        main_execve_wrapper_exe,
         full_auto,
         /*codex_home*/ None,
     )
@@ -388,6 +426,7 @@ async fn load_debug_sandbox_config(
 async fn load_debug_sandbox_config_with_codex_home(
     cli_overrides: Vec<(String, TomlValue)>,
     codex_linux_sandbox_exe: Option<PathBuf>,
+    main_execve_wrapper_exe: Option<PathBuf>,
     full_auto: bool,
     codex_home: Option<PathBuf>,
 ) -> anyhow::Result<Config> {
@@ -395,6 +434,7 @@ async fn load_debug_sandbox_config_with_codex_home(
         cli_overrides.clone(),
         ConfigOverrides {
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.clone(),
+            main_execve_wrapper_exe: main_execve_wrapper_exe.clone(),
             ..Default::default()
         },
         codex_home.clone(),
@@ -415,6 +455,7 @@ async fn load_debug_sandbox_config_with_codex_home(
         ConfigOverrides {
             sandbox_mode: Some(create_sandbox_mode(full_auto)),
             codex_linux_sandbox_exe,
+            main_execve_wrapper_exe,
             ..Default::default()
         },
         codex_home,
@@ -506,6 +547,7 @@ mod tests {
         let config = load_debug_sandbox_config_with_codex_home(
             Vec::new(),
             None,
+            None,
             false,
             Some(codex_home_path),
         )
@@ -540,6 +582,7 @@ mod tests {
         let err = load_debug_sandbox_config_with_codex_home(
             Vec::new(),
             None,
+            None,
             true,
             Some(codex_home.path().to_path_buf()),
         )
@@ -550,6 +593,25 @@ mod tests {
             err.to_string().contains("--full-auto"),
             "unexpected error: {err}"
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn debug_sandbox_threads_execve_wrapper_override() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let wrapper = codex_home.path().join("codex-execve-wrapper");
+
+        let config = load_debug_sandbox_config_with_codex_home(
+            Vec::new(),
+            None,
+            Some(wrapper.clone()),
+            false,
+            Some(codex_home.path().to_path_buf()),
+        )
+        .await?;
+
+        assert_eq!(config.main_execve_wrapper_exe, Some(wrapper));
 
         Ok(())
     }
