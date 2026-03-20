@@ -118,6 +118,16 @@ async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnCon
         .await;
 }
 
+fn guardian_prompt_text(items: &[codex_protocol::user_input::UserInput]) -> String {
+    items
+        .iter()
+        .map(|item| match item {
+            codex_protocol::user_input::UserInput::Text { text, .. } => text.as_str(),
+            other => panic!("expected text-only guardian prompt item, got {other:?}"),
+        })
+        .collect::<String>()
+}
+
 fn guardian_snapshot_options() -> ContextSnapshotOptions {
     ContextSnapshotOptions::default()
         .strip_capability_instructions()
@@ -428,6 +438,178 @@ async fn routes_approval_to_guardian_requires_auto_only_review_policy() {
     turn.config = Arc::new(config);
 
     assert!(routes_approval_to_guardian(&turn));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approved_guardian_review_moves_parent_transcript_boundary() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian-approved"),
+            ev_assistant_message(
+                "msg-guardian-approved",
+                "{\"risk_level\":\"low\",\"risk_score\":5,\"rationale\":\"approved\",\"evidence\":[]}",
+            ),
+            ev_completed("resp-guardian-approved"),
+        ]),
+    )
+    .await;
+
+    let (session, turn) = guardian_test_session_and_turn(&server).await;
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let decision = review_approval_request(
+        &session,
+        &turn,
+        GuardianApprovalRequest::Shell {
+            id: "shell-approved-1".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: PathBuf::from("/repo/codex-rs/core"),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the first docs fix.".to_string()),
+        },
+        None,
+    )
+    .await;
+    assert_eq!(decision, ReviewDecision::Approved);
+
+    session
+        .record_into_history(
+            &[
+                ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: "Push the release branch too.".to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                },
+                ResponseItem::Message {
+                    id: None,
+                    role: "assistant".to_string(),
+                    content: vec![ContentItem::OutputText {
+                        text: "I now need approval to push the release branch.".to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                },
+            ],
+            turn.as_ref(),
+        )
+        .await;
+
+    let prompt = build_guardian_prompt_items(
+        session.as_ref(),
+        None,
+        GuardianApprovalRequest::Shell {
+            id: "shell-approved-2".to_string(),
+            command: vec!["git".to_string(), "push".to_string(), "origin".to_string()],
+            cwd: PathBuf::from("/repo/codex-rs/core"),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the release branch.".to_string()),
+        },
+    )
+    .await?;
+    let prompt_text = guardian_prompt_text(&prompt);
+
+    assert!(!prompt_text.contains("Please check the repo visibility"));
+    assert!(!prompt_text.contains("The repo is public; I now need approval"));
+    assert!(prompt_text.contains("Push the release branch too."));
+    assert!(prompt_text.contains("I now need approval to push the release branch."));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn denied_guardian_review_moves_parent_transcript_boundary() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian-denied"),
+            ev_assistant_message(
+                "msg-guardian-denied",
+                "{\"risk_level\":\"high\",\"risk_score\":95,\"rationale\":\"denied\",\"evidence\":[]}",
+            ),
+            ev_completed("resp-guardian-denied"),
+        ]),
+    )
+    .await;
+
+    let (session, turn) = guardian_test_session_and_turn(&server).await;
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let decision = review_approval_request(
+        &session,
+        &turn,
+        GuardianApprovalRequest::Shell {
+            id: "shell-denied-1".to_string(),
+            command: vec!["git".to_string(), "push".to_string(), "--force".to_string()],
+            cwd: PathBuf::from("/repo/codex-rs/core"),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to force push the first docs fix.".to_string()),
+        },
+        None,
+    )
+    .await;
+    assert_eq!(decision, ReviewDecision::Denied);
+
+    session
+        .record_into_history(
+            &[
+                ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text: "Push the hotfix branch instead.".to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                },
+                ResponseItem::Message {
+                    id: None,
+                    role: "assistant".to_string(),
+                    content: vec![ContentItem::OutputText {
+                        text: "I need approval to push the hotfix branch.".to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                },
+            ],
+            turn.as_ref(),
+        )
+        .await;
+
+    let prompt = build_guardian_prompt_items(
+        session.as_ref(),
+        None,
+        GuardianApprovalRequest::Shell {
+            id: "shell-denied-2".to_string(),
+            command: vec!["git".to_string(), "push".to_string(), "hotfix".to_string()],
+            cwd: PathBuf::from("/repo/codex-rs/core"),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the hotfix branch.".to_string()),
+        },
+    )
+    .await?;
+    let prompt_text = guardian_prompt_text(&prompt);
+
+    assert!(!prompt_text.contains("Please check the repo visibility"));
+    assert!(!prompt_text.contains("The repo is public; I now need approval"));
+    assert!(prompt_text.contains("Push the hotfix branch instead."));
+    assert!(prompt_text.contains("I need approval to push the hotfix branch."));
+
+    Ok(())
 }
 
 #[test]
