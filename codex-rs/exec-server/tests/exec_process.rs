@@ -11,6 +11,7 @@ use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecResponse;
 use codex_exec_server::ReadParams;
 use pretty_assertions::assert_eq;
+use test_case::test_case;
 
 use common::exec_server::ExecServerHarness;
 use common::exec_server::exec_server;
@@ -78,12 +79,9 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
     Ok(())
 }
 
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn exec_process_starts_and_exits_locally() -> Result<()> {
-    assert_exec_process_starts_and_exits(false).await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn exec_process_starts_and_exits_remotely() -> Result<()> {
-    assert_exec_process_starts_and_exits(true).await
+async fn exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
+    assert_exec_process_starts_and_exits(use_remote).await
 }

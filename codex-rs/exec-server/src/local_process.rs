@@ -70,7 +70,7 @@ enum ProcessEntry {
 struct Inner {
     notifications: RpcNotificationSender,
     events_tx: broadcast::Sender<ExecServerEvent>,
-    processes: Arc<Mutex<HashMap<String, ProcessEntry>>>,
+    processes: Mutex<HashMap<String, ProcessEntry>>,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
 }
@@ -95,7 +95,7 @@ impl LocalProcess {
             inner: Arc::new(Inner {
                 notifications,
                 events_tx: broadcast::channel(EVENT_CHANNEL_CAPACITY).0,
-                processes: Arc::new(Mutex::new(HashMap::new())),
+                processes: Mutex::new(HashMap::new()),
                 initialize_requested: AtomicBool::new(false),
                 initialized: AtomicBool::new(false),
             }),

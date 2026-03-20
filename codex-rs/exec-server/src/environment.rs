@@ -93,10 +93,6 @@ impl Environment {
         self.experimental_exec_server_url.as_deref()
     }
 
-    pub fn remote_exec_server_client(&self) -> Option<ExecServerClient> {
-        self.remote_exec_server_client.clone()
-    }
-
     pub fn get_executor(&self) -> Arc<dyn ExecProcess> {
         Arc::clone(&self.executor)
     }
@@ -112,7 +108,7 @@ impl Environment {
 
 impl ExecutorEnvironment for Environment {
     fn get_executor(&self) -> Arc<dyn ExecProcess> {
-        self.get_executor()
+        Arc::clone(&self.executor)
     }
 }
 
