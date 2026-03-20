@@ -169,9 +169,9 @@ impl ConfigService {
 
         let effective = layers.effective_config();
 
-        let effective_config_toml: ConfigToml = effective
-            .try_into()
-            .map_err(|err| ConfigServiceError::toml("invalid configuration", err))?;
+        let effective_config_toml =
+            crate::config::deserialize_merged_config_toml(effective, &self.codex_home)
+                .map_err(|err| ConfigServiceError::toml("invalid configuration", err))?;
 
         let json_value = serde_json::to_value(&effective_config_toml)
             .map_err(|err| ConfigServiceError::json("failed to serialize configuration", err))?;
