@@ -1,5 +1,4 @@
 use std::io;
-use std::sync::Arc;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -22,26 +21,18 @@ use codex_app_server_protocol::JSONRPCErrorError;
 
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
-use crate::Environment;
 use crate::ExecutorFileSystem;
 use crate::RemoveOptions;
+use crate::local_file_system::LocalFileSystem;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
 
-#[derive(Clone)]
-pub(crate) struct ExecServerFileSystem {
-    file_system: Arc<dyn ExecutorFileSystem>,
+#[derive(Clone, Default)]
+pub(crate) struct FileSystemHandler {
+    file_system: LocalFileSystem,
 }
 
-impl Default for ExecServerFileSystem {
-    fn default() -> Self {
-        Self {
-            file_system: Arc::new(Environment::default().get_filesystem()),
-        }
-    }
-}
-
-impl ExecServerFileSystem {
+impl FileSystemHandler {
     pub(crate) async fn read_file(
         &self,
         params: FsReadFileParams,

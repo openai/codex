@@ -27,7 +27,7 @@ use crate::bottom_pane::TerminalTitleItem;
 use crate::history_cell::HistoryCell;
 
 use codex_core::config::types::ApprovalsReviewer;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;

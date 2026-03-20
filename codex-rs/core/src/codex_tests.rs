@@ -7,6 +7,7 @@ use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::NetworkConstraints;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
+use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecToolCallOutput;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_connection_manager::ToolInfo;
@@ -14,6 +15,7 @@ use crate::models_manager::model_info;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
 
+use codex_features::Features;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -2517,6 +2519,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
 
     let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&per_turn_config));
     let turn_context = Session::make_turn_context(
+        conversation_id,
         Some(Arc::clone(&auth_manager)),
         &session_telemetry,
         session_configuration.provider.clone(),
@@ -3315,6 +3318,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
 
     let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&per_turn_config));
     let turn_context = Arc::new(Session::make_turn_context(
+        conversation_id,
         Some(Arc::clone(&auth_manager)),
         &session_telemetry,
         session_configuration.provider.clone(),
@@ -3406,7 +3410,7 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
 #[tokio::test]
 async fn record_model_warning_appends_user_message() {
     let (mut session, turn_context) = make_session_and_context().await;
-    let features = crate::features::Features::with_defaults().into();
+    let features = Features::with_defaults().into();
     session.features = features;
 
     session
@@ -3709,7 +3713,11 @@ async fn handle_output_item_done_records_image_save_history_message() {
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let call_id = "ig_history_records_message";
-    let expected_saved_path = std::env::temp_dir().join(format!("{call_id}.png"));
+    let expected_saved_path = crate::stream_events_utils::image_generation_artifact_path(
+        turn_context.config.codex_home.as_path(),
+        &session.conversation_id.to_string(),
+        call_id,
+    );
     let _ = std::fs::remove_file(&expected_saved_path);
     let item = ResponseItem::ImageGenerationCall {
         id: call_id.to_string(),
@@ -3729,10 +3737,18 @@ async fn handle_output_item_done_records_image_save_history_message() {
         .expect("image generation item should succeed");
 
     let history = session.clone_history().await;
+    let image_output_path = crate::stream_events_utils::image_generation_artifact_path(
+        turn_context.config.codex_home.as_path(),
+        &session.conversation_id.to_string(),
+        "<image_id>",
+    );
+    let image_output_dir = image_output_path
+        .parent()
+        .expect("generated image path should have a parent");
     let save_message: ResponseItem = DeveloperInstructions::new(format!(
         "Generated images are saved to {} as {} by default.",
-        std::env::temp_dir().display(),
-        std::env::temp_dir().join("<image_id>.png").display(),
+        image_output_dir.display(),
+        image_output_path.display(),
     ))
     .into();
     assert_eq!(history.raw_items(), &[save_message, item]);
@@ -3749,7 +3765,11 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let call_id = "ig_history_no_message";
-    let expected_saved_path = std::env::temp_dir().join(format!("{call_id}.png"));
+    let expected_saved_path = crate::stream_events_utils::image_generation_artifact_path(
+        turn_context.config.codex_home.as_path(),
+        &session.conversation_id.to_string(),
+        call_id,
+    );
     let _ = std::fs::remove_file(&expected_saved_path);
     let item = ResponseItem::ImageGenerationCall {
         id: call_id.to_string(),
@@ -4770,6 +4790,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         },
         cwd: turn_context.cwd.clone(),
         expiration: timeout_ms.into(),
+        capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
         network: None,
         sandbox_permissions,
@@ -4787,6 +4808,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         command: params.command.clone(),
         cwd: params.cwd.clone(),
         expiration: timeout_ms.into(),
+        capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
         network: None,
         windows_sandbox_level: turn_context.windows_sandbox_level,

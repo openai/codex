@@ -1,5 +1,9 @@
-use crate::config_loader::ResidencyRequirement;
-use crate::spawn::CODEX_SANDBOX_ENV_VAR;
+//! Default Codex HTTP client: shared `User-Agent`, `originator`, optional residency header, and
+//! reqwest/`CodexHttpClient` construction.
+//!
+//! Use [`crate::default_client`] or [`codex_login::default_client`] from other crates in this
+//! workspace.
+
 use codex_client::BuildCustomCaTransportError;
 use codex_client::CodexHttpClient;
 pub use codex_client::CodexRequestBuilder;
@@ -30,6 +34,8 @@ pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(||
 pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
+
+pub use codex_config::ResidencyRequirement;
 
 #[derive(Debug, Clone)]
 pub struct Originator {
@@ -232,7 +238,7 @@ pub fn default_headers() -> HeaderMap {
 }
 
 fn is_sandboxed() -> bool {
-    std::env::var(CODEX_SANDBOX_ENV_VAR).as_deref() == Ok("seatbelt")
+    std::env::var("CODEX_SANDBOX").as_deref() == Ok("seatbelt")
 }
 
 #[cfg(test)]

@@ -59,6 +59,7 @@ async fn run_websocket_listener(
     let listener = TcpListener::bind(bind_address).await?;
     let local_addr = listener.local_addr()?;
     tracing::info!("codex-exec-server listening on ws://{local_addr}");
+    println!("ws://{local_addr}");
 
     loop {
         let (stream, peer_addr) = listener.accept().await?;

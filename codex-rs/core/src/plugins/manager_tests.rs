@@ -976,7 +976,7 @@ enabled = false
                     policy: MarketplacePluginPolicy {
                         installation: MarketplacePluginInstallPolicy::Available,
                         authentication: MarketplacePluginAuthPolicy::OnInstall,
-                        products: vec![],
+                        products: None,
                     },
                     interface: None,
                     installed: true,
@@ -992,7 +992,7 @@ enabled = false
                     policy: MarketplacePluginPolicy {
                         installation: MarketplacePluginInstallPolicy::Available,
                         authentication: MarketplacePluginAuthPolicy::OnInstall,
-                        products: vec![],
+                        products: None,
                     },
                     interface: None,
                     installed: true,
@@ -1041,6 +1041,80 @@ enabled = true
         .unwrap();
 
     assert_eq!(marketplaces, Vec::new());
+}
+
+#[tokio::test]
+async fn list_marketplaces_excludes_plugins_with_explicit_empty_products() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "disabled-plugin",
+      "source": {
+        "source": "local",
+        "path": "./disabled-plugin"
+      },
+      "policy": {
+        "products": []
+      }
+    },
+    {
+      "name": "default-plugin",
+      "source": {
+        "source": "local",
+        "path": "./default-plugin"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
+
+    let config = load_config(tmp.path(), &repo_root).await;
+    let marketplaces = PluginsManager::new(tmp.path().to_path_buf())
+        .list_marketplaces_for_config(&config, &[AbsolutePathBuf::try_from(repo_root).unwrap()])
+        .unwrap();
+
+    let marketplace = marketplaces
+        .into_iter()
+        .find(|marketplace| {
+            marketplace.path
+                == AbsolutePathBuf::try_from(
+                    tmp.path().join("repo/.agents/plugins/marketplace.json"),
+                )
+                .unwrap()
+        })
+        .expect("expected repo marketplace entry");
+    assert_eq!(
+        marketplace.plugins,
+        vec![ConfiguredMarketplacePlugin {
+            id: "default-plugin@debug".to_string(),
+            name: "default-plugin".to_string(),
+            source: MarketplacePluginSource::Local {
+                path: AbsolutePathBuf::try_from(tmp.path().join("repo/default-plugin")).unwrap(),
+            },
+            policy: MarketplacePluginPolicy {
+                installation: MarketplacePluginInstallPolicy::Available,
+                authentication: MarketplacePluginAuthPolicy::OnInstall,
+                products: None,
+            },
+            interface: None,
+            installed: false,
+            enabled: false,
+        }]
+    );
 }
 
 #[tokio::test]
@@ -1177,7 +1251,7 @@ plugins = true
                 policy: MarketplacePluginPolicy {
                     installation: MarketplacePluginInstallPolicy::Available,
                     authentication: MarketplacePluginAuthPolicy::OnInstall,
-                    products: vec![],
+                    products: None,
                 },
                 interface: None,
                 installed: false,
@@ -1280,7 +1354,7 @@ enabled = false
             policy: MarketplacePluginPolicy {
                 installation: MarketplacePluginInstallPolicy::Available,
                 authentication: MarketplacePluginAuthPolicy::OnInstall,
-                products: vec![],
+                products: None,
             },
             interface: None,
             installed: false,
@@ -1309,7 +1383,7 @@ enabled = false
             policy: MarketplacePluginPolicy {
                 installation: MarketplacePluginInstallPolicy::Available,
                 authentication: MarketplacePluginAuthPolicy::OnInstall,
-                products: vec![],
+                products: None,
             },
             interface: None,
             installed: false,
@@ -1391,7 +1465,7 @@ enabled = true
                 policy: MarketplacePluginPolicy {
                     installation: MarketplacePluginInstallPolicy::Available,
                     authentication: MarketplacePluginAuthPolicy::OnInstall,
-                    products: vec![],
+                    products: None,
                 },
                 interface: None,
                 installed: false,

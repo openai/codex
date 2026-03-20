@@ -1,7 +1,7 @@
 use super::*;
 use crate::config::ConfigBuilder;
-use crate::features::Feature;
 use chrono::TimeZone;
+use codex_features::Feature;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AskForApproval;

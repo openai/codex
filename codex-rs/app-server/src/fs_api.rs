@@ -34,7 +34,7 @@ pub(crate) struct FsApi {
 impl Default for FsApi {
     fn default() -> Self {
         Self {
-            file_system: Arc::new(Environment::default().get_filesystem()),
+            file_system: Environment::default().get_filesystem(),
         }
     }
 }

@@ -24,9 +24,9 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerTransportConfig;
 use crate::default_client::is_first_party_originator;
 use crate::default_client::originator;
-use crate::features::Feature;
 use crate::skills::SkillMetadata;
 use crate::skills::model::SkillToolDependency;
+use codex_features::Feature;
 
 const SKILL_MCP_DEPENDENCY_PROMPT_ID: &str = "skill_mcp_dependency_install";
 const MCP_DEPENDENCY_OPTION_INSTALL: &str = "Install";

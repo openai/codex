@@ -10,11 +10,12 @@ use codex_config::Sourced;
 
 use crate::config::ConfigToml;
 use crate::config::profile::ConfigProfile;
-use crate::features::Feature;
-use crate::features::FeatureOverrides;
-use crate::features::Features;
-use crate::features::canonical_feature_for_key;
-use crate::features::feature_for_key;
+use codex_features::Feature;
+use codex_features::FeatureConfigSource;
+use codex_features::FeatureOverrides;
+use codex_features::Features;
+use codex_features::canonical_feature_for_key;
+use codex_features::feature_for_key;
 
 /// Wrapper around [`Features`] which enforces constraints defined in
 /// `FeatureRequirementsToml` and provides normalization to ensure constraints
@@ -304,7 +305,22 @@ pub(crate) fn validate_feature_requirements_in_config_toml(
         profile: &ConfigProfile,
         feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
     ) -> std::io::Result<()> {
-        let configured_features = Features::from_config(cfg, profile, FeatureOverrides::default());
+        let configured_features = Features::from_sources(
+            FeatureConfigSource {
+                features: cfg.features.as_ref(),
+                include_apply_patch_tool: None,
+                experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
+                experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
+            },
+            FeatureConfigSource {
+                features: profile.features.as_ref(),
+                include_apply_patch_tool: profile.include_apply_patch_tool,
+                experimental_use_freeform_apply_patch: profile
+                    .experimental_use_freeform_apply_patch,
+                experimental_use_unified_exec_tool: profile.experimental_use_unified_exec_tool,
+            },
+            FeatureOverrides::default(),
+        );
         ManagedFeatures::from_configured(configured_features, feature_requirements.cloned())
             .map(|_| ())
             .map_err(|err| {

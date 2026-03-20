@@ -1,8 +1,6 @@
 use super::*;
 use crate::auth::storage::FileAuthStorage;
 use crate::auth::storage::get_auth_file;
-use crate::config::Config;
-use crate::config::ConfigBuilder;
 use crate::token_data::IdTokenInfo;
 use crate::token_data::KnownPlan as InternalKnownPlan;
 use crate::token_data::PlanType as InternalPlanType;
@@ -103,7 +101,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
         .unwrap()
         .unwrap();
     assert_eq!(None, auth.api_key());
-    assert_eq!(AuthMode::Chatgpt, auth.auth_mode());
+    assert_eq!(crate::AuthMode::Chatgpt, auth.auth_mode());
     assert_eq!(auth.get_chatgpt_user_id().as_deref(), Some("user-12345"));
 
     let auth_dot_json = auth
@@ -149,7 +147,7 @@ async fn loads_api_key_from_auth_json() {
     let auth = super::load_auth(dir.path(), false, AuthCredentialsStoreMode::File)
         .unwrap()
         .unwrap();
-    assert_eq!(auth.auth_mode(), AuthMode::ApiKey);
+    assert_eq!(auth.auth_mode(), crate::AuthMode::ApiKey);
     assert_eq!(auth.api_key(), Some("sk-test-key"));
 
     assert!(auth.get_token_data().is_err());
@@ -260,15 +258,13 @@ async fn build_config(
     codex_home: &Path,
     forced_login_method: Option<ForcedLoginMethod>,
     forced_chatgpt_workspace_id: Option<String>,
-) -> Config {
-    let mut config = ConfigBuilder::default()
-        .codex_home(codex_home.to_path_buf())
-        .build()
-        .await
-        .expect("config should load");
-    config.forced_login_method = forced_login_method;
-    config.forced_chatgpt_workspace_id = forced_chatgpt_workspace_id;
-    config
+) -> AuthConfig {
+    AuthConfig {
+        codex_home: codex_home.to_path_buf(),
+        auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        forced_login_method,
+        forced_chatgpt_workspace_id,
+    }
 }
 
 /// Use sparingly.

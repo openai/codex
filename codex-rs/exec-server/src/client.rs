@@ -18,16 +18,15 @@ use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::JSONRPCNotification;
 use serde_json::Value;
 use tokio::sync::broadcast;
-use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
 use tracing::debug;
 use tracing::warn;
 
 use crate::client_api::ExecServerClientConnectOptions;
-use crate::client_api::ExecServerEvent;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
+use crate::process::ExecServerEvent;
 use crate::protocol::EXEC_EXITED_METHOD;
 use crate::protocol::EXEC_METHOD;
 use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
@@ -58,11 +57,6 @@ use crate::protocol::WriteResponse;
 use crate::rpc::RpcCallError;
 use crate::rpc::RpcClient;
 use crate::rpc::RpcClientEvent;
-use crate::rpc::RpcNotificationSender;
-use crate::rpc::RpcServerOutboundMessage;
-
-mod local_backend;
-use local_backend::LocalBackend;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -96,43 +90,14 @@ impl RemoteExecServerConnectArgs {
     }
 }
 
-enum ClientBackend {
-    Remote(RpcClient),
-    InProcess(LocalBackend),
-}
-
-impl ClientBackend {
-    fn as_local(&self) -> Option<&LocalBackend> {
-        match self {
-            ClientBackend::Remote(_) => None,
-            ClientBackend::InProcess(backend) => Some(backend),
-        }
-    }
-
-    fn as_remote(&self) -> Option<&RpcClient> {
-        match self {
-            ClientBackend::Remote(client) => Some(client),
-            ClientBackend::InProcess(_) => None,
-        }
-    }
-}
-
 struct Inner {
-    backend: ClientBackend,
+    client: RpcClient,
     events_tx: broadcast::Sender<ExecServerEvent>,
     reader_task: tokio::task::JoinHandle<()>,
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
-        if let Some(backend) = self.backend.as_local()
-            && let Ok(handle) = tokio::runtime::Handle::try_current()
-        {
-            let backend = backend.clone();
-            handle.spawn(async move {
-                backend.shutdown().await;
-            });
-        }
         self.reader_task.abort();
     }
 }
@@ -167,40 +132,6 @@ pub enum ExecServerError {
 }
 
 impl ExecServerClient {
-    pub async fn connect_in_process(
-        options: ExecServerClientConnectOptions,
-    ) -> Result<Self, ExecServerError> {
-        let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<RpcServerOutboundMessage>(256);
-        let backend = LocalBackend::new(crate::server::ExecServerHandler::new(
-            RpcNotificationSender::new(outgoing_tx),
-        ));
-        let inner = Arc::new_cyclic(|weak| {
-            let weak = weak.clone();
-            let reader_task = tokio::spawn(async move {
-                while let Some(message) = outgoing_rx.recv().await {
-                    if let Some(inner) = weak.upgrade()
-                        && let Err(err) = handle_in_process_outbound_message(&inner, message).await
-                    {
-                        warn!(
-                            "in-process exec-server client closing after unexpected response: {err}"
-                        );
-                        return;
-                    }
-                }
-            });
-
-            Inner {
-                backend: ClientBackend::InProcess(backend),
-                events_tx: broadcast::channel(256).0,
-                reader_task,
-            }
-        });
-
-        let client = Self { inner };
-        client.initialize(options).await?;
-        Ok(client)
-    }
-
     pub async fn connect_websocket(
         args: RemoteExecServerConnectArgs,
     ) -> Result<Self, ExecServerError> {
@@ -241,17 +172,11 @@ impl ExecServerClient {
         } = options;
 
         timeout(initialize_timeout, async {
-            let response = if let Some(backend) = self.inner.backend.as_local() {
-                backend.initialize().await?
-            } else {
-                let params = InitializeParams { client_name };
-                let Some(remote) = self.inner.backend.as_remote() else {
-                    return Err(ExecServerError::Protocol(
-                        "remote backend missing during initialize".to_string(),
-                    ));
-                };
-                remote.call(INITIALIZE_METHOD, &params).await?
-            };
+            let response = self
+                .inner
+                .client
+                .call(INITIALIZE_METHOD, &InitializeParams { client_name })
+                .await?;
             self.notify_initialized().await?;
             Ok(response)
         })
@@ -262,27 +187,16 @@ impl ExecServerClient {
     }
 
     pub async fn exec(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
-        if let Some(backend) = self.inner.backend.as_local() {
-            return backend.exec(params).await;
-        }
-        let Some(remote) = self.inner.backend.as_remote() else {
-            return Err(ExecServerError::Protocol(
-                "remote backend missing during exec".to_string(),
-            ));
-        };
-        remote.call(EXEC_METHOD, &params).await.map_err(Into::into)
+        self.inner
+            .client
+            .call(EXEC_METHOD, &params)
+            .await
+            .map_err(Into::into)
     }
 
     pub async fn read(&self, params: ReadParams) -> Result<ReadResponse, ExecServerError> {
-        if let Some(backend) = self.inner.backend.as_local() {
-            return backend.exec_read(params).await;
-        }
-        let Some(remote) = self.inner.backend.as_remote() else {
-            return Err(ExecServerError::Protocol(
-                "remote backend missing during read".to_string(),
-            ));
-        };
-        remote
+        self.inner
+            .client
             .call(EXEC_READ_METHOD, &params)
             .await
             .map_err(Into::into)
@@ -293,38 +207,28 @@ impl ExecServerClient {
         process_id: &str,
         chunk: Vec<u8>,
     ) -> Result<WriteResponse, ExecServerError> {
-        let params = WriteParams {
-            process_id: process_id.to_string(),
-            chunk: chunk.into(),
-        };
-        if let Some(backend) = self.inner.backend.as_local() {
-            return backend.exec_write(params).await;
-        }
-        let Some(remote) = self.inner.backend.as_remote() else {
-            return Err(ExecServerError::Protocol(
-                "remote backend missing during write".to_string(),
-            ));
-        };
-        remote
-            .call(EXEC_WRITE_METHOD, &params)
+        self.inner
+            .client
+            .call(
+                EXEC_WRITE_METHOD,
+                &WriteParams {
+                    process_id: process_id.to_string(),
+                    chunk: chunk.into(),
+                },
+            )
             .await
             .map_err(Into::into)
     }
 
     pub async fn terminate(&self, process_id: &str) -> Result<TerminateResponse, ExecServerError> {
-        let params = TerminateParams {
-            process_id: process_id.to_string(),
-        };
-        if let Some(backend) = self.inner.backend.as_local() {
-            return backend.terminate(params).await;
-        }
-        let Some(remote) = self.inner.backend.as_remote() else {
-            return Err(ExecServerError::Protocol(
-                "remote backend missing during terminate".to_string(),
-            ));
-        };
-        remote
-            .call(EXEC_TERMINATE_METHOD, &params)
+        self.inner
+            .client
+            .call(
+                EXEC_TERMINATE_METHOD,
+                &TerminateParams {
+                    process_id: process_id.to_string(),
+                },
+            )
             .await
             .map_err(Into::into)
     }
@@ -333,15 +237,8 @@ impl ExecServerClient {
         &self,
         params: FsReadFileParams,
     ) -> Result<FsReadFileResponse, ExecServerError> {
-        if let Some(backend) = self.inner.backend.as_local() {
-            return backend.fs_read_file(params).await;
-        }
-        let Some(remote) = self.inner.backend.as_remote() else {
-            return Err(ExecServerError::Protocol(
-                "remote backend missing during fs/readFile".to_string(),
-            ));
-        };
-        remote
+        self.inner
+            .client
             .call(FS_READ_FILE_METHOD, &params)
             .await
             .map_err(Into::into)
@@ -351,15 +248,8 @@ impl ExecServerClient {
         &self,
         params: FsWriteFileParams,
     ) -> Result<FsWriteFileResponse, ExecServerError> {
-        if let Some(backend) = self.inner.backend.as_local() {
-            return backend.fs_write_file(params).await;
-        }
-        let Some(remote) = self.inner.backend.as_remote() else {
-            return Err(ExecServerError::Protocol(
-                "remote backend missing during fs/writeFile".to_string(),
-            ));
-        };
-        remote
+        self.inner
+            .client
             .call(FS_WRITE_FILE_METHOD, &params)
             .await
             .map_err(Into::into)
@@ -369,15 +259,8 @@ impl ExecServerClient {
         &self,
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, ExecServerError> {
-        if let Some(backend) = self.inner.backend.as_local() {
-            return backend.fs_create_directory(params).await;
-        }
-        let Some(remote) = self.inner.backend.as_remote() else {
-            return Err(ExecServerError::Protocol(
-                "remote backend missing during fs/createDirectory".to_string(),
-            ));
-        };
-        remote
+        self.inner
+            .client
             .call(FS_CREATE_DIRECTORY_METHOD, &params)
             .await
             .map_err(Into::into)
@@ -387,15 +270,8 @@ impl ExecServerClient {
         &self,
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, ExecServerError> {
-        if let Some(backend) = self.inner.backend.as_local() {
-            return backend.fs_get_metadata(params).await;
-        }
-        let Some(remote) = self.inner.backend.as_remote() else {
-            return Err(ExecServerError::Protocol(
-                "remote backend missing during fs/getMetadata".to_string(),
-            ));
-        };
-        remote
+        self.inner
+            .client
             .call(FS_GET_METADATA_METHOD, &params)
             .await
             .map_err(Into::into)
@@ -405,15 +281,8 @@ impl ExecServerClient {
         &self,
         params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, ExecServerError> {
-        if let Some(backend) = self.inner.backend.as_local() {
-            return backend.fs_read_directory(params).await;
-        }
-        let Some(remote) = self.inner.backend.as_remote() else {
-            return Err(ExecServerError::Protocol(
-                "remote backend missing during fs/readDirectory".to_string(),
-            ));
-        };
-        remote
+        self.inner
+            .client
             .call(FS_READ_DIRECTORY_METHOD, &params)
             .await
             .map_err(Into::into)
@@ -423,30 +292,16 @@ impl ExecServerClient {
         &self,
         params: FsRemoveParams,
     ) -> Result<FsRemoveResponse, ExecServerError> {
-        if let Some(backend) = self.inner.backend.as_local() {
-            return backend.fs_remove(params).await;
-        }
-        let Some(remote) = self.inner.backend.as_remote() else {
-            return Err(ExecServerError::Protocol(
-                "remote backend missing during fs/remove".to_string(),
-            ));
-        };
-        remote
+        self.inner
+            .client
             .call(FS_REMOVE_METHOD, &params)
             .await
             .map_err(Into::into)
     }
 
     pub async fn fs_copy(&self, params: FsCopyParams) -> Result<FsCopyResponse, ExecServerError> {
-        if let Some(backend) = self.inner.backend.as_local() {
-            return backend.fs_copy(params).await;
-        }
-        let Some(remote) = self.inner.backend.as_remote() else {
-            return Err(ExecServerError::Protocol(
-                "remote backend missing during fs/copy".to_string(),
-            ));
-        };
-        remote
+        self.inner
+            .client
             .call(FS_COPY_METHOD, &params)
             .await
             .map_err(Into::into)
@@ -482,7 +337,7 @@ impl ExecServerClient {
             });
 
             Inner {
-                backend: ClientBackend::Remote(rpc_client),
+                client: rpc_client,
                 events_tx: broadcast::channel(256).0,
                 reader_task,
             }
@@ -494,13 +349,11 @@ impl ExecServerClient {
     }
 
     async fn notify_initialized(&self) -> Result<(), ExecServerError> {
-        match &self.inner.backend {
-            ClientBackend::Remote(client) => client
-                .notify(INITIALIZED_METHOD, &serde_json::json!({}))
-                .await
-                .map_err(ExecServerError::Json),
-            ClientBackend::InProcess(backend) => backend.initialized().await,
-        }
+        self.inner
+            .client
+            .notify(INITIALIZED_METHOD, &serde_json::json!({}))
+            .await
+            .map_err(ExecServerError::Json)
     }
 }
 
@@ -513,20 +366,6 @@ impl From<RpcCallError> for ExecServerError {
                 code: error.code,
                 message: error.message,
             },
-        }
-    }
-}
-
-async fn handle_in_process_outbound_message(
-    inner: &Arc<Inner>,
-    message: RpcServerOutboundMessage,
-) -> Result<(), ExecServerError> {
-    match message {
-        RpcServerOutboundMessage::Response { .. } | RpcServerOutboundMessage::Error { .. } => Err(
-            ExecServerError::Protocol("unexpected in-process RPC response".to_string()),
-        ),
-        RpcServerOutboundMessage::Notification(notification) => {
-            handle_server_notification(inner, notification).await
         }
     }
 }

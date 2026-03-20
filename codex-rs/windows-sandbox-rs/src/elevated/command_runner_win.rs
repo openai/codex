@@ -289,7 +289,7 @@ fn spawn_ipc_process(
             &req.env,
             stdin_mode,
             StderrMode::Separate,
-            false,
+            /*use_private_desktop*/ false,
         )?;
         (
             pipe_handles.process,

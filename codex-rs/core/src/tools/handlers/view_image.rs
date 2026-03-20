@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;

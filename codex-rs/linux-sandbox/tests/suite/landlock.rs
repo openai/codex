@@ -4,6 +4,7 @@ use codex_core::config::types::ShellEnvironmentPolicy;
 use codex_core::error::CodexErr;
 use codex_core::error::Result;
 use codex_core::error::SandboxErr;
+use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecParams;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::exec_env::create_env;
@@ -116,6 +117,7 @@ async fn run_cmd_result_with_policies(
         command: cmd.iter().copied().map(str::to_owned).collect(),
         cwd,
         expiration: timeout_ms.into(),
+        capture_policy: ExecCapturePolicy::ShellTool,
         env: create_env_from_core_vars(),
         network: None,
         sandbox_permissions: SandboxPermissions::UseDefault,
@@ -375,6 +377,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
         // Give the tool a generous 2-second timeout so even slow DNS timeouts
         // do not stall the suite.
         expiration: NETWORK_TIMEOUT_MS.into(),
+        capture_policy: ExecCapturePolicy::ShellTool,
         env: create_env_from_core_vars(),
         network: None,
         sandbox_permissions: SandboxPermissions::UseDefault,

@@ -435,6 +435,7 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
                 name: "Alpha".to_string(),
                 description: Some("Alpha connector".to_string()),
                 install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
+                needs_auth: true,
             }],
         }
     );
@@ -518,12 +519,86 @@ async fn plugin_install_filters_disallowed_apps_needing_auth() -> Result<()> {
                 name: "Alpha".to_string(),
                 description: Some("Alpha connector".to_string()),
                 install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
+                needs_auth: true,
             }],
         }
     );
 
     server_handle.abort();
     let _ = server_handle.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_install_makes_bundled_mcp_servers_available_to_followup_requests() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        "[features]\nplugins = true\n",
+    )?;
+    let repo_root = TempDir::new()?;
+    write_plugin_marketplace(
+        repo_root.path(),
+        "debug",
+        "sample-plugin",
+        "./sample-plugin",
+        None,
+        None,
+    )?;
+    write_plugin_source(repo_root.path(), "sample-plugin", &[])?;
+    std::fs::write(
+        repo_root.path().join("sample-plugin/.mcp.json"),
+        r#"{
+  "mcpServers": {
+    "sample-mcp": {
+      "command": "echo"
+    }
+  }
+}"#,
+    )?;
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_install_request(PluginInstallParams {
+            marketplace_path,
+            plugin_name: "sample-plugin".to_string(),
+            force_remote_sync: false,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginInstallResponse = to_response(response)?;
+    assert_eq!(response.apps_needing_auth, Vec::<AppSummary>::new());
+    let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+    assert!(!config.contains("[mcp_servers.sample-mcp]"));
+    assert!(!config.contains("command = \"echo\""));
+
+    let request_id = mcp
+        .send_raw_request(
+            "mcpServer/oauth/login",
+            Some(json!({
+                "name": "sample-mcp",
+            })),
+        )
+        .await?;
+    let err = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, -32600);
+    assert_eq!(
+        err.error.message,
+        "OAuth login is only supported for streamable HTTP servers."
+    );
     Ok(())
 }
 

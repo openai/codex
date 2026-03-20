@@ -1,7 +1,7 @@
 use anyhow::Result;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::protocol::AskForApproval;

@@ -67,6 +67,7 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
 
     let state = TurnMetadataState::new(
+        "session-a".to_string(),
         "turn-a".to_string(),
         cwd,
         &sandbox_policy,
@@ -76,7 +77,9 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
     let header = state.current_header_value().expect("header");
     let json: Value = serde_json::from_str(&header).expect("json");
     let sandbox_name = json.get("sandbox").and_then(Value::as_str);
+    let session_id = json.get("session_id").and_then(Value::as_str);
 
     let expected_sandbox = sandbox_tag(&sandbox_policy, WindowsSandboxLevel::Disabled);
     assert_eq!(sandbox_name, Some(expected_sandbox));
+    assert_eq!(session_id, Some("session-a"));
 }

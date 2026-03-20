@@ -27,9 +27,6 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
-use crate::features::FEATURES;
-use crate::features::Feature;
-use crate::features::maybe_push_unstable_features_warning;
 #[cfg(test)]
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::ModelsManager;
@@ -59,6 +56,9 @@ use chrono::Utc;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_exec_server::Environment;
+use codex_features::FEATURES;
+use codex_features::Feature;
+use codex_features::unstable_features_warning_event;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
@@ -140,6 +140,7 @@ use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use toml::Value as TomlValue;
 use tracing::Instrument;
 use tracing::debug;
 use tracing::debug_span;
@@ -1286,6 +1287,7 @@ impl Session {
 
     #[allow(clippy::too_many_arguments)]
     fn make_turn_context(
+        conversation_id: ThreadId,
         auth_manager: Option<Arc<AuthManager>>,
         session_telemetry: &SessionTelemetry,
         provider: ModelProviderInfo,
@@ -1336,6 +1338,7 @@ impl Session {
 
         let cwd = session_configuration.cwd.clone();
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
+            conversation_id.to_string(),
             sub_id.clone(),
             cwd.clone(),
             session_configuration.sandbox_policy.get(),
@@ -1566,7 +1569,19 @@ impl Session {
                 }),
             });
         }
-        maybe_push_unstable_features_warning(&config, &mut post_session_configured_events);
+        let config_path = config.codex_home.join(CONFIG_TOML_FILE);
+        if let Some(event) = unstable_features_warning_event(
+            config
+                .config_layer_stack
+                .effective_config()
+                .get("features")
+                .and_then(TomlValue::as_table),
+            config.suppress_unstable_features_warning,
+            &config.features,
+            &config_path.display().to_string(),
+        ) {
+            post_session_configured_events.push(event);
+        }
         if config.permissions.approval_policy.value() == AskForApproval::OnFailure {
             post_session_configured_events.push(Event {
                 id: "".to_owned(),
@@ -2394,6 +2409,7 @@ impl Session {
                 .skills_for_config(&per_turn_config),
         );
         let mut turn_context: TurnContext = Self::make_turn_context(
+            self.conversation_id,
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.session_telemetry,
             session_configuration.provider.clone(),
@@ -5160,8 +5176,8 @@ async fn spawn_review_thread(
         .await;
     // For reviews, disable web_search and view_image regardless of global settings.
     let mut review_features = sess.features.clone();
-    let _ = review_features.disable(crate::features::Feature::WebSearchRequest);
-    let _ = review_features.disable(crate::features::Feature::WebSearchCached);
+    let _ = review_features.disable(Feature::WebSearchRequest);
+    let _ = review_features.disable(Feature::WebSearchCached);
     let review_web_search_mode = WebSearchMode::Disabled;
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &review_model_info,
@@ -5220,6 +5236,7 @@ async fn spawn_review_thread(
     let per_turn_config = Arc::new(per_turn_config);
     let review_turn_id = sub_id.to_string();
     let turn_metadata_state = Arc::new(TurnMetadataState::new(
+        sess.conversation_id.to_string(),
         review_turn_id.clone(),
         parent_turn_context.cwd.clone(),
         parent_turn_context.sandbox_policy.get(),

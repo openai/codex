@@ -1,10 +1,10 @@
 use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
-use crate::features::FEATURES;
 use crate::path_utils::resolve_symlink_write_paths;
 use crate::path_utils::write_atomically;
 use anyhow::Context;
 use codex_config::CONFIG_TOML_FILE;
+use codex_features::FEATURES;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;

@@ -71,6 +71,7 @@ use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -3102,7 +3103,7 @@ impl App {
                             Ok(()) => {
                                 session_telemetry.counter(
                                     "codex.windows_sandbox.elevated_setup_success",
-                                    1,
+                                    /*inc*/ 1,
                                     &[],
                                 );
                                 AppEvent::EnableWindowsSandboxForAgentMode {
@@ -3132,7 +3133,7 @@ impl App {
                                     codex_core::windows_sandbox::elevated_setup_failure_metric_name(
                                         &err,
                                     ),
-                                    1,
+                                    /*inc*/ 1,
                                     &tags,
                                 );
                                 tracing::error!(
@@ -3173,7 +3174,7 @@ impl App {
                         ) {
                             session_telemetry.counter(
                                 "codex.windows_sandbox.legacy_setup_preflight_failed",
-                                1,
+                                /*inc*/ 1,
                                 &[],
                             );
                             tracing::warn!(
@@ -3198,7 +3199,7 @@ impl App {
                     self.chat_widget
                         .add_to_history(history_cell::new_info_event(
                             format!("Granting sandbox read access to {path} ..."),
-                            None,
+                            /*hint*/ None,
                         ));
 
                     let policy = self.config.permissions.sandbox_policy.get().clone();
@@ -3273,11 +3274,13 @@ impl App {
                     match builder.apply().await {
                         Ok(()) => {
                             if elevated_enabled {
-                                self.config.set_windows_sandbox_enabled(false);
-                                self.config.set_windows_elevated_sandbox_enabled(true);
+                                self.config.set_windows_sandbox_enabled(/*value*/ false);
+                                self.config
+                                    .set_windows_elevated_sandbox_enabled(/*value*/ true);
                             } else {
-                                self.config.set_windows_sandbox_enabled(true);
-                                self.config.set_windows_elevated_sandbox_enabled(false);
+                                self.config.set_windows_sandbox_enabled(/*value*/ true);
+                                self.config
+                                    .set_windows_elevated_sandbox_enabled(/*value*/ false);
                             }
                             self.chat_widget.set_windows_sandbox_mode(
                                 self.config.permissions.windows_sandbox_mode,
@@ -6655,7 +6658,7 @@ guardian_approval = true
             make_header(true),
             Arc::new(crate::history_cell::new_info_event(
                 "startup tip that used to replay".to_string(),
-                None,
+                /*hint*/ None,
             )) as Arc<dyn HistoryCell>,
             user_cell("Tell me a long story about a town with a dark lighthouse."),
             agent_cell(story_part_one),

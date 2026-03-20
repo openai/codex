@@ -2,8 +2,10 @@
 
 use anyhow::Context as _;
 use anyhow::ensure;
+use codex_arg0::Arg0PathEntryGuard;
 use codex_utils_cargo_bin::CargoBinError;
 use ctor::ctor;
+use std::sync::OnceLock;
 use tempfile::TempDir;
 
 use codex_core::CodexThread;
@@ -24,10 +26,17 @@ pub mod test_codex_exec;
 pub mod tracing;
 pub mod zsh_fork;
 
+static TEST_ARG0_PATH_ENTRY: OnceLock<Option<Arg0PathEntryGuard>> = OnceLock::new();
+
 #[ctor]
 fn enable_deterministic_unified_exec_process_ids_for_tests() {
     codex_core::test_support::set_thread_manager_test_mode(/*enabled*/ true);
     codex_core::test_support::set_deterministic_process_ids(/*enabled*/ true);
+}
+
+#[ctor]
+fn configure_arg0_dispatch_for_test_binaries() {
+    let _ = TEST_ARG0_PATH_ENTRY.get_or_init(codex_arg0::arg0_dispatch);
 }
 
 #[ctor]
@@ -155,8 +164,7 @@ pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
 fn default_test_overrides() -> ConfigOverrides {
     ConfigOverrides {
         codex_linux_sandbox_exe: Some(
-            codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")
-                .expect("should find binary for codex-linux-sandbox"),
+            find_codex_linux_sandbox_exe().expect("should find binary for codex-linux-sandbox"),
         ),
         ..ConfigOverrides::default()
     }
@@ -165,6 +173,23 @@ fn default_test_overrides() -> ConfigOverrides {
 #[cfg(not(target_os = "linux"))]
 fn default_test_overrides() -> ConfigOverrides {
     ConfigOverrides::default()
+}
+
+#[cfg(target_os = "linux")]
+pub fn find_codex_linux_sandbox_exe() -> Result<PathBuf, CargoBinError> {
+    if let Ok(path) = std::env::current_exe() {
+        return Ok(path);
+    }
+
+    if let Some(path) = TEST_ARG0_PATH_ENTRY
+        .get()
+        .and_then(Option::as_ref)
+        .and_then(|path_entry| path_entry.paths().codex_linux_sandbox_exe.clone())
+    {
+        return Ok(path);
+    }
+
+    codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")
 }
 
 /// Builds an SSE stream body from a JSON fixture.
@@ -482,7 +507,7 @@ macro_rules! codex_linux_sandbox_exe_or_skip {
     () => {{
         #[cfg(target_os = "linux")]
         {
-            match codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox") {
+            match $crate::find_codex_linux_sandbox_exe() {
                 Ok(path) => Some(path),
                 Err(err) => {
                     eprintln!("codex-linux-sandbox binary not available, skipping test: {err}");
@@ -498,7 +523,7 @@ macro_rules! codex_linux_sandbox_exe_or_skip {
     ($return_value:expr $(,)?) => {{
         #[cfg(target_os = "linux")]
         {
-            match codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox") {
+            match $crate::find_codex_linux_sandbox_exe() {
                 Ok(path) => Some(path),
                 Err(err) => {
                     eprintln!("codex-linux-sandbox binary not available, skipping test: {err}");

@@ -23,18 +23,18 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use crate::auth::AuthCredentialsStoreMode;
+use crate::auth::AuthDotJson;
+use crate::auth::save_auth;
+use crate::default_client::originator;
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
+use crate::token_data::TokenData;
+use crate::token_data::parse_chatgpt_jwt_claims;
 use base64::Engine;
 use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
 use codex_client::build_reqwest_client_with_custom_ca;
-use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::auth::AuthDotJson;
-use codex_core::auth::save_auth;
-use codex_core::default_client::originator;
-use codex_core::token_data::TokenData;
-use codex_core::token_data::parse_chatgpt_jwt_claims;
 use rand::RngCore;
 use serde_json::Value as JsonValue;
 use tiny_http::Header;
@@ -484,10 +484,7 @@ fn build_authorize_url(
         ("id_token_add_organizations".to_string(), "true".to_string()),
         ("codex_cli_simplified_flow".to_string(), "true".to_string()),
         ("state".to_string(), state.to_string()),
-        (
-            "originator".to_string(),
-            originator().value.as_str().to_string(),
-        ),
+        ("originator".to_string(), originator().value),
     ];
     if let Some(workspace_id) = forced_chatgpt_workspace_id {
         query.push(("allowed_workspace_id".to_string(), workspace_id.to_string()));

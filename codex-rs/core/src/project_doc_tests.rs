@@ -1,6 +1,6 @@
 use super::*;
 use crate::config::ConfigBuilder;
-use crate::features::Feature;
+use codex_features::Feature;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;

@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;

@@ -1,3 +1,4 @@
+use super::sanitize_user_agent;
 use super::*;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;

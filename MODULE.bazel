@@ -1,5 +1,6 @@
 module(name = "codex")
 
+bazel_dep(name = "bazel_skylib", version = "1.8.2")
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "llvm", version = "0.6.7")
 
@@ -132,6 +133,8 @@ crate.annotation(
     workspace_cargo_toml = "rust/runfiles/Cargo.toml",
 )
 
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
 llvm = use_extension("@llvm//extensions:llvm.bzl", "llvm")
 use_repo(llvm, "llvm-project")
 
@@ -173,6 +176,29 @@ crate.annotation(
 )
 
 inject_repo(crate, "alsa_lib")
+
+bazel_dep(name = "v8", version = "14.6.202.9")
+archive_override(
+    module_name = "v8",
+    integrity = "sha256-JphDwLAzsd9KvgRZ7eQvNtPU6qGd3XjFt/a/1QITAJU=",
+    patch_strip = 3,
+    patches = [
+        "//patches:v8_module_deps.patch",
+        "//patches:v8_bazel_rules.patch",
+        "//patches:v8_source_portability.patch",
+    ],
+    strip_prefix = "v8-14.6.202.9",
+    urls = ["https://github.com/v8/v8/archive/refs/tags/14.6.202.9.tar.gz"],
+)
+
+http_archive(
+    name = "v8_crate_146_4_0",
+    build_file = "//third_party/v8:v8_crate.BUILD.bazel",
+    sha256 = "d97bcac5cdc5a195a4813f1855a6bc658f240452aac36caa12fd6c6f16026ab1",
+    strip_prefix = "v8-146.4.0",
+    type = "tar.gz",
+    urls = ["https://static.crates.io/crates/v8/v8-146.4.0.crate"],
+)
 
 use_repo(crate, "crates")
 

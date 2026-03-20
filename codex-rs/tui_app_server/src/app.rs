@@ -72,13 +72,13 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::ApprovalsReviewer;
 use codex_core::config::types::ModelAvailabilityNuxConfig;
 use codex_core::config_loader::ConfigLayerStackOrdering;
-use codex_core::features::Feature;
 use codex_core::message_history;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecApprovalRequestEvent;
@@ -1367,18 +1367,18 @@ impl App {
                 let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
                 self.app_event_tx.send(AppEvent::CodexOp(
                     AppCommand::override_turn_context(
-                        None,
-                        None,
-                        None,
-                        None,
+                        /*cwd*/ None,
+                        /*approval_policy*/ None,
+                        /*approvals_reviewer*/ None,
+                        /*sandbox_policy*/ None,
                         #[cfg(target_os = "windows")]
                         Some(windows_sandbox_level),
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
+                        /*model*/ None,
+                        /*effort*/ None,
+                        /*summary*/ None,
+                        /*service_tier*/ None,
+                        /*collaboration_mode*/ None,
+                        /*personality*/ None,
                     )
                     .into_core(),
                 ));
@@ -3834,7 +3834,7 @@ impl App {
                             Ok(()) => {
                                 session_telemetry.counter(
                                     "codex.windows_sandbox.elevated_setup_success",
-                                    1,
+                                    /*inc*/ 1,
                                     &[],
                                 );
                                 AppEvent::EnableWindowsSandboxForAgentMode {
@@ -3864,7 +3864,7 @@ impl App {
                                     codex_core::windows_sandbox::elevated_setup_failure_metric_name(
                                         &err,
                                     ),
-                                    1,
+                                    /*inc*/ 1,
                                     &tags,
                                 );
                                 tracing::error!(
@@ -3905,7 +3905,7 @@ impl App {
                         ) {
                             session_telemetry.counter(
                                 "codex.windows_sandbox.legacy_setup_preflight_failed",
-                                1,
+                                /*inc*/ 1,
                                 &[],
                             );
                             tracing::warn!(
@@ -3930,7 +3930,7 @@ impl App {
                     self.chat_widget
                         .add_to_history(history_cell::new_info_event(
                             format!("Granting sandbox read access to {path} ..."),
-                            None,
+                            /*hint*/ None,
                         ));
 
                     let policy = self.config.permissions.sandbox_policy.get().clone();
@@ -4005,11 +4005,13 @@ impl App {
                     match builder.apply().await {
                         Ok(()) => {
                             if elevated_enabled {
-                                self.config.set_windows_sandbox_enabled(false);
-                                self.config.set_windows_elevated_sandbox_enabled(true);
+                                self.config.set_windows_sandbox_enabled(/*value*/ false);
+                                self.config
+                                    .set_windows_elevated_sandbox_enabled(/*value*/ true);
                             } else {
-                                self.config.set_windows_sandbox_enabled(true);
-                                self.config.set_windows_elevated_sandbox_enabled(false);
+                                self.config.set_windows_sandbox_enabled(/*value*/ true);
+                                self.config
+                                    .set_windows_elevated_sandbox_enabled(/*value*/ false);
                             }
                             self.chat_widget.set_windows_sandbox_mode(
                                 self.config.permissions.windows_sandbox_mode,
@@ -4021,18 +4023,18 @@ impl App {
                             {
                                 self.app_event_tx.send(AppEvent::CodexOp(
                                     AppCommand::override_turn_context(
-                                        None,
-                                        None,
-                                        None,
-                                        None,
+                                        /*cwd*/ None,
+                                        /*approval_policy*/ None,
+                                        /*approvals_reviewer*/ None,
+                                        /*sandbox_policy*/ None,
                                         #[cfg(target_os = "windows")]
                                         Some(windows_sandbox_level),
-                                        None,
-                                        None,
-                                        None,
-                                        None,
-                                        None,
-                                        None,
+                                        /*model*/ None,
+                                        /*effort*/ None,
+                                        /*summary*/ None,
+                                        /*service_tier*/ None,
+                                        /*collaboration_mode*/ None,
+                                        /*personality*/ None,
                                     )
                                     .into(),
                                 ));
@@ -4047,18 +4049,18 @@ impl App {
                             } else {
                                 self.app_event_tx.send(AppEvent::CodexOp(
                                     AppCommand::override_turn_context(
-                                        None,
+                                        /*cwd*/ None,
                                         Some(preset.approval),
                                         Some(self.config.approvals_reviewer),
                                         Some(preset.sandbox.clone()),
                                         #[cfg(target_os = "windows")]
                                         Some(windows_sandbox_level),
-                                        None,
-                                        None,
-                                        None,
-                                        None,
-                                        None,
-                                        None,
+                                        /*model*/ None,
+                                        /*effort*/ None,
+                                        /*summary*/ None,
+                                        /*service_tier*/ None,
+                                        /*collaboration_mode*/ None,
+                                        /*personality*/ None,
                                     )
                                     .into(),
                                 ));
