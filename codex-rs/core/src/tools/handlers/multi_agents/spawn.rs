@@ -182,9 +182,7 @@ struct SpawnAgentArgs {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct SpawnAgentResult {
-    #[serde(skip_serializing_if = "Option::is_none")]
     agent_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     task_name: Option<String>,
     nickname: Option<String>,
 }

@@ -153,7 +153,7 @@ impl AgentControl {
                     depth,
                     agent_path,
                     agent_role,
-                    None,
+                    /*preferred_agent_nickname*/ None,
                 )?;
                 (Some(session_source), agent_metadata)
             }
@@ -366,7 +366,7 @@ impl AgentControl {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
                 depth,
-                agent_path: _,
+                agent_path,
                 agent_role: _,
                 agent_nickname: _,
             }) => {
@@ -384,7 +384,7 @@ impl AgentControl {
                     &config,
                     parent_thread_id,
                     depth,
-                    None,
+                    agent_path,
                     resumed_agent_role,
                     resumed_agent_nickname,
                 )?
@@ -683,6 +683,7 @@ impl AgentControl {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn prepare_thread_spawn(
         &self,
         reservation: &mut crate::agent::guards::SpawnReservation,

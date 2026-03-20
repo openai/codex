@@ -217,6 +217,33 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
 }
 
 #[tokio::test]
+async fn spawn_agent_includes_task_name_key_when_not_named() {
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+
+    let output = SpawnAgentHandler
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed");
+    let (content, success) = expect_text_output(output);
+    let result: serde_json::Value =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+
+    assert!(result["agent_id"].is_string());
+    assert_eq!(result["task_name"], serde_json::Value::Null);
+    assert!(result.get("nickname").is_some());
+    assert_eq!(success, Some(true));
+}
+
+#[tokio::test]
 async fn spawn_agent_errors_when_manager_dropped() {
     let (session, turn) = make_session_and_context().await;
     let invocation = invocation(
@@ -310,6 +337,45 @@ async fn multi_agent_v2_spawn_returns_path_and_send_input_accepts_relative_path(
         ))
         .await
         .expect("send_input should accept v2 path");
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_includes_agent_id_key_when_named() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    turn.config = Arc::new(config);
+
+    let output = SpawnAgentHandler
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "test_process"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed");
+    let (content, success) = expect_text_output(output);
+    let result: serde_json::Value =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+
+    assert_eq!(result["agent_id"], serde_json::Value::Null);
+    assert_eq!(result["task_name"], "/root/test_process");
+    assert!(result.get("nickname").is_some());
+    assert_eq!(success, Some(true));
 }
 
 #[tokio::test]
