@@ -684,7 +684,6 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
             search_content_types: None,
         },
         create_view_image_tool(config.can_request_original_image_detail),
-        create_download_openai_file_tool(),
         create_spawn_agent_tool(&config),
         create_send_input_tool(),
         create_wait_agent_tool(),
