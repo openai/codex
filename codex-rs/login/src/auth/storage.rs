@@ -23,6 +23,9 @@ use crate::token_data::TokenData;
 use codex_app_server_protocol::AuthMode;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
+use codex_keyring_store::delete_json_from_keyring;
+use codex_keyring_store::load_json_from_keyring;
+use codex_keyring_store::save_json_to_keyring;
 use once_cell::sync::Lazy;
 
 /// Determine where Codex should store CLI auth credentials.
@@ -162,47 +165,39 @@ impl KeyringAuthStorage {
         }
     }
 
-    fn load_from_keyring(&self, key: &str) -> std::io::Result<Option<AuthDotJson>> {
-        match self.keyring_store.load(KEYRING_SERVICE, key) {
-            Ok(Some(serialized)) => serde_json::from_str(&serialized).map(Some).map_err(|err| {
-                std::io::Error::other(format!(
-                    "failed to deserialize CLI auth from keyring: {err}"
-                ))
-            }),
-            Ok(None) => Ok(None),
-            Err(error) => Err(std::io::Error::other(format!(
-                "failed to load CLI auth from keyring: {}",
-                error.message()
-            ))),
-        }
-    }
-
-    fn save_to_keyring(&self, key: &str, value: &str) -> std::io::Result<()> {
-        match self.keyring_store.save(KEYRING_SERVICE, key, value) {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                let message = format!(
-                    "failed to write OAuth tokens to keyring: {}",
-                    error.message()
-                );
-                warn!("{message}");
-                Err(std::io::Error::other(message))
-            }
-        }
+    fn load_auth_from_keyring(&self, base_key: &str) -> std::io::Result<Option<AuthDotJson>> {
+        let Some(value) =
+            load_json_from_keyring(self.keyring_store.as_ref(), KEYRING_SERVICE, base_key)
+                .map_err(|err| {
+                    std::io::Error::other(format!("failed to load CLI auth from keyring: {err}"))
+                })?
+        else {
+            return Ok(None);
+        };
+        serde_json::from_value(value).map(Some).map_err(|err| {
+            std::io::Error::other(format!(
+                "failed to deserialize CLI auth from keyring: {err}"
+            ))
+        })
     }
 }
 
 impl AuthStorageBackend for KeyringAuthStorage {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
         let key = compute_store_key(&self.codex_home)?;
-        self.load_from_keyring(&key)
+        self.load_auth_from_keyring(&key)
     }
 
     fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
-        let key = compute_store_key(&self.codex_home)?;
-        // Simpler error mapping per style: prefer method reference over closure
-        let serialized = serde_json::to_string(auth).map_err(std::io::Error::other)?;
-        self.save_to_keyring(&key, &serialized)?;
+        let base_key = compute_store_key(&self.codex_home)?;
+        let value = serde_json::to_value(auth).map_err(std::io::Error::other)?;
+        save_json_to_keyring(
+            self.keyring_store.as_ref(),
+            KEYRING_SERVICE,
+            &base_key,
+            &value,
+        )
+        .map_err(|err| std::io::Error::other(format!("failed to write auth to keyring: {err}")))?;
         if let Err(err) = delete_file_if_exists(&self.codex_home) {
             warn!("failed to remove CLI auth fallback file: {err}");
         }
@@ -210,13 +205,12 @@ impl AuthStorageBackend for KeyringAuthStorage {
     }
 
     fn delete(&self) -> std::io::Result<bool> {
-        let key = compute_store_key(&self.codex_home)?;
-        let keyring_removed = self
-            .keyring_store
-            .delete(KEYRING_SERVICE, &key)
-            .map_err(|err| {
-                std::io::Error::other(format!("failed to delete auth from keyring: {err}"))
-            })?;
+        let base_key = compute_store_key(&self.codex_home)?;
+        let keyring_removed =
+            delete_json_from_keyring(self.keyring_store.as_ref(), KEYRING_SERVICE, &base_key)
+                .map_err(|err| {
+                    std::io::Error::other(format!("failed to delete auth from keyring: {err}"))
+                })?;
         let file_removed = delete_file_if_exists(&self.codex_home)?;
         Ok(keyring_removed || file_removed)
     }
