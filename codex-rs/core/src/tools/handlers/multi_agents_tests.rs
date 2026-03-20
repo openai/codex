@@ -22,6 +22,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::RolloutItem;
 use pretty_assertions::assert_eq;
@@ -210,6 +211,47 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
         .await;
     assert_eq!(snapshot.approval_policy, AskForApproval::OnRequest);
     assert_eq!(snapshot.model_provider_id, "ollama");
+}
+
+#[tokio::test]
+async fn spawn_agent_explorer_role_preserves_requested_model_and_reasoning_settings() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        agent_id: String,
+    }
+
+    let (mut session, turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+
+    let invocation = invocation(
+        Arc::new(session),
+        Arc::new(turn),
+        "spawn_agent",
+        function_payload(json!({
+            "message": "inspect this repo",
+            "agent_type": "explorer",
+            "model": "gpt-5.2",
+            "reasoning_effort": "low",
+        })),
+    );
+    let output = SpawnAgentHandler
+        .handle(invocation)
+        .await
+        .expect("spawn_agent should succeed");
+    let (content, _) = expect_text_output(output);
+    let result: SpawnAgentResult =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    let agent_id = agent_id(&result.agent_id).expect("agent_id should be valid");
+    let snapshot = manager
+        .get_thread(agent_id)
+        .await
+        .expect("spawned agent thread should exist")
+        .config_snapshot()
+        .await;
+
+    assert_eq!(snapshot.model, "gpt-5.2");
+    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::Low));
 }
 
 #[tokio::test]

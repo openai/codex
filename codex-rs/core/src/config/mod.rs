@@ -1945,6 +1945,7 @@ fn add_additional_file_system_writes(
 #[derive(Default, Debug, Clone)]
 pub struct ConfigOverrides {
     pub model: Option<String>,
+    pub model_reasoning_effort: Option<ReasoningEffort>,
     pub review_model: Option<String>,
     pub cwd: Option<PathBuf>,
     pub approval_policy: Option<AskForApproval>,
@@ -2143,6 +2144,7 @@ impl Config {
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
             model,
+            model_reasoning_effort: override_model_reasoning_effort,
             review_model: override_review_model,
             cwd,
             approval_policy: approval_policy_override,
@@ -2759,9 +2761,9 @@ impl Config {
                 .or(show_raw_agent_reasoning)
                 .unwrap_or(false),
             guardian_developer_instructions,
-            model_reasoning_effort: config_profile
+            model_reasoning_effort: override_model_reasoning_effort.or(config_profile
                 .model_reasoning_effort
-                .or(cfg.model_reasoning_effort),
+                .or(cfg.model_reasoning_effort)),
             plan_mode_reasoning_effort: config_profile
                 .plan_mode_reasoning_effort
                 .or(cfg.plan_mode_reasoning_effort),
