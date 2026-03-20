@@ -58,7 +58,10 @@ fn requirements_allowed_domains_are_a_baseline_for_user_allowlist() {
 
     assert_eq!(
         spec.config.network.allowed_domains(),
-        vec!["*.example.com".to_string(), "api.example.com".to_string()]
+        Some(vec![
+            "*.example.com".to_string(),
+            "api.example.com".to_string()
+        ])
     );
     assert_eq!(
         spec.constraints.allowed_domains,
@@ -88,10 +91,10 @@ fn requirements_allowed_domains_do_not_override_user_denies_for_same_pattern() {
     )
     .expect("managed allowlist should not erase a user deny");
 
-    assert!(spec.config.network.allowed_domains().is_empty());
+    assert_eq!(spec.config.network.allowed_domains(), None);
     assert_eq!(
         spec.config.network.denied_domains(),
-        vec!["api.example.com".to_string()]
+        Some(vec!["api.example.com".to_string()])
     );
     assert_eq!(
         spec.constraints.allowed_domains,
@@ -129,11 +132,11 @@ fn requirements_allowlist_expansion_keeps_user_entries_mutable() {
 
     assert_eq!(
         candidate.network.allowed_domains(),
-        vec!["*.example.com".to_string()]
+        Some(vec!["*.example.com".to_string()])
     );
     assert_eq!(
         candidate.network.denied_domains(),
-        vec!["api.example.com".to_string()]
+        Some(vec!["api.example.com".to_string()])
     );
     validate_policy_against_constraints(&candidate, &spec.constraints)
         .expect("user allowlist entries should not become managed constraints");
@@ -165,11 +168,11 @@ fn danger_full_access_keeps_managed_allowlist_and_denylist_fixed() {
 
     assert_eq!(
         spec.config.network.allowed_domains(),
-        vec!["*.example.com".to_string()]
+        Some(vec!["*.example.com".to_string()])
     );
     assert_eq!(
         spec.config.network.denied_domains(),
-        vec!["blocked.example.com".to_string()]
+        Some(vec!["blocked.example.com".to_string()])
     );
     assert_eq!(spec.constraints.allowlist_expansion_enabled, Some(false));
     assert_eq!(spec.constraints.denylist_expansion_enabled, Some(false));
@@ -199,7 +202,7 @@ fn managed_allowed_domains_only_disables_default_mode_allowlist_expansion() {
 
     assert_eq!(
         spec.config.network.allowed_domains(),
-        vec!["*.example.com".to_string()]
+        Some(vec!["*.example.com".to_string()])
     );
     assert_eq!(spec.constraints.allowlist_expansion_enabled, Some(false));
 }
@@ -228,7 +231,7 @@ fn managed_allowed_domains_only_ignores_user_allowlist_and_hard_denies_misses() 
 
     assert_eq!(
         spec.config.network.allowed_domains(),
-        vec!["managed.example.com".to_string()]
+        Some(vec!["managed.example.com".to_string()])
     );
     assert_eq!(
         spec.constraints.allowed_domains,
@@ -256,7 +259,7 @@ fn managed_allowed_domains_only_without_managed_allowlist_blocks_all_user_domain
     )
     .expect("managed-only mode should treat missing managed allowlist as empty");
 
-    assert!(spec.config.network.allowed_domains().is_empty());
+    assert_eq!(spec.config.network.allowed_domains(), None);
     assert_eq!(spec.constraints.allowed_domains, Some(Vec::new()));
     assert_eq!(spec.constraints.allowlist_expansion_enabled, Some(false));
     assert!(spec.hard_deny_allowlist_misses);
@@ -280,7 +283,7 @@ fn managed_allowed_domains_only_blocks_all_user_domains_in_full_access_without_m
     )
     .expect("managed-only mode should treat missing managed allowlist as empty");
 
-    assert!(spec.config.network.allowed_domains().is_empty());
+    assert_eq!(spec.config.network.allowed_domains(), None);
     assert_eq!(spec.constraints.allowed_domains, Some(Vec::new()));
     assert_eq!(spec.constraints.allowlist_expansion_enabled, Some(false));
     assert!(spec.hard_deny_allowlist_misses);
@@ -309,13 +312,13 @@ fn deny_only_requirements_do_not_create_allow_constraints_in_full_access() {
 
     assert_eq!(
         spec.config.network.allowed_domains(),
-        vec!["api.example.com".to_string()]
+        Some(vec!["api.example.com".to_string()])
     );
     assert_eq!(spec.constraints.allowed_domains, None);
     assert_eq!(spec.constraints.allowlist_expansion_enabled, None);
     assert_eq!(
         spec.config.network.denied_domains(),
-        vec!["managed-blocked.example.com".to_string()]
+        Some(vec!["managed-blocked.example.com".to_string()])
     );
 }
 
@@ -342,11 +345,11 @@ fn allow_only_requirements_do_not_create_deny_constraints_in_full_access() {
 
     assert_eq!(
         spec.config.network.allowed_domains(),
-        vec!["managed.example.com".to_string()]
+        Some(vec!["managed.example.com".to_string()])
     );
     assert_eq!(
         spec.config.network.denied_domains(),
-        vec!["blocked.example.com".to_string()]
+        Some(vec!["blocked.example.com".to_string()])
     );
     assert_eq!(spec.constraints.denied_domains, None);
     assert_eq!(spec.constraints.denylist_expansion_enabled, None);
@@ -375,10 +378,10 @@ fn requirements_denied_domains_are_a_baseline_for_default_mode() {
 
     assert_eq!(
         spec.config.network.denied_domains(),
-        vec![
+        Some(vec![
             "managed-blocked.example.com".to_string(),
             "blocked.example.com".to_string()
-        ]
+        ])
     );
     assert_eq!(
         spec.constraints.denied_domains,
@@ -417,11 +420,11 @@ fn requirements_denylist_expansion_keeps_user_entries_mutable() {
 
     assert_eq!(
         candidate.network.allowed_domains(),
-        vec!["blocked.example.com".to_string()]
+        Some(vec!["blocked.example.com".to_string()])
     );
     assert_eq!(
         candidate.network.denied_domains(),
-        vec!["managed-blocked.example.com".to_string()]
+        Some(vec!["managed-blocked.example.com".to_string()])
     );
     validate_policy_against_constraints(&candidate, &spec.constraints)
         .expect("user denylist entries should not become managed constraints");

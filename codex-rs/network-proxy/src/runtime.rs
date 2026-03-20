@@ -296,8 +296,8 @@ impl NetworkProxyState {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
         Ok((
-            guard.config.network.allowed_domains(),
-            guard.config.network.denied_domains(),
+            guard.config.network.allowed_domains().unwrap_or_default(),
+            guard.config.network.denied_domains().unwrap_or_default(),
         ))
     }
 
@@ -341,17 +341,18 @@ impl NetworkProxyState {
             Ok(host) => host,
             Err(_) => return Ok(HostBlockDecision::Blocked(HostBlockReason::NotAllowed)),
         };
-        let (deny_set, allow_set, allow_local_binding, allowed_domains_empty, allowed_domains) = {
+        let (deny_set, allow_set, allow_local_binding, allowed_domains) = {
             let guard = self.state.read().await;
             let allowed_domains = guard.config.network.allowed_domains();
             (
                 guard.deny_set.clone(),
                 guard.allow_set.clone(),
                 guard.config.network.allow_local_binding,
-                allowed_domains.is_empty(),
                 allowed_domains,
             )
         };
+        let allowed_domains_empty = allowed_domains.is_none();
+        let allowed_domains = allowed_domains.unwrap_or_default();
 
         let host_str = host.as_str();
 
@@ -684,15 +685,15 @@ impl DomainListKind {
 
     fn entries(self, network: &crate::config::NetworkProxySettings) -> Vec<String> {
         match self {
-            Self::Allow => network.allowed_domains(),
-            Self::Deny => network.denied_domains(),
+            Self::Allow => network.allowed_domains().unwrap_or_default(),
+            Self::Deny => network.denied_domains().unwrap_or_default(),
         }
     }
 
     fn opposite_entries(self, network: &crate::config::NetworkProxySettings) -> Vec<String> {
         match self {
-            Self::Allow => network.denied_domains(),
-            Self::Deny => network.allowed_domains(),
+            Self::Allow => network.denied_domains().unwrap_or_default(),
+            Self::Deny => network.allowed_domains().unwrap_or_default(),
         }
     }
 }
@@ -724,15 +725,15 @@ async fn host_resolves_to_non_public_ip(host: &str, port: u16) -> bool {
 }
 
 fn log_policy_changes(previous: &NetworkProxyConfig, next: &NetworkProxyConfig) {
-    let previous_allowed_domains = previous.network.allowed_domains();
-    let next_allowed_domains = next.network.allowed_domains();
+    let previous_allowed_domains = previous.network.allowed_domains().unwrap_or_default();
+    let next_allowed_domains = next.network.allowed_domains().unwrap_or_default();
     log_domain_list_changes(
         "allowlist",
         &previous_allowed_domains,
         &next_allowed_domains,
     );
-    let previous_denied_domains = previous.network.denied_domains();
-    let next_denied_domains = next.network.denied_domains();
+    let previous_denied_domains = previous.network.denied_domains().unwrap_or_default();
+    let next_denied_domains = next.network.denied_domains().unwrap_or_default();
     log_domain_list_changes("denylist", &previous_denied_domains, &next_denied_domains);
 }
 

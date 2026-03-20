@@ -221,7 +221,6 @@ impl std::fmt::Display for NetworkUnixSocketPermissionToml {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct NetworkRequirementsToml {
     pub enabled: Option<bool>,
     pub http_port: Option<u16>,
@@ -907,18 +906,6 @@ mod tests {
                 )),
             }
         );
-    }
-
-    #[test]
-    fn network_requirements_reject_legacy_network_list_keys() {
-        let err = from_str::<NetworkRequirementsToml>(
-            r#"
-allowed_domains = ["example.com"]
-"#,
-        )
-        .expect_err("legacy network list keys should fail");
-
-        assert!(err.to_string().contains("unknown field `allowed_domains`"));
     }
 
     #[test]

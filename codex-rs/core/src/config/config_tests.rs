@@ -361,19 +361,6 @@ allow_upstream_proxy = false
 }
 
 #[test]
-fn config_toml_rejects_legacy_permission_profile_network_lists() {
-    let toml = r#"
-default_permissions = "workspace"
-
-[permissions.workspace.network]
-allowed_domains = ["openai.com"]
-"#;
-    let err = toml::from_str::<ConfigToml>(toml).expect_err("legacy network lists should fail");
-
-    assert!(err.to_string().contains("unknown field `allowed_domains`"));
-}
-
-#[test]
 fn permissions_profiles_network_populates_runtime_network_proxy_spec() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;

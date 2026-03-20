@@ -115,20 +115,29 @@ pub struct NetworkUnixSocketPermissions {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct NetworkProxySettings {
+    #[serde(default)]
     pub enabled: bool,
+    #[serde(default = "default_proxy_url")]
     pub proxy_url: String,
     pub enable_socks5: bool,
+    #[serde(default = "default_socks_url")]
     pub socks_url: String,
     pub enable_socks5_udp: bool,
     pub allow_upstream_proxy: bool,
+    #[serde(default)]
     pub dangerously_allow_non_loopback_proxy: bool,
+    #[serde(default)]
     pub dangerously_allow_all_unix_sockets: bool,
+    #[serde(default)]
     pub mode: NetworkMode,
+    #[serde(default)]
     pub domains: Option<NetworkDomainPermissions>,
+    #[serde(default)]
     pub unix_sockets: Option<NetworkUnixSocketPermissions>,
     pub allow_local_binding: bool,
+    #[serde(default)]
     pub mitm: bool,
 }
 
@@ -153,32 +162,26 @@ impl Default for NetworkProxySettings {
 }
 
 impl NetworkProxySettings {
-    pub fn allowed_domains(&self) -> Vec<String> {
-        self.domains
-            .as_ref()
-            .map(|domains| {
-                domains
-                    .effective_entries()
-                    .iter()
-                    .filter(|entry| matches!(entry.permission, NetworkDomainPermission::Allow))
-                    .map(|entry| entry.pattern.clone())
-                    .collect()
-            })
-            .unwrap_or_default()
+    pub fn allowed_domains(&self) -> Option<Vec<String>> {
+        self.domain_entries(NetworkDomainPermission::Allow)
     }
 
-    pub fn denied_domains(&self) -> Vec<String> {
+    pub fn denied_domains(&self) -> Option<Vec<String>> {
+        self.domain_entries(NetworkDomainPermission::Deny)
+    }
+
+    fn domain_entries(&self, permission: NetworkDomainPermission) -> Option<Vec<String>> {
         self.domains
             .as_ref()
             .map(|domains| {
                 domains
                     .effective_entries()
                     .iter()
-                    .filter(|entry| matches!(entry.permission, NetworkDomainPermission::Deny))
+                    .filter(|entry| entry.permission == permission)
                     .map(|entry| entry.pattern.clone())
                     .collect()
             })
-            .unwrap_or_default()
+            .filter(|entries: &Vec<String>| !entries.is_empty())
     }
 
     pub fn allow_unix_sockets(&self) -> Vec<String> {
@@ -608,28 +611,17 @@ mod tests {
     }
 
     #[test]
-    fn network_proxy_settings_reject_legacy_network_list_keys() {
-        let err = serde_json::from_str::<NetworkProxyConfig>(
-            r#"{
-                "network": {
-                    "allowed_domains": ["example.com"]
-                }
-            }"#,
-        )
-        .expect_err("legacy network list keys should fail");
-
-        assert!(err.to_string().contains("unknown field `allowed_domains`"));
-    }
-
-    #[test]
     fn set_allowed_domains_preserves_existing_deny_for_same_pattern() {
         let mut settings = NetworkProxySettings::default();
         settings.set_denied_domains(vec!["example.com".to_string()]);
 
         settings.set_allowed_domains(vec!["example.com".to_string()]);
 
-        assert!(settings.allowed_domains().is_empty());
-        assert_eq!(settings.denied_domains(), vec!["example.com".to_string()]);
+        assert_eq!(settings.allowed_domains(), None);
+        assert_eq!(
+            settings.denied_domains(),
+            Some(vec!["example.com".to_string()])
+        );
     }
 
     #[test]

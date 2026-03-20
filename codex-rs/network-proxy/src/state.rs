@@ -41,14 +41,15 @@ pub struct PartialNetworkProxyConfig {
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct PartialNetworkConfig {
     pub enabled: Option<bool>,
     pub mode: Option<NetworkMode>,
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
+    #[serde(default)]
     pub domains: Option<NetworkDomainPermissions>,
+    #[serde(default)]
     pub unix_sockets: Option<NetworkUnixSocketPermissions>,
     pub allow_local_binding: Option<bool>,
 }
@@ -58,9 +59,9 @@ pub fn build_config_state(
     constraints: NetworkProxyConstraints,
 ) -> anyhow::Result<ConfigState> {
     crate::config::validate_unix_socket_allowlist_paths(&config)?;
-    let allowed_domains = config.network.allowed_domains();
-    let denied_domains = config.network.denied_domains();
-    validate_denylist_domain_patterns("network.denied_domains", &denied_domains)
+    let allowed_domains = config.network.allowed_domains().unwrap_or_default();
+    let denied_domains = config.network.denied_domains().unwrap_or_default();
+    validate_non_global_wildcard_domain_patterns("network.denied_domains", &denied_domains)
         .map_err(NetworkProxyConstraintError::into_anyhow)?;
     let deny_set = compile_denylist_globset(&denied_domains)?;
     let allow_set = compile_allowlist_globset(&allowed_domains)?;
@@ -106,14 +107,17 @@ pub fn validate_policy_against_constraints(
     }
 
     let enabled = config.network.enabled;
-    let config_allowed_domains = config.network.allowed_domains();
-    let config_denied_domains = config.network.denied_domains();
+    let config_allowed_domains = config.network.allowed_domains().unwrap_or_default();
+    let config_denied_domains = config.network.denied_domains().unwrap_or_default();
     let denied_domain_overrides: HashSet<String> = config_denied_domains
         .iter()
         .map(|entry| entry.to_ascii_lowercase())
         .collect();
     let config_allow_unix_sockets = config.network.allow_unix_sockets();
-    validate_denylist_domain_patterns("network.denied_domains", &config_denied_domains)?;
+    validate_non_global_wildcard_domain_patterns(
+        "network.denied_domains",
+        &config_denied_domains,
+    )?;
     if let Some(max_enabled) = constraints.enabled {
         validate(enabled, move |candidate| {
             if *candidate && !max_enabled {
@@ -213,6 +217,7 @@ pub fn validate_policy_against_constraints(
     }
 
     if let Some(allowed_domains) = &constraints.allowed_domains {
+        validate_non_global_wildcard_domain_patterns("network.allowed_domains", allowed_domains)?;
         match constraints.allowlist_expansion_enabled {
             Some(true) => {
                 let required_set: HashSet<String> = allowed_domains
@@ -299,7 +304,7 @@ pub fn validate_policy_against_constraints(
     }
 
     if let Some(denied_domains) = &constraints.denied_domains {
-        validate_denylist_domain_patterns("network.denied_domains", denied_domains)?;
+        validate_non_global_wildcard_domain_patterns("network.denied_domains", denied_domains)?;
         let required_set: HashSet<String> = denied_domains
             .iter()
             .map(|s| s.to_ascii_lowercase())
@@ -372,7 +377,7 @@ pub fn validate_policy_against_constraints(
     Ok(())
 }
 
-fn validate_denylist_domain_patterns(
+fn validate_non_global_wildcard_domain_patterns(
     field_name: &'static str,
     patterns: &[String],
 ) -> Result<(), NetworkProxyConstraintError> {
@@ -414,20 +419,4 @@ fn network_mode_rank(mode: NetworkMode) -> u8 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn partial_network_proxy_config_rejects_legacy_network_list_keys() {
-        let err = serde_json::from_str::<PartialNetworkProxyConfig>(
-            r#"{
-                "network": {
-                    "allowed_domains": ["example.com"]
-                }
-            }"#,
-        )
-        .expect_err("legacy network list keys should fail");
-
-        assert!(err.to_string().contains("unknown field `allowed_domains`"));
-    }
-}
+mod tests {}
