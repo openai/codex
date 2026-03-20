@@ -252,7 +252,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
 
     let mut tool_event = None;
     wait_for_event_with_timeout(
-        &codex,
+        codex,
         |event| match event {
             EventMsg::ViewImageToolCall(_) => {
                 tool_event = Some(event.clone());

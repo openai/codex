@@ -134,7 +134,9 @@ pub async fn test_env() -> Result<TestEnv> {
         None => {
             let local_cwd_temp_dir = TempDir::new()?;
             let cwd = local_cwd_temp_dir.path().to_path_buf();
-            let environment = codex_exec_server::Environment::create(None).await?;
+            let environment =
+                codex_exec_server::Environment::create(/*experimental_exec_server_url*/ None)
+                    .await?;
             Ok(TestEnv {
                 environment,
                 cwd,
