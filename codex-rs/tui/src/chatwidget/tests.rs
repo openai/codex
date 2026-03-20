@@ -318,6 +318,51 @@ async fn resume_initial_replay_does_not_duplicate_completed_agent_message_histor
 }
 
 #[tokio::test]
+async fn thread_snapshot_replay_uses_turn_complete_last_agent_message_without_completed_item() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event_replay(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    drain_insert_history(&mut rx);
+
+    chat.handle_codex_event_replay(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "stale delta".to_string(),
+        }),
+    });
+    chat.handle_codex_event_replay(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: Some("assistant reply".to_string()),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected replayed assistant message to render from TurnComplete fallback"
+    );
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("assistant reply"),
+        "expected replayed assistant message, got {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("stale delta"),
+        "expected replay fallback to ignore stale delta content, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
 async fn replayed_user_message_preserves_text_elements_and_local_images() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
 
@@ -1939,6 +1984,7 @@ async fn make_chatwidget_manual(
         terminal_title_status_kind: TerminalTitleStatusKind::Working,
         retry_status_header: None,
         pending_status_indicator_restore: false,
+        thread_snapshot_replay_saw_final_agent_message_item: false,
         suppress_queue_autosend: false,
         thread_id: None,
         thread_name: None,
@@ -3149,7 +3195,7 @@ async fn plan_implementation_popup_skips_when_messages_queued() {
     chat.bottom_pane.set_task_running(true);
     chat.queue_user_message("Queued message".into());
 
-    chat.on_task_complete(Some("Plan details".to_string()), false);
+    chat.on_task_complete(Some("Plan details".to_string()), None);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -3175,7 +3221,7 @@ async fn plan_implementation_popup_skips_without_proposed_plan() {
             status: StepStatus::Pending,
         }],
     });
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, None);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -3196,7 +3242,7 @@ async fn plan_implementation_popup_shows_after_proposed_plan_output() {
     chat.on_task_started();
     chat.on_plan_delta("- Step 1\n- Step 2\n".to_string());
     chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, None);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -3238,7 +3284,7 @@ async fn plan_implementation_popup_skips_when_steer_follows_proposed_plan() {
     }
 
     complete_user_message(&mut chat, "user-1", "Please continue.");
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, None);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -3284,7 +3330,7 @@ async fn plan_implementation_popup_shows_after_new_plan_follows_steer() {
 "
         .to_string(),
     );
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, None);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -3314,7 +3360,7 @@ async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
         }],
     });
     chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, None);
 
     let popup = render_bottom_popup(&chat, 80);
     assert!(
@@ -3944,6 +3990,24 @@ async fn idle_commit_ticks_do_not_restore_status_without_commentary_completion()
     // A second idle tick should not toggle the row back on and cause jitter.
     chat.on_commit_tick();
     assert_eq!(chat.bottom_pane.status_indicator_visible(), false);
+}
+
+#[tokio::test]
+async fn commit_tick_requests_redraw_when_active_stream_cell_changes() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.on_task_started();
+    chat.on_agent_message_delta("Preamble line\n".to_string());
+
+    let (frame_requester, mut frame_schedule_rx) = FrameRequester::test_observable();
+    chat.frame_requester = frame_requester;
+
+    chat.on_commit_tick();
+
+    assert!(
+        chat.active_cell.is_some(),
+        "expected commit tick to update active cell"
+    );
+    assert!(frame_schedule_rx.try_recv().is_ok());
 }
 
 #[tokio::test]
@@ -5210,7 +5274,7 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
     );
     drain_insert_history(&mut rx);
 
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, None);
     end_exec(&mut chat, begin, "", "", 0);
 
     let cells = drain_insert_history(&mut rx);
@@ -5224,7 +5288,7 @@ async fn unified_exec_end_after_task_complete_is_suppressed() {
 async fn unified_exec_interaction_after_task_complete_is_suppressed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.on_task_started();
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, None);
 
     chat.handle_codex_event(Event {
         id: "call-1".to_string(),
@@ -11077,7 +11141,7 @@ async fn runtime_metrics_websocket_timing_logs_and_final_separator_sums_totals()
         .expect("expected websocket timing log");
     assert!(second_log.contains("TTFT: 80ms (iapi)"));
 
-    chat.on_task_complete(None, false);
+    chat.on_task_complete(None, None);
     let mut final_separator = None;
     while let Ok(event) = rx.try_recv() {
         if let AppEvent::InsertHistoryCell(cell) = event {

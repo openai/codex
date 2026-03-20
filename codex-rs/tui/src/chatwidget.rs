@@ -731,6 +731,10 @@ pub(crate) struct ChatWidget {
     retry_status_header: Option<String>,
     // Set when commentary output completes; once stream queues go idle we restore the status row.
     pending_status_indicator_restore: bool,
+    // Older thread snapshots may lack a final `AgentMessageItem` and only preserve
+    // `TurnComplete.last_agent_message`. Track whether the replayed turn already produced a
+    // final assistant item so replay can fall back only when needed.
+    thread_snapshot_replay_saw_final_agent_message_item: bool,
     suppress_queue_autosend: bool,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
@@ -1177,12 +1181,12 @@ impl ChatWidget {
     /// This gate prevents flicker while normal output is still actively
     /// streaming, but still restores a visible "working" affordance when a
     /// commentary block ends before the turn itself has completed.
-    fn maybe_restore_status_indicator_after_stream_idle(&mut self) {
+    fn maybe_restore_status_indicator_after_stream_idle(&mut self) -> bool {
         if !self.pending_status_indicator_restore
             || !self.bottom_pane.is_task_running()
             || !self.stream_controllers_idle()
         {
-            return;
+            return false;
         }
 
         self.bottom_pane.ensure_status_indicator();
@@ -1193,6 +1197,7 @@ impl ChatWidget {
             self.current_status.details_max_lines,
         );
         self.pending_status_indicator_restore = false;
+        true
     }
 
     /// Update the status indicator header and details.
@@ -1760,6 +1765,7 @@ impl ChatWidget {
         self.update_task_running_state();
         self.retry_status_header = None;
         self.pending_status_indicator_restore = false;
+        self.thread_snapshot_replay_saw_final_agent_message_item = false;
         self.bottom_pane
             .set_interrupt_hint_visible(/*visible*/ true);
         self.terminal_title_status_kind = TerminalTitleStatusKind::Working;
@@ -1769,12 +1775,25 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
+    fn on_task_complete(
+        &mut self,
+        last_agent_message: Option<String>,
+        replay_kind: Option<ReplayKind>,
+    ) {
+        let from_replay = replay_kind.is_some();
         self.submit_pending_steers_after_interrupt = false;
         if let Some(message) = last_agent_message.as_ref()
             && !message.trim().is_empty()
         {
             self.last_copyable_output = Some(message.clone());
+        }
+        if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
+            && !self.thread_snapshot_replay_saw_final_agent_message_item
+            && let Some(message) = last_agent_message.as_deref()
+            && !message.trim().is_empty()
+            && let Some(cell) = self.completed_agent_message_cell(message)
+        {
+            self.add_boxed_history(cell);
         }
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
@@ -1820,6 +1839,7 @@ impl ChatWidget {
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
+        self.thread_snapshot_replay_saw_final_agent_message_item = false;
         self.request_redraw();
 
         let had_pending_steers = !self.pending_steers.is_empty();
@@ -3143,10 +3163,13 @@ impl ChatWidget {
             self.bottom_pane.hide_status_indicator();
             self.active_cell = Some(cell);
             self.bump_active_cell_revision();
+            self.request_redraw();
         }
 
         if outcome.has_controller && outcome.all_idle {
-            self.maybe_restore_status_indicator_after_stream_idle();
+            if self.maybe_restore_status_indicator_after_stream_idle() {
+                self.request_redraw();
+            }
             self.app_event_tx.send(AppEvent::StopCommitAnimation);
         }
 
@@ -3700,6 +3723,7 @@ impl ChatWidget {
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            thread_snapshot_replay_saw_final_agent_message_item: false,
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
@@ -3898,6 +3922,7 @@ impl ChatWidget {
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            thread_snapshot_replay_saw_final_agent_message_item: false,
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
@@ -4088,6 +4113,7 @@ impl ChatWidget {
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            thread_snapshot_replay_saw_final_agent_message_item: false,
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
@@ -5393,7 +5419,7 @@ impl ChatWidget {
             }
             EventMsg::TurnComplete(TurnCompleteEvent {
                 last_agent_message, ..
-            }) => self.on_task_complete(last_agent_message, from_replay),
+            }) => self.on_task_complete(last_agent_message, replay_kind),
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);
@@ -5610,6 +5636,11 @@ impl ChatWidget {
                     self.on_plan_item_completed(plan_item.text.clone());
                 }
                 if let codex_protocol::items::TurnItem::AgentMessage(item) = item {
+                    if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
+                        && matches!(item.phase, Some(MessagePhase::FinalAnswer) | None)
+                    {
+                        self.thread_snapshot_replay_saw_final_agent_message_item = true;
+                    }
                     self.on_agent_message_item_completed(item, replay_kind);
                 }
             }
