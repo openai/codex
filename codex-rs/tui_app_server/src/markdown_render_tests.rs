@@ -9,6 +9,10 @@ use crate::markdown_render::COLON_LOCATION_SUFFIX_RE;
 use crate::markdown_render::HASH_LOCATION_SUFFIX_RE;
 use crate::markdown_render::render_markdown_text;
 use crate::markdown_render::render_markdown_text_with_width_and_cwd;
+use crate::osc8::ParsedOsc8;
+use crate::osc8::osc8_hyperlink;
+use crate::osc8::parse_osc8_hyperlink;
+use crate::osc8::strip_osc8_hyperlinks;
 use insta::assert_snapshot;
 
 fn render_markdown_text_for_cwd(input: &str, cwd: &Path) -> Text<'static> {
@@ -651,9 +655,12 @@ fn strong_emphasis() {
 fn link() {
     let text = render_markdown_text("[Link](https://example.com)");
     let expected = Text::from(Line::from_iter([
-        "Link".into(),
+        osc8_hyperlink("https://example.com", "Link")
+            .underlined(),
         " (".into(),
-        "https://example.com".cyan().underlined(),
+        osc8_hyperlink("https://example.com", "https://example.com")
+            .cyan()
+            .underlined(),
         ")".into(),
     ]));
     assert_eq!(text, expected);
@@ -776,15 +783,91 @@ fn file_link_uses_target_path_for_hash_range() {
 }
 
 #[test]
-fn url_link_shows_destination() {
+fn url_link_renders_clickable_label_with_destination() {
     let text = render_markdown_text("[docs](https://example.com/docs)");
     let expected = Text::from(Line::from_iter([
-        "docs".into(),
+        osc8_hyperlink("https://example.com/docs", "docs")
+            .underlined(),
         " (".into(),
-        "https://example.com/docs".cyan().underlined(),
+        osc8_hyperlink("https://example.com/docs", "https://example.com/docs")
+            .cyan()
+            .underlined(),
         ")".into(),
     ]));
     assert_eq!(text, expected);
+}
+
+#[test]
+fn url_link_with_inline_code_is_clickable() {
+    let text = render_markdown_text("[`docs`](https://example.com/docs)");
+    let expected = Text::from(Line::from_iter([
+        osc8_hyperlink("https://example.com/docs", "docs")
+            .cyan()
+            .underlined(),
+        " (".into(),
+        osc8_hyperlink("https://example.com/docs", "https://example.com/docs")
+            .cyan()
+            .underlined(),
+        ")".into(),
+    ]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn nested_styled_url_link_preserves_destination_outer_style() {
+    let text = render_markdown_text("***[docs](https://example.com/docs)***");
+    let expected = Text::from(Line::from_iter([
+        osc8_hyperlink("https://example.com/docs", "docs")
+            .bold()
+            .italic()
+            .underlined(),
+        " (".into(),
+        osc8_hyperlink("https://example.com/docs", "https://example.com/docs")
+            .bold()
+            .italic()
+            .cyan()
+            .underlined(),
+        ")".into(),
+    ]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn wrapped_url_link_label_stays_clickable_across_lines() {
+    let text = render_markdown_text_with_width_and_cwd(
+        "[abcdefgh](https://example.com/docs)",
+        Some(4),
+        None,
+    );
+
+    let wrapped_label_lines = text.lines.iter().take(3).cloned().collect::<Vec<_>>();
+    let expected = vec![
+        Line::from(osc8_hyperlink("https://example.com/docs", "abc").underlined()),
+        Line::from(osc8_hyperlink("https://example.com/docs", "def").underlined()),
+        Line::from(osc8_hyperlink("https://example.com/docs", "gh").underlined()),
+    ];
+    assert_eq!(wrapped_label_lines, expected);
+
+    let first = text.lines[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert_eq!(
+        parse_osc8_hyperlink(&first),
+        Some(ParsedOsc8 {
+            destination: "https://example.com/docs",
+            text: "abc",
+        })
+    );
+}
+
+#[test]
+fn url_link_sanitizes_control_chars() {
+    assert_eq!(
+        osc8_hyperlink("https://example.com/\u{1b}]8;;\u{07}injected", "unsafe"),
+        "\u{1b}]8;;https://example.com/]8;;injected\u{7}unsafe\u{1b}]8;;\u{7}"
+    );
 }
 
 #[test]
@@ -797,10 +880,12 @@ fn markdown_render_file_link_snapshot() {
         .lines
         .iter()
         .map(|l| {
-            l.spans
+            let line = l
+                .spans
                 .iter()
                 .map(|s| s.content.clone())
-                .collect::<String>()
+                .collect::<String>();
+            strip_osc8_hyperlinks(&line)
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -819,10 +904,12 @@ fn unordered_list_local_file_link_stays_inline_with_following_text() {
         .lines
         .iter()
         .map(|line| {
-            line.spans
+            let rendered = line
+                .spans
                 .iter()
                 .map(|span| span.content.as_ref())
-                .collect::<String>()
+                .collect::<String>();
+            strip_osc8_hyperlinks(&rendered)
         })
         .collect::<Vec<_>>();
     assert_eq!(
@@ -1161,10 +1248,12 @@ URL with parentheses: [link](https://example.com/path_(with)_parens).
         .lines
         .iter()
         .map(|l| {
-            l.spans
+            let line = l
+                .spans
                 .iter()
                 .map(|s| s.content.clone())
-                .collect::<String>()
+                .collect::<String>();
+            strip_osc8_hyperlinks(&line)
         })
         .collect::<Vec<_>>()
         .join("\n");

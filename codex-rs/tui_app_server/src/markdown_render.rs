@@ -5,6 +5,7 @@
 //! transcripts show the real file target (including normalized location suffixes) and can shorten
 //! absolute paths relative to a known working directory.
 
+use crate::osc8::osc8_hyperlink;
 use crate::render::highlight::highlight_code_to_lines;
 use crate::render::line_utils::line_to_static;
 use crate::wrapping::RtOptions;
@@ -42,7 +43,8 @@ struct MarkdownStyles {
     strikethrough: Style,
     ordered_list_marker: Style,
     unordered_list_marker: Style,
-    link: Style,
+    link_label: Style,
+    link_destination: Style,
     blockquote: Style,
 }
 
@@ -63,7 +65,8 @@ impl Default for MarkdownStyles {
             strikethrough: Style::new().crossed_out(),
             ordered_list_marker: Style::new().light_blue(),
             unordered_list_marker: Style::new(),
-            link: Style::new().cyan().underlined(),
+            link_label: Style::new().underlined(),
+            link_destination: Style::new().cyan().underlined(),
             blockquote: Style::new().green(),
         }
     }
@@ -272,7 +275,12 @@ where
             Tag::Emphasis => self.push_inline_style(self.styles.emphasis),
             Tag::Strong => self.push_inline_style(self.styles.strong),
             Tag::Strikethrough => self.push_inline_style(self.styles.strikethrough),
-            Tag::Link { dest_url, .. } => self.push_link(dest_url.to_string()),
+            Tag::Link { dest_url, .. } => {
+                self.push_link(dest_url.to_string());
+                if self.remote_link_destination().is_some() {
+                    self.push_inline_style(self.styles.link_label);
+                }
+            }
             Tag::HtmlBlock
             | Tag::FootnoteDefinition(_)
             | Tag::Table(_)
@@ -407,7 +415,7 @@ where
             if i > 0 {
                 self.push_line(Line::default());
             }
-            let content = line.to_string();
+            let content = self.maybe_wrap_remote_link_text(line);
             let span = Span::styled(
                 content,
                 self.inline_styles.last().copied().unwrap_or_default(),
@@ -426,7 +434,13 @@ where
             self.push_line(Line::default());
             self.pending_marker_line = false;
         }
-        let span = Span::from(code.into_string()).style(self.styles.code);
+        let style = self
+            .inline_styles
+            .last()
+            .copied()
+            .unwrap_or_default()
+            .patch(self.styles.code);
+        let span = Span::from(self.maybe_wrap_remote_link_text(code.as_ref())).style(style);
         self.push_span(span);
     }
 
@@ -445,7 +459,7 @@ where
                 self.push_line(Line::default());
             }
             let style = self.inline_styles.last().copied().unwrap_or_default();
-            self.push_span(Span::styled(line.to_string(), style));
+            self.push_span(Span::styled(self.maybe_wrap_remote_link_text(line), style));
         }
         self.needs_newline = !inline;
     }
@@ -596,8 +610,18 @@ where
     fn pop_link(&mut self) {
         if let Some(link) = self.link.take() {
             if link.show_destination {
+                self.pop_inline_style();
+                let destination_style = self
+                    .inline_styles
+                    .last()
+                    .copied()
+                    .unwrap_or_default()
+                    .patch(self.styles.link_destination);
                 self.push_span(" (".into());
-                self.push_span(Span::styled(link.destination, self.styles.link));
+                self.push_span(Span::styled(
+                    osc8_hyperlink(&link.destination, &link.destination),
+                    destination_style,
+                ));
                 self.push_span(")".into());
             } else if let Some(local_target_display) = link.local_target_display {
                 if self.pending_marker_line {
@@ -615,6 +639,20 @@ where
                 self.line_ends_with_local_link_target = true;
             }
         }
+    }
+
+    fn remote_link_destination(&self) -> Option<&str> {
+        self.link
+            .as_ref()
+            .filter(|link| link.show_destination)
+            .map(|link| link.destination.as_str())
+    }
+
+    fn maybe_wrap_remote_link_text(&self, text: &str) -> String {
+        self.remote_link_destination().map_or_else(
+            || text.to_string(),
+            |destination| osc8_hyperlink(destination, text),
+        )
     }
 
     fn suppressing_local_link_label(&self) -> bool {
