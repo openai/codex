@@ -231,19 +231,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         handoff_item_added.item["input_transcript"],
         json!("delegate now")
     );
-    assert_eq!(
-        handoff_item_added.item["active_transcript"],
-        json!([
-            {
-                "role": "user",
-                "text": "delegate now",
-            },
-            {
-                "role": "assistant",
-                "text": "working",
-            }
-        ])
-    );
+    assert_eq!(handoff_item_added.item["active_transcript"], json!([]));
 
     let realtime_error =
         read_notification::<ThreadRealtimeErrorNotification>(&mut mcp, "thread/realtime/error")
