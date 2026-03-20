@@ -612,6 +612,111 @@ async fn denied_guardian_review_moves_parent_transcript_boundary() -> anyhow::Re
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replacing_parent_history_clears_guardian_parent_transcript_boundary() -> anyhow::Result<()>
+{
+    let (session, turn) = crate::codex::make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let boundary = session.clone_history().await.raw_items().len();
+    session
+        .guardian_review_session
+        .set_parent_history_boundary(Some(boundary))
+        .await;
+
+    session
+        .replace_history(
+            vec![
+                ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText {
+                        text:
+                            "Summarized prior authorization: repo is public and push was requested."
+                                .to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                },
+                ResponseItem::Message {
+                    id: None,
+                    role: "assistant".to_string(),
+                    content: vec![ContentItem::OutputText {
+                        text: "Need approval to push the release branch now.".to_string(),
+                    }],
+                    end_turn: None,
+                    phase: None,
+                },
+            ],
+            None,
+        )
+        .await;
+
+    assert_eq!(
+        session
+            .guardian_review_session
+            .parent_history_boundary()
+            .await,
+        None
+    );
+
+    let prompt = build_guardian_prompt_items(
+        session.as_ref(),
+        None,
+        GuardianApprovalRequest::Shell {
+            id: "shell-replaced-history".to_string(),
+            command: vec!["git".to_string(), "push".to_string(), "release".to_string()],
+            cwd: PathBuf::from("/repo/codex-rs/core"),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the release branch.".to_string()),
+        },
+    )
+    .await?;
+    let prompt_text = guardian_prompt_text(&prompt);
+
+    assert!(prompt_text.contains("Summarized prior authorization"));
+    assert!(prompt_text.contains("Need approval to push the release branch now."));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn out_of_range_parent_history_boundary_uses_current_history() -> anyhow::Result<()> {
+    let (session, turn) = crate::codex::make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let out_of_range_boundary = session.clone_history().await.raw_items().len() + 1;
+    session
+        .guardian_review_session
+        .set_parent_history_boundary(Some(out_of_range_boundary))
+        .await;
+
+    let prompt = build_guardian_prompt_items(
+        session.as_ref(),
+        None,
+        GuardianApprovalRequest::Shell {
+            id: "shell-stale-boundary".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: PathBuf::from("/repo/codex-rs/core"),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the docs fix.".to_string()),
+        },
+    )
+    .await?;
+    let prompt_text = guardian_prompt_text(&prompt);
+
+    assert!(prompt_text.contains("Please check the repo visibility"));
+    assert!(prompt_text.contains("The repo is public; I now need approval"));
+
+    Ok(())
+}
+
 #[test]
 fn build_guardian_transcript_reserves_separate_budget_for_tool_evidence() {
     let repeated = "signal ".repeat(8_000);

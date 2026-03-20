@@ -72,7 +72,7 @@ pub(crate) async fn build_guardian_prompt_items(
         .guardian_review_session
         .parent_history_boundary()
         .await
-        .map(|boundary| boundary.min(history_items.len()))
+        .filter(|&boundary| boundary <= history_items.len())
         .unwrap_or_default();
     let transcript_entries = collect_guardian_transcript_entries(&history_items[start_index..]);
     let planned_action_json = format_guardian_action_pretty(&request)?;
