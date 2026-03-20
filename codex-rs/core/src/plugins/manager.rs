@@ -60,6 +60,7 @@ use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
+use tokio::sync::Mutex;
 use toml_edit::value;
 use tracing::info;
 use tracing::warn;
@@ -463,6 +464,7 @@ pub struct PluginsManager {
     store: PluginStore,
     featured_plugin_ids_cache: RwLock<Option<CachedFeaturedPluginIds>>,
     cached_enabled_outcome: RwLock<Option<PluginLoadOutcome>>,
+    remote_sync_lock: Mutex<()>,
     restriction_product: Option<Product>,
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
 }
@@ -488,6 +490,7 @@ impl PluginsManager {
             store: PluginStore::new(codex_home),
             featured_plugin_ids_cache: RwLock::new(None),
             cached_enabled_outcome: RwLock::new(None),
+            remote_sync_lock: Mutex::new(()),
             restriction_product,
             analytics_events_client: RwLock::new(None),
         }
@@ -777,6 +780,8 @@ impl PluginsManager {
         auth: Option<&CodexAuth>,
         additive_only: bool,
     ) -> Result<RemotePluginSyncResult, PluginRemoteSyncError> {
+        let _remote_sync_guard = self.remote_sync_lock.lock().await;
+
         if !config.features.enabled(Feature::Plugins) {
             return Ok(RemotePluginSyncResult::default());
         }
