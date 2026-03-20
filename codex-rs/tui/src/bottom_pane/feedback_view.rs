@@ -1,7 +1,6 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 
-use codex_feedback::feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
 use codex_feedback::feedback_diagnostics::FeedbackDiagnostics;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -501,7 +500,7 @@ fn make_feedback_item(
 pub(crate) fn feedback_upload_consent_params(
     app_event_tx: AppEventSender,
     category: FeedbackCategory,
-    rollout_path: Option<std::path::PathBuf>,
+    _rollout_path: Option<std::path::PathBuf>,
     feedback_diagnostics: &FeedbackDiagnostics,
 ) -> super::SelectionViewParams {
     use super::popup_consts::standard_popup_hint_line;
@@ -527,26 +526,17 @@ pub(crate) fn feedback_upload_consent_params(
         }
     });
 
-    // Build header listing files that would be sent if user consents.
+    // Build header asking for consent before uploading feedback artifacts.
     let mut header_lines: Vec<Box<dyn crate::render::renderable::Renderable>> = vec![
-        Line::from("Upload logs?".bold()).into(),
+        Line::from("Upload logs and rollout?".bold()).into(),
         Line::from("").into(),
-        Line::from("The following files will be sent:".dim()).into(),
-        Line::from(vec!["  • ".into(), "codex-logs.log".into()]).into(),
+        Line::from(
+            "Is it OK to upload the log and rollout for the main agent and all sub-agents?".dim(),
+        )
+        .into(),
     ];
-    if let Some(path) = rollout_path.as_deref()
-        && let Some(name) = path.file_name().map(|s| s.to_string_lossy().to_string())
-    {
-        header_lines.push(Line::from(vec!["  • ".into(), name.into()]).into());
-    }
     if !feedback_diagnostics.is_empty() {
-        header_lines.push(
-            Line::from(vec![
-                "  • ".into(),
-                FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME.into(),
-            ])
-            .into(),
-        );
+        header_lines.push(Line::from("").into());
     }
     if should_show_feedback_connectivity_details(category, feedback_diagnostics) {
         header_lines.push(Line::from("").into());
@@ -566,7 +556,7 @@ pub(crate) fn feedback_upload_consent_params(
             super::SelectionItem {
                 name: "Yes".to_string(),
                 description: Some(
-                    "Share the current Codex session logs with the team for troubleshooting."
+                    "Share the current Codex session log and rollout with the team for troubleshooting."
                         .to_string(),
                 ),
                 actions: vec![yes_action],

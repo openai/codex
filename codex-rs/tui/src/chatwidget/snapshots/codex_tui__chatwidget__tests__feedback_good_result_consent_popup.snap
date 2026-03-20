@@ -2,13 +2,12 @@
 source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
-  Upload logs?
+  Upload logs and rollout?
 
-  The following files will be sent:
-    • codex-logs.log
-    • codex-connectivity-diagnostics.txt
+  Is it OK to upload the log and rollout for the main agent and all sub-agents
 
-› 1. Yes  Share the current Codex session logs with the team for
+
+› 1. Yes  Share the current Codex session log and rollout with the team for
           troubleshooting.
   2. No
 
