@@ -1645,6 +1645,14 @@ impl ChatWidget {
             self.plan_delta_buffer.clear();
         }
         self.plan_delta_buffer.push_str(&delta);
+        if self
+            .active_cell
+            .as_ref()
+            .is_some_and(|cell| !cell.as_any().is::<history_cell::ProposedPlanStreamCell>())
+        {
+            self.flush_unified_exec_wait_streak();
+            self.flush_active_cell();
+        }
         if self.plan_stream_controller.is_none() {
             // Before streaming plan content, flush any active exec cell group.
             self.flush_unified_exec_wait_streak();
