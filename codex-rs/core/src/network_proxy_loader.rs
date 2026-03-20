@@ -150,14 +150,12 @@ fn apply_network_constraints(network: NetworkToml, constraints: &mut NetworkProx
     if let Some(dangerously_allow_all_unix_sockets) = network.dangerously_allow_all_unix_sockets {
         constraints.dangerously_allow_all_unix_sockets = Some(dangerously_allow_all_unix_sockets);
     }
-    if network.domains.is_some() {
-        let allowed_domains = network.allowed_domains();
-        constraints.allowed_domains = Some(allowed_domains);
-        let denied_domains = network.denied_domains();
-        constraints.denied_domains = Some(denied_domains);
+    if let Some(domains) = network.domains.as_ref() {
+        constraints.allowed_domains = domains.allowed_domains();
+        constraints.denied_domains = domains.denied_domains();
     }
-    if network.unix_sockets.is_some() {
-        let allow_unix_sockets = network.allow_unix_sockets();
+    if let Some(unix_sockets) = network.unix_sockets.as_ref() {
+        let allow_unix_sockets = unix_sockets.allow_unix_sockets();
         constraints.allow_unix_sockets = Some(allow_unix_sockets);
     }
     if let Some(allow_local_binding) = network.allow_local_binding {
@@ -221,24 +219,28 @@ fn apply_exec_policy_network_rules(
     let (allowed_domains, denied_domains) = exec_policy.compiled_network_domains();
     for host in allowed_domains {
         upsert_network_domain(
-            &mut config.network.allowed_domains,
-            &mut config.network.denied_domains,
+            config,
             host,
+            codex_network_proxy::NetworkDomainPermission::Allow,
         );
     }
     for host in denied_domains {
         upsert_network_domain(
-            &mut config.network.denied_domains,
-            &mut config.network.allowed_domains,
+            config,
             host,
+            codex_network_proxy::NetworkDomainPermission::Deny,
         );
     }
 }
 
-fn upsert_network_domain(target: &mut Vec<String>, opposite: &mut Vec<String>, host: String) {
-    opposite.retain(|entry| normalize_host(entry) != host);
-    target.retain(|entry| normalize_host(entry) != host);
-    target.push(host);
+fn upsert_network_domain(
+    config: &mut NetworkProxyConfig,
+    host: String,
+    permission: codex_network_proxy::NetworkDomainPermission,
+) {
+    config
+        .network
+        .upsert_domain_permission(host, permission, normalize_host);
 }
 
 fn is_user_controlled_layer(layer: &ConfigLayerSource) -> bool {

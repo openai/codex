@@ -928,7 +928,9 @@ fn guardian_review_session_config_uses_live_network_proxy_state() {
     let mut parent_config = test_config();
     let mut parent_network = NetworkProxyConfig::default();
     parent_network.network.enabled = true;
-    parent_network.network.allowed_domains = vec!["parent.example".to_string()];
+    parent_network
+        .network
+        .set_allowed_domains(vec!["parent.example".to_string()]);
     parent_config.permissions.network = Some(
         NetworkProxySpec::from_config_and_constraints(
             parent_network,
@@ -940,7 +942,9 @@ fn guardian_review_session_config_uses_live_network_proxy_state() {
 
     let mut live_network = NetworkProxyConfig::default();
     live_network.network.enabled = true;
-    live_network.network.allowed_domains = vec!["github.com".to_string()];
+    live_network
+        .network
+        .set_allowed_domains(vec!["github.com".to_string()]);
 
     let guardian_config = build_guardian_review_session_config_for_test(
         &parent_config,

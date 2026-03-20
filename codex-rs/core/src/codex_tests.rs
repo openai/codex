@@ -454,7 +454,7 @@ async fn start_managed_network_proxy_applies_execpolicy_network_rules() -> anyho
 
     let current_cfg = started_proxy.proxy().current_cfg().await?;
     assert_eq!(
-        current_cfg.network.allowed_domains,
+        current_cfg.network.allowed_domains(),
         vec!["example.com".to_string()]
     );
     Ok(())
@@ -498,7 +498,7 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
 
     let current_cfg = started_proxy.proxy().current_cfg().await?;
     assert_eq!(
-        current_cfg.network.allowed_domains,
+        current_cfg.network.allowed_domains(),
         vec!["managed.example.com".to_string()]
     );
     Ok(())

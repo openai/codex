@@ -150,30 +150,9 @@
         "null"
       ]
     },
-    "dynamicTools": {
-      "items": {
-        "$ref": "#/definitions/DynamicToolSpec"
-      },
-      "type": [
-        "array",
-        "null"
-      ]
-    },
     "ephemeral": {
       "type": [
         "boolean",
-        "null"
-      ]
-    },
-    "experimentalRawEvents": {
-      "default": false,
-      "description": "If true, opt into emitting raw Responses API items on the event stream. This is for internal use only (e.g. Codex Cloud).",
-      "type": "boolean"
-    },
-    "mockExperimentalField": {
-      "description": "Test-only experimental field used to validate experimental gating and schema filtering behavior in a stable way.",
-      "type": [
-        "string",
         "null"
       ]
     },
@@ -188,11 +167,6 @@
         "string",
         "null"
       ]
-    },
-    "persistExtendedHistory": {
-      "default": false,
-      "description": "If true, persist additional rollout EventMsg variants required to reconstruct a richer thread history on resume/fork/read.",
-      "type": "boolean"
     },
     "personality": {
       "anyOf": [
