@@ -1,6 +1,18 @@
 use super::*;
+use codex_protocol::AgentPath;
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
+
+fn agent_path(path: &str) -> AgentPath {
+    AgentPath::try_from(path).expect("valid agent path")
+}
+
+fn agent_metadata(thread_id: ThreadId) -> AgentMetadata {
+    AgentMetadata {
+        agent_id: Some(thread_id),
+        ..Default::default()
+    }
+}
 
 #[test]
 fn format_agent_nickname_adds_ordinals_after_reset() {
@@ -21,6 +33,7 @@ fn thread_spawn_depth_increments_and_enforces_limit() {
     let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id: ThreadId::new(),
         depth: 1,
+        agent_path: None,
         agent_nickname: None,
         agent_role: None,
     });
@@ -52,7 +65,7 @@ fn commit_holds_slot_until_release() {
     let guards = Arc::new(Guards::default());
     let reservation = guards.reserve_spawn_slot(Some(1)).expect("reserve slot");
     let thread_id = ThreadId::new();
-    reservation.commit(thread_id);
+    reservation.commit(agent_metadata(thread_id));
 
     let err = match guards.reserve_spawn_slot(Some(1)) {
         Ok(_) => panic!("limit should be enforced"),
@@ -75,7 +88,7 @@ fn release_ignores_unknown_thread_id() {
     let guards = Arc::new(Guards::default());
     let reservation = guards.reserve_spawn_slot(Some(1)).expect("reserve slot");
     let thread_id = ThreadId::new();
-    reservation.commit(thread_id);
+    reservation.commit(agent_metadata(thread_id));
 
     guards.release_spawned_thread(ThreadId::new());
 
@@ -100,13 +113,13 @@ fn release_is_idempotent_for_registered_threads() {
     let guards = Arc::new(Guards::default());
     let reservation = guards.reserve_spawn_slot(Some(1)).expect("reserve slot");
     let first_id = ThreadId::new();
-    reservation.commit(first_id);
+    reservation.commit(agent_metadata(first_id));
 
     guards.release_spawned_thread(first_id);
 
     let reservation = guards.reserve_spawn_slot(Some(1)).expect("slot reused");
     let second_id = ThreadId::new();
-    reservation.commit(second_id);
+    reservation.commit(agent_metadata(second_id));
 
     guards.release_spawned_thread(first_id);
 
@@ -131,14 +144,14 @@ fn failed_spawn_keeps_nickname_marked_used() {
     let guards = Arc::new(Guards::default());
     let mut reservation = guards.reserve_spawn_slot(None).expect("reserve slot");
     let agent_nickname = reservation
-        .reserve_agent_nickname(&["alpha"])
+        .reserve_agent_nickname_with_preference(&["alpha"], /*preferred*/ None)
         .expect("reserve agent name");
     assert_eq!(agent_nickname, "alpha");
     drop(reservation);
 
     let mut reservation = guards.reserve_spawn_slot(None).expect("reserve slot");
     let agent_nickname = reservation
-        .reserve_agent_nickname(&["alpha", "beta"])
+        .reserve_agent_nickname_with_preference(&["alpha", "beta"], /*preferred*/ None)
         .expect("unused name should still be preferred");
     assert_eq!(agent_nickname, "beta");
 }
@@ -148,17 +161,17 @@ fn agent_nickname_resets_used_pool_when_exhausted() {
     let guards = Arc::new(Guards::default());
     let mut first = guards.reserve_spawn_slot(None).expect("reserve first slot");
     let first_name = first
-        .reserve_agent_nickname(&["alpha"])
+        .reserve_agent_nickname_with_preference(&["alpha"], /*preferred*/ None)
         .expect("reserve first agent name");
     let first_id = ThreadId::new();
-    first.commit(first_id);
+    first.commit(agent_metadata(first_id));
     assert_eq!(first_name, "alpha");
 
     let mut second = guards
         .reserve_spawn_slot(None)
         .expect("reserve second slot");
     let second_name = second
-        .reserve_agent_nickname(&["alpha"])
+        .reserve_agent_nickname_with_preference(&["alpha"], /*preferred*/ None)
         .expect("name should be reused after pool reset");
     assert_eq!(second_name, "alpha the 2nd");
     let active_agents = guards
@@ -174,10 +187,10 @@ fn released_nickname_stays_used_until_pool_reset() {
 
     let mut first = guards.reserve_spawn_slot(None).expect("reserve first slot");
     let first_name = first
-        .reserve_agent_nickname(&["alpha"])
+        .reserve_agent_nickname_with_preference(&["alpha"], /*preferred*/ None)
         .expect("reserve first agent name");
     let first_id = ThreadId::new();
-    first.commit(first_id);
+    first.commit(agent_metadata(first_id));
     assert_eq!(first_name, "alpha");
 
     guards.release_spawned_thread(first_id);
@@ -186,16 +199,16 @@ fn released_nickname_stays_used_until_pool_reset() {
         .reserve_spawn_slot(None)
         .expect("reserve second slot");
     let second_name = second
-        .reserve_agent_nickname(&["alpha", "beta"])
+        .reserve_agent_nickname_with_preference(&["alpha", "beta"], /*preferred*/ None)
         .expect("released name should still be marked used");
     assert_eq!(second_name, "beta");
     let second_id = ThreadId::new();
-    second.commit(second_id);
+    second.commit(agent_metadata(second_id));
     guards.release_spawned_thread(second_id);
 
     let mut third = guards.reserve_spawn_slot(None).expect("reserve third slot");
     let third_name = third
-        .reserve_agent_nickname(&["alpha", "beta"])
+        .reserve_agent_nickname_with_preference(&["alpha", "beta"], /*preferred*/ None)
         .expect("pool reset should permit a duplicate");
     let expected_names = HashSet::from(["alpha the 2nd".to_string(), "beta the 2nd".to_string()]);
     assert!(expected_names.contains(&third_name));
@@ -212,10 +225,10 @@ fn repeated_resets_advance_the_ordinal_suffix() {
 
     let mut first = guards.reserve_spawn_slot(None).expect("reserve first slot");
     let first_name = first
-        .reserve_agent_nickname(&["Plato"])
+        .reserve_agent_nickname_with_preference(&["Plato"], /*preferred*/ None)
         .expect("reserve first agent name");
     let first_id = ThreadId::new();
-    first.commit(first_id);
+    first.commit(agent_metadata(first_id));
     assert_eq!(first_name, "Plato");
     guards.release_spawned_thread(first_id);
 
@@ -223,16 +236,16 @@ fn repeated_resets_advance_the_ordinal_suffix() {
         .reserve_spawn_slot(None)
         .expect("reserve second slot");
     let second_name = second
-        .reserve_agent_nickname(&["Plato"])
+        .reserve_agent_nickname_with_preference(&["Plato"], /*preferred*/ None)
         .expect("reserve second agent name");
     let second_id = ThreadId::new();
-    second.commit(second_id);
+    second.commit(agent_metadata(second_id));
     assert_eq!(second_name, "Plato the 2nd");
     guards.release_spawned_thread(second_id);
 
     let mut third = guards.reserve_spawn_slot(None).expect("reserve third slot");
     let third_name = third
-        .reserve_agent_nickname(&["Plato"])
+        .reserve_agent_nickname_with_preference(&["Plato"], /*preferred*/ None)
         .expect("reserve third agent name");
     assert_eq!(third_name, "Plato the 3rd");
     let active_agents = guards
@@ -240,4 +253,60 @@ fn repeated_resets_advance_the_ordinal_suffix() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     assert_eq!(active_agents.nickname_reset_count, 2);
+}
+
+#[test]
+fn register_root_thread_indexes_root_path() {
+    let guards = Arc::new(Guards::default());
+    let root_thread_id = ThreadId::new();
+
+    guards.register_root_thread(root_thread_id);
+
+    assert_eq!(
+        guards.agent_id_for_path(&AgentPath::root()),
+        Some(root_thread_id)
+    );
+}
+
+#[test]
+fn reserved_agent_path_is_released_when_spawn_fails() {
+    let guards = Arc::new(Guards::default());
+    let mut first = guards.reserve_spawn_slot(None).expect("reserve first slot");
+    first
+        .reserve_agent_path(&agent_path("/root/researcher"))
+        .expect("reserve first path");
+    drop(first);
+
+    let mut second = guards
+        .reserve_spawn_slot(None)
+        .expect("reserve second slot");
+    second
+        .reserve_agent_path(&agent_path("/root/researcher"))
+        .expect("dropped reservation should free the path");
+}
+
+#[test]
+fn committed_agent_path_is_indexed_until_release() {
+    let guards = Arc::new(Guards::default());
+    let thread_id = ThreadId::new();
+    let mut reservation = guards.reserve_spawn_slot(None).expect("reserve slot");
+    reservation
+        .reserve_agent_path(&agent_path("/root/researcher"))
+        .expect("reserve path");
+    reservation.commit(AgentMetadata {
+        agent_id: Some(thread_id),
+        agent_path: Some(agent_path("/root/researcher")),
+        ..Default::default()
+    });
+
+    assert_eq!(
+        guards.agent_id_for_path(&agent_path("/root/researcher")),
+        Some(thread_id)
+    );
+
+    guards.release_spawned_thread(thread_id);
+    assert_eq!(
+        guards.agent_id_for_path(&agent_path("/root/researcher")),
+        None
+    );
 }

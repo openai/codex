@@ -181,6 +181,7 @@ class AppServerClient:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
             cwd=self.config.cwd,
             env=env,
             bufsize=1,

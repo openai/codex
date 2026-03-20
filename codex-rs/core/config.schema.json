@@ -422,6 +422,9 @@
             "multi_agent": {
               "type": "boolean"
             },
+            "multi_agent_v2": {
+              "type": "boolean"
+            },
             "personality": {
               "type": "boolean"
             },
@@ -2026,6 +2029,9 @@
           "type": "boolean"
         },
         "multi_agent": {
+          "type": "boolean"
+        },
+        "multi_agent_v2": {
           "type": "boolean"
         },
         "personality": {

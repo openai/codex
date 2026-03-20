@@ -38,6 +38,7 @@ async fn write_session_with_user_event(codex_home: &Path) -> io::Result<()> {
             originator: "test_originator".to_string(),
             cli_version: "test_version".to_string(),
             source: SessionSource::Cli,
+            agent_path: None,
             agent_nickname: None,
             agent_role: None,
             model_provider: None,

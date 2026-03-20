@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use crate::AgentPath;
 use crate::ThreadId;
 use crate::approvals::ElicitationRequestEvent;
 use crate::config_types::ApprovalsReviewer;
@@ -2288,6 +2289,8 @@ pub enum SubAgentSource {
         parent_thread_id: ThreadId,
         depth: i32,
         #[serde(default)]
+        agent_path: Option<AgentPath>,
+        #[serde(default)]
         agent_nickname: Option<String>,
         #[serde(default, alias = "agent_type")]
         agent_role: Option<String>,
@@ -2351,6 +2354,16 @@ impl SessionSource {
             _ => None,
         }
     }
+
+    pub fn get_agent_path(&self) -> Option<AgentPath> {
+        match self {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_path, .. }) => {
+                agent_path.clone()
+            }
+            _ => None,
+        }
+    }
+
     pub fn restriction_product(&self) -> Option<Product> {
         match self {
             SessionSource::Custom(source) => Product::from_session_source_name(source),
@@ -2411,6 +2424,9 @@ pub struct SessionMeta {
     /// Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.
     #[serde(default, alias = "agent_type", skip_serializing_if = "Option::is_none")]
     pub agent_role: Option<String>,
+    /// Optional canonical agent path assigned to an AgentControl-spawned sub-agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_path: Option<String>,
     pub model_provider: Option<String>,
     /// base_instructions for the session. This *should* always be present when creating a new session,
     /// but may be missing for older sessions. If not present, fall back to rendering the base_instructions
@@ -2434,6 +2450,7 @@ impl Default for SessionMeta {
             source: SessionSource::default(),
             agent_nickname: None,
             agent_role: None,
+            agent_path: None,
             model_provider: None,
             base_instructions: None,
             dynamic_tools: None,

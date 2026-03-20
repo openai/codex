@@ -139,6 +139,9 @@
       "title": "AgentMessageDeltaNotification",
       "type": "object"
     },
+    "AgentPath": {
+      "type": "string"
+    },
     "AnalyticsConfig": {
       "additionalProperties": true,
       "properties": {
@@ -9274,6 +9277,17 @@
                     "string",
                     "null"
                   ]
+                },
+                "agent_path": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/AgentPath"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
                 },
                 "agent_role": {
                   "default": null,
