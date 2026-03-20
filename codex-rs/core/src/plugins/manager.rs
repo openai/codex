@@ -775,6 +775,7 @@ impl PluginsManager {
         &self,
         config: &Config,
         auth: Option<&CodexAuth>,
+        additive_only: bool,
     ) -> Result<RemotePluginSyncResult, PluginRemoteSyncError> {
         if !config.features.enabled(Feature::Plugins) {
             return Ok(RemotePluginSyncResult::default());
@@ -914,7 +915,7 @@ impl PluginsManager {
                         value: value(true),
                     });
                 }
-            } else {
+            } else if !additive_only {
                 if is_installed {
                     uninstalls.push(plugin_id);
                 }

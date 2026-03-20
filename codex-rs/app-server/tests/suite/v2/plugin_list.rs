@@ -735,10 +735,12 @@ async fn plugin_list_force_remote_sync_reconciles_curated_plugin_state() -> Resu
     assert!(!config.contains(r#"[plugins."gmail@openai-curated"]"#));
     assert!(!config.contains(r#"[plugins."calendar@openai-curated"]"#));
 
-    wait_for_path_exists(&codex_home.path().join(format!(
-        "plugins/cache/openai-curated/linear/{TEST_CURATED_PLUGIN_SHA}"
-    )))
-    .await?;
+    assert!(
+        codex_home
+            .path()
+            .join("plugins/cache/openai-curated/linear/local")
+            .is_dir()
+    );
     assert!(
         !codex_home
             .path()

@@ -5489,7 +5489,7 @@ impl CodexMessageProcessor {
 
         if force_remote_sync {
             match plugins_manager
-                .sync_plugins_from_remote(&config, auth.as_ref())
+                .sync_plugins_from_remote(&config, auth.as_ref(), /*additive_only*/ false)
                 .await
             {
                 Ok(sync_result) => {
