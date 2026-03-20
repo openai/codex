@@ -105,22 +105,6 @@ impl TestEnv {
     pub fn experimental_exec_server_url(&self) -> Option<&str> {
         self.environment.experimental_exec_server_url()
     }
-
-    pub fn cwd_path(&self) -> &Path {
-        &self.cwd
-    }
-
-    async fn from_config(config: &Config) -> Result<Self> {
-        let environment =
-            codex_exec_server::Environment::create(config.experimental_exec_server_url.clone())
-                .await?;
-        Ok(Self {
-            environment,
-            cwd: config.cwd.clone(),
-            _local_cwd_temp_dir: None,
-            _remote_exec_server_process: None,
-        })
-    }
 }
 
 pub async fn test_env() -> Result<TestEnv> {
@@ -402,14 +386,14 @@ impl TestCodexBuilder {
         let test_env = test_env().await?;
         let experimental_exec_server_url =
             test_env.experimental_exec_server_url().map(str::to_owned);
-        let remote_aware_cwd = test_env.cwd_path().to_path_buf();
+        let cwd = test_env.cwd.to_path_buf();
         self.config_mutators.push(Box::new(move |config| {
             config.experimental_exec_server_url = experimental_exec_server_url;
-            config.cwd = remote_aware_cwd;
+            config.cwd = cwd;
         }));
 
         let mut test = self.build(server).await?;
-        test._executor_environment = test_env;
+        test._test_env = test_env;
         Ok(test)
     }
 
@@ -465,7 +449,7 @@ impl TestCodexBuilder {
     ) -> anyhow::Result<TestCodex> {
         let base_url = format!("{}/v1", server.uri());
         let (config, cwd) = self.prepare_config(base_url, &home).await?;
-        Box::pin(self.build_from_config(config, cwd, home, resume_from)).await
+        Box::pin(self.build_from_config(config, cwd, home, resume_from, test_env().await?)).await
     }
 
     async fn build_with_home_and_base_url(
@@ -475,7 +459,7 @@ impl TestCodexBuilder {
         resume_from: Option<PathBuf>,
     ) -> anyhow::Result<TestCodex> {
         let (config, cwd) = self.prepare_config(base_url, &home).await?;
-        Box::pin(self.build_from_config(config, cwd, home, resume_from)).await
+        Box::pin(self.build_from_config(config, cwd, home, resume_from, test_env().await?)).await
     }
 
     async fn build_from_config(
@@ -484,6 +468,7 @@ impl TestCodexBuilder {
         cwd: Arc<TempDir>,
         home: Arc<TempDir>,
         resume_from: Option<PathBuf>,
+        test_env: TestEnv,
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
         let thread_manager = if config.model_catalog.is_some() {
@@ -539,7 +524,6 @@ impl TestCodexBuilder {
             }
             (None, None) => Box::pin(thread_manager.start_thread(config.clone())).await?,
         };
-        let executor_environment = TestEnv::from_config(&config).await?;
 
         Ok(TestCodex {
             home,
@@ -548,7 +532,7 @@ impl TestCodexBuilder {
             codex: new_conversation.thread,
             session_configured: new_conversation.session_configured,
             thread_manager,
-            _executor_environment: executor_environment,
+            _test_env: test_env,
         })
     }
 
@@ -645,7 +629,7 @@ pub struct TestCodex {
     pub session_configured: SessionConfiguredEvent,
     pub config: Config,
     pub thread_manager: Arc<ThreadManager>,
-    _executor_environment: TestEnv,
+    _test_env: TestEnv,
 }
 
 impl TestCodex {
@@ -662,7 +646,11 @@ impl TestCodex {
     }
 
     pub fn executor_environment(&self) -> &TestEnv {
-        &self._executor_environment
+        &self._test_env
+    }
+
+    pub fn fs(&self) -> &FileSystem {
+        self._test_env.environment.get_filesystem()
     }
 
     pub async fn submit_turn(&self, prompt: &str) -> Result<()> {

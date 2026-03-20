@@ -196,7 +196,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
     let abs_path_absolute = absolute_path(&abs_path)?;
     let assets_dir = cwd.join("assets");
 
-    let file_system = test.executor_environment().environment().get_filesystem();
+    let file_system = test.fs();
 
     let original_width = 2304;
     let original_height = 864;
