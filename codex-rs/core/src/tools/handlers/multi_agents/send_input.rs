@@ -24,15 +24,14 @@ impl ToolHandler for Handler {
         } = invocation;
         let arguments = function_arguments(payload)?;
         let args: SendInputArgs = parse_arguments(&arguments)?;
-        let receiver_thread_id = agent_id(&args.id)?;
+        let receiver_thread_id = resolve_agent_target(&session, &turn, &args.target).await?;
         let input_items = parse_collab_input(args.message, args.items)?;
         let prompt = input_preview(&input_items);
-        let (receiver_agent_nickname, receiver_agent_role) = session
+        let receiver_agent = session
             .services
             .agent_control
-            .get_agent_nickname_and_role(receiver_thread_id)
-            .await
-            .unwrap_or((None, None));
+            .get_agent_metadata(receiver_thread_id)
+            .unwrap_or_default();
         if args.interrupt {
             session
                 .services
@@ -71,8 +70,8 @@ impl ToolHandler for Handler {
                     call_id,
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id,
-                    receiver_agent_nickname,
-                    receiver_agent_role,
+                    receiver_agent_nickname: receiver_agent.agent_nickname,
+                    receiver_agent_role: receiver_agent.agent_role,
                     prompt,
                     status,
                 }
@@ -87,7 +86,7 @@ impl ToolHandler for Handler {
 
 #[derive(Debug, Deserialize)]
 struct SendInputArgs {
-    id: String,
+    target: String,
     message: Option<String>,
     items: Option<Vec<UserInput>>,
     #[serde(default)]
