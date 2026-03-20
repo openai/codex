@@ -8731,7 +8731,7 @@ mod tests {
             model_provider: "test-provider".to_string(),
             cwd: PathBuf::from("/"),
             cli_version: "0.0.0".to_string(),
-            source: SessionSource::VSCode,
+            source: SessionSource::VSCode.into(),
             git_info: None,
         };
 
@@ -8787,7 +8787,7 @@ mod tests {
             model_provider: "fallback".to_string(),
             cwd: PathBuf::new(),
             cli_version: String::new(),
-            source: SessionSource::VSCode,
+            source: codex_app_server_protocol::SessionSource::VsCode.into(),
             git_info: None,
         };
 
@@ -9082,7 +9082,7 @@ mod tests {
             path: None,
             cwd: PathBuf::new(),
             cli_version: String::new(),
-            source: SessionSource::VSCode,
+            source: SessionSource::VSCode.into(),
             agent_nickname: None,
             agent_role: None,
             git_info: None,
@@ -9090,7 +9090,9 @@ mod tests {
             turns: Vec::new(),
         };
 
-        populate_thread_turns(&mut thread, ThreadTurnSource::HistoryItems(&items), None).await?;
+        populate_thread_turns(&mut thread, ThreadTurnSource::HistoryItems(&items), None)
+            .await
+            .map_err(anyhow::Error::msg)?;
 
         let Some(ThreadItem::ImageGeneration {
             result, saved_path, ..
@@ -9101,6 +9103,11 @@ mod tests {
 
         assert!(result.is_empty());
         assert_eq!(saved_path.as_deref(), Some(saved_path_string.as_str()));
+        let Some(RolloutItem::EventMsg(EventMsg::ImageGenerationEnd(source_item))) = items.get(2) else {
+            panic!("expected source image generation end event");
+        };
+        assert_eq!(source_item.result, "Zm9v");
+        assert_eq!(source_item.saved_path.as_deref(), Some(saved_path_string.as_str()));
         Ok(())
     }
 }
