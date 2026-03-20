@@ -121,6 +121,7 @@ pub mod default_client {
 pub mod project_doc;
 mod rollout;
 pub(crate) mod safety;
+mod sandboxed_fs;
 pub mod seatbelt;
 pub mod shell;
 pub mod shell_snapshot;
