@@ -25,6 +25,7 @@ use crate::rollout::truncation;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillsManager;
 use crate::tasks::interrupted_turn_history_marker;
+use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelPreset;
@@ -149,10 +150,10 @@ pub enum ForkSnapshot {
     /// Fork the current persisted history as if the source thread had been
     /// interrupted now.
     ///
-    /// If the source thread is mid-turn, this appends the same
-    /// `<turn_aborted>` marker produced by a real interrupt. If the source
-    /// thread is already at a turn boundary, this returns the current persisted
-    /// history unchanged.
+    /// If the persisted snapshot ends mid-turn, this appends the same
+    /// `<turn_aborted>` marker produced by a real interrupt. If the snapshot is
+    /// already at a turn boundary, this returns the current persisted history
+    /// unchanged.
     Interrupted,
 }
 
@@ -584,21 +585,10 @@ impl ThreadManager {
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
         let history = RolloutRecorder::get_rollout_history(&path).await?;
-        let source_thread = {
-            let threads = self.state.threads.read().await;
-            threads
-                .values()
-                .find(|thread| thread.rollout_path().as_ref() == Some(&path))
-                .cloned()
-        };
-        let source_mid_turn = if let Some(thread) = source_thread {
-            thread.codex.session.active_turn.lock().await.is_some()
-        } else {
-            false
-        };
+        let snapshot_mid_turn = snapshot_ends_mid_turn(&history);
         let history = match snapshot {
             ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
-                truncate_before_nth_user_message(history, nth_user_message, source_mid_turn)
+                truncate_before_nth_user_message(history, nth_user_message, snapshot_mid_turn)
             }
             ForkSnapshot::Interrupted => {
                 let history = match history {
@@ -606,7 +596,7 @@ impl ThreadManager {
                     InitialHistory::Forked(history) => InitialHistory::Forked(history),
                     InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
                 };
-                if source_mid_turn {
+                if snapshot_mid_turn {
                     inject_interrupted_marker(history)
                 } else {
                     history
@@ -893,11 +883,11 @@ impl ThreadManagerState {
 fn truncate_before_nth_user_message(
     history: InitialHistory,
     n: usize,
-    source_mid_turn: bool,
+    snapshot_mid_turn: bool,
 ) -> InitialHistory {
     let items: Vec<RolloutItem> = history.get_rollout_items();
     let user_positions = truncation::user_message_positions_in_rollout(&items);
-    let rolled = if source_mid_turn && n >= user_positions.len() {
+    let rolled = if snapshot_mid_turn && n >= user_positions.len() {
         if let Some(cut_idx) = user_positions.last().copied() {
             items[..cut_idx].to_vec()
         } else {
@@ -912,6 +902,14 @@ fn truncate_before_nth_user_message(
     } else {
         InitialHistory::Forked(rolled)
     }
+}
+
+fn snapshot_ends_mid_turn(history: &InitialHistory) -> bool {
+    let mut builder = ThreadHistoryBuilder::new();
+    for item in history.get_rollout_items() {
+        builder.handle_rollout_item(&item);
+    }
+    builder.has_active_turn()
 }
 
 /// Append the same model-visible interruption marker used by the live interrupt
