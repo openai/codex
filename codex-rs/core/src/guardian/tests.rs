@@ -57,7 +57,33 @@ async fn guardian_test_session_and_turn(
 async fn guardian_test_session_and_turn_with_base_url(
     base_url: &str,
 ) -> (Arc<Session>, Arc<TurnContext>) {
-    let (mut session, mut turn) = crate::codex::make_session_and_context().await;
+    let (session, turn) = crate::codex::make_session_and_context().await;
+    configure_guardian_test_session(
+        session, turn, base_url, /*guardian_review_session*/ None,
+    )
+    .await
+}
+
+async fn guardian_test_session_and_turn_with_base_url_and_fork_cap(
+    base_url: &str,
+    active_fork_cap: usize,
+) -> (Arc<Session>, Arc<TurnContext>) {
+    let (session, turn) = crate::codex::make_session_and_context().await;
+    configure_guardian_test_session(
+        session,
+        turn,
+        base_url,
+        Some(GuardianReviewSessionManager::new_for_test(active_fork_cap)),
+    )
+    .await
+}
+
+async fn configure_guardian_test_session(
+    mut session: Session,
+    mut turn: TurnContext,
+    base_url: &str,
+    guardian_review_session: Option<GuardianReviewSessionManager>,
+) -> (Arc<Session>, Arc<TurnContext>) {
     let mut config = (*turn.config).clone();
     config.model_provider.base_url = Some(format!("{base_url}/v1"));
     config.user_instructions = None;
@@ -68,6 +94,9 @@ async fn guardian_test_session_and_turn_with_base_url(
         config.model_provider.clone(),
     ));
     session.services.models_manager = models_manager;
+    if let Some(guardian_review_session) = guardian_review_session {
+        session.guardian_review_session = guardian_review_session;
+    }
     turn.config = Arc::clone(&config);
     turn.provider = config.model_provider.clone();
     turn.user_instructions = None;
@@ -719,7 +748,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
 
 #[tokio::test(flavor = "current_thread")]
 async fn guardian_active_fork_cap_waits_for_any_fork_slot() -> anyhow::Result<()> {
-    let fork_cap = super::review_session::GUARDIAN_ACTIVE_FORK_CAP;
+    let fork_cap = 2;
     let first_assessment = serde_json::json!({
         "risk_level": "low",
         "risk_score": 4,
@@ -802,7 +831,8 @@ async fn guardian_active_fork_cap_waits_for_any_fork_slot() -> anyhow::Result<()
     }]);
     let (server, _) = start_streaming_sse_server(responses).await;
 
-    let (session, turn) = guardian_test_session_and_turn_with_base_url(server.uri()).await;
+    let (session, turn) =
+        guardian_test_session_and_turn_with_base_url_and_fork_cap(server.uri(), fork_cap).await;
     seed_guardian_parent_history(&session, &turn).await;
 
     let initial_request = GuardianApprovalRequest::Shell {
