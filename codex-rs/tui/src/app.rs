@@ -2174,7 +2174,7 @@ impl App {
                 );
                 let forked = thread_manager
                     .fork_thread(
-                        ForkSnapshot::TruncateBeforeNthUserMessage(usize::MAX),
+                        ForkSnapshot::Interrupted,
                         config.clone(),
                         target_session.path.clone(),
                         /*persist_extended_history*/ false,
@@ -2594,7 +2594,7 @@ impl App {
                         match self
                             .server
                             .fork_thread(
-                                ForkSnapshot::TruncateBeforeNthUserMessage(usize::MAX),
+                                ForkSnapshot::Interrupted,
                                 self.config.clone(),
                                 path.clone(),
                                 /*persist_extended_history*/ false,

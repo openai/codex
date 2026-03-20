@@ -4,7 +4,6 @@ use crate::config::test_config;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::RefreshStrategy;
 use crate::tasks::interrupted_turn_history_marker;
-use assert_matches::assert_matches;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
@@ -39,7 +38,7 @@ fn assistant_msg(text: &str) -> ResponseItem {
 }
 
 #[test]
-fn drops_from_last_user_only() {
+fn truncates_before_requested_user_message() {
     let items = [
         user_msg("u1"),
         assistant_msg("a1"),
@@ -69,7 +68,11 @@ fn drops_from_last_user_only() {
         .cloned()
         .map(RolloutItem::ResponseItem)
         .collect();
-    let truncated = truncate_before_nth_user_message(InitialHistory::Forked(initial), 1);
+    let truncated = truncate_before_nth_user_message(
+        InitialHistory::Forked(initial),
+        1,
+        /*source_mid_turn*/ false,
+    );
     let got_items = truncated.get_rollout_items();
     let expected_items = vec![
         RolloutItem::ResponseItem(items[0].clone()),
@@ -86,8 +89,36 @@ fn drops_from_last_user_only() {
         .cloned()
         .map(RolloutItem::ResponseItem)
         .collect();
-    let truncated2 = truncate_before_nth_user_message(InitialHistory::Forked(initial2), 2);
-    assert_matches!(truncated2, InitialHistory::New);
+    let truncated2 = truncate_before_nth_user_message(
+        InitialHistory::Forked(initial2.clone()),
+        2,
+        /*source_mid_turn*/ false,
+    );
+    assert_eq!(
+        serde_json::to_value(truncated2.get_rollout_items()).unwrap(),
+        serde_json::to_value(initial2).unwrap()
+    );
+}
+
+#[test]
+fn out_of_range_truncation_drops_only_unfinished_suffix_mid_turn() {
+    let items = vec![
+        RolloutItem::ResponseItem(user_msg("u1")),
+        RolloutItem::ResponseItem(assistant_msg("a1")),
+        RolloutItem::ResponseItem(user_msg("u2")),
+        RolloutItem::ResponseItem(assistant_msg("partial")),
+    ];
+
+    let truncated = truncate_before_nth_user_message(
+        InitialHistory::Forked(items.clone()),
+        usize::MAX,
+        /*source_mid_turn*/ true,
+    );
+
+    assert_eq!(
+        serde_json::to_value(truncated.get_rollout_items()).unwrap(),
+        serde_json::to_value(items[..2].to_vec()).unwrap()
+    );
 }
 
 #[tokio::test]
@@ -105,7 +136,11 @@ async fn ignores_session_prefix_messages_when_truncating() {
         .map(RolloutItem::ResponseItem)
         .collect();
 
-    let truncated = truncate_before_nth_user_message(InitialHistory::Forked(rollout_items), 1);
+    let truncated = truncate_before_nth_user_message(
+        InitialHistory::Forked(rollout_items),
+        1,
+        /*source_mid_turn*/ false,
+    );
     let got_items = truncated.get_rollout_items();
 
     let expected: Vec<RolloutItem> = vec![

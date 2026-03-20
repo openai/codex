@@ -128,6 +128,13 @@ pub struct NewThread {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ForkSnapshot {
     /// Fork a committed prefix ending strictly before the nth user message.
+    ///
+    /// When `n` is within range, this cuts before that 0-based user-message
+    /// boundary. When `n` is out of range and the source thread is currently
+    /// mid-turn, this instead cuts before the last user message so the fork
+    /// drops the unfinished turn suffix. When `n` is out of range and the
+    /// source thread is already at a turn boundary, this returns the full
+    /// committed history unchanged.
     TruncateBeforeNthUserMessage(usize),
 
     /// Fork the current persisted history as if the source thread had been
@@ -568,26 +575,29 @@ impl ThreadManager {
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
         let history = RolloutRecorder::get_rollout_history(&path).await?;
+        let source_thread = {
+            let threads = self.state.threads.read().await;
+            threads
+                .values()
+                .find(|thread| thread.rollout_path().as_ref() == Some(&path))
+                .cloned()
+        };
+        let source_mid_turn = if let Some(thread) = source_thread {
+            thread.codex.session.active_turn.lock().await.is_some()
+        } else {
+            false
+        };
         let history = match snapshot {
             ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
-                truncate_before_nth_user_message(history, nth_user_message)
+                truncate_before_nth_user_message(history, nth_user_message, source_mid_turn)
             }
             ForkSnapshot::Interrupted => {
-                let source_thread = {
-                    let threads = self.state.threads.read().await;
-                    threads
-                        .values()
-                        .find(|thread| thread.rollout_path().as_ref() == Some(&path))
-                        .cloned()
-                };
                 let history = match history {
                     InitialHistory::New => InitialHistory::New,
                     InitialHistory::Forked(history) => InitialHistory::Forked(history),
                     InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
                 };
-                if let Some(thread) = source_thread
-                    && thread.codex.session.active_turn.lock().await.is_some()
-                {
+                if source_mid_turn {
                     inject_interrupted_marker(history)
                 } else {
                     history
@@ -866,11 +876,27 @@ impl ThreadManagerState {
     }
 }
 
-/// Return a prefix of `items` obtained by cutting strictly before the nth user message
-/// (0-based) and all items that follow it.
-fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> InitialHistory {
+/// Return a fork snapshot cut strictly before the nth user message (0-based).
+///
+/// Out-of-range values keep the full committed history at a turn boundary, but
+/// fall back to cutting before the last user message when the source thread is
+/// currently mid-turn so the fork omits the unfinished suffix.
+fn truncate_before_nth_user_message(
+    history: InitialHistory,
+    n: usize,
+    source_mid_turn: bool,
+) -> InitialHistory {
     let items: Vec<RolloutItem> = history.get_rollout_items();
-    let rolled = truncation::truncate_rollout_before_nth_user_message_from_start(&items, n);
+    let user_positions = truncation::user_message_positions_in_rollout(&items);
+    let rolled = if source_mid_turn && n >= user_positions.len() {
+        if let Some(cut_idx) = user_positions.last().copied() {
+            items[..cut_idx].to_vec()
+        } else {
+            items
+        }
+    } else {
+        truncation::truncate_rollout_before_nth_user_message_from_start(&items, n)
+    };
 
     if rolled.is_empty() {
         InitialHistory::New
