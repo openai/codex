@@ -1519,6 +1519,7 @@ impl ChatWidget {
         &mut self,
         category: crate::app_event::FeedbackCategory,
         include_logs: bool,
+        guardian_rollout_path: Option<PathBuf>,
     ) {
         if let Some(chatgpt_user_id) = self
             .auth_manager
@@ -1528,13 +1529,14 @@ impl ChatWidget {
             tracing::info!(target: "feedback_tags", chatgpt_user_id);
         }
         let snapshot = self.feedback.snapshot(self.thread_id);
-        self.show_feedback_note(category, include_logs, snapshot);
+        self.show_feedback_note(category, include_logs, guardian_rollout_path, snapshot);
     }
 
     fn show_feedback_note(
         &mut self,
         category: crate::app_event::FeedbackCategory,
         include_logs: bool,
+        guardian_rollout_path: Option<PathBuf>,
         snapshot: codex_feedback::FeedbackSnapshot,
     ) {
         let rollout = if include_logs {
@@ -1546,6 +1548,7 @@ impl ChatWidget {
             category,
             snapshot,
             rollout,
+            guardian_rollout_path,
             self.app_event_tx.clone(),
             include_logs,
             self.feedback_audience,
@@ -1560,7 +1563,11 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn open_feedback_consent(&mut self, category: crate::app_event::FeedbackCategory) {
+    pub(crate) fn open_feedback_consent(
+        &mut self,
+        category: crate::app_event::FeedbackCategory,
+        guardian_rollout_path: Option<PathBuf>,
+    ) {
         if let Some(chatgpt_user_id) = self
             .auth_manager
             .auth_cached()
@@ -1573,6 +1580,7 @@ impl ChatWidget {
             self.app_event_tx.clone(),
             category,
             self.current_rollout_path.clone(),
+            guardian_rollout_path,
             snapshot.feedback_diagnostics(),
         );
         self.bottom_pane.show_selection_view(params);

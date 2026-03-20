@@ -50,6 +50,7 @@ pub(crate) struct FeedbackNoteView {
     category: FeedbackCategory,
     snapshot: codex_feedback::FeedbackSnapshot,
     rollout_path: Option<PathBuf>,
+    guardian_rollout_path: Option<PathBuf>,
     app_event_tx: AppEventSender,
     include_logs: bool,
     feedback_audience: FeedbackAudience,
@@ -65,6 +66,7 @@ impl FeedbackNoteView {
         category: FeedbackCategory,
         snapshot: codex_feedback::FeedbackSnapshot,
         rollout_path: Option<PathBuf>,
+        guardian_rollout_path: Option<PathBuf>,
         app_event_tx: AppEventSender,
         include_logs: bool,
         feedback_audience: FeedbackAudience,
@@ -73,6 +75,7 @@ impl FeedbackNoteView {
             category,
             snapshot,
             rollout_path,
+            guardian_rollout_path,
             app_event_tx,
             include_logs,
             feedback_audience,
@@ -90,7 +93,11 @@ impl FeedbackNoteView {
             Some(note.as_str())
         };
         let attachment_paths = if self.include_logs {
-            self.rollout_path.iter().cloned().collect::<Vec<_>>()
+            self.rollout_path
+                .iter()
+                .chain(self.guardian_rollout_path.iter())
+                .cloned()
+                .collect::<Vec<_>>()
         } else {
             Vec::new()
         };
@@ -502,6 +509,7 @@ pub(crate) fn feedback_upload_consent_params(
     app_event_tx: AppEventSender,
     category: FeedbackCategory,
     rollout_path: Option<std::path::PathBuf>,
+    guardian_rollout_path: Option<std::path::PathBuf>,
     feedback_diagnostics: &FeedbackDiagnostics,
 ) -> super::SelectionViewParams {
     use super::popup_consts::standard_popup_hint_line;
@@ -534,10 +542,17 @@ pub(crate) fn feedback_upload_consent_params(
         Line::from("The following files will be sent:".dim()).into(),
         Line::from(vec!["  • ".into(), "codex-logs.log".into()]).into(),
     ];
-    if let Some(path) = rollout_path.as_deref()
-        && let Some(name) = path.file_name().map(|s| s.to_string_lossy().to_string())
+    for rollout_path in rollout_path
+        .iter()
+        .chain(guardian_rollout_path.iter())
+        .map(std::path::PathBuf::as_path)
     {
-        header_lines.push(Line::from(vec!["  • ".into(), name.into()]).into());
+        if let Some(name) = rollout_path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+        {
+            header_lines.push(Line::from(vec!["  • ".into(), name.into()]).into());
+        }
     }
     if !feedback_diagnostics.is_empty() {
         header_lines.push(
@@ -633,6 +648,7 @@ mod tests {
             category,
             snapshot,
             None,
+            None,
             tx,
             true,
             FeedbackAudience::External,
@@ -695,6 +711,7 @@ mod tests {
         let view = FeedbackNoteView::new(
             FeedbackCategory::Bug,
             snapshot,
+            None,
             None,
             tx,
             false,

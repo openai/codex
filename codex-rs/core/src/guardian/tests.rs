@@ -737,6 +737,74 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn guardian_session_can_initialize_before_first_approval() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let _startup_prewarm = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian-startup"),
+            ev_completed("resp-guardian-startup"),
+        ]),
+    )
+    .await;
+
+    let (session, turn) = guardian_test_session_and_turn(&server).await;
+    assert!(
+        session
+            .guardian_review_session
+            .trunk_rollout_path()
+            .await
+            .is_none()
+    );
+
+    session
+        .guardian_review_session
+        .initialize_trunk_if_needed(Arc::clone(&session), Arc::clone(&turn))
+        .await;
+
+    assert!(
+        session
+            .guardian_review_session
+            .trunk_rollout_path()
+            .await
+            .is_some()
+    );
+    session.guardian_review_session.shutdown().await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn guardian_session_trunk_rollout_path_is_persisted() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let _startup_prewarm = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian-startup"),
+            ev_completed("resp-guardian-startup"),
+        ]),
+    )
+    .await;
+
+    let (session, turn) = guardian_test_session_and_turn(&server).await;
+    session
+        .guardian_review_session
+        .initialize_trunk_if_needed(Arc::clone(&session), Arc::clone(&turn))
+        .await;
+
+    assert!(
+        session
+            .guardian_review_session
+            .trunk_rollout_path()
+            .await
+            .is_some()
+    );
+    session.guardian_review_session.shutdown().await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn guardian_active_fork_cap_waits_for_any_fork_slot() -> anyhow::Result<()> {
     let fork_cap = 2;
     let first_assessment = serde_json::json!({

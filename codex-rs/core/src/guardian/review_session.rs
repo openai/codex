@@ -313,6 +313,13 @@ impl GuardianReviewSessionManager {
         }
     }
 
+    pub(crate) async fn trunk_rollout_path(&self) -> Option<PathBuf> {
+        let trunk = self.state.lock().await.trunk.as_ref().cloned();
+        let trunk = trunk?;
+        trunk.codex.session.flush_rollout().await;
+        trunk.codex.session.current_rollout_path().await
+    }
+
     pub(crate) fn spawn_initialize_trunk_if_needed(
         &self,
         parent_session: Arc<Session>,

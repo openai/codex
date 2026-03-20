@@ -1399,6 +1399,21 @@ impl App {
         self.active_thread_id.or(self.chat_widget.thread_id())
     }
 
+    async fn current_guardian_rollout_path(&self) -> Option<PathBuf> {
+        let thread_id = self.current_displayed_thread_id()?;
+        match self.server.get_thread(thread_id).await {
+            Ok(thread) => thread.guardian_trunk_rollout_path().await,
+            Err(err) => {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    error = %err,
+                    "failed to load thread while resolving guardian rollout path for feedback"
+                );
+                None
+            }
+        }
+    }
+
     /// Mirrors the visible thread into the contextual footer row.
     ///
     /// The footer sometimes shows ambient context instead of an instructional hint. In multi-agent
@@ -2834,10 +2849,18 @@ impl App {
                 category,
                 include_logs,
             } => {
-                self.chat_widget.open_feedback_note(category, include_logs);
+                let guardian_rollout_path = if include_logs {
+                    self.current_guardian_rollout_path().await
+                } else {
+                    None
+                };
+                self.chat_widget
+                    .open_feedback_note(category, include_logs, guardian_rollout_path);
             }
             AppEvent::OpenFeedbackConsent { category } => {
-                self.chat_widget.open_feedback_consent(category);
+                let guardian_rollout_path = self.current_guardian_rollout_path().await;
+                self.chat_widget
+                    .open_feedback_consent(category, guardian_rollout_path);
             }
             AppEvent::LaunchExternalEditor => {
                 if self.chat_widget.external_editor_state() == ExternalEditorState::Active {

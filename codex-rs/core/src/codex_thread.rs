@@ -155,6 +155,14 @@ impl CodexThread {
         self.codex.state_db()
     }
 
+    pub async fn guardian_trunk_rollout_path(&self) -> Option<PathBuf> {
+        self.codex
+            .session
+            .guardian_review_session
+            .trunk_rollout_path()
+            .await
+    }
+
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
         self.codex.thread_config_snapshot().await
     }
