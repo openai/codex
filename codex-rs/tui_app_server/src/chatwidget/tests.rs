@@ -11645,7 +11645,7 @@ async fn assert_hook_events_snapshot(
             turn_id: None,
             run: codex_protocol::protocol::HookRunSummary {
                 id: run_id.to_string(),
-                event_name: event_name.clone(),
+                event_name,
                 handler_type: codex_protocol::protocol::HookHandlerType::Command,
                 execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
                 scope: codex_protocol::protocol::HookScope::Turn,
