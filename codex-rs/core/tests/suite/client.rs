@@ -366,6 +366,7 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
         call_id: "legacy-js-call".to_string(),
         name: "js_repl".to_string(),
         input: "console.log('legacy image flow')".to_string(),
+        metadata: None,
     };
     let legacy_image_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
     let rollout = vec![
@@ -523,6 +524,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
                 namespace: None,
                 arguments: "{\"path\":\"/tmp/example.webp\"}".to_string(),
                 call_id: function_call_id.to_string(),
+                metadata: None,
             }),
         },
         RolloutLine {
@@ -545,6 +547,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
                 call_id: custom_call_id.to_string(),
                 name: "js_repl".to_string(),
                 input: "console.log('image flow')".to_string(),
+                metadata: None,
             }),
         },
         RolloutLine {
@@ -1879,6 +1882,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         namespace: None,
         arguments: "{}".into(),
         call_id: "function-call-id".into(),
+        metadata: None,
     });
     prompt.input.push(ResponseItem::FunctionCallOutput {
         call_id: "function-call-id".into(),
@@ -1895,6 +1899,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             env: None,
             user: None,
         }),
+        metadata: None,
     });
     prompt.input.push(ResponseItem::CustomToolCall {
         id: Some("custom-tool-id".into()),
@@ -1902,6 +1907,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         call_id: "custom-tool-call-id".into(),
         name: "custom_tool".into(),
         input: "{}".into(),
+        metadata: None,
     });
     prompt.input.push(ResponseItem::CustomToolCallOutput {
         call_id: "custom-tool-call-id".into(),

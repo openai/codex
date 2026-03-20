@@ -292,6 +292,8 @@ use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::tool_kind_for_path;
 use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
+use crate::state::ApprovalOutcomeMetadata;
+use crate::state::PendingApprovalMetadata;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state_db;
@@ -331,6 +333,8 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ResponseItemMetadata;
+use codex_protocol::models::SandboxPolicyMetadata;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
@@ -1001,7 +1005,13 @@ fn local_time_context() -> (String, String) {
     }
 }
 
-fn stamp_user_message_type_on_input_item(item: &mut ResponseInputItem, kind: UserMessageType) {
+fn stamp_message_metadata_on_input_item(
+    item: &mut ResponseInputItem,
+    patch: &ResponseItemMetadata,
+) {
+    if patch.is_empty() {
+        return;
+    }
     let ResponseInputItem::Message { role, metadata, .. } = item else {
         return;
     };
@@ -1009,8 +1019,161 @@ fn stamp_user_message_type_on_input_item(item: &mut ResponseInputItem, kind: Use
         return;
     }
     let mut metadata_value = metadata.take().unwrap_or_default();
-    metadata_value.user_message_type = Some(kind);
-    *metadata = Some(metadata_value);
+    metadata_value.merge_from(patch.clone());
+    *metadata = (!metadata_value.is_empty()).then_some(metadata_value);
+}
+
+fn sandbox_policy_to_metadata(policy: &SandboxPolicy) -> SandboxPolicyMetadata {
+    match policy {
+        SandboxPolicy::ReadOnly { .. } => SandboxPolicyMetadata::ReadOnly,
+        SandboxPolicy::WorkspaceWrite { .. } | SandboxPolicy::ExternalSandbox { .. } => {
+            SandboxPolicyMetadata::Sandbox
+        }
+        SandboxPolicy::DangerFullAccess => SandboxPolicyMetadata::FullAccess,
+    }
+}
+
+fn user_message_metadata_patch(
+    kind: UserMessageType,
+    sandbox_policy: Option<SandboxPolicyMetadata>,
+) -> ResponseItemMetadata {
+    ResponseItemMetadata {
+        user_message_type: Some(kind),
+        sandbox_policy,
+        ..ResponseItemMetadata::default()
+    }
+}
+
+fn stamp_message_metadata_on_response_item(
+    item: ResponseItem,
+    patch: Option<ResponseItemMetadata>,
+) -> ResponseItem {
+    let Some(patch) = patch else {
+        return item;
+    };
+    if patch.is_empty() {
+        return item;
+    }
+
+    match item {
+        ResponseItem::Message {
+            id,
+            role,
+            content,
+            metadata,
+            end_turn,
+            phase,
+        } if role == "user" => {
+            let mut metadata_value = metadata.unwrap_or_default();
+            metadata_value.merge_from(patch);
+            let metadata = (!metadata_value.is_empty()).then_some(metadata_value);
+            ResponseItem::Message {
+                id,
+                role,
+                content,
+                metadata,
+                end_turn,
+                phase,
+            }
+        }
+        other => other,
+    }
+}
+
+fn response_item_tool_call_id(item: &ResponseItem) -> Option<&str> {
+    match item {
+        ResponseItem::LocalShellCall {
+            call_id: Some(call_id),
+            ..
+        } => Some(call_id),
+        ResponseItem::FunctionCall { call_id, .. } => Some(call_id),
+        ResponseItem::CustomToolCall { call_id, .. } => Some(call_id),
+        _ => None,
+    }
+}
+
+fn tool_call_metadata_slot_mut(
+    item: &mut ResponseItem,
+) -> Option<&mut Option<ResponseItemMetadata>> {
+    match item {
+        ResponseItem::LocalShellCall { metadata, .. }
+        | ResponseItem::FunctionCall { metadata, .. }
+        | ResponseItem::CustomToolCall { metadata, .. } => Some(metadata),
+        _ => None,
+    }
+}
+
+fn stamp_tool_metadata_on_response_item(
+    mut item: ResponseItem,
+    patch: ResponseItemMetadata,
+) -> ResponseItem {
+    if patch.is_empty() {
+        return item;
+    }
+    let Some(metadata_slot) = tool_call_metadata_slot_mut(&mut item) else {
+        return item;
+    };
+    let mut metadata = metadata_slot.take().unwrap_or_default();
+    metadata.merge_from(patch);
+    *metadata_slot = (!metadata.is_empty()).then_some(metadata);
+    item
+}
+
+fn tool_call_metadata_or_default(item: &ResponseItem) -> Option<ResponseItemMetadata> {
+    match item {
+        ResponseItem::LocalShellCall { metadata, .. }
+        | ResponseItem::FunctionCall { metadata, .. }
+        | ResponseItem::CustomToolCall { metadata, .. } => {
+            Some(metadata.clone().unwrap_or_default())
+        }
+        _ => None,
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct ToolApprovalMetadataSnapshot {
+    approval_outcomes_by_call_id: HashMap<String, ApprovalOutcomeMetadata>,
+    pending_approval_call_ids: HashSet<String>,
+}
+
+fn stamp_tool_approval_metadata_with_snapshot(
+    turn_context: &TurnContext,
+    response_item: ResponseItem,
+    snapshot: Option<&ToolApprovalMetadataSnapshot>,
+) -> ResponseItem {
+    let Some(snapshot) = snapshot else {
+        return response_item;
+    };
+    let Some(call_id) = response_item_tool_call_id(&response_item) else {
+        return response_item;
+    };
+
+    let outcome = snapshot.approval_outcomes_by_call_id.get(call_id).cloned();
+    let has_pending_approval = snapshot.pending_approval_call_ids.contains(call_id);
+
+    let mut metadata = match tool_call_metadata_or_default(&response_item) {
+        Some(metadata) => metadata,
+        None => return response_item,
+    };
+    metadata.sandbox_policy = Some(sandbox_policy_to_metadata(
+        turn_context.sandbox_policy.get(),
+    ));
+
+    match outcome {
+        Some(outcome) => {
+            metadata.is_tool_call_escalated = Some(true);
+            metadata.review_decision = outcome.review_decision;
+        }
+        None if !has_pending_approval => {
+            metadata.is_tool_call_escalated = Some(false);
+            metadata.review_decision = None;
+        }
+        None => {
+            return stamp_tool_metadata_on_response_item(response_item, metadata);
+        }
+    }
+
+    stamp_tool_metadata_on_response_item(response_item, metadata)
 }
 
 #[derive(Clone)]
@@ -2879,6 +3042,12 @@ impl Session {
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_approval_call_id(
+                        effective_approval_id.clone(),
+                        PendingApprovalMetadata {
+                            call_id: call_id.clone(),
+                        },
+                    );
                     ts.insert_pending_approval(effective_approval_id.clone(), tx_approve)
                 }
                 None => None,
@@ -2944,6 +3113,12 @@ impl Session {
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_approval_call_id(
+                        approval_id.clone(),
+                        PendingApprovalMetadata {
+                            call_id: call_id.clone(),
+                        },
+                    );
                     ts.insert_pending_approval(approval_id.clone(), tx_approve)
                 }
                 None => None,
@@ -3229,7 +3404,44 @@ impl Session {
         }
     }
 
+    pub async fn record_approval_outcome(&self, approval_id: &str, decision: &ReviewDecision) {
+        let mut active = self.active_turn.lock().await;
+        let Some(at) = active.as_mut() else {
+            return;
+        };
+        let mut ts = at.turn_state.lock().await;
+        let pending_approval = ts
+            .remove_pending_approval_call_id(approval_id)
+            .unwrap_or_else(|| PendingApprovalMetadata {
+                call_id: approval_id.to_string(),
+            });
+        drop(ts);
+        drop(active);
+        self.record_call_approval_outcome(
+            pending_approval.call_id,
+            ApprovalOutcomeMetadata::reviewed(decision),
+        )
+        .await;
+    }
+
+    pub(crate) async fn record_call_approval_outcome(
+        &self,
+        call_id: String,
+        outcome: ApprovalOutcomeMetadata,
+    ) {
+        let mut active = self.active_turn.lock().await;
+        let Some(at) = active.as_mut() else {
+            return;
+        };
+        if !self.enabled(Feature::ItemMetadata) {
+            return;
+        }
+        let mut ts = at.turn_state.lock().await;
+        ts.record_approval_outcome(call_id, outcome);
+    }
+
     pub async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {
+        self.record_approval_outcome(approval_id, &decision).await;
         let entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
@@ -3248,6 +3460,60 @@ impl Session {
                 warn!("No pending approval found for call_id: {approval_id}");
             }
         }
+    }
+
+    pub(crate) async fn stamp_tool_approval_metadata(
+        &self,
+        turn_context: &TurnContext,
+        response_item: ResponseItem,
+    ) -> ResponseItem {
+        if !self.enabled(Feature::ItemMetadata) {
+            return response_item;
+        }
+        let snapshot = {
+            let active = self.active_turn.lock().await;
+            let Some(at) = active.as_ref() else {
+                return response_item;
+            };
+            let ts = at.turn_state.lock().await;
+            let (approval_outcomes_by_call_id, pending_approval_call_ids) =
+                ts.approval_metadata_snapshot();
+            ToolApprovalMetadataSnapshot {
+                approval_outcomes_by_call_id,
+                pending_approval_call_ids,
+            }
+        };
+        stamp_tool_approval_metadata_with_snapshot(turn_context, response_item, Some(&snapshot))
+    }
+
+    pub(crate) async fn stamp_tool_approval_metadata_on_items(
+        &self,
+        turn_context: &TurnContext,
+        response_items: Vec<ResponseItem>,
+    ) -> Vec<ResponseItem> {
+        if !self.enabled(Feature::ItemMetadata) {
+            return response_items;
+        }
+        let snapshot = {
+            let active = self.active_turn.lock().await;
+            let Some(at) = active.as_ref() else {
+                return response_items;
+            };
+            let ts = at.turn_state.lock().await;
+            let (approval_outcomes_by_call_id, pending_approval_call_ids) =
+                ts.approval_metadata_snapshot();
+            ToolApprovalMetadataSnapshot {
+                approval_outcomes_by_call_id,
+                pending_approval_call_ids,
+            }
+        };
+
+        response_items
+            .into_iter()
+            .map(|item| {
+                stamp_tool_approval_metadata_with_snapshot(turn_context, item, Some(&snapshot))
+            })
+            .collect()
     }
 
     pub async fn resolve_elicitation(
@@ -3783,6 +4049,10 @@ impl Session {
         turn_context: &TurnContext,
         response_item: ResponseItem,
     ) {
+        let response_item = self
+            .stamp_tool_approval_metadata(turn_context, response_item)
+            .await;
+
         // Add to conversation history and persist response item to rollout.
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
@@ -3799,39 +4069,18 @@ impl Session {
         turn_context: &TurnContext,
         input: &[UserInput],
         response_item: ResponseItem,
-        user_message_type: Option<UserMessageType>,
+        message_metadata: Option<ResponseItemMetadata>,
     ) {
-        let user_message_type = if self.enabled(Feature::ItemMetadata) {
-            user_message_type
+        let metadata_patch = if self.enabled(Feature::ItemMetadata) {
+            let mut patch = message_metadata.unwrap_or_default();
+            patch.sandbox_policy = Some(sandbox_policy_to_metadata(
+                turn_context.sandbox_policy.get(),
+            ));
+            Some(patch)
         } else {
             None
         };
-
-        let response_item = match (response_item, user_message_type.clone()) {
-            (
-                ResponseItem::Message {
-                    id,
-                    role,
-                    content,
-                    metadata,
-                    end_turn,
-                    phase,
-                },
-                Some(kind),
-            ) if role == "user" => {
-                let mut metadata = metadata.unwrap_or_default();
-                metadata.user_message_type = Some(kind);
-                ResponseItem::Message {
-                    id,
-                    role,
-                    content,
-                    metadata: Some(metadata),
-                    end_turn,
-                    phase,
-                }
-            }
-            (response_item, _) => response_item,
-        };
+        let response_item = stamp_message_metadata_on_response_item(response_item, metadata_patch);
 
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
@@ -3918,7 +4167,7 @@ impl Session {
             return Err(SteerInputError::NoActiveTurn(input));
         };
 
-        let Some((active_turn_id, _)) = active_turn.tasks.first() else {
+        let Some((active_turn_id, active_task)) = active_turn.tasks.first() else {
             return Err(SteerInputError::NoActiveTurn(input));
         };
 
@@ -3927,18 +4176,25 @@ impl Session {
         {
             return Err(SteerInputError::ExpectedTurnMismatch {
                 expected: expected_turn_id.to_string(),
-                actual: active_turn_id.clone(),
+                actual: active_turn_id.to_string(),
             });
         }
 
         let mut input_item: ResponseInputItem = input.into();
-        if self.enabled(Feature::ItemMetadata) {
-            stamp_user_message_type_on_input_item(&mut input_item, UserMessageType::PromptSteering);
+        let metadata = Some(user_message_metadata_patch(
+            UserMessageType::PromptSteering,
+            self.enabled(Feature::ItemMetadata)
+                .then(|| sandbox_policy_to_metadata(active_task.turn_context.sandbox_policy.get())),
+        ));
+        if self.enabled(Feature::ItemMetadata)
+            && let Some(metadata_patch) = metadata.as_ref()
+        {
+            stamp_message_metadata_on_input_item(&mut input_item, metadata_patch);
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
-        turn_state.push_pending_input(input_item, Some(UserMessageType::PromptSteering));
-        Ok(active_turn_id.clone())
+        turn_state.push_pending_input(input_item, metadata);
+        Ok(active_turn_id.to_string())
     }
 
     /// Returns the input if there was no task running to inject into
@@ -3949,18 +4205,29 @@ impl Session {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
+                let sandbox_policy = at.tasks.first().map(|(_, turn_context)| {
+                    sandbox_policy_to_metadata(turn_context.turn_context.sandbox_policy.get())
+                });
                 let mut ts = at.turn_state.lock().await;
                 for mut item in input {
-                    let user_message_type = match &item {
-                        ResponseInputItem::Message { .. } => Some(UserMessageType::PromptQueued),
+                    let metadata = match &item {
+                        ResponseInputItem::Message { .. } => Some(user_message_metadata_patch(
+                            UserMessageType::PromptQueued,
+                            if self.enabled(Feature::ItemMetadata) {
+                                sandbox_policy.clone()
+                            } else {
+                                None
+                            },
+                        )),
                         _ => None,
                     };
+
                     if self.enabled(Feature::ItemMetadata)
-                        && let Some(kind) = user_message_type.clone()
+                        && let Some(metadata_patch) = metadata.as_ref()
                     {
-                        stamp_user_message_type_on_input_item(&mut item, kind);
+                        stamp_message_metadata_on_input_item(&mut item, metadata_patch);
                     }
-                    ts.push_pending_input(item, user_message_type);
+                    ts.push_pending_input(item, metadata);
                 }
                 Ok(())
             }
@@ -3970,14 +4237,14 @@ impl Session {
 
     pub async fn get_pending_input_with_metadata(
         &self,
-    ) -> Vec<(ResponseInputItem, Option<UserMessageType>)> {
+    ) -> Vec<(ResponseInputItem, Option<ResponseItemMetadata>)> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
                 ts.take_pending_input_with_metadata()
                     .into_iter()
-                    .map(|item| (item.input, item.user_message_type))
+                    .map(|item| (item.input, item.metadata))
                     .collect()
             }
             None => Vec::with_capacity(0),
@@ -3986,7 +4253,7 @@ impl Session {
 
     pub(crate) async fn prepend_pending_input_with_metadata(
         &self,
-        input: Vec<(ResponseInputItem, Option<UserMessageType>)>,
+        input: Vec<(ResponseInputItem, Option<ResponseItemMetadata>)>,
     ) -> Result<(), ()> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
@@ -3995,12 +4262,7 @@ impl Session {
                 ts.prepend_pending_input(
                     input
                         .into_iter()
-                        .map(
-                            |(input, user_message_type)| crate::state::PendingInputItem {
-                                input,
-                                user_message_type,
-                            },
-                        )
+                        .map(|(input, metadata)| crate::state::PendingInputItem { input, metadata })
                         .collect(),
                 );
                 Ok(())
@@ -4758,6 +5020,8 @@ mod handlers {
         }
         match decision {
             ReviewDecision::Abort => {
+                sess.record_approval_outcome(&approval_id, &ReviewDecision::Abort)
+                    .await;
                 sess.interrupt_task().await;
             }
             other => sess.notify_approval(&approval_id, other).await,
@@ -5673,15 +5937,22 @@ pub(crate) async fn run_turn(
         .await;
 
     let mut initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-    if sess.enabled(Feature::ItemMetadata) {
-        stamp_user_message_type_on_input_item(&mut initial_input_for_turn, UserMessageType::Prompt);
+    let initial_message_metadata = Some(user_message_metadata_patch(
+        UserMessageType::Prompt,
+        sess.enabled(Feature::ItemMetadata)
+            .then(|| sandbox_policy_to_metadata(turn_context.sandbox_policy.get())),
+    ));
+    if sess.enabled(Feature::ItemMetadata)
+        && let Some(metadata_patch) = initial_message_metadata.as_ref()
+    {
+        stamp_message_metadata_on_input_item(&mut initial_input_for_turn, metadata_patch);
     }
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
     sess.record_user_prompt_and_emit_turn_item(
         turn_context.as_ref(),
         &input,
         response_item,
-        Some(UserMessageType::Prompt),
+        initial_message_metadata,
     )
     .await;
     record_additional_contexts(&sess, &turn_context, additional_contexts).await;
@@ -5731,10 +6002,10 @@ pub(crate) async fn run_turn(
         let mut accepted_pending_input = Vec::new();
         if !pending_response_items.is_empty() {
             let mut pending_input_iter = pending_response_items.into_iter();
-            while let Some((pending_input_item, user_message_type)) = pending_input_iter.next() {
+            while let Some((pending_input_item, message_metadata)) = pending_input_iter.next() {
                 match inspect_pending_input(&sess, &turn_context, pending_input_item).await {
                     PendingInputHookDisposition::Accepted(pending_input) => {
-                        accepted_pending_input.push((*pending_input, user_message_type));
+                        accepted_pending_input.push((*pending_input, message_metadata));
                     }
                     PendingInputHookDisposition::Blocked {
                         additional_contexts,
@@ -5755,8 +6026,8 @@ pub(crate) async fn run_turn(
         }
 
         let has_accepted_pending_input = !accepted_pending_input.is_empty();
-        for (pending_input, user_message_type) in accepted_pending_input {
-            record_pending_input(&sess, &turn_context, pending_input, user_message_type).await;
+        for (pending_input, message_metadata) in accepted_pending_input {
+            record_pending_input(&sess, &turn_context, pending_input, message_metadata).await;
         }
         record_additional_contexts(&sess, &turn_context, blocked_pending_input_contexts).await;
 
@@ -5768,11 +6039,16 @@ pub(crate) async fn run_turn(
         }
 
         // Construct the input that we will send to the model.
-        let sampling_request_input: Vec<ResponseItem> = {
-            sess.clone_history()
-                .await
-                .for_prompt(&turn_context.model_info.input_modalities)
-        };
+        let sampling_request_input_items = sess
+            .clone_history()
+            .await
+            .for_prompt(&turn_context.model_info.input_modalities);
+        let sampling_request_input = sess
+            .stamp_tool_approval_metadata_on_items(
+                turn_context.as_ref(),
+                sampling_request_input_items,
+            )
+            .await;
 
         let sampling_request_input_messages = sampling_request_input
             .iter()

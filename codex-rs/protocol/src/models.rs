@@ -269,6 +269,28 @@ pub enum UserMessageType {
     PromptQueued,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum ReviewDecisionMetadata {
+    Approved,
+    Denied,
+    Abort,
+    ApprovedForSession,
+    ApprovedWithAmendment,
+    ApprovedWithNetworkPolicyAllow,
+    DeniedWithNetworkPolicyDeny,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SandboxPolicyMetadata {
+    ReadOnly,
+    Sandbox,
+    FullAccess,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct ResponseItemMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -278,6 +300,43 @@ pub struct ResponseItemMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub uuid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sandbox_policy: Option<SandboxPolicyMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub is_tool_call_escalated: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub review_decision: Option<ReviewDecisionMetadata>,
+}
+
+impl ResponseItemMetadata {
+    pub fn is_empty(&self) -> bool {
+        self.user_message_type.is_none()
+            && self.uuid.is_none()
+            && self.sandbox_policy.is_none()
+            && self.is_tool_call_escalated.is_none()
+            && self.review_decision.is_none()
+    }
+
+    pub fn merge_from(&mut self, other: Self) {
+        if other.user_message_type.is_some() {
+            self.user_message_type = other.user_message_type;
+        }
+        if other.uuid.is_some() {
+            self.uuid = other.uuid;
+        }
+        if other.sandbox_policy.is_some() {
+            self.sandbox_policy = other.sandbox_policy;
+        }
+        if other.is_tool_call_escalated.is_some() {
+            self.is_tool_call_escalated = other.is_tool_call_escalated;
+        }
+        if other.review_decision.is_some() {
+            self.review_decision = other.review_decision;
+        }
+    }
 }
 
 impl ResponseItem {
@@ -393,6 +452,9 @@ pub enum ResponseItem {
         call_id: Option<String>,
         status: LocalShellStatus,
         action: LocalShellAction,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     FunctionCall {
         #[serde(default, skip_serializing)]
@@ -407,6 +469,9 @@ pub enum ResponseItem {
         // Session::handle_function_call parse it into a Value.
         arguments: String,
         call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     ToolSearchCall {
         #[serde(default, skip_serializing)]
@@ -442,6 +507,9 @@ pub enum ResponseItem {
         call_id: String,
         name: String,
         input: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     // `custom_tool_call_output.output` uses the same wire encoding as
     // `function_call_output.output` so freeform tools can return either plain
@@ -1965,6 +2033,7 @@ mod tests {
                 namespace: Some("mcp__codex_apps__gmail".to_string()),
                 arguments: "{\"top_k\":5}".to_string(),
                 call_id: "call-1".to_string(),
+                metadata: None,
             }
         );
     }
@@ -3030,6 +3099,7 @@ mod tests {
             metadata: Some(ResponseItemMetadata {
                 user_message_type: Some(UserMessageType::Prompt),
                 uuid: None,
+                ..ResponseItemMetadata::default()
             }),
             end_turn: None,
             phase: None,

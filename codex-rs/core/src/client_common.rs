@@ -79,6 +79,7 @@ fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
             call_id,
             name,
             input: _,
+            ..
         } => {
             if name == "apply_patch" {
                 shell_call_ids.insert(call_id.clone());

@@ -269,7 +269,7 @@ impl Session {
                             self,
                             &turn_context,
                             *pending_input,
-                            pending_input_item.user_message_type,
+                            pending_input_item.metadata,
                         )
                         .await;
                     }

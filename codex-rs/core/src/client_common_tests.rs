@@ -150,6 +150,7 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
+            metadata: None,
         },
         ResponseItem::FunctionCallOutput {
             call_id: "call-1".to_string(),
@@ -161,6 +162,7 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
             call_id: "call-2".to_string(),
             name: "apply_patch".to_string(),
             input: "*** Begin Patch".to_string(),
+            metadata: None,
         },
         ResponseItem::CustomToolCallOutput {
             call_id: "call-2".to_string(),
@@ -180,6 +182,7 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
                 namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call-1".to_string(),
+                metadata: None,
             },
             ResponseItem::FunctionCallOutput {
                 call_id: "call-1".to_string(),
@@ -191,6 +194,7 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
                 call_id: "call-2".to_string(),
                 name: "apply_patch".to_string(),
                 input: "*** Begin Patch".to_string(),
+                metadata: None,
             },
             ResponseItem::CustomToolCallOutput {
                 call_id: "call-2".to_string(),
@@ -213,6 +217,7 @@ fn formatted_input_does_not_generate_message_metadata_uuid_when_disabled() {
             metadata: Some(ResponseItemMetadata {
                 user_message_type: Some(UserMessageType::Prompt),
                 uuid: None,
+                ..ResponseItemMetadata::default()
             }),
             end_turn: None,
             phase: None,
@@ -245,6 +250,7 @@ fn formatted_input_preserves_existing_message_metadata_uuid() {
             metadata: Some(ResponseItemMetadata {
                 user_message_type: Some(UserMessageType::Prompt),
                 uuid: Some("2585a800-7d93-4f52-8648-d9cb39f413d2".to_string()),
+                ..ResponseItemMetadata::default()
             }),
             end_turn: None,
             phase: None,
