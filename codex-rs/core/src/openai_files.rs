@@ -301,6 +301,7 @@ pub(crate) async fn upload_local_file(
     let upload_response = build_reqwest_client()
         .put(&create_payload.upload_url)
         .timeout(OPENAI_FILE_REQUEST_TIMEOUT)
+        .header("x-ms-blob-type", "BlockBlob")
         .body(reqwest::Body::wrap_stream(ReaderStream::new(upload_file)))
         .send()
         .await
@@ -394,15 +395,27 @@ pub(crate) async fn download_file_to_managed_temp(
             .unwrap_or(resolved.file_id.as_str()),
     );
     let destination_path = download_dir.join(&file_name);
-    let response = build_reqwest_client()
-        .get(&resolved.download_url)
-        .timeout(OPENAI_FILE_REQUEST_TIMEOUT)
-        .send()
-        .await
-        .map_err(|source| OpenAiFileError::Request {
-            url: resolved.download_url.clone(),
-            source,
-        })?;
+    let chatgpt_base_url = config.chatgpt_base_url.trim_end_matches('/');
+    let response = if resolved.download_url.starts_with(chatgpt_base_url) {
+        let auth = ensure_chatgpt_auth(auth)?;
+        authorized_request(auth, reqwest::Method::GET, &resolved.download_url)?
+            .send()
+            .await
+            .map_err(|source| OpenAiFileError::Request {
+                url: resolved.download_url.clone(),
+                source,
+            })?
+    } else {
+        build_reqwest_client()
+            .get(&resolved.download_url)
+            .timeout(OPENAI_FILE_REQUEST_TIMEOUT)
+            .send()
+            .await
+            .map_err(|source| OpenAiFileError::Request {
+                url: resolved.download_url.clone(),
+                source,
+            })?
+    };
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
@@ -684,6 +697,47 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "file `file_123` is too large to download automatically: 200 bytes exceeds the limit of 128 bytes"
+        );
+    }
+
+    #[tokio::test]
+    async fn download_file_to_managed_temp_authenticates_same_origin_download_urls() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/backend-api/files/download/file_123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success",
+                "download_url": format!("{}/backend-api/estuary/content?id=file_123", server.uri()),
+                "file_name": "report.txt",
+                "mime_type": "text/plain",
+                "file_size_bytes": 4
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/backend-api/estuary/content"))
+            .and(header("authorization", "Bearer dummy_token"))
+            .and(header("chatgpt-account-id", "account_id"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw("test", "text/plain"))
+            .mount(&server)
+            .await;
+
+        let downloaded = download_file_to_managed_temp(
+            &test_config_for(&server),
+            Some(&chatgpt_auth()),
+            "sediment://file_123",
+            "call-3",
+            OPENAI_FILE_DOWNLOAD_LIMIT_BYTES,
+        )
+        .await
+        .expect("download succeeds");
+
+        assert_eq!(downloaded.file_id, "file_123");
+        assert_eq!(
+            tokio::fs::read_to_string(&downloaded.destination_path)
+                .await
+                .expect("read downloaded file"),
+            "test"
         );
     }
 }
