@@ -121,7 +121,7 @@ index 85f31b7..7314584 100644
      ],
      outs = [
          "include/inspector/Debugger.h",
-@@ -4426,15 +4426,19 @@ genrule(
+@@ -4426,15 +4426,18 @@ genrule(
          "src/inspector/protocol/Schema.cpp",
          "src/inspector/protocol/Schema.h",
      ],
@@ -134,7 +134,7 @@ index 85f31b7..7314584 100644
             --config $(location :src/inspector/inspector_protocol_config.json) \
             --config_value protocol.path=$(location :include/js_protocol.pdl) \
             --output_base $(@D)/src/inspector",
-     local = 1,
+-    local = 1,
      message = "Generating inspector files",
      tools = [
 -        ":code_generator",
