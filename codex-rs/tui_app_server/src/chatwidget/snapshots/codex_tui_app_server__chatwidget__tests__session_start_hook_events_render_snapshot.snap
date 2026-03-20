@@ -1,6 +1,5 @@
 ---
-source: tui/src/chatwidget/tests.rs
-assertion_line: 8586
+source: tui_app_server/src/chatwidget/tests.rs
 expression: combined
 ---
 • Running SessionStart hook: warming the shell

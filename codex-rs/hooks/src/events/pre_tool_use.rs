@@ -164,7 +164,7 @@ fn parse_completed(
                             text: reason,
                         });
                     }
-                } else {
+                } else if trimmed_stdout.starts_with('{') || trimmed_stdout.starts_with('[') {
                     status = HookRunStatus::Failed;
                     entries.push(HookOutputEntry {
                         kind: HookOutputEntryKind::Error,
@@ -273,6 +273,35 @@ mod tests {
     }
 
     #[test]
+    fn deprecated_block_decision_blocks_processing() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(
+                Some(0),
+                r#"{"decision":"block","reason":"do not run that"}"#,
+                "",
+            ),
+            Some("turn-1".to_string()),
+        );
+
+        assert_eq!(
+            parsed.data,
+            PreToolUseHandlerData {
+                should_block: true,
+                block_reason: Some("do not run that".to_string()),
+            }
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
+        assert_eq!(
+            parsed.completed.run.entries,
+            vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Feedback,
+                text: "do not run that".to_string(),
+            }]
+        );
+    }
+
+    #[test]
     fn unsupported_permission_decision_fails_open() {
         let parsed = parse_completed(
             &handler(),
@@ -302,6 +331,31 @@ mod tests {
     }
 
     #[test]
+    fn deprecated_approve_decision_fails_open() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(Some(0), r#"{"decision":"approve"}"#, ""),
+            Some("turn-1".to_string()),
+        );
+
+        assert_eq!(
+            parsed.data,
+            PreToolUseHandlerData {
+                should_block: false,
+                block_reason: None,
+            }
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
+        assert_eq!(
+            parsed.completed.run.entries,
+            vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Error,
+                text: "PreToolUse hook returned unsupported decision:approve".to_string(),
+            }]
+        );
+    }
+
+    #[test]
     fn unsupported_additional_context_fails_open() {
         let parsed = parse_completed(
             &handler(),
@@ -326,6 +380,50 @@ mod tests {
             vec![HookOutputEntry {
                 kind: HookOutputEntryKind::Error,
                 text: "PreToolUse hook returned unsupported additionalContext".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn plain_stdout_is_ignored() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(Some(0), "hook ran successfully\n", ""),
+            Some("turn-1".to_string()),
+        );
+
+        assert_eq!(
+            parsed.data,
+            PreToolUseHandlerData {
+                should_block: false,
+                block_reason: None,
+            }
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Completed);
+        assert_eq!(parsed.completed.run.entries, vec![]);
+    }
+
+    #[test]
+    fn invalid_json_like_stdout_fails_instead_of_becoming_noop() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(Some(0), "{\"decision\":\n", ""),
+            Some("turn-1".to_string()),
+        );
+
+        assert_eq!(
+            parsed.data,
+            PreToolUseHandlerData {
+                should_block: false,
+                block_reason: None,
+            }
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
+        assert_eq!(
+            parsed.completed.run.entries,
+            vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Error,
+                text: "hook returned invalid pre-tool-use JSON output".to_string(),
             }]
         );
     }

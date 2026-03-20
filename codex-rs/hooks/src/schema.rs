@@ -83,6 +83,10 @@ pub(crate) struct PreToolUseCommandOutputWire {
     #[serde(flatten)]
     pub universal: HookUniversalOutputWire,
     #[serde(default)]
+    pub decision: Option<PreToolUseDecisionWire>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
     pub hook_specific_output: Option<PreToolUseHookSpecificOutputWire>,
 }
 
@@ -109,6 +113,14 @@ pub(crate) enum PreToolUsePermissionDecisionWire {
     Deny,
     #[serde(rename = "ask")]
     Ask,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub(crate) enum PreToolUseDecisionWire {
+    #[serde(rename = "approve")]
+    Approve,
+    #[serde(rename = "block")]
+    Block,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
