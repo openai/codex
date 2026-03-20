@@ -510,3 +510,60 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn limited_rollout_clears_inline_image_result_when_saved_path_exists()
+-> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .build()
+        .await?;
+    let thread_id = ThreadId::new();
+    let recorder = RolloutRecorder::new(
+        &config,
+        RolloutRecorderParams::new(
+            thread_id,
+            None,
+            SessionSource::Cli,
+            BaseInstructions::default(),
+            Vec::new(),
+            EventPersistenceMode::Limited,
+        ),
+        None,
+        None,
+    )
+    .await?;
+
+    let saved_path = home.path().join("generated_images/thread/ig_123.png");
+    let saved_path_str = saved_path.to_string_lossy().into_owned();
+    recorder
+        .record_items(&[RolloutItem::EventMsg(EventMsg::ImageGenerationEnd(
+            codex_protocol::protocol::ImageGenerationEndEvent {
+                call_id: "ig_123".to_string(),
+                status: "completed".to_string(),
+                revised_prompt: Some("final prompt".to_string()),
+                result: "Zm9v".to_string(),
+                saved_path: Some(saved_path_str.clone()),
+            },
+        ))])
+        .await?;
+    recorder.persist().await?;
+    recorder.flush().await?;
+
+    let text = std::fs::read_to_string(recorder.rollout_path())?;
+    let persisted_event = text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<RolloutLine>(line).ok())
+        .find_map(|line| match line.item {
+            RolloutItem::EventMsg(EventMsg::ImageGenerationEnd(event)) => Some(event),
+            _ => None,
+        })
+        .expect("persisted image generation end event");
+
+    assert_eq!(persisted_event.saved_path.as_deref(), Some(saved_path_str.as_str()));
+    assert!(persisted_event.result.is_empty());
+
+    recorder.shutdown().await?;
+    Ok(())
+}
