@@ -678,6 +678,7 @@ async fn plugin_list_force_remote_sync_reconciles_curated_plugin_state() -> Resu
         .await;
     Mock::given(method("GET"))
         .and(path("/backend-api/plugins/featured"))
+        .and(query_param("platform", "codex"))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(
@@ -784,6 +785,7 @@ async fn app_server_startup_remote_plugin_sync_runs_once() -> Result<()> {
         .await;
     Mock::given(method("GET"))
         .and(path("/backend-api/plugins/featured"))
+        .and(query_param("platform", "codex"))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(ResponseTemplate::new(200).set_body_string(r#"["linear@openai-curated"]"#))
@@ -850,6 +852,7 @@ async fn plugin_list_fetches_featured_plugin_ids_without_chatgpt_auth() -> Resul
 
     Mock::given(method("GET"))
         .and(path("/backend-api/plugins/featured"))
+        .and(query_param("platform", "codex"))
         .respond_with(ResponseTemplate::new(200).set_body_string(r#"["linear@openai-curated"]"#))
         .mount(&server)
         .await;
@@ -888,6 +891,7 @@ async fn plugin_list_uses_warmed_featured_plugin_ids_cache_on_first_request() ->
 
     Mock::given(method("GET"))
         .and(path("/backend-api/plugins/featured"))
+        .and(query_param("platform", "codex"))
         .respond_with(ResponseTemplate::new(200).set_body_string(r#"["linear@openai-curated"]"#))
         .expect(1)
         .mount(&server)
