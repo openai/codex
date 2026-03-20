@@ -1000,6 +1000,17 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
     assert_eq!(hook_inputs[0]["tool_name"], "Bash");
     assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    let transcript_path = hook_inputs[0]["transcript_path"]
+        .as_str()
+        .expect("pre tool use hook transcript_path");
+    assert!(
+        !transcript_path.is_empty(),
+        "pre tool use hook should receive a non-empty transcript_path",
+    );
+    assert!(
+        Path::new(transcript_path).exists(),
+        "pre tool use hook transcript_path should be materialized on disk",
+    );
     assert!(
         hook_inputs[0]["turn_id"]
             .as_str()
