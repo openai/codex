@@ -38,6 +38,7 @@ pub(crate) struct ResolvedOpenAiFile {
 pub(crate) struct UploadedOpenAiFile {
     pub(crate) file_id: String,
     pub(crate) uri: String,
+    pub(crate) download_url: String,
     pub(crate) file_name: String,
     pub(crate) file_size_bytes: u64,
     pub(crate) mime_type: Option<String>,
@@ -351,6 +352,12 @@ pub(crate) async fn upload_local_file(
         "success" => Ok(UploadedOpenAiFile {
             file_id: create_payload.file_id.clone(),
             uri: openai_file_uri(&create_payload.file_id),
+            download_url: finalize_payload.download_url.ok_or_else(|| {
+                OpenAiFileError::UploadFailed {
+                    file_id: create_payload.file_id.clone(),
+                    message: "missing download_url".to_string(),
+                }
+            })?,
             file_name: finalize_payload.file_name.unwrap_or(file_name),
             file_size_bytes: metadata.len(),
             mime_type: finalize_payload.mime_type,
@@ -619,6 +626,10 @@ mod tests {
 
         assert_eq!(uploaded.file_id, "file_123");
         assert_eq!(uploaded.uri, "sediment://file_123");
+        assert_eq!(
+            uploaded.download_url,
+            format!("{}/download/file_123", server.uri())
+        );
         assert_eq!(uploaded.file_name, "hello.txt");
         assert_eq!(uploaded.mime_type, Some("text/plain".to_string()));
     }

@@ -33,8 +33,8 @@ use crate::openai_files::OPENAI_FILE_AUTO_DOWNLOAD_BUDGET_BYTES;
 use crate::openai_files::OPENAI_FILE_AUTO_DOWNLOAD_LIMIT_BYTES;
 use crate::openai_files::download_file_to_managed_temp;
 use crate::openai_files::is_openai_file_uri;
-use crate::openai_files::openai_file_uri;
 use crate::openai_files::parse_openai_file_id;
+use crate::openai_files::resolve_openai_file;
 use crate::openai_files::upload_local_file;
 use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
@@ -66,6 +66,8 @@ pub(crate) async fn handle_mcp_tool_call(
     sess: Arc<Session>,
     turn_context: &Arc<TurnContext>,
     call_id: String,
+    qualified_tool_name: &str,
+    qualified_tool_namespace: Option<&str>,
     server: String,
     tool_name: String,
     arguments: String,
@@ -90,8 +92,15 @@ pub(crate) async fn handle_mcp_tool_call(
         arguments: arguments_value.clone(),
     };
 
-    let metadata =
-        lookup_mcp_tool_metadata(sess.as_ref(), turn_context.as_ref(), &server, &tool_name).await;
+    let metadata = lookup_mcp_tool_metadata(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        qualified_tool_name,
+        qualified_tool_namespace,
+        &server,
+        &tool_name,
+    )
+    .await;
     let app_tool_policy = if server == CODEX_APPS_MCP_SERVER_NAME {
         connectors::app_tool_policy(
             &turn_context.config,
@@ -839,6 +848,8 @@ fn mcp_tool_approval_callsite_mode(
 pub(crate) async fn lookup_mcp_tool_metadata(
     sess: &Session,
     turn_context: &TurnContext,
+    qualified_tool_name: &str,
+    qualified_tool_namespace: Option<&str>,
     server: &str,
     tool_name: &str,
 ) -> Option<McpToolApprovalMetadata> {
@@ -850,9 +861,21 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         .list_all_tools()
         .await;
 
-    let tool_info = tools
-        .into_values()
-        .find(|tool_info| tool_info.server_name == server && tool_info.tool.name == tool_name)?;
+    let qualified_tool_key = if let Some(namespace) = qualified_tool_namespace {
+        if qualified_tool_name.starts_with(namespace) {
+            qualified_tool_name.to_string()
+        } else {
+            format!("{namespace}{qualified_tool_name}")
+        }
+    } else {
+        qualified_tool_name.to_string()
+    };
+
+    let tool_info = tools.get(&qualified_tool_key).cloned().or_else(|| {
+        tools
+            .into_values()
+            .find(|tool_info| tool_info.server_name == server && tool_info.tool.name == tool_name)
+    })?;
     let connector_description = if server == CODEX_APPS_MCP_SERVER_NAME {
         let connectors = match connectors::list_cached_accessible_connectors_from_mcp_tools(
             turn_context.config.as_ref(),
@@ -955,7 +978,7 @@ async fn rewrite_argument_value_for_openai_files(
                 path_or_file_ref,
             )
             .await?;
-            *value = serde_json::Value::String(rewritten);
+            *value = rewritten;
             Ok(())
         }
         serde_json::Value::Array(values) => {
@@ -971,7 +994,7 @@ async fn rewrite_argument_value_for_openai_files(
                     path_or_file_ref,
                 )
                 .await?;
-                *item = serde_json::Value::String(rewritten);
+                *item = rewritten;
             }
             Ok(())
         }
@@ -985,28 +1008,29 @@ async fn rewrite_single_argument_string(
     field_name: &str,
     index: Option<usize>,
     path_or_file_ref: &str,
-) -> Result<String, String> {
+) -> Result<serde_json::Value, String> {
     if is_openai_file_uri(path_or_file_ref)
         && let Some(file_id) = parse_openai_file_id(path_or_file_ref)
     {
-        return Ok(openai_file_uri(file_id));
-    }
-
-    let resolved_path = turn_context.resolve_path(Some(path_or_file_ref.to_string()));
-    if resolved_path.exists() {
-        let uploaded = upload_local_file(turn_context.config.as_ref(), auth, &resolved_path)
+        let resolved = resolve_openai_file(turn_context.config.as_ref(), auth, file_id)
             .await
             .map_err(|error| match index {
                 Some(index) => format!(
-                    "failed to upload `{path_or_file_ref}` for `{field_name}[{index}]`: {error}"
+                    "failed to resolve `{path_or_file_ref}` for `{field_name}[{index}]`: {error}"
                 ),
                 None => {
-                    format!("failed to upload `{path_or_file_ref}` for `{field_name}`: {error}")
+                    format!("failed to resolve `{path_or_file_ref}` for `{field_name}`: {error}")
                 }
             })?;
-        return Ok(uploaded.uri);
+        return Ok(serde_json::json!({
+            "download_url": resolved.download_url,
+            "file_id": resolved.file_id,
+            "mime_type": resolved.mime_type,
+            "file_name": resolved.file_name,
+        }));
     }
 
+    let resolved_path = turn_context.resolve_path(Some(path_or_file_ref.to_string()));
     let uploaded = upload_local_file(turn_context.config.as_ref(), auth, &resolved_path)
         .await
         .map_err(|error| match index {
@@ -1015,7 +1039,12 @@ async fn rewrite_single_argument_string(
             ),
             None => format!("failed to upload `{path_or_file_ref}` for `{field_name}`: {error}"),
         })?;
-    Ok(uploaded.uri)
+    Ok(serde_json::json!({
+        "download_url": uploaded.download_url,
+        "file_id": uploaded.file_id,
+        "mime_type": uploaded.mime_type,
+        "file_name": uploaded.file_name,
+    }))
 }
 
 async fn rewrite_mcp_tool_result_for_openai_files(

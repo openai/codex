@@ -668,6 +668,8 @@ async fn maybe_auto_review_mcp_request_user_input(
     let metadata = lookup_mcp_tool_metadata(
         parent_session.as_ref(),
         parent_ctx.as_ref(),
+        &invocation.tool,
+        None,
         &invocation.server,
         &invocation.tool,
     )

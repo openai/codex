@@ -23,6 +23,8 @@ impl ToolHandler for McpHandler {
             session,
             turn,
             call_id,
+            tool_name,
+            tool_namespace,
             payload,
             ..
         } = invocation;
@@ -47,6 +49,8 @@ impl ToolHandler for McpHandler {
             Arc::clone(&session),
             &turn,
             call_id.clone(),
+            &tool_name,
+            tool_namespace.as_deref(),
             server,
             tool,
             arguments_str,

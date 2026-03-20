@@ -365,7 +365,15 @@ async fn rewrite_single_argument_string_prefers_existing_local_file_over_bare_fi
     .await
     .expect("rewrite should upload the local file");
 
-    assert_eq!(rewritten, "sediment://file_123");
+    assert_eq!(
+        rewritten,
+        serde_json::json!({
+            "download_url": format!("{}/download/file_123", server.uri()),
+            "file_id": "file_123",
+            "mime_type": "text/csv",
+            "file_name": "file_report.csv",
+        })
+    );
 }
 
 #[tokio::test]
