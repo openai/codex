@@ -3,7 +3,9 @@ use anyhow::Result;
 use anyhow::bail;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
+use serde::Serializer;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::net::SocketAddr;
@@ -17,18 +19,86 @@ pub struct NetworkProxyConfig {
     pub network: NetworkProxySettings,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+/// Variant order encodes effective precedence for duplicate patterns:
+/// `None < Allow < Deny`, so deny wins over allow when entries conflict.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkDomainPermission {
+    None,
     Allow,
     Deny,
-    None,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkDomainPermissionEntry {
+    pub pattern: String,
+    pub permission: NetworkDomainPermission,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NetworkDomainPermissions {
-    #[serde(flatten)]
-    pub entries: BTreeMap<String, NetworkDomainPermission>,
+    pub entries: Vec<NetworkDomainPermissionEntry>,
+}
+
+impl Serialize for NetworkDomainPermissions {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.effective_entries()
+            .into_iter()
+            .map(|entry| (entry.pattern, entry.permission))
+            .collect::<BTreeMap<_, _>>()
+            .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for NetworkDomainPermissions {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let entries = BTreeMap::<String, NetworkDomainPermission>::deserialize(deserializer)?
+            .into_iter()
+            .map(|(pattern, permission)| NetworkDomainPermissionEntry {
+                pattern,
+                permission,
+            })
+            .collect();
+        Ok(Self { entries })
+    }
+}
+
+impl NetworkDomainPermissions {
+    fn effective_entries(&self) -> Vec<NetworkDomainPermissionEntry> {
+        let mut order = Vec::new();
+        let mut effective_permissions = BTreeMap::new();
+
+        for entry in &self.entries {
+            if !effective_permissions.contains_key(&entry.pattern) {
+                order.push(entry.pattern.clone());
+            }
+
+            let permission = effective_permissions
+                .entry(entry.pattern.clone())
+                .or_insert(entry.permission);
+            if entry.permission > *permission {
+                *permission = entry.permission;
+            }
+        }
+
+        order
+            .into_iter()
+            .filter_map(|pattern| {
+                effective_permissions.remove(&pattern).map(|permission| {
+                    NetworkDomainPermissionEntry {
+                        pattern,
+                        permission,
+                    }
+                })
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -88,10 +158,10 @@ impl NetworkProxySettings {
             .as_ref()
             .map(|domains| {
                 domains
-                    .entries
+                    .effective_entries()
                     .iter()
-                    .filter(|(_, permission)| matches!(permission, NetworkDomainPermission::Allow))
-                    .map(|(pattern, _)| pattern.clone())
+                    .filter(|entry| matches!(entry.permission, NetworkDomainPermission::Allow))
+                    .map(|entry| entry.pattern.clone())
                     .collect()
             })
             .unwrap_or_default()
@@ -102,10 +172,10 @@ impl NetworkProxySettings {
             .as_ref()
             .map(|domains| {
                 domains
-                    .entries
+                    .effective_entries()
                     .iter()
-                    .filter(|(_, permission)| matches!(permission, NetworkDomainPermission::Deny))
-                    .map(|(pattern, _)| pattern.clone())
+                    .filter(|entry| matches!(entry.permission, NetworkDomainPermission::Deny))
+                    .map(|entry| entry.pattern.clone())
                     .collect()
             })
             .unwrap_or_default()
@@ -145,8 +215,11 @@ impl NetworkProxySettings {
         let normalized_host = normalize(&host);
         domains
             .entries
-            .retain(|entry, _| normalize(entry) != normalized_host);
-        domains.entries.insert(host, permission);
+            .retain(|entry| normalize(&entry.pattern) != normalized_host);
+        domains.entries.push(NetworkDomainPermissionEntry {
+            pattern: host,
+            permission,
+        });
         self.domains = (!domains.entries.is_empty()).then_some(domains);
     }
 
@@ -158,9 +231,18 @@ impl NetworkProxySettings {
         let mut domains = self.domains.take().unwrap_or_default();
         domains
             .entries
-            .retain(|_, existing| *existing != permission);
+            .retain(|entry| entry.permission != permission);
         for entry in entries {
-            domains.entries.insert(entry, permission);
+            if !domains
+                .entries
+                .iter()
+                .any(|existing| existing.pattern == entry && existing.permission == permission)
+            {
+                domains.entries.push(NetworkDomainPermissionEntry {
+                    pattern: entry,
+                    permission,
+                });
+            }
         }
         self.domains = (!domains.entries.is_empty()).then_some(domains);
     }
@@ -537,6 +619,50 @@ mod tests {
         .expect_err("legacy network list keys should fail");
 
         assert!(err.to_string().contains("unknown field `allowed_domains`"));
+    }
+
+    #[test]
+    fn set_allowed_domains_preserves_existing_deny_for_same_pattern() {
+        let mut settings = NetworkProxySettings::default();
+        settings.set_denied_domains(vec!["example.com".to_string()]);
+
+        settings.set_allowed_domains(vec!["example.com".to_string()]);
+
+        assert!(settings.allowed_domains().is_empty());
+        assert_eq!(settings.denied_domains(), vec!["example.com".to_string()]);
+    }
+
+    #[test]
+    fn network_domain_permissions_serialize_to_effective_map_shape() {
+        let mut settings = NetworkProxySettings::default();
+        settings.set_denied_domains(vec!["example.com".to_string()]);
+        settings.set_allowed_domains(vec!["example.com".to_string()]);
+        let config = NetworkProxyConfig { network: settings };
+
+        let value = serde_json::to_value(&config).unwrap();
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "network": {
+                    "enabled": false,
+                    "proxy_url": "http://127.0.0.1:3128",
+                    "enable_socks5": true,
+                    "socks_url": "http://127.0.0.1:8081",
+                    "enable_socks5_udp": true,
+                    "allow_upstream_proxy": true,
+                    "dangerously_allow_non_loopback_proxy": false,
+                    "dangerously_allow_all_unix_sockets": false,
+                    "mode": "full",
+                    "domains": {
+                        "example.com": "deny",
+                    },
+                    "unix_sockets": null,
+                    "allow_local_binding": false,
+                    "mitm": false,
+                }
+            })
+        );
     }
 
     #[test]

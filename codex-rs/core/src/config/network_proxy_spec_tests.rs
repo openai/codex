@@ -68,6 +68,38 @@ fn requirements_allowed_domains_are_a_baseline_for_user_allowlist() {
 }
 
 #[test]
+fn requirements_allowed_domains_do_not_override_user_denies_for_same_pattern() {
+    let mut config = NetworkProxyConfig::default();
+    config
+        .network
+        .set_denied_domains(vec!["api.example.com".to_string()]);
+    let requirements = NetworkConstraints {
+        domains: Some(domain_permissions([(
+            "api.example.com",
+            NetworkDomainPermissionToml::Allow,
+        )])),
+        ..Default::default()
+    };
+
+    let spec = NetworkProxySpec::from_config_and_constraints(
+        config,
+        Some(requirements),
+        &SandboxPolicy::new_workspace_write_policy(),
+    )
+    .expect("managed allowlist should not erase a user deny");
+
+    assert!(spec.config.network.allowed_domains().is_empty());
+    assert_eq!(
+        spec.config.network.denied_domains(),
+        vec!["api.example.com".to_string()]
+    );
+    assert_eq!(
+        spec.constraints.allowed_domains,
+        Some(vec!["api.example.com".to_string()])
+    );
+}
+
+#[test]
 fn requirements_allowlist_expansion_keeps_user_entries_mutable() {
     let mut config = NetworkProxyConfig::default();
     config
@@ -344,8 +376,8 @@ fn requirements_denied_domains_are_a_baseline_for_default_mode() {
     assert_eq!(
         spec.config.network.denied_domains(),
         vec![
-            "blocked.example.com".to_string(),
-            "managed-blocked.example.com".to_string()
+            "managed-blocked.example.com".to_string(),
+            "blocked.example.com".to_string()
         ]
     );
     assert_eq!(

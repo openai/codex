@@ -15,6 +15,7 @@ mod state;
 mod upstream;
 
 pub use config::NetworkDomainPermission;
+pub use config::NetworkDomainPermissionEntry;
 pub use config::NetworkDomainPermissions;
 pub use config::NetworkMode;
 pub use config::NetworkProxyConfig;
