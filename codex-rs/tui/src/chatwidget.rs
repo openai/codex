@@ -702,6 +702,8 @@ pub(crate) struct ChatWidget {
     /// This is kept separate from `mcp_startup_status` so that MCP startup progress (or completion)
     /// can update the status header without accidentally clearing the spinner for an active turn.
     agent_turn_running: bool,
+    /// True after the user submits `/compact` until that manually-started turn ends.
+    manual_compact_turn_pending_or_running: bool,
     /// Tracks per-server MCP startup state while startup is in progress.
     ///
     /// The map is `Some(_)` from the first `McpStartupUpdate` until `McpStartupComplete`, and the
@@ -909,6 +911,7 @@ pub(crate) struct ThreadInputState {
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
     agent_turn_running: bool,
+    manual_compact_turn_pending_or_running: bool,
 }
 
 impl From<String> for UserMessage {
@@ -1740,6 +1743,7 @@ impl ChatWidget {
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
         self.submit_pending_steers_after_interrupt = false;
+        self.manual_compact_turn_pending_or_running = false;
         if let Some(message) = last_agent_message.as_ref()
             && !message.trim().is_empty()
         {
@@ -2081,6 +2085,7 @@ impl ChatWidget {
         self.finalize_active_cell_as_failed();
         // Reset running state and clear streaming buffers.
         self.agent_turn_running = false;
+        self.manual_compact_turn_pending_or_running = false;
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
         self.update_task_running_state();
@@ -2310,6 +2315,7 @@ impl ChatWidget {
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             agent_turn_running: self.agent_turn_running,
+            manual_compact_turn_pending_or_running: self.manual_compact_turn_pending_or_running,
         })
     }
 
@@ -2318,6 +2324,8 @@ impl ChatWidget {
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
             self.agent_turn_running = input_state.agent_turn_running;
+            self.manual_compact_turn_pending_or_running =
+                input_state.manual_compact_turn_pending_or_running;
             self.update_collaboration_mode_indicator();
             self.refresh_model_display();
             if let Some(composer) = input_state.composer {
@@ -2351,6 +2359,7 @@ impl ChatWidget {
                 .extend(input_state.queued_user_messages);
         } else {
             self.agent_turn_running = false;
+            self.manual_compact_turn_pending_or_running = false;
             self.pending_steers.clear();
             self.set_remote_image_urls(Vec::new());
             self.bottom_pane.set_composer_text_with_mention_bindings(
@@ -3649,6 +3658,7 @@ impl ChatWidget {
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
+            manual_compact_turn_pending_or_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_partial_snapshot: None,
@@ -3847,6 +3857,7 @@ impl ChatWidget {
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
+            manual_compact_turn_pending_or_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_partial_snapshot: None,
@@ -4037,6 +4048,7 @@ impl ChatWidget {
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
             agent_turn_running: false,
+            manual_compact_turn_pending_or_running: false,
             mcp_startup_status: None,
             connectors_cache: ConnectorsCacheState::default(),
             connectors_partial_snapshot: None,
@@ -4422,6 +4434,7 @@ impl ChatWidget {
             }
             SlashCommand::Compact => {
                 self.clear_token_usage();
+                self.manual_compact_turn_pending_or_running = true;
                 self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
             }
             SlashCommand::Review => {
@@ -4943,6 +4956,11 @@ impl ChatWidget {
             return;
         }
         if self.is_review_mode {
+            self.queued_user_messages.push_back(user_message);
+            self.refresh_pending_input_preview();
+            return;
+        }
+        if self.manual_compact_turn_pending_or_running {
             self.queued_user_messages.push_back(user_message);
             self.refresh_pending_input_preview();
             return;

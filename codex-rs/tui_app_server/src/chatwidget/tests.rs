@@ -1909,6 +1909,7 @@ async fn make_chatwidget_manual(
         task_complete_pending: false,
         unified_exec_processes: Vec::new(),
         agent_turn_running: false,
+        manual_compact_turn_pending_or_running: false,
         mcp_startup_status: None,
         connectors_cache: ConnectorsCacheState::default(),
         connectors_partial_snapshot: None,
@@ -3714,6 +3715,7 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         agent_turn_running: true,
+        manual_compact_turn_pending_or_running: false,
     }));
 
     assert!(chat.agent_turn_running);
@@ -4058,6 +4060,52 @@ async fn steer_enter_queues_while_plan_stream_is_active() {
     assert!(chat.pending_steers.is_empty());
     assert_no_submit_op(&mut op_rx);
     assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[tokio::test]
+async fn submit_user_message_queues_while_compaction_turn_is_running() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    chat.manual_compact_turn_pending_or_running = true;
+    chat.on_task_started();
+
+    chat.submit_user_message(UserMessage::from("queued while compacting"));
+
+    assert!(chat.pending_steers.is_empty());
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["queued while compacting"]
+    );
+    assert_no_submit_op(&mut op_rx);
+
+    chat.on_task_complete(None, /*from_replay*/ false);
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "queued while compacting".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected queued compact follow-up Op::UserTurn, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn submit_user_message_queues_after_compact_is_submitted() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.manual_compact_turn_pending_or_running = true;
+
+    chat.submit_user_message(UserMessage::from("queued before compact starts"));
+
+    assert!(chat.pending_steers.is_empty());
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["queued before compact starts"]
+    );
+    assert_no_submit_op(&mut op_rx);
 }
 
 #[tokio::test]
