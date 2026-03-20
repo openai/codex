@@ -6,12 +6,11 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_network_proxy::NetworkDomainPermission as ProxyNetworkDomainPermission;
-use codex_network_proxy::NetworkDomainPermissionEntry as ProxyNetworkDomainPermissionEntry;
-use codex_network_proxy::NetworkDomainPermissions as ProxyNetworkDomainPermissions;
 use codex_network_proxy::NetworkMode;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::NetworkUnixSocketPermission as ProxyNetworkUnixSocketPermission;
 use codex_network_proxy::NetworkUnixSocketPermissions as ProxyNetworkUnixSocketPermissions;
+use codex_network_proxy::normalize_host;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -72,6 +71,7 @@ impl NetworkDomainPermissionsToml {
         self.entries.is_empty()
     }
 
+    #[cfg(test)]
     pub(crate) fn allowed_domains(&self) -> Option<Vec<String>> {
         let allowed_domains: Vec<String> = self
             .entries
@@ -82,6 +82,7 @@ impl NetworkDomainPermissionsToml {
         (!allowed_domains.is_empty()).then_some(allowed_domains)
     }
 
+    #[cfg(test)]
     pub(crate) fn denied_domains(&self) -> Option<Vec<String>> {
         let denied_domains: Vec<String> = self
             .entries
@@ -155,7 +156,6 @@ impl std::fmt::Display for NetworkUnixSocketPermissionToml {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
-#[serde(deny_unknown_fields)]
 pub struct NetworkToml {
     pub enabled: Option<bool>,
     pub proxy_url: Option<String>,
@@ -211,8 +211,8 @@ impl NetworkToml {
         if let Some(mode) = self.mode {
             config.network.mode = mode;
         }
-        if self.domains.is_some() {
-            config.network.domains = self.domains.as_ref().map(to_proxy_domain_permissions);
+        if let Some(domains) = self.domains.as_ref() {
+            overlay_network_domain_permissions(config, domains);
         }
         if self.unix_sockets.is_some() {
             config.network.unix_sockets = self.unix_sockets.as_ref().map(to_proxy_unix_sockets);
@@ -229,25 +229,19 @@ impl NetworkToml {
     }
 }
 
-fn to_proxy_domain_permissions(
+pub(crate) fn overlay_network_domain_permissions(
+    config: &mut NetworkProxyConfig,
     domains: &NetworkDomainPermissionsToml,
-) -> ProxyNetworkDomainPermissions {
-    ProxyNetworkDomainPermissions {
-        entries: domains
-            .entries
-            .iter()
-            .map(|(pattern, permission)| {
-                let permission = match permission {
-                    NetworkDomainPermissionToml::Allow => ProxyNetworkDomainPermission::Allow,
-                    NetworkDomainPermissionToml::Deny => ProxyNetworkDomainPermission::Deny,
-                    NetworkDomainPermissionToml::None => ProxyNetworkDomainPermission::None,
-                };
-                ProxyNetworkDomainPermissionEntry {
-                    pattern: pattern.clone(),
-                    permission,
-                }
-            })
-            .collect(),
+) {
+    for (pattern, permission) in &domains.entries {
+        let permission = match permission {
+            NetworkDomainPermissionToml::Allow => ProxyNetworkDomainPermission::Allow,
+            NetworkDomainPermissionToml::Deny => ProxyNetworkDomainPermission::Deny,
+            NetworkDomainPermissionToml::None => ProxyNetworkDomainPermission::None,
+        };
+        config
+            .network
+            .upsert_domain_permission(pattern.clone(), permission, normalize_host);
     }
 }
 

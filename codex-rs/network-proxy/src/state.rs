@@ -40,14 +40,15 @@ pub struct PartialNetworkProxyConfig {
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct PartialNetworkConfig {
     pub enabled: Option<bool>,
     pub mode: Option<NetworkMode>,
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
+    #[serde(default)]
     pub domains: Option<NetworkDomainPermissions>,
+    #[serde(default)]
     pub unix_sockets: Option<NetworkUnixSocketPermissions>,
     pub allow_local_binding: Option<bool>,
 }
@@ -57,10 +58,10 @@ pub fn build_config_state(
     constraints: NetworkProxyConstraints,
 ) -> anyhow::Result<ConfigState> {
     crate::config::validate_unix_socket_allowlist_paths(&config)?;
-    let allowed_domains = config.network.allowed_domains();
+    let allowed_domains = config.network.allowed_domains().unwrap_or_default();
     validate_domain_patterns("network.allowed_domains", &allowed_domains)
         .map_err(NetworkProxyConstraintError::into_anyhow)?;
-    let denied_domains = config.network.denied_domains();
+    let denied_domains = config.network.denied_domains().unwrap_or_default();
     validate_domain_patterns("network.denied_domains", &denied_domains)
         .map_err(NetworkProxyConstraintError::into_anyhow)?;
     let deny_set = compile_globset(&denied_domains)?;
@@ -107,8 +108,8 @@ pub fn validate_policy_against_constraints(
     }
 
     let enabled = config.network.enabled;
-    let config_allowed_domains = config.network.allowed_domains();
-    let config_denied_domains = config.network.denied_domains();
+    let config_allowed_domains = config.network.allowed_domains().unwrap_or_default();
+    let config_denied_domains = config.network.denied_domains().unwrap_or_default();
     let denied_domain_overrides: HashSet<String> = config_denied_domains
         .iter()
         .map(|entry| entry.to_ascii_lowercase())
@@ -417,20 +418,4 @@ fn network_mode_rank(mode: NetworkMode) -> u8 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn partial_network_proxy_config_rejects_legacy_network_list_keys() {
-        let err = serde_json::from_str::<PartialNetworkProxyConfig>(
-            r#"{
-                "network": {
-                    "allowed_domains": ["example.com"]
-                }
-            }"#,
-        )
-        .expect_err("legacy network list keys should fail");
-
-        assert!(err.to_string().contains("unknown field `allowed_domains`"));
-    }
-}
+mod tests {}

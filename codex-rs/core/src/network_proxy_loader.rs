@@ -1,6 +1,7 @@
 use crate::config::NetworkToml;
 use crate::config::PermissionsToml;
 use crate::config::find_codex_home;
+use crate::config::overlay_network_domain_permissions;
 use crate::config::resolve_permission_profile;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStack;
@@ -151,8 +152,16 @@ fn apply_network_constraints(network: NetworkToml, constraints: &mut NetworkProx
         constraints.dangerously_allow_all_unix_sockets = Some(dangerously_allow_all_unix_sockets);
     }
     if let Some(domains) = network.domains.as_ref() {
-        constraints.allowed_domains = domains.allowed_domains();
-        constraints.denied_domains = domains.denied_domains();
+        let mut config = NetworkProxyConfig::default();
+        if let Some(allowed_domains) = constraints.allowed_domains.take() {
+            config.network.set_allowed_domains(allowed_domains);
+        }
+        if let Some(denied_domains) = constraints.denied_domains.take() {
+            config.network.set_denied_domains(denied_domains);
+        }
+        overlay_network_domain_permissions(&mut config, domains);
+        constraints.allowed_domains = config.network.allowed_domains();
+        constraints.denied_domains = config.network.denied_domains();
     }
     if let Some(unix_sockets) = network.unix_sockets.as_ref() {
         let allow_unix_sockets = unix_sockets.allow_unix_sockets();

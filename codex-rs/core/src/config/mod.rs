@@ -130,6 +130,7 @@ pub use permissions::NetworkUnixSocketPermissionToml;
 pub use permissions::NetworkUnixSocketPermissionsToml;
 pub use permissions::PermissionProfileToml;
 pub use permissions::PermissionsToml;
+pub(crate) use permissions::overlay_network_domain_permissions;
 pub(crate) use permissions::resolve_permission_profile;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;

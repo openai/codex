@@ -246,7 +246,7 @@ impl NetworkProxySpec {
             let effective_allowed_domains = if allowlist_expansion_enabled {
                 Self::merge_domain_lists(
                     managed_allowed_domains.clone(),
-                    &config.network.allowed_domains(),
+                    config.network.allowed_domains().as_deref().unwrap_or(&[]),
                 )
             } else {
                 managed_allowed_domains.clone()
@@ -265,7 +265,7 @@ impl NetworkProxySpec {
             let effective_denied_domains = if denylist_expansion_enabled {
                 Self::merge_domain_lists(
                     managed_denied_domains.clone(),
-                    &config.network.denied_domains(),
+                    config.network.denied_domains().as_deref().unwrap_or(&[]),
                 )
             } else {
                 managed_denied_domains.clone()

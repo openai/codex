@@ -9,18 +9,6 @@ fn normalize_absolute_path_for_platform_simplifies_windows_verbatim_paths() {
 }
 
 #[test]
-fn network_toml_rejects_legacy_network_list_keys() {
-    let err = toml::from_str::<NetworkToml>(
-        r#"
-allowed_domains = ["openai.com"]
-"#,
-    )
-    .expect_err("legacy network list keys should fail");
-
-    assert!(err.to_string().contains("unknown field `allowed_domains`"));
-}
-
-#[test]
 fn network_permission_containers_project_allowed_and_denied_entries() {
     let domains = NetworkDomainPermissionsToml {
         entries: BTreeMap::from([
