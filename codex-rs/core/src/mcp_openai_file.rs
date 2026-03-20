@@ -41,9 +41,7 @@ pub(crate) fn retain_openai_file_tool_meta_map(
 fn filtered_openai_file_tool_meta(
     meta: Option<&Map<String, JsonValue>>,
 ) -> Option<Map<String, JsonValue>> {
-    let Some(meta) = meta else {
-        return None;
-    };
+    let meta = meta?;
 
     let mut filtered = Map::new();
     for key in [META_OPENAI_FILE_PARAMS, META_OPENAI_FILE_OUTPUTS] {

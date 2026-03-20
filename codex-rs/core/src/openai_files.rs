@@ -472,7 +472,7 @@ pub(crate) fn managed_download_dir(scope: &str) -> Result<PathBuf, OpenAiFileErr
     tempfile::Builder::new()
         .prefix("download-")
         .tempdir_in(&parent)
-        .map(|temp_dir| temp_dir.keep())
+        .map(tempfile::TempDir::keep)
         .map_err(|source| OpenAiFileError::CreateDirectory {
             path: parent,
             source,
