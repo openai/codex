@@ -9,7 +9,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use codex_core::CodexThread;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::UndoCompletedEvent;

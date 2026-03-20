@@ -229,7 +229,7 @@ pub fn spawn_process_with_pipes(
             argv,
             cwd,
             env_map,
-            None,
+            /*logs_base_dir*/ None,
             stdio,
             use_private_desktop,
         )

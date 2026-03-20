@@ -1,5 +1,3 @@
-mod storage;
-
 use async_trait::async_trait;
 use chrono::Utc;
 use reqwest::StatusCode;
@@ -16,45 +14,24 @@ use std::sync::Mutex;
 use std::sync::RwLock;
 
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
-use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 
+use crate::auth::error::RefreshTokenFailedError;
+use crate::auth::error::RefreshTokenFailedReason;
 pub use crate::auth::storage::AuthCredentialsStoreMode;
 pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::create_auth_storage;
-use crate::config::Config;
-use crate::error::RefreshTokenFailedError;
-use crate::error::RefreshTokenFailedReason;
+use crate::auth::util::try_parse_error_message;
+use crate::default_client::create_client;
 use crate::token_data::KnownPlan as InternalKnownPlan;
 use crate::token_data::PlanType as InternalPlanType;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
-use crate::util::try_parse_error_message;
 use codex_client::CodexHttpClient;
 use codex_protocol::account::PlanType as AccountPlanType;
 use serde_json::Value;
 use thiserror::Error;
-
-/// Account type for the current user.
-///
-/// This is used internally to determine the base URL for generating responses,
-/// and to gate ChatGPT-only behaviors like rate limits and available models (as
-/// opposed to API key-based auth).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AuthMode {
-    ApiKey,
-    Chatgpt,
-}
-
-impl From<AuthMode> for TelemetryAuthMode {
-    fn from(mode: AuthMode) -> Self {
-        match mode {
-            AuthMode::ApiKey => TelemetryAuthMode::ApiKey,
-            AuthMode::Chatgpt => TelemetryAuthMode::Chatgpt,
-        }
-    }
-}
 
 /// Authentication mechanism used by the current user.
 #[derive(Debug, Clone)]
@@ -161,14 +138,14 @@ impl CodexAuth {
         codex_home: &Path,
         auth_dot_json: AuthDotJson,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
-        client: CodexHttpClient,
     ) -> std::io::Result<Self> {
         let auth_mode = auth_dot_json.resolved_mode();
+        let client = create_client();
         if auth_mode == ApiAuthMode::ApiKey {
             let Some(api_key) = auth_dot_json.openai_api_key.as_deref() else {
                 return Err(std::io::Error::other("API key auth is missing a key."));
             };
-            return Ok(CodexAuth::from_api_key_with_client(api_key, client));
+            return Ok(Self::from_api_key(api_key));
         }
 
         let storage_mode = auth_dot_json.storage_mode(auth_credentials_store_mode);
@@ -189,7 +166,6 @@ impl CodexAuth {
         }
     }
 
-    /// Loads the available auth information from auth storage.
     pub fn from_auth_storage(
         codex_home: &Path,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
@@ -201,10 +177,10 @@ impl CodexAuth {
         )
     }
 
-    pub fn auth_mode(&self) -> AuthMode {
+    pub fn auth_mode(&self) -> crate::AuthMode {
         match self {
-            Self::ApiKey(_) => AuthMode::ApiKey,
-            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => AuthMode::Chatgpt,
+            Self::ApiKey(_) => crate::AuthMode::ApiKey,
+            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) => crate::AuthMode::Chatgpt,
         }
     }
 
@@ -217,11 +193,11 @@ impl CodexAuth {
     }
 
     pub fn is_api_key_auth(&self) -> bool {
-        self.auth_mode() == AuthMode::ApiKey
+        self.auth_mode() == crate::AuthMode::ApiKey
     }
 
     pub fn is_chatgpt_auth(&self) -> bool {
-        self.auth_mode() == AuthMode::Chatgpt
+        self.auth_mode() == crate::AuthMode::Chatgpt
     }
 
     pub fn is_external_chatgpt_tokens(&self) -> bool {
@@ -335,7 +311,7 @@ impl CodexAuth {
             last_refresh: Some(Utc::now()),
         };
 
-        let client = crate::default_client::create_client();
+        let client = create_client();
         let state = ChatgptAuthState {
             auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
             client,
@@ -344,14 +320,10 @@ impl CodexAuth {
         Self::Chatgpt(ChatgptAuth { state, storage })
     }
 
-    fn from_api_key_with_client(api_key: &str, _client: CodexHttpClient) -> Self {
+    pub fn from_api_key(api_key: &str) -> Self {
         Self::ApiKey(ApiKeyAuth {
             api_key: api_key.to_owned(),
         })
-    }
-
-    pub fn from_api_key(api_key: &str) -> Self {
-        Self::from_api_key_with_client(api_key, crate::default_client::create_client())
     }
 }
 
@@ -458,11 +430,19 @@ pub fn load_auth_dot_json(
     storage.load()
 }
 
-pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthConfig {
+    pub codex_home: PathBuf,
+    pub auth_credentials_store_mode: AuthCredentialsStoreMode,
+    pub forced_login_method: Option<ForcedLoginMethod>,
+    pub forced_chatgpt_workspace_id: Option<String>,
+}
+
+pub fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<()> {
     let Some(auth) = load_auth(
         &config.codex_home,
         /*enable_codex_api_key_env*/ true,
-        config.cli_auth_credentials_store_mode,
+        config.auth_credentials_store_mode,
     )?
     else {
         return Ok(());
@@ -470,13 +450,15 @@ pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
 
     if let Some(required_method) = config.forced_login_method {
         let method_violation = match (required_method, auth.auth_mode()) {
-            (ForcedLoginMethod::Api, AuthMode::ApiKey) => None,
-            (ForcedLoginMethod::Chatgpt, AuthMode::Chatgpt) => None,
-            (ForcedLoginMethod::Api, AuthMode::Chatgpt) => Some(
+            (ForcedLoginMethod::Api, crate::AuthMode::ApiKey) => None,
+            (ForcedLoginMethod::Chatgpt, crate::AuthMode::Chatgpt)
+            | (ForcedLoginMethod::Chatgpt, crate::AuthMode::ChatgptAuthTokens) => None,
+            (ForcedLoginMethod::Api, crate::AuthMode::Chatgpt)
+            | (ForcedLoginMethod::Api, crate::AuthMode::ChatgptAuthTokens) => Some(
                 "API key login is required, but ChatGPT is currently being used. Logging out."
                     .to_string(),
             ),
-            (ForcedLoginMethod::Chatgpt, AuthMode::ApiKey) => Some(
+            (ForcedLoginMethod::Chatgpt, crate::AuthMode::ApiKey) => Some(
                 "ChatGPT login is required, but an API key is currently being used. Logging out."
                     .to_string(),
             ),
@@ -486,7 +468,7 @@ pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
             return logout_with_message(
                 &config.codex_home,
                 message,
-                config.cli_auth_credentials_store_mode,
+                config.auth_credentials_store_mode,
             );
         }
     }
@@ -504,7 +486,7 @@ pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
                     format!(
                         "Failed to load ChatGPT credentials while enforcing workspace restrictions: {err}. Logging out."
                     ),
-                    config.cli_auth_credentials_store_mode,
+                    config.auth_credentials_store_mode,
                 );
             }
         };
@@ -523,7 +505,7 @@ pub fn enforce_login_restrictions(config: &Config) -> std::io::Result<()> {
             return logout_with_message(
                 &config.codex_home,
                 message,
-                config.cli_auth_credentials_store_mode,
+                config.auth_credentials_store_mode,
             );
         }
     }
@@ -564,17 +546,12 @@ fn load_auth(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<Option<CodexAuth>> {
     let build_auth = |auth_dot_json: AuthDotJson, storage_mode| {
-        let client = crate::default_client::create_client();
-        CodexAuth::from_auth_dot_json(codex_home, auth_dot_json, storage_mode, client)
+        CodexAuth::from_auth_dot_json(codex_home, auth_dot_json, storage_mode)
     };
 
     // API key via env var takes precedence over any other auth method.
     if enable_codex_api_key_env && let Some(api_key) = read_codex_api_key_from_env() {
-        let client = crate::default_client::create_client();
-        return Ok(Some(CodexAuth::from_api_key_with_client(
-            api_key.as_str(),
-            client,
-        )));
+        return Ok(Some(CodexAuth::from_api_key(api_key.as_str())));
     }
 
     // External ChatGPT auth tokens live in the in-memory (ephemeral) store. Always check this
@@ -1077,7 +1054,7 @@ impl AuthManager {
     }
 
     /// Create an AuthManager with a specific CodexAuth, for testing only.
-    pub(crate) fn from_auth_for_testing(auth: CodexAuth) -> Arc<Self> {
+    pub fn from_auth_for_testing(auth: CodexAuth) -> Arc<Self> {
         let cached = CachedAuth {
             auth: Some(auth),
             external_refresher: None,
@@ -1093,10 +1070,7 @@ impl AuthManager {
     }
 
     /// Create an AuthManager with a specific CodexAuth and codex home, for testing only.
-    pub(crate) fn from_auth_for_testing_with_home(
-        auth: CodexAuth,
-        codex_home: PathBuf,
-    ) -> Arc<Self> {
+    pub fn from_auth_for_testing_with_home(auth: CodexAuth, codex_home: PathBuf) -> Arc<Self> {
         let cached = CachedAuth {
             auth: Some(auth),
             external_refresher: None,
@@ -1342,7 +1316,7 @@ impl AuthManager {
         self.auth_cached().as_ref().map(CodexAuth::api_auth_mode)
     }
 
-    pub fn auth_mode(&self) -> Option<AuthMode> {
+    pub fn auth_mode(&self) -> Option<crate::AuthMode> {
         self.auth_cached().as_ref().map(CodexAuth::auth_mode)
     }
 

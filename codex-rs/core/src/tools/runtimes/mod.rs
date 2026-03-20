@@ -4,6 +4,7 @@ Module: runtimes
 Concrete ToolRuntime implementations for specific tools. Each runtime stays
 small and focused and reuses the orchestrator for approvals + sandbox + retry.
 */
+use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::path_utils;
 use crate::sandboxing::CommandSpec;
@@ -47,6 +48,7 @@ pub(crate) fn build_command_spec(
         cwd: cwd.to_path_buf(),
         env: env.clone(),
         expiration,
+        capture_policy: ExecCapturePolicy::ShellTool,
         sandbox_permissions,
         additional_permissions,
         justification,

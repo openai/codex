@@ -7,6 +7,7 @@ use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::NetworkConstraints;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::Sourced;
+use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecToolCallOutput;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_connection_manager::ToolInfo;
@@ -14,6 +15,7 @@ use crate::models_manager::model_info;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
 
+use codex_features::Features;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
@@ -3408,7 +3410,7 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
 #[tokio::test]
 async fn record_model_warning_appends_user_message() {
     let (mut session, turn_context) = make_session_and_context().await;
-    let features = crate::features::Features::with_defaults().into();
+    let features = Features::with_defaults().into();
     session.features = features;
 
     session
@@ -4788,6 +4790,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         },
         cwd: turn_context.cwd.clone(),
         expiration: timeout_ms.into(),
+        capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
         network: None,
         sandbox_permissions,
@@ -4805,6 +4808,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         command: params.command.clone(),
         cwd: params.cwd.clone(),
         expiration: timeout_ms.into(),
+        capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
         network: None,
         windows_sandbox_level: turn_context.windows_sandbox_level,

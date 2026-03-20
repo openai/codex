@@ -5,7 +5,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;

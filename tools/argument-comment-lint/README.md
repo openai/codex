@@ -73,21 +73,71 @@ GitHub releases also publish a DotSlash file named
 x64. The published package contains a small runner executable, a bundled
 `cargo-dylint`, and the prebuilt lint library.
 
-Run the lint against `codex-rs` from the repo root:
+The package is not a full Rust toolchain. Running the prebuilt path still
+requires the pinned nightly toolchain to be installed via `rustup`:
+
+```bash
+rustup toolchain install nightly-2025-09-18 \
+  --component llvm-tools-preview \
+  --component rustc-dev \
+  --component rust-src
+```
+
+The checked-in DotSlash file lives at `tools/argument-comment-lint/argument-comment-lint`.
+`run-prebuilt-linter.sh` resolves that file via `dotslash` and is the path used by
+`just clippy`, `just argument-comment-lint`, and the Rust CI job. The
+source-build path remains available in `run.sh` for people
+iterating on the lint crate itself.
+
+The Unix archive layout is:
+
+```text
+argument-comment-lint/
+  bin/
+    argument-comment-lint
+    cargo-dylint
+  lib/
+    libargument_comment_lint@nightly-2025-09-18-<target>.dylib|so
+```
+
+On Windows the same layout is published as a `.zip`, with `.exe` and `.dll`
+filenames instead.
+
+DotSlash resolves the package entrypoint to `argument-comment-lint/bin/argument-comment-lint`
+(or `.exe` on Windows). That runner finds the sibling bundled `cargo-dylint`
+binary and the single packaged Dylint library under `lib/`, normalizes the
+host-qualified nightly filename to the plain `nightly-2025-09-18` channel when
+needed, and then invokes `cargo-dylint dylint --lib-path <that-library>` with
+the repo's default `DYLINT_RUSTFLAGS` and `CARGO_INCREMENTAL=0` settings.
+
+The checked-in `run-prebuilt-linter.sh` wrapper uses the fetched package
+contents directly so the current checked-in alpha artifact works the same way.
+It also makes sure the `rustup` shims stay ahead of any direct toolchain
+`cargo` binary on `PATH`, and sets `RUSTUP_HOME` from `rustup show home` when
+the environment does not already provide it. That extra `RUSTUP_HOME` export is
+required for the current Windows Dylint driver path.
+
+If you are changing the lint crate itself, use the source-build wrapper:
 
 ```bash
 ./tools/argument-comment-lint/run.sh -p codex-core
+```
+
+Run the lint against `codex-rs` from the repo root:
+
+```bash
+./tools/argument-comment-lint/run-prebuilt-linter.sh -p codex-core
 just argument-comment-lint -p codex-core
 ```
 
-If no package selection is provided, `run.sh` defaults to checking the
+If no package selection is provided, `run-prebuilt-linter.sh` defaults to checking the
 `codex-rs` workspace with `--workspace --no-deps`.
 
 Repo runs also promote `uncommented_anonymous_literal_argument` to an error by
 default:
 
 ```bash
-./tools/argument-comment-lint/run.sh -p codex-core
+./tools/argument-comment-lint/run-prebuilt-linter.sh -p codex-core
 ```
 
 The wrapper does that by setting `DYLINT_RUSTFLAGS`, and it leaves an explicit
@@ -105,5 +155,5 @@ CARGO_INCREMENTAL=1 \
 To expand target coverage for an ad hoc run:
 
 ```bash
-./tools/argument-comment-lint/run.sh -p codex-core -- --all-targets
+./tools/argument-comment-lint/run-prebuilt-linter.sh -p codex-core -- --all-targets
 ```

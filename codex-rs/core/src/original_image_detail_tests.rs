@@ -1,8 +1,8 @@
 use super::*;
 
 use crate::config::test_config;
-use crate::features::Features;
 use crate::models_manager::manager::ModelsManager;
+use codex_features::Features;
 use pretty_assertions::assert_eq;
 
 #[test]

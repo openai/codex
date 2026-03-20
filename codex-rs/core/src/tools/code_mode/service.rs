@@ -8,11 +8,11 @@ use tracing::warn;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::features::Feature;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::js_repl::resolve_compatible_node;
 use crate::tools::parallel::ToolCallRuntime;
+use codex_features::Feature;
 
 use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;

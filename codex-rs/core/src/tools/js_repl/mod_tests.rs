@@ -1,11 +1,11 @@
 use super::*;
 use crate::codex::make_session_and_context;
 use crate::codex::make_session_and_context_with_dynamic_tools_and_rx;
-use crate::features::Feature;
 use crate::protocol::AskForApproval;
 use crate::protocol::EventMsg;
 use crate::protocol::SandboxPolicy;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_features::Feature;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;

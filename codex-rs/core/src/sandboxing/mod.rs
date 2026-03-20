@@ -8,6 +8,7 @@ ready‑to‑spawn environment.
 
 pub(crate) mod macos_permissions;
 
+use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
@@ -55,6 +56,7 @@ pub struct CommandSpec {
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
     pub expiration: ExecExpiration,
+    pub capture_policy: ExecCapturePolicy,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<PermissionProfile>,
     pub justification: Option<String>,
@@ -67,6 +69,7 @@ pub struct ExecRequest {
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
     pub expiration: ExecExpiration,
+    pub capture_policy: ExecCapturePolicy,
     pub sandbox: SandboxType,
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
@@ -707,6 +710,7 @@ impl SandboxManager {
             env,
             network: network.cloned(),
             expiration: spec.expiration,
+            capture_policy: spec.capture_policy,
             sandbox,
             windows_sandbox_level,
             windows_sandbox_private_desktop,

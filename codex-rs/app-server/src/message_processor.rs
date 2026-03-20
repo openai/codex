@@ -50,10 +50,6 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_core::AnalyticsEventsClient;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
-use codex_core::auth::ExternalAuthRefreshContext;
-use codex_core::auth::ExternalAuthRefreshReason;
-use codex_core::auth::ExternalAuthRefresher;
-use codex_core::auth::ExternalAuthTokens;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
@@ -63,7 +59,12 @@ use codex_core::default_client::get_codex_user_agent;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_features::Feature;
 use codex_feedback::CodexFeedback;
+use codex_login::auth::ExternalAuthRefreshContext;
+use codex_login::auth::ExternalAuthRefreshReason;
+use codex_login::auth::ExternalAuthRefresher;
+use codex_login::auth::ExternalAuthTokens;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
@@ -212,7 +213,7 @@ impl MessageProcessor {
                     CollaborationModesConfig {
                         default_mode_request_user_input: config
                             .features
-                            .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
+                            .enabled(Feature::DefaultModeRequestUserInput),
                     },
                 ));
                 (auth_manager, thread_manager)

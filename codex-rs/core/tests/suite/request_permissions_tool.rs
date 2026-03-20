@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 use codex_core::config::Constrained;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;

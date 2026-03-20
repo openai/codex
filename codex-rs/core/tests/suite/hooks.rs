@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;

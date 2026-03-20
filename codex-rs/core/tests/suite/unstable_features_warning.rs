@@ -3,7 +3,7 @@
 use codex_config::CONFIG_TOML_FILE;
 use codex_core::CodexAuth;
 use codex_core::NewThread;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::WarningEvent;

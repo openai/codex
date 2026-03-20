@@ -34,6 +34,7 @@ use uuid::Uuid;
 use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec_env::create_env;
 use crate::function_tool::FunctionCallError;
@@ -1037,6 +1038,7 @@ impl JsReplManager {
             cwd: turn.cwd.clone(),
             env,
             expiration: ExecExpiration::DefaultTimeout,
+            capture_policy: ExecCapturePolicy::ShellTool,
             sandbox_permissions: SandboxPermissions::UseDefault,
             additional_permissions: None,
             justification: None,
