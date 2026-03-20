@@ -500,11 +500,14 @@ impl PluginsManager {
         *stored_client = Some(analytics_events_client);
     }
 
-    fn restriction_product_matches(&self, products: &[Product]) -> bool {
-        products.is_empty()
-            || self
+    fn restriction_product_matches(&self, products: Option<&[Product]>) -> bool {
+        match products {
+            None => true,
+            Some([]) => false,
+            Some(products) => self
                 .restriction_product
-                .is_some_and(|product| product.matches_product_restriction(products))
+                .is_some_and(|product| product.matches_product_restriction(products)),
+        }
     }
 
     pub fn plugins_for_config(&self, config: &Config) -> PluginLoadOutcome {
@@ -830,7 +833,8 @@ impl PluginsManager {
                 .get(&plugin_key)
                 .map(|plugin| plugin.enabled);
             let installed_version = self.store.active_plugin_version(&plugin_id);
-            let product_allowed = self.restriction_product_matches(&plugin.policy.products);
+            let product_allowed =
+                self.restriction_product_matches(plugin.policy.products.as_deref());
             local_plugins.push((
                 plugin_name,
                 plugin_id,
@@ -991,7 +995,7 @@ impl PluginsManager {
                         if !seen_plugin_keys.insert(plugin_key.clone()) {
                             return None;
                         }
-                        if !self.restriction_product_matches(&plugin.policy.products) {
+                        if !self.restriction_product_matches(plugin.policy.products.as_deref()) {
                             return None;
                         }
 
@@ -1041,7 +1045,7 @@ impl PluginsManager {
                 marketplace_name,
             });
         };
-        if !self.restriction_product_matches(&plugin.policy.products) {
+        if !self.restriction_product_matches(plugin.policy.products.as_deref()) {
             return Err(MarketplaceError::PluginNotFound {
                 plugin_name: request.plugin_name.clone(),
                 marketplace_name,

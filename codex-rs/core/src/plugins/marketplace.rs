@@ -57,7 +57,7 @@ pub struct MarketplacePluginPolicy {
     pub authentication: MarketplacePluginAuthPolicy,
     // TODO: Surface or enforce product gating at the Codex/plugin consumer boundary instead of
     // only carrying it through core marketplace metadata.
-    pub products: Vec<Product>,
+    pub products: Option<Vec<Product>>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -169,9 +169,13 @@ pub fn resolve_marketplace_plugin(
         ..
     } = plugin;
     let install_policy = policy.installation;
-    let product_allowed = policy.products.is_empty()
-        || restriction_product
-            .is_some_and(|product| product.matches_product_restriction(&policy.products));
+    let product_allowed = match policy.products.as_deref() {
+        None => true,
+        Some([]) => false,
+        Some(products) => {
+            restriction_product.is_some_and(|product| product.matches_product_restriction(products))
+        }
+    };
     if install_policy == MarketplacePluginInstallPolicy::NotAvailable || !product_allowed {
         return Err(MarketplaceError::PluginNotAvailable {
             plugin_name: name,
@@ -432,8 +436,7 @@ struct RawMarketplaceManifestPluginPolicy {
     installation: MarketplacePluginInstallPolicy,
     #[serde(default)]
     authentication: MarketplacePluginAuthPolicy,
-    #[serde(default)]
-    products: Vec<Product>,
+    products: Option<Vec<Product>>,
 }
 
 #[derive(Debug, Deserialize)]
