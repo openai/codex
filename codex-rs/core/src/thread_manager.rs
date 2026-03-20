@@ -905,11 +905,31 @@ fn truncate_before_nth_user_message(
 }
 
 fn snapshot_ends_mid_turn(history: &InitialHistory) -> bool {
+    let rollout_items = history.get_rollout_items();
     let mut builder = ThreadHistoryBuilder::new();
-    for item in history.get_rollout_items() {
-        builder.handle_rollout_item(&item);
+    for item in &rollout_items {
+        builder.handle_rollout_item(item);
     }
-    builder.has_active_turn()
+    if builder.has_active_turn() {
+        return true;
+    }
+
+    let Some(last_user_position) = truncation::user_message_positions_in_rollout(&rollout_items)
+        .last()
+        .copied()
+    else {
+        return false;
+    };
+
+    // Synthetic fork/resume histories can contain user/assistant response items
+    // without explicit turn lifecycle events. If the persisted snapshot has no
+    // terminating boundary after its last user message, treat it as mid-turn.
+    !rollout_items[last_user_position + 1..].iter().any(|item| {
+        matches!(
+            item,
+            RolloutItem::EventMsg(EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
+        )
+    })
 }
 
 /// Append the same model-visible interruption marker used by the live interrupt
