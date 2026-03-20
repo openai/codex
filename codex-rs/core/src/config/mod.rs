@@ -673,11 +673,10 @@ impl ConfigBuilder {
         .await?;
         let merged_toml = config_layer_stack.effective_config();
 
-        // Note that each layer in ConfigLayerStack should have resolved
-        // relative paths to absolute paths based on the parent folder of the
-        // respective config file, so we should be safe to deserialize without
-        // AbsolutePathBufGuard here.
-        let config_toml: ConfigToml = match merged_toml.try_into() {
+        // Config layers loaded from MDM can still contain `~/...` paths because
+        // there is no config-file directory to resolve them against. Allow home
+        // expansion here while still rejecting relative paths such as `./...`.
+        let config_toml = match deserialize_merged_config_toml(merged_toml, &codex_home) {
             Ok(config_toml) => config_toml,
             Err(err) => {
                 if let Some(config_error) =
@@ -898,6 +897,14 @@ pub(crate) fn deserialize_config_toml_with_base(
     root_value
         .try_into()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+pub(crate) fn deserialize_merged_config_toml(
+    root_value: TomlValue,
+    config_base_dir: &Path,
+) -> Result<ConfigToml, toml::de::Error> {
+    let _guard = AbsolutePathBufGuard::home_expansion_only(config_base_dir);
+    root_value.try_into()
 }
 
 fn load_catalog_json(path: &AbsolutePathBuf) -> std::io::Result<ModelsResponse> {
