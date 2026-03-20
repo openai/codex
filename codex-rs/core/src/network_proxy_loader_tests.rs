@@ -78,8 +78,8 @@ fn execpolicy_network_rules_overlay_network_lists() {
     assert_eq!(
         config.network.allowed_domains(),
         vec![
-            "blocked.example.com".to_string(),
-            "config.example.com".to_string()
+            "config.example.com".to_string(),
+            "blocked.example.com".to_string()
         ]
     );
     assert_eq!(

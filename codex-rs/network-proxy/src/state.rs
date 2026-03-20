@@ -109,6 +109,10 @@ pub fn validate_policy_against_constraints(
     let enabled = config.network.enabled;
     let config_allowed_domains = config.network.allowed_domains();
     let config_denied_domains = config.network.denied_domains();
+    let denied_domain_overrides: HashSet<String> = config_denied_domains
+        .iter()
+        .map(|entry| entry.to_ascii_lowercase())
+        .collect();
     let config_allow_unix_sockets = config.network.allow_unix_sockets();
     validate_domain_patterns("network.allowed_domains", &config_allowed_domains)?;
     validate_domain_patterns("network.denied_domains", &config_denied_domains)?;
@@ -218,14 +222,17 @@ pub fn validate_policy_against_constraints(
                     .iter()
                     .map(|entry| entry.to_ascii_lowercase())
                     .collect();
-                validate(config_allowed_domains, move |candidate| {
+                validate(config_allowed_domains, |candidate| {
                     let candidate_set: HashSet<String> = candidate
                         .iter()
                         .map(|entry| entry.to_ascii_lowercase())
                         .collect();
                     let missing: Vec<String> = required_set
                         .iter()
-                        .filter(|entry| !candidate_set.contains(*entry))
+                        .filter(|entry| {
+                            !candidate_set.contains(*entry)
+                                && !denied_domain_overrides.contains(*entry)
+                        })
                         .cloned()
                         .collect();
                     if missing.is_empty() {
@@ -244,12 +251,16 @@ pub fn validate_policy_against_constraints(
                     .iter()
                     .map(|entry| entry.to_ascii_lowercase())
                     .collect();
-                validate(config_allowed_domains, move |candidate| {
+                validate(config_allowed_domains, |candidate| {
                     let candidate_set: HashSet<String> = candidate
                         .iter()
                         .map(|entry| entry.to_ascii_lowercase())
                         .collect();
-                    if candidate_set == required_set {
+                    let expected_set: HashSet<String> = required_set
+                        .difference(&denied_domain_overrides)
+                        .cloned()
+                        .collect();
+                    if candidate_set == expected_set {
                         Ok(())
                     } else {
                         Err(invalid_value(

@@ -6,6 +6,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_network_proxy::NetworkDomainPermission as ProxyNetworkDomainPermission;
+use codex_network_proxy::NetworkDomainPermissionEntry as ProxyNetworkDomainPermissionEntry;
 use codex_network_proxy::NetworkDomainPermissions as ProxyNetworkDomainPermissions;
 use codex_network_proxy::NetworkMode;
 use codex_network_proxy::NetworkProxyConfig;
@@ -241,7 +242,10 @@ fn to_proxy_domain_permissions(
                     NetworkDomainPermissionToml::Deny => ProxyNetworkDomainPermission::Deny,
                     NetworkDomainPermissionToml::None => ProxyNetworkDomainPermission::None,
                 };
-                (pattern.clone(), permission)
+                ProxyNetworkDomainPermissionEntry {
+                    pattern: pattern.clone(),
+                    permission,
+                }
             })
             .collect(),
     }
