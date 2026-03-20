@@ -777,16 +777,16 @@ fn approval_elicitation_meta_merges_session_and_always_persist_with_connector_so
 }
 
 #[tokio::test]
-async fn approval_callsite_mode_distinguishes_normal_always_allow_and_full_access() {
+async fn approval_callsite_mode_distinguishes_default_always_allow_and_full_access() {
     let (_session, mut turn_context) = make_session_and_context().await;
 
     assert_eq!(
         mcp_tool_approval_callsite_mode(AppToolApproval::Auto, &turn_context),
-        "mcp_tool_call__normal"
+        "mcp_tool_call__default"
     );
     assert_eq!(
         mcp_tool_approval_callsite_mode(AppToolApproval::Prompt, &turn_context),
-        "mcp_tool_call__normal"
+        "mcp_tool_call__default"
     );
     assert_eq!(
         mcp_tool_approval_callsite_mode(AppToolApproval::Approve, &turn_context),
