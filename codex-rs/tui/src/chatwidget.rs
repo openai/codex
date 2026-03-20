@@ -1593,9 +1593,9 @@ impl ChatWidget {
     fn finalize_completed_assistant_message(
         &mut self,
         message: Option<&str>,
-        prefer_completed_message: bool,
+        replay_kind: Option<ReplayKind>,
     ) {
-        if prefer_completed_message
+        if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
             && let Some(message) = message
             && !message.is_empty()
         {
@@ -1624,7 +1624,7 @@ impl ChatWidget {
     }
 
     fn on_agent_message(&mut self, message: String) {
-        self.finalize_completed_assistant_message(Some(&message), false);
+        self.finalize_completed_assistant_message(Some(&message), None);
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
@@ -3085,7 +3085,11 @@ impl ChatWidget {
     /// Commentary completion sets a deferred restore flag so the status row
     /// returns once stream queues are idle. Final-answer completion (or absent
     /// phase for legacy models) clears the flag to preserve historical behavior.
-    fn on_agent_message_item_completed(&mut self, item: AgentMessageItem, from_replay: bool) {
+    fn on_agent_message_item_completed(
+        &mut self,
+        item: AgentMessageItem,
+        replay_kind: Option<ReplayKind>,
+    ) {
         let mut message = String::new();
         for content in &item.content {
             match content {
@@ -3094,7 +3098,7 @@ impl ChatWidget {
         }
         self.finalize_completed_assistant_message(
             (!message.is_empty()).then_some(message.as_str()),
-            from_replay,
+            replay_kind,
         );
         self.pending_status_indicator_restore = match item.phase {
             // Models that don't support preambles only output AgentMessageItems on turn completion.
@@ -5606,7 +5610,7 @@ impl ChatWidget {
                     self.on_plan_item_completed(plan_item.text.clone());
                 }
                 if let codex_protocol::items::TurnItem::AgentMessage(item) = item {
-                    self.on_agent_message_item_completed(item, from_replay);
+                    self.on_agent_message_item_completed(item, replay_kind);
                 }
             }
         }

@@ -279,6 +279,45 @@ async fn thread_snapshot_replay_does_not_duplicate_agent_message_history() {
 }
 
 #[tokio::test]
+async fn resume_initial_replay_does_not_duplicate_completed_agent_message_history() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.replay_initial_messages(vec![
+        EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "assistant reply".to_string(),
+        }),
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            item: TurnItem::AgentMessage(AgentMessageItem {
+                id: "msg-1".to_string(),
+                content: vec![AgentMessageContent::Text {
+                    text: "assistant reply".to_string(),
+                }],
+                phase: None,
+                memory_citation: None,
+            }),
+        }),
+        EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: Some("assistant reply".to_string()),
+        }),
+    ]);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected replayed assistant message to render once"
+    );
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("assistant reply"),
+        "expected replayed assistant message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
 async fn replayed_user_message_preserves_text_elements_and_local_images() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
 
@@ -10695,22 +10734,22 @@ async fn default_terminal_title_refreshes_when_spinner_state_changes() {
     chat.config.animations = true;
 
     chat.config.tui_terminal_title = None;
-    let project = "project".to_string();
-    chat.last_terminal_title = Some(project);
+    let cwd = PathBuf::from("/tmp/project");
+    chat.config.cwd = cwd.clone();
+    chat.current_cwd = Some(cwd);
+    chat.config.config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        chat.config.config_layer_stack.requirements().clone(),
+        chat.config.config_layer_stack.requirements_toml().clone(),
+    )
+    .expect("config layer stack without project layers");
     chat.bottom_pane.set_task_running(true);
     chat.terminal_title_status_kind = TerminalTitleStatusKind::Thinking;
     chat.terminal_title_animation_origin = Instant::now() + Duration::from_secs(1);
 
     chat.refresh_terminal_title();
 
-    let title = chat
-        .last_terminal_title
-        .as_deref()
-        .expect("expected terminal title refresh");
-    assert!(
-        title.starts_with("⠋ "),
-        "expected refreshed title to include the spinner prefix, got {title:?}"
-    );
+    assert_eq!(chat.last_terminal_title, Some("⠋ project".to_string()));
 }
 
 #[tokio::test]

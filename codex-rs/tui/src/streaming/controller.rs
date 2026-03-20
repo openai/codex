@@ -49,11 +49,13 @@ impl StreamController {
         if lines.is_empty() || lines == self.current_lines {
             return false;
         }
+        let enqueued_at = self
+            .pending_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.enqueued_at)
+            .unwrap_or_else(Instant::now);
         self.current_lines = lines.clone();
-        self.pending_snapshot = Some(PendingSnapshot {
-            lines,
-            enqueued_at: Instant::now(),
-        });
+        self.pending_snapshot = Some(PendingSnapshot { lines, enqueued_at });
         true
     }
 
@@ -154,11 +156,13 @@ impl PlanStreamController {
         if lines.is_empty() || lines == self.current_lines {
             return false;
         }
+        let enqueued_at = self
+            .pending_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.enqueued_at)
+            .unwrap_or_else(Instant::now);
         self.current_lines = lines.clone();
-        self.pending_snapshot = Some(PendingSnapshot {
-            lines,
-            enqueued_at: Instant::now(),
-        });
+        self.pending_snapshot = Some(PendingSnapshot { lines, enqueued_at });
         true
     }
 
