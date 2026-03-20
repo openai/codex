@@ -22,6 +22,7 @@ use codex_core::models_manager::collaboration_mode_presets::CollaborationModesCo
 use codex_core::shell::Shell;
 use codex_core::shell::get_shell_by_model_provided_path;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
@@ -649,8 +650,8 @@ impl TestCodex {
         &self._test_env
     }
 
-    pub fn fs(&self) -> &FileSystem {
-        self._test_env.environment.get_filesystem()
+    pub fn fs(&self) -> Arc<dyn ExecutorFileSystem> {
+        self._test_env.environment().get_filesystem()
     }
 
     pub async fn submit_turn(&self, prompt: &str) -> Result<()> {
