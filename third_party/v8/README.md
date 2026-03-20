@@ -1,11 +1,15 @@
 # `rusty_v8` Consumer Artifacts
 
-This directory wires the `v8` crate to exact-version prebuilt artifacts.
-Consumer builds use:
+This directory wires the `v8` crate to exact-version Bazel inputs.
+Bazel consumer builds use:
 
-- upstream `denoland/rusty_v8` release archives on Darwin, GNU Linux, and Windows
-- `openai/codex` release assets for `x86_64-unknown-linux-musl` and
-  `aarch64-unknown-linux-musl`
+- upstream `denoland/rusty_v8` release archives on Windows
+- source-built V8 archives on Darwin, GNU Linux, and musl Linux
+- `openai/codex` release assets for published musl release pairs
+
+Cargo builds still use prebuilt `rusty_v8` archives by default. Only Bazel
+overrides `RUSTY_V8_ARCHIVE`/`RUSTY_V8_SRC_BINDING_PATH` in `MODULE.bazel` to
+select source-built local archives for its consumer builds.
 
 Current pinned versions:
 
@@ -27,7 +31,8 @@ with these raw asset names:
 - `src_binding_release_<target>.rs`
 
 The dedicated publishing workflow is `.github/workflows/rusty-v8-release.yml`.
-It only builds musl release pairs from source:
+It builds musl release pairs from source and keeps the release artifacts as the
+statically linked form:
 
 - `//third_party/v8:rusty_v8_release_pair_x86_64_unknown_linux_musl`
 - `//third_party/v8:rusty_v8_release_pair_aarch64_unknown_linux_musl`

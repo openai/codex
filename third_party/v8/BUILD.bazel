@@ -125,17 +125,17 @@ alias(
 alias(
     name = "rusty_v8_archive_for_target",
     actual = select({
-        "@rules_rs//rs/experimental/platforms/config:aarch64-apple-darwin": ":v8_146_4_0_aarch64_apple_darwin",
+        "@rules_rs//rs/experimental/platforms/config:aarch64-apple-darwin": ":v8_146_4_0_aarch64_apple_darwin_bazel",
         "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-gnullvm": ":v8_146_4_0_aarch64_pc_windows_gnullvm",
         "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-msvc": ":v8_146_4_0_aarch64_pc_windows_msvc",
-        "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-gnu": ":v8_146_4_0_aarch64_unknown_linux_gnu",
-        ":platform_aarch64_unknown_linux_musl": ":v8_146_4_0_aarch64_unknown_linux_musl",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-apple-darwin": ":v8_146_4_0_x86_64_apple_darwin",
+        "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-gnu": ":v8_146_4_0_aarch64_unknown_linux_gnu_bazel",
+        ":platform_aarch64_unknown_linux_musl": ":v8_146_4_0_aarch64_unknown_linux_musl_release_base",
+        "@rules_rs//rs/experimental/platforms/config:x86_64-apple-darwin": ":v8_146_4_0_x86_64_apple_darwin_bazel",
         "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-gnullvm": ":v8_146_4_0_x86_64_pc_windows_gnullvm",
         "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-msvc": ":v8_146_4_0_x86_64_pc_windows_msvc",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-gnu": ":v8_146_4_0_x86_64_unknown_linux_gnu",
-        ":platform_x86_64_unknown_linux_musl": ":v8_146_4_0_x86_64_unknown_linux_musl",
-        "//conditions:default": ":v8_146_4_0_x86_64_unknown_linux_gnu",
+        "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-gnu": ":v8_146_4_0_x86_64_unknown_linux_gnu_bazel",
+        ":platform_x86_64_unknown_linux_musl": ":v8_146_4_0_x86_64_unknown_linux_musl_release",
+        "//conditions:default": ":v8_146_4_0_x86_64_unknown_linux_gnu_bazel",
     }),
 )
 
@@ -194,6 +194,30 @@ cc_library(
         "@v8//:core_lib_icu",
         "@v8//:rusty_v8_internal_headers",
     ],
+)
+
+cc_static_library(
+    name = "v8_146_4_0_aarch64_apple_darwin_bazel",
+    deps = [":v8_146_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
+    name = "v8_146_4_0_aarch64_unknown_linux_gnu_bazel",
+    deps = [":v8_146_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
+    name = "v8_146_4_0_x86_64_apple_darwin_bazel",
+    deps = [":v8_146_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
+)
+
+cc_static_library(
+    name = "v8_146_4_0_x86_64_unknown_linux_gnu_bazel",
+    deps = [":v8_146_4_0_binding"],
+    features = V8_STATIC_LIBRARY_FEATURES,
 )
 
 cc_static_library(
