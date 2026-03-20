@@ -76,6 +76,12 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
                 "delta": "working"
             }),
             json!({
+                "type": "conversation.handoff.requested",
+                "handoff_id": "handoff_1",
+                "item_id": "item_2",
+                "input_transcript": "delegate now"
+            }),
+            json!({
                 "type": "error",
                 "message": "upstream boom"
             }),
@@ -207,6 +213,33 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     assert_eq!(second_transcript_update.thread_id, output_audio.thread_id);
     assert_eq!(second_transcript_update.role, "assistant");
     assert_eq!(second_transcript_update.text, "working");
+
+    let handoff_item_added = read_notification::<ThreadRealtimeItemAddedNotification>(
+        &mut mcp,
+        "thread/realtime/itemAdded",
+    )
+    .await?;
+    assert_eq!(handoff_item_added.thread_id, output_audio.thread_id);
+    assert_eq!(handoff_item_added.item["type"], json!("handoff_request"));
+    assert_eq!(handoff_item_added.item["handoff_id"], json!("handoff_1"));
+    assert_eq!(handoff_item_added.item["item_id"], json!("item_2"));
+    assert_eq!(
+        handoff_item_added.item["input_transcript"],
+        json!("delegate now")
+    );
+    assert_eq!(
+        handoff_item_added.item["active_transcript"],
+        json!([
+            {
+                "role": "user",
+                "text": "delegate now",
+            },
+            {
+                "role": "assistant",
+                "text": "working",
+            }
+        ])
+    );
 
     let realtime_error =
         read_notification::<ThreadRealtimeErrorNotification>(&mut mcp, "thread/realtime/error")

@@ -459,7 +459,23 @@ pub(crate) async fn apply_bespoke_event_handling(
                             .await;
                     }
                     RealtimeEvent::ConversationItemDone { .. } => {}
-                    RealtimeEvent::HandoffRequested(_) => {}
+                    RealtimeEvent::HandoffRequested(handoff) => {
+                        let notification = ThreadRealtimeItemAddedNotification {
+                            thread_id: conversation_id.to_string(),
+                            item: serde_json::json!({
+                                "type": "handoff_request",
+                                "handoff_id": handoff.handoff_id,
+                                "item_id": handoff.item_id,
+                                "input_transcript": handoff.input_transcript,
+                                "active_transcript": handoff.active_transcript,
+                            }),
+                        };
+                        outgoing
+                            .send_server_notification(ServerNotification::ThreadRealtimeItemAdded(
+                                notification,
+                            ))
+                            .await;
+                    }
                     RealtimeEvent::Error(message) => {
                         let notification = ThreadRealtimeErrorNotification {
                             thread_id: conversation_id.to_string(),
