@@ -2175,7 +2175,6 @@ dependencies = [
  "codex-client",
  "codex-config",
  "codex-keyring-store",
- "codex-otel",
  "codex-protocol",
  "codex-terminal-detection",
  "core_test_support",
