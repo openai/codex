@@ -549,13 +549,8 @@ pub fn render_decision_for_unmatched_command(
 
     // On Windows, ReadOnly sandbox is not a real sandbox, so special-case it
     // here.
-    let relying_on_runtime_sandbox_for_safety =
+    let environment_lacks_sandbox_protections =
         cfg!(windows) && matches!(sandbox_policy, SandboxPolicy::ReadOnly { .. });
-
-    let sandbox_is_explicitly_disabled = matches!(
-        sandbox_policy,
-        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
-    );
 
     // If the command is flagged as dangerous or we have no sandbox protection,
     // we should never allow it to run without approval.
@@ -563,9 +558,13 @@ pub fn render_decision_for_unmatched_command(
     // We prefer to prompt the user rather than outright forbid the command,
     // but if the user has explicitly disabled prompts, we must
     // forbid the command.
-    if command_might_be_dangerous(command) || relying_on_runtime_sandbox_for_safety {
+    if command_might_be_dangerous(command) || environment_lacks_sandbox_protections {
         return match approval_policy {
             AskForApproval::Never => {
+                let sandbox_is_explicitly_disabled = matches!(
+                    sandbox_policy,
+                    SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+                );
                 if sandbox_is_explicitly_disabled {
                     // If the sandbox is explicitly disabled, we should allow the command to run
                     Decision::Allow

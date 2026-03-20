@@ -1691,20 +1691,68 @@ async fn verify_approval_requirement_for_unsafe_powershell_command() {
     );
 }
 
-struct ExecApprovalRequirementScenario {
-    policy_src: Option<String>,
+#[tokio::test]
+async fn dangerous_command_allowed_when_sandbox_is_explicitly_disabled() {
+    let command = vec_str(&["rm", "-rf", "/tmp/nonexistent"]);
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: None,
+            command,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ExternalSandbox {
+                network_access: Default::default(),
+            },
+            file_system_sandbox_policy: external_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment {
+                command: vec_str(&["rm", "-rf", "/tmp/nonexistent"]),
+            }),
+        },
+    )
+    .await;
+}
 
+#[tokio::test]
+async fn dangerous_command_forbidden_in_external_sandbox_when_policy_matches() {
+    let command = vec_str(&["rm", "-rf", "/tmp/nonexistent"]);
+    assert_exec_approval_requirement_for_command(
+        ExecApprovalRequirementScenario {
+            policy_src: Some("prefix_rule(pattern=['rm'], decision='prompt')".to_string()),
+            command,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ExternalSandbox {
+                network_access: Default::default(),
+            },
+            file_system_sandbox_policy: external_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        },
+        ExecApprovalRequirement::Forbidden {
+            reason: "approval required by policy, but AskForApproval is set to Never".to_string(),
+        },
+    )
+    .await;
+}
+
+struct ExecApprovalRequirementScenario {
+    /// Source for the Starlark `.rules` file.
+    policy_src: Option<String>,
     command: Vec<String>,
     approval_policy: AskForApproval,
     sandbox_policy: SandboxPolicy,
     file_system_sandbox_policy: FileSystemSandboxPolicy,
     sandbox_permissions: SandboxPermissions,
     prefix_rule: Option<Vec<String>>,
-
-    expected_requirement: ExecApprovalRequirement,
 }
 
-async fn assert_exec_approval_requirement_for_command(test: ExecApprovalRequirementScenario) {
+async fn assert_exec_approval_requirement_for_command(
+    test: ExecApprovalRequirementScenario,
+    expected_requirement: ExecApprovalRequirement,
+) {
     let ExecApprovalRequirementScenario {
         policy_src,
         command,
@@ -1713,7 +1761,6 @@ async fn assert_exec_approval_requirement_for_command(test: ExecApprovalRequirem
         file_system_sandbox_policy,
         sandbox_permissions,
         prefix_rule,
-        expected_requirement,
     } = test;
 
     let policy = match policy_src {
@@ -1739,47 +1786,4 @@ async fn assert_exec_approval_requirement_for_command(test: ExecApprovalRequirem
         .await;
 
     assert_eq!(requirement, expected_requirement);
-}
-
-#[tokio::test]
-async fn dangerous_command_allowed_when_sandbox_is_explicitly_disabled() {
-    let command = vec_str(&["rm", "-rf", "/tmp/nonexistent"]);
-    assert_exec_approval_requirement_for_command(ExecApprovalRequirementScenario {
-        policy_src: None,
-        command,
-        approval_policy: AskForApproval::Never,
-        sandbox_policy: SandboxPolicy::ExternalSandbox {
-            network_access: Default::default(),
-        },
-        file_system_sandbox_policy: external_file_system_sandbox_policy(),
-        sandbox_permissions: SandboxPermissions::UseDefault,
-        prefix_rule: None,
-        expected_requirement: ExecApprovalRequirement::Skip {
-            bypass_sandbox: false,
-            proposed_execpolicy_amendment: Some(ExecPolicyAmendment {
-                command: vec_str(["rm", "-rf", "/tmp/nonexistent"]),
-            }),
-        },
-    })
-    .await;
-}
-
-#[tokio::test]
-async fn dangerous_command_forbidden_in_external_sandbox_when_policy_matches() {
-    let command = vec_str(&["rm", "-rf", "/tmp/nonexistent"]);
-    assert_exec_approval_requirement_for_command(ExecApprovalRequirementScenario {
-        policy_src: Some("prefix_rule(pattern=['rm'], decision='prompt')".to_string()),
-        command,
-        approval_policy: AskForApproval::Never,
-        sandbox_policy: SandboxPolicy::ExternalSandbox {
-            network_access: Default::default(),
-        },
-        file_system_sandbox_policy: external_file_system_sandbox_policy(),
-        sandbox_permissions: SandboxPermissions::UseDefault,
-        prefix_rule: None,
-        expected_requirement: ExecApprovalRequirement::Forbidden {
-            reason: "approval required by policy, but AskForApproval is set to Never".to_string(),
-        },
-    })
-    .await;
 }
