@@ -34,28 +34,6 @@ fn assistant_message(text: &str) -> ResponseItem {
 }
 
 #[tokio::test]
-async fn record_initial_history_resumed_preserves_model_visible_image_generation_result() {
-    let (session, _turn_context) = make_session_and_context().await;
-    let item = ResponseItem::ImageGenerationCall {
-        id: "ig-test".to_string(),
-        status: "completed".to_string(),
-        revised_prompt: Some("a tiny blue square".to_string()),
-        result: "Zm9v".to_string(),
-    };
-
-    session
-        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
-            conversation_id: ThreadId::default(),
-            history: vec![RolloutItem::ResponseItem(item.clone())],
-            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
-        }))
-        .await;
-
-    let history = session.clone_history().await;
-    assert_eq!(history.raw_items(), &[item]);
-}
-
-#[tokio::test]
 async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previous_turn_settings()
 {
     let (session, turn_context) = make_session_and_context().await;

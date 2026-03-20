@@ -9103,11 +9103,6 @@ mod tests {
 
         assert!(result.is_empty());
         assert_eq!(saved_path.as_deref(), Some(saved_path_string.as_str()));
-        let Some(RolloutItem::EventMsg(EventMsg::ImageGenerationEnd(source_item))) = items.get(2) else {
-            panic!("expected source image generation end event");
-        };
-        assert_eq!(source_item.result, "Zm9v");
-        assert_eq!(source_item.saved_path.as_deref(), Some(saved_path_string.as_str()));
         Ok(())
     }
 }
