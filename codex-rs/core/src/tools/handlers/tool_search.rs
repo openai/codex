@@ -21,14 +21,18 @@ use crate::client_common::tools::ResponsesApiTool;
 
 pub struct ToolSearchHandler {
     tools: HashMap<String, ToolInfo>,
+    openai_file_bridge_enabled: bool,
 }
 
 pub(crate) const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
 pub(crate) const DEFAULT_LIMIT: usize = 8;
 
 impl ToolSearchHandler {
-    pub fn new(tools: HashMap<String, ToolInfo>) -> Self {
-        Self { tools }
+    pub fn new(tools: HashMap<String, ToolInfo>, openai_file_bridge_enabled: bool) -> Self {
+        Self {
+            tools,
+            openai_file_bridge_enabled,
+        }
     }
 }
 
@@ -89,9 +93,11 @@ impl ToolHandler for ToolSearchHandler {
             .into_iter()
             .filter_map(|result| entries.get(result.document.id))
             .collect::<Vec<_>>();
-        let tools = serialize_tool_search_output_tools(&matched_entries).map_err(|err| {
-            FunctionCallError::Fatal(format!("failed to encode tool_search output: {err}"))
-        })?;
+        let tools =
+            serialize_tool_search_output_tools(&matched_entries, self.openai_file_bridge_enabled)
+                .map_err(|err| {
+                FunctionCallError::Fatal(format!("failed to encode tool_search output: {err}"))
+            })?;
 
         Ok(ToolSearchOutput { tools })
     }
@@ -99,6 +105,7 @@ impl ToolHandler for ToolSearchHandler {
 
 fn serialize_tool_search_output_tools(
     matched_entries: &[&(String, ToolInfo)],
+    openai_file_bridge_enabled: bool,
 ) -> Result<Vec<ToolSearchOutputTool>, serde_json::Error> {
     let grouped: BTreeMap<String, Vec<ToolInfo>> =
         matched_entries
@@ -129,8 +136,12 @@ fn serialize_tool_search_output_tools(
         let tools = tools
             .iter()
             .map(|tool| {
-                mcp_tool_to_deferred_openai_tool(tool.tool_name.clone(), tool)
-                    .map(ResponsesApiNamespaceTool::Function)
+                mcp_tool_to_deferred_openai_tool(
+                    tool.tool_name.clone(),
+                    tool,
+                    openai_file_bridge_enabled,
+                )
+                .map(ResponsesApiNamespaceTool::Function)
             })
             .collect::<Result<Vec<_>, _>>()?;
 

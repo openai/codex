@@ -278,6 +278,7 @@ pub(crate) struct ToolsConfig {
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
     pub search_tool: bool,
     pub tool_suggest: bool,
+    pub openai_file_bridge: bool,
     pub exec_permission_approvals_enabled: bool,
     pub request_permissions_tool_enabled: bool,
     pub code_mode_enabled: bool,
@@ -343,6 +344,7 @@ impl ToolsConfig {
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool = model_info.supports_search_tool;
         let include_tool_suggest = include_search_tool && features.enabled(Feature::ToolSuggest);
+        let include_openai_file_bridge = features.enabled(Feature::AppsFileBridge);
         let include_original_image_detail = can_request_original_image_detail(features, model_info);
         let include_artifact_tools =
             features.enabled(Feature::Artifact) && codex_artifacts::can_manage_artifact_runtime();
@@ -412,6 +414,7 @@ impl ToolsConfig {
             agent_roles: BTreeMap::new(),
             search_tool: include_search_tool,
             tool_suggest: include_tool_suggest,
+            openai_file_bridge: include_openai_file_bridge,
             exec_permission_approvals_enabled,
             request_permissions_tool_enabled,
             code_mode_enabled: include_code_mode,
@@ -2376,8 +2379,10 @@ fn push_tool_spec(
 pub(crate) fn mcp_tool_to_openai_tool(
     fully_qualified_name: String,
     tool_info: ToolInfo,
+    openai_file_bridge_enabled: bool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    let (description, input_schema, output_schema) = mcp_tool_to_openai_tool_parts(&tool_info)?;
+    let (description, input_schema, output_schema) =
+        mcp_tool_to_openai_tool_parts(&tool_info, openai_file_bridge_enabled)?;
 
     Ok(ResponsesApiTool {
         name: fully_qualified_name,
@@ -2392,8 +2397,10 @@ pub(crate) fn mcp_tool_to_openai_tool(
 pub(crate) fn mcp_tool_to_deferred_openai_tool(
     name: String,
     tool_info: &ToolInfo,
+    openai_file_bridge_enabled: bool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    let (description, input_schema, _) = mcp_tool_to_openai_tool_parts(tool_info)?;
+    let (description, input_schema, _) =
+        mcp_tool_to_openai_tool_parts(tool_info, openai_file_bridge_enabled)?;
 
     Ok(ResponsesApiTool {
         name,
@@ -2429,6 +2436,7 @@ pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, s
 
 fn mcp_tool_to_openai_tool_parts(
     tool_info: &ToolInfo,
+    openai_file_bridge_enabled: bool,
 ) -> Result<(String, JsonSchema, Option<JsonValue>), serde_json::Error> {
     let tool = tool_info.tool.clone();
     let rmcp::model::Tool {
@@ -2439,7 +2447,7 @@ fn mcp_tool_to_openai_tool_parts(
     } = tool;
 
     let mut serialized_input_schema = serde_json::Value::Object(input_schema.as_ref().clone());
-    if tool_info.server_name == CODEX_APPS_MCP_SERVER_NAME {
+    if openai_file_bridge_enabled && tool_info.server_name == CODEX_APPS_MCP_SERVER_NAME {
         mask_input_schema_for_model(
             &mut serialized_input_schema,
             &declared_openai_file_params(tool_info.tool.meta.as_deref()),
@@ -2468,7 +2476,7 @@ fn mcp_tool_to_openai_tool_parts(
     let mut structured_content_schema = output_schema
         .map(|output_schema| serde_json::Value::Object(output_schema.as_ref().clone()))
         .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()));
-    if tool_info.server_name == CODEX_APPS_MCP_SERVER_NAME {
+    if openai_file_bridge_enabled && tool_info.server_name == CODEX_APPS_MCP_SERVER_NAME {
         mask_output_schema_for_model(
             &mut structured_content_schema,
             &declared_openai_file_outputs(tool_info.tool.meta.as_deref()),
@@ -2858,7 +2866,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
     if config.search_tool
         && let Some(app_tools) = app_tools
     {
-        let search_tool_handler = Arc::new(ToolSearchHandler::new(app_tools.clone()));
+        let search_tool_handler = Arc::new(ToolSearchHandler::new(
+            app_tools.clone(),
+            config.openai_file_bridge,
+        ));
         push_tool_spec(
             &mut builder,
             create_tool_search_tool(&app_tools),
@@ -3025,13 +3036,15 @@ pub(crate) fn build_specs_with_discoverable_tools(
     );
     builder.register_handler("view_image", view_image_handler);
 
-    push_tool_spec(
-        &mut builder,
-        create_download_openai_file_tool(),
-        /*supports_parallel_tool_calls*/ true,
-        config.code_mode_enabled,
-    );
-    builder.register_handler("download_openai_file", Arc::new(DownloadOpenAiFileHandler));
+    if config.openai_file_bridge {
+        push_tool_spec(
+            &mut builder,
+            create_download_openai_file_tool(),
+            /*supports_parallel_tool_calls*/ true,
+            config.code_mode_enabled,
+        );
+        builder.register_handler("download_openai_file", Arc::new(DownloadOpenAiFileHandler));
+    }
 
     if config.artifact_tools {
         push_tool_spec(
@@ -3108,7 +3121,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 
         for (name, tool_info) in entries.into_iter() {
-            match mcp_tool_to_openai_tool(name.clone(), tool_info.clone()) {
+            match mcp_tool_to_openai_tool(
+                name.clone(),
+                tool_info.clone(),
+                config.openai_file_bridge,
+            ) {
                 Ok(converted_tool) => {
                     push_tool_spec(
                         &mut builder,

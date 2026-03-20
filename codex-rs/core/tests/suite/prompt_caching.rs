@@ -177,7 +177,6 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "apply_patch",
         "web_search",
         "view_image",
-        "download_openai_file",
         "spawn_agent",
         "send_input",
         "resume_agent",

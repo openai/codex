@@ -31,6 +31,60 @@ fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> r
     }
 }
 
+fn codex_apps_file_bridge_tool() -> ToolInfo {
+    ToolInfo {
+        server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        tool_name: "echo_file_inputs".to_string(),
+        tool_namespace: "mcp__codex_apps__file_meta_test".to_string(),
+        tool: rmcp::model::Tool {
+            name: "echo_file_inputs".to_string().into(),
+            title: None,
+            description: Some("Echo file inputs".to_string().into()),
+            input_schema: std::sync::Arc::new(rmcp::model::object(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "file": {
+                        "type": "object",
+                        "properties": {
+                            "download_url": {"type": "string"},
+                            "file_id": {"type": "string"}
+                        }
+                    }
+                }
+            }))),
+            output_schema: Some(std::sync::Arc::new(rmcp::model::object(
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "outputFile": {
+                            "type": "object",
+                            "properties": {
+                                "file_id": {"type": "string"}
+                            }
+                        }
+                    }
+                }),
+            ))),
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: Some(rmcp::model::Meta(
+                serde_json::json!({
+                    "openai/fileParams": ["file"],
+                    "openai/fileOutputs": ["outputFile"]
+                })
+                .as_object()
+                .expect("meta object")
+                .clone(),
+            )),
+        },
+        connector_id: Some("file_meta_test".to_string()),
+        connector_name: Some("File Meta Test".to_string()),
+        plugin_display_names: Vec::new(),
+        connector_description: Some("TinyMCP file bridge test tool.".to_string()),
+    }
+}
+
 fn tool_info(tool: rmcp::model::Tool) -> ToolInfo {
     ToolInfo {
         server_name: "server".to_string(),
@@ -121,8 +175,9 @@ fn mcp_tool_to_openai_tool_inserts_empty_properties() {
         meta: None,
     };
 
-    let openai_tool = mcp_tool_to_openai_tool("server/no_props".to_string(), tool_info(tool))
-        .expect("convert tool");
+    let openai_tool =
+        mcp_tool_to_openai_tool("server/no_props".to_string(), tool_info(tool), false)
+            .expect("convert tool");
     let parameters = serde_json::to_value(openai_tool.parameters).expect("serialize schema");
 
     assert_eq!(parameters.get("properties"), Some(&serde_json::json!({})));
@@ -158,9 +213,12 @@ fn mcp_tool_to_openai_tool_preserves_top_level_output_schema() {
         meta: None,
     };
 
-    let openai_tool =
-        mcp_tool_to_openai_tool("mcp__server__with_output".to_string(), tool_info(tool))
-            .expect("convert tool");
+    let openai_tool = mcp_tool_to_openai_tool(
+        "mcp__server__with_output".to_string(),
+        tool_info(tool),
+        false,
+    )
+    .expect("convert tool");
 
     assert_eq!(
         openai_tool.output_schema,
@@ -193,6 +251,111 @@ fn mcp_tool_to_openai_tool_preserves_top_level_output_schema() {
 }
 
 #[test]
+fn mcp_tool_to_openai_tool_does_not_mask_apps_file_fields_without_bridge_flag() {
+    let openai_tool = mcp_tool_to_openai_tool(
+        "mcp__codex_apps__echo_file_inputs".to_string(),
+        codex_apps_file_bridge_tool(),
+        false,
+    )
+    .expect("convert tool");
+
+    assert_eq!(
+        serde_json::to_value(openai_tool.parameters).expect("serialize schema"),
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "object",
+                    "properties": {
+                        "download_url": {"type": "string"},
+                        "file_id": {"type": "string"}
+                    }
+                }
+            }
+        })
+    );
+    assert_eq!(
+        openai_tool.output_schema,
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "array",
+                    "items": {}
+                },
+                "structuredContent": {
+                    "type": "object",
+                    "properties": {
+                        "outputFile": {
+                            "type": "object",
+                            "properties": {
+                                "file_id": {"type": "string"}
+                            }
+                        }
+                    }
+                },
+                "isError": {
+                    "type": "boolean"
+                },
+                "_meta": {}
+            },
+            "required": ["content"],
+            "additionalProperties": false
+        }))
+    );
+}
+
+#[test]
+fn mcp_tool_to_openai_tool_masks_apps_file_fields_with_bridge_flag() {
+    let openai_tool = mcp_tool_to_openai_tool(
+        "mcp__codex_apps__echo_file_inputs".to_string(),
+        codex_apps_file_bridge_tool(),
+        true,
+    )
+    .expect("convert tool");
+
+    assert_eq!(
+        serde_json::to_value(openai_tool.parameters).expect("serialize schema"),
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "string",
+                    "description": "Pass a local file path string. Codex will upload it before invoking the tool."
+                }
+            }
+        })
+    );
+    assert_eq!(
+        openai_tool.output_schema,
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "array",
+                    "items": {}
+                },
+                "structuredContent": {
+                    "type": "object",
+                    "properties": {
+                        "outputFile": {
+                            "type": "string",
+                            "description": "This field returns a local temp file path after Codex auto-downloads supported OpenAI file handles."
+                        }
+                    }
+                },
+                "isError": {
+                    "type": "boolean"
+                },
+                "_meta": {}
+            },
+            "required": ["content"],
+            "additionalProperties": false
+        }))
+    );
+}
+
+#[test]
 fn mcp_tool_to_openai_tool_preserves_output_schema_without_inferred_type() {
     let mut input_schema = rmcp::model::JsonObject::new();
     input_schema.insert("type".to_string(), serde_json::json!("object"));
@@ -212,9 +375,12 @@ fn mcp_tool_to_openai_tool_preserves_output_schema_without_inferred_type() {
         meta: None,
     };
 
-    let openai_tool =
-        mcp_tool_to_openai_tool("mcp__server__with_enum_output".to_string(), tool_info(tool))
-            .expect("convert tool");
+    let openai_tool = mcp_tool_to_openai_tool(
+        "mcp__server__with_enum_output".to_string(),
+        tool_info(tool),
+        false,
+    )
+    .expect("convert tool");
 
     assert_eq!(
         openai_tool.output_schema,
@@ -257,6 +423,7 @@ fn search_tool_deferred_tools_always_set_defer_loading_true() {
     let openai_tool = mcp_tool_to_deferred_openai_tool(
         "mcp__codex_apps__lookup_order".to_string(),
         &tool_info(tool),
+        false,
     )
     .expect("convert deferred tool");
 
@@ -282,6 +449,7 @@ fn deferred_responses_api_tool_serializes_with_defer_loading() {
         mcp_tool_to_deferred_openai_tool(
             "mcp__codex_apps__lookup_order".to_string(),
             &tool_info(tool),
+            false,
         )
         .expect("convert deferred tool"),
     ))
@@ -1340,7 +1508,6 @@ fn test_build_specs_gpt5_codex_default() {
             "apply_patch",
             "web_search",
             "view_image",
-            "download_openai_file",
             "spawn_agent",
             "send_input",
             "resume_agent",
@@ -1364,7 +1531,6 @@ fn test_build_specs_gpt51_codex_default() {
             "apply_patch",
             "web_search",
             "view_image",
-            "download_openai_file",
             "spawn_agent",
             "send_input",
             "resume_agent",
@@ -1390,7 +1556,6 @@ fn test_build_specs_gpt5_codex_unified_exec_web_search() {
             "apply_patch",
             "web_search",
             "view_image",
-            "download_openai_file",
             "spawn_agent",
             "send_input",
             "resume_agent",
@@ -1416,7 +1581,6 @@ fn test_build_specs_gpt51_codex_unified_exec_web_search() {
             "apply_patch",
             "web_search",
             "view_image",
-            "download_openai_file",
             "spawn_agent",
             "send_input",
             "resume_agent",
@@ -1440,7 +1604,6 @@ fn test_gpt_5_1_codex_max_defaults() {
             "apply_patch",
             "web_search",
             "view_image",
-            "download_openai_file",
             "spawn_agent",
             "send_input",
             "resume_agent",
@@ -1464,7 +1627,6 @@ fn test_codex_5_1_mini_defaults() {
             "apply_patch",
             "web_search",
             "view_image",
-            "download_openai_file",
             "spawn_agent",
             "send_input",
             "resume_agent",
@@ -1487,7 +1649,6 @@ fn test_gpt_5_defaults() {
             "request_user_input",
             "web_search",
             "view_image",
-            "download_openai_file",
             "spawn_agent",
             "send_input",
             "resume_agent",
@@ -1511,7 +1672,6 @@ fn test_gpt_5_1_defaults() {
             "apply_patch",
             "web_search",
             "view_image",
-            "download_openai_file",
             "spawn_agent",
             "send_input",
             "resume_agent",
@@ -1537,7 +1697,6 @@ fn test_gpt_5_1_codex_max_unified_exec_web_search() {
             "apply_patch",
             "web_search",
             "view_image",
-            "download_openai_file",
             "spawn_agent",
             "send_input",
             "resume_agent",
@@ -1545,6 +1704,38 @@ fn test_gpt_5_1_codex_max_unified_exec_web_search() {
             "close_agent",
         ],
     );
+}
+
+#[test]
+fn download_openai_file_requires_apps_file_bridge_feature_flag() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let available_models = Vec::new();
+    let mut features = Features::with_defaults();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+    assert_lacks_tool_name(&tools, "download_openai_file");
+
+    features.enable(Feature::AppsFileBridge);
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+    assert_contains_tool_names(&tools, &["download_openai_file"]);
 }
 
 #[test]

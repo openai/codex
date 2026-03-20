@@ -230,6 +230,73 @@ fn custom_mcp_tool_question_mentions_server_name() {
     );
 }
 
+#[tokio::test]
+async fn openai_file_argument_rewrite_requires_feature_flag() {
+    let (session, turn_context) = make_session_and_context().await;
+    let arguments = Some(serde_json::json!({
+        "file": "/tmp/codex-smoke-file.txt"
+    }));
+    let metadata = McpToolApprovalMetadata {
+        annotations: None,
+        connector_id: Some("file_meta_test".to_string()),
+        connector_name: Some("File Meta Test".to_string()),
+        connector_description: None,
+        tool_title: None,
+        tool_description: None,
+        codex_apps_meta: None,
+        openai_file_params: vec!["file".to_string()],
+        openai_file_outputs: Vec::new(),
+    };
+
+    let rewritten = rewrite_mcp_tool_arguments_for_openai_files(
+        &session,
+        &turn_context,
+        CODEX_APPS_MCP_SERVER_NAME,
+        arguments.clone(),
+        Some(&metadata),
+    )
+    .await
+    .expect("rewrite should succeed");
+
+    assert_eq!(rewritten, arguments);
+}
+
+#[tokio::test]
+async fn openai_file_result_rewrite_requires_feature_flag() {
+    let (session, turn_context) = make_session_and_context().await;
+    let result = CallToolResult {
+        content: Vec::new(),
+        structured_content: Some(serde_json::json!({
+            "outputFile": "sediment://file_123"
+        })),
+        is_error: None,
+        meta: None,
+    };
+    let metadata = McpToolApprovalMetadata {
+        annotations: None,
+        connector_id: Some("file_meta_test".to_string()),
+        connector_name: Some("File Meta Test".to_string()),
+        connector_description: None,
+        tool_title: None,
+        tool_description: None,
+        codex_apps_meta: None,
+        openai_file_params: Vec::new(),
+        openai_file_outputs: vec!["outputFile".to_string()],
+    };
+
+    let rewritten = rewrite_mcp_tool_result_for_openai_files(
+        &session,
+        &turn_context,
+        "call_123",
+        CODEX_APPS_MCP_SERVER_NAME,
+        result.clone(),
+        Some(&metadata),
+    )
+    .await;
+
+    assert_eq!(rewritten, result);
+}
+
 #[test]
 fn codex_apps_tool_question_uses_fallback_app_label() {
     let question = build_mcp_tool_approval_question(

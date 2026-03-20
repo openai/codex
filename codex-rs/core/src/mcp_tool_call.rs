@@ -903,6 +903,13 @@ async fn rewrite_mcp_tool_arguments_for_openai_files(
     arguments_value: Option<serde_json::Value>,
     metadata: Option<&McpToolApprovalMetadata>,
 ) -> Result<Option<serde_json::Value>, String> {
+    if !turn_context
+        .config
+        .features
+        .enabled(Feature::AppsFileBridge)
+    {
+        return Ok(arguments_value);
+    }
     if server != CODEX_APPS_MCP_SERVER_NAME {
         return Ok(arguments_value);
     }
@@ -1003,6 +1010,13 @@ async fn rewrite_mcp_tool_result_for_openai_files(
     mut result: CallToolResult,
     metadata: Option<&McpToolApprovalMetadata>,
 ) -> CallToolResult {
+    if !turn_context
+        .config
+        .features
+        .enabled(Feature::AppsFileBridge)
+    {
+        return result;
+    }
     if server != CODEX_APPS_MCP_SERVER_NAME {
         return result;
     }
