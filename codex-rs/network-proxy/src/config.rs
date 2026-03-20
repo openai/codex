@@ -4,6 +4,7 @@ use anyhow::bail;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -16,32 +17,48 @@ pub struct NetworkProxyConfig {
     pub network: NetworkProxySettings,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkDomainPermission {
+    Allow,
+    Deny,
+    None,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct NetworkDomainPermissions {
+    #[serde(flatten)]
+    pub entries: BTreeMap<String, NetworkDomainPermission>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkUnixSocketPermission {
+    Allow,
+    None,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct NetworkUnixSocketPermissions {
+    #[serde(flatten)]
+    pub entries: BTreeMap<String, NetworkUnixSocketPermission>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct NetworkProxySettings {
-    #[serde(default)]
     pub enabled: bool,
-    #[serde(default = "default_proxy_url")]
     pub proxy_url: String,
     pub enable_socks5: bool,
-    #[serde(default = "default_socks_url")]
     pub socks_url: String,
     pub enable_socks5_udp: bool,
     pub allow_upstream_proxy: bool,
-    #[serde(default)]
     pub dangerously_allow_non_loopback_proxy: bool,
-    #[serde(default)]
     pub dangerously_allow_all_unix_sockets: bool,
-    #[serde(default)]
     pub mode: NetworkMode,
-    #[serde(default)]
-    pub allowed_domains: Vec<String>,
-    #[serde(default)]
-    pub denied_domains: Vec<String>,
-    #[serde(default)]
-    pub allow_unix_sockets: Vec<String>,
+    pub domains: Option<NetworkDomainPermissions>,
+    pub unix_sockets: Option<NetworkUnixSocketPermissions>,
     pub allow_local_binding: bool,
-    #[serde(default)]
     pub mitm: bool,
 }
 
@@ -57,12 +74,110 @@ impl Default for NetworkProxySettings {
             dangerously_allow_non_loopback_proxy: false,
             dangerously_allow_all_unix_sockets: false,
             mode: NetworkMode::default(),
-            allowed_domains: Vec::new(),
-            denied_domains: Vec::new(),
-            allow_unix_sockets: Vec::new(),
+            domains: None,
+            unix_sockets: None,
             allow_local_binding: false,
             mitm: false,
         }
+    }
+}
+
+impl NetworkProxySettings {
+    pub fn allowed_domains(&self) -> Vec<String> {
+        self.domains
+            .as_ref()
+            .map(|domains| {
+                domains
+                    .entries
+                    .iter()
+                    .filter(|(_, permission)| matches!(permission, NetworkDomainPermission::Allow))
+                    .map(|(pattern, _)| pattern.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn denied_domains(&self) -> Vec<String> {
+        self.domains
+            .as_ref()
+            .map(|domains| {
+                domains
+                    .entries
+                    .iter()
+                    .filter(|(_, permission)| matches!(permission, NetworkDomainPermission::Deny))
+                    .map(|(pattern, _)| pattern.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn allow_unix_sockets(&self) -> Vec<String> {
+        self.unix_sockets
+            .as_ref()
+            .map(|unix_sockets| {
+                unix_sockets
+                    .entries
+                    .iter()
+                    .filter(|(_, permission)| {
+                        matches!(permission, NetworkUnixSocketPermission::Allow)
+                    })
+                    .map(|(path, _)| path.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn set_allowed_domains(&mut self, allowed_domains: Vec<String>) {
+        self.set_domain_entries(allowed_domains, NetworkDomainPermission::Allow);
+    }
+
+    pub fn set_denied_domains(&mut self, denied_domains: Vec<String>) {
+        self.set_domain_entries(denied_domains, NetworkDomainPermission::Deny);
+    }
+
+    pub fn upsert_domain_permission(
+        &mut self,
+        host: String,
+        permission: NetworkDomainPermission,
+        normalize: impl Fn(&str) -> String,
+    ) {
+        let mut domains = self.domains.take().unwrap_or_default();
+        let normalized_host = normalize(&host);
+        domains
+            .entries
+            .retain(|entry, _| normalize(entry) != normalized_host);
+        domains.entries.insert(host, permission);
+        self.domains = (!domains.entries.is_empty()).then_some(domains);
+    }
+
+    pub fn set_allow_unix_sockets(&mut self, allow_unix_sockets: Vec<String>) {
+        self.set_unix_socket_entries(allow_unix_sockets, NetworkUnixSocketPermission::Allow);
+    }
+
+    fn set_domain_entries(&mut self, entries: Vec<String>, permission: NetworkDomainPermission) {
+        let mut domains = self.domains.take().unwrap_or_default();
+        domains
+            .entries
+            .retain(|_, existing| *existing != permission);
+        for entry in entries {
+            domains.entries.insert(entry, permission);
+        }
+        self.domains = (!domains.entries.is_empty()).then_some(domains);
+    }
+
+    fn set_unix_socket_entries(
+        &mut self,
+        entries: Vec<String>,
+        permission: NetworkUnixSocketPermission,
+    ) {
+        let mut unix_sockets = self.unix_sockets.take().unwrap_or_default();
+        unix_sockets
+            .entries
+            .retain(|_, existing| *existing != permission);
+        for entry in entries {
+            unix_sockets.entries.insert(entry, permission);
+        }
+        self.unix_sockets = (!unix_sockets.entries.is_empty()).then_some(unix_sockets);
     }
 }
 
@@ -136,7 +251,7 @@ pub(crate) fn clamp_bind_addrs(
         "SOCKS5 proxy",
         "dangerously_allow_non_loopback_proxy",
     );
-    if cfg.allow_unix_sockets.is_empty() && !cfg.dangerously_allow_all_unix_sockets {
+    if cfg.allow_unix_sockets().is_empty() && !cfg.dangerously_allow_all_unix_sockets {
         return (http_addr, socks_addr);
     }
 
@@ -198,7 +313,7 @@ impl ValidatedUnixSocketPath {
 }
 
 pub(crate) fn validate_unix_socket_allowlist_paths(cfg: &NetworkProxyConfig) -> Result<()> {
-    for (index, socket_path) in cfg.network.allow_unix_sockets.iter().enumerate() {
+    for (index, socket_path) in cfg.network.allow_unix_sockets().iter().enumerate() {
         ValidatedUnixSocketPath::parse(socket_path)
             .with_context(|| format!("invalid network.allow_unix_sockets[{index}]"))?;
     }
@@ -357,6 +472,19 @@ mod tests {
 
     use pretty_assertions::assert_eq;
 
+    fn settings_with_unix_sockets(unix_sockets: &[&str]) -> NetworkProxySettings {
+        let mut settings = NetworkProxySettings::default();
+        if !unix_sockets.is_empty() {
+            settings.set_allow_unix_sockets(
+                unix_sockets
+                    .iter()
+                    .map(|path| (*path).to_string())
+                    .collect(),
+            );
+        }
+        settings
+    }
+
     #[test]
     fn network_proxy_settings_default_matches_local_use_baseline() {
         assert_eq!(
@@ -371,9 +499,8 @@ mod tests {
                 dangerously_allow_non_loopback_proxy: false,
                 dangerously_allow_all_unix_sockets: false,
                 mode: NetworkMode::Full,
-                allowed_domains: Vec::new(),
-                denied_domains: Vec::new(),
-                allow_unix_sockets: Vec::new(),
+                domains: None,
+                unix_sockets: None,
                 allow_local_binding: false,
                 mitm: false,
             }
@@ -396,6 +523,20 @@ mod tests {
         };
 
         assert_eq!(config.network, expected);
+    }
+
+    #[test]
+    fn network_proxy_settings_reject_legacy_network_list_keys() {
+        let err = serde_json::from_str::<NetworkProxyConfig>(
+            r#"{
+                "network": {
+                    "allowed_domains": ["example.com"]
+                }
+            }"#,
+        )
+        .expect_err("legacy network list keys should fail");
+
+        assert!(err.to_string().contains("unknown field `allowed_domains`"));
     }
 
     #[test]
@@ -536,10 +677,10 @@ mod tests {
 
     #[test]
     fn clamp_bind_addrs_forces_loopback_when_unix_sockets_enabled() {
-        let cfg = NetworkProxySettings {
-            dangerously_allow_non_loopback_proxy: true,
-            allow_unix_sockets: vec!["/tmp/docker.sock".to_string()],
-            ..Default::default()
+        let cfg = {
+            let mut settings = settings_with_unix_sockets(&["/tmp/docker.sock"]);
+            settings.dangerously_allow_non_loopback_proxy = true;
+            settings
         };
         let http_addr = "0.0.0.0:3128".parse::<SocketAddr>().unwrap();
         let socks_addr = "0.0.0.0:8081".parse::<SocketAddr>().unwrap();
@@ -569,10 +710,7 @@ mod tests {
     #[test]
     fn resolve_runtime_rejects_relative_allow_unix_sockets_entries() {
         let cfg = NetworkProxyConfig {
-            network: NetworkProxySettings {
-                allow_unix_sockets: vec!["relative.sock".to_string()],
-                ..NetworkProxySettings::default()
-            },
+            network: settings_with_unix_sockets(&["relative.sock"]),
         };
 
         let err = match resolve_runtime(&cfg) {
@@ -591,10 +729,7 @@ mod tests {
     #[test]
     fn resolve_runtime_accepts_unix_style_absolute_allow_unix_sockets_entries() {
         let cfg = NetworkProxyConfig {
-            network: NetworkProxySettings {
-                allow_unix_sockets: vec!["/private/tmp/example.sock".to_string()],
-                ..NetworkProxySettings::default()
-            },
+            network: settings_with_unix_sockets(&["/private/tmp/example.sock"]),
         };
 
         assert!(

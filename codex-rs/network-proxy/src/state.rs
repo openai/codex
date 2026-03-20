@@ -1,5 +1,7 @@
+use crate::config::NetworkDomainPermissions;
 use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
+use crate::config::NetworkUnixSocketPermissions;
 use crate::mitm::MitmState;
 use crate::policy::DomainPattern;
 use crate::policy::compile_allowlist_globset;
@@ -39,19 +41,15 @@ pub struct PartialNetworkProxyConfig {
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PartialNetworkConfig {
     pub enabled: Option<bool>,
     pub mode: Option<NetworkMode>,
     pub allow_upstream_proxy: Option<bool>,
     pub dangerously_allow_non_loopback_proxy: Option<bool>,
     pub dangerously_allow_all_unix_sockets: Option<bool>,
-    #[serde(default)]
-    pub allowed_domains: Option<Vec<String>>,
-    #[serde(default)]
-    pub denied_domains: Option<Vec<String>>,
-    #[serde(default)]
-    pub allow_unix_sockets: Option<Vec<String>>,
-    #[serde(default)]
+    pub domains: Option<NetworkDomainPermissions>,
+    pub unix_sockets: Option<NetworkUnixSocketPermissions>,
     pub allow_local_binding: Option<bool>,
 }
 
@@ -60,10 +58,12 @@ pub fn build_config_state(
     constraints: NetworkProxyConstraints,
 ) -> anyhow::Result<ConfigState> {
     crate::config::validate_unix_socket_allowlist_paths(&config)?;
-    validate_denylist_domain_patterns("network.denied_domains", &config.network.denied_domains)
+    let allowed_domains = config.network.allowed_domains();
+    let denied_domains = config.network.denied_domains();
+    validate_denylist_domain_patterns("network.denied_domains", &denied_domains)
         .map_err(NetworkProxyConstraintError::into_anyhow)?;
-    let deny_set = compile_denylist_globset(&config.network.denied_domains)?;
-    let allow_set = compile_allowlist_globset(&config.network.allowed_domains)?;
+    let deny_set = compile_denylist_globset(&denied_domains)?;
+    let allow_set = compile_allowlist_globset(&allowed_domains)?;
     let mitm = if config.network.mitm {
         Some(Arc::new(MitmState::new(
             config.network.allow_upstream_proxy,
@@ -106,7 +106,10 @@ pub fn validate_policy_against_constraints(
     }
 
     let enabled = config.network.enabled;
-    validate_denylist_domain_patterns("network.denied_domains", &config.network.denied_domains)?;
+    let config_allowed_domains = config.network.allowed_domains();
+    let config_denied_domains = config.network.denied_domains();
+    let config_allow_unix_sockets = config.network.allow_unix_sockets();
+    validate_denylist_domain_patterns("network.denied_domains", &config_denied_domains)?;
     if let Some(max_enabled) = constraints.enabled {
         validate(enabled, move |candidate| {
             if *candidate && !max_enabled {
@@ -212,7 +215,7 @@ pub fn validate_policy_against_constraints(
                     .iter()
                     .map(|entry| entry.to_ascii_lowercase())
                     .collect();
-                validate(config.network.allowed_domains.clone(), move |candidate| {
+                validate(config_allowed_domains, move |candidate| {
                     let candidate_set: HashSet<String> = candidate
                         .iter()
                         .map(|entry| entry.to_ascii_lowercase())
@@ -238,7 +241,7 @@ pub fn validate_policy_against_constraints(
                     .iter()
                     .map(|entry| entry.to_ascii_lowercase())
                     .collect();
-                validate(config.network.allowed_domains.clone(), move |candidate| {
+                validate(config_allowed_domains, move |candidate| {
                     let candidate_set: HashSet<String> = candidate
                         .iter()
                         .map(|entry| entry.to_ascii_lowercase())
@@ -259,7 +262,7 @@ pub fn validate_policy_against_constraints(
                     .iter()
                     .map(|entry| DomainPattern::parse_for_constraints(entry))
                     .collect();
-                validate(config.network.allowed_domains.clone(), move |candidate| {
+                validate(config_allowed_domains, move |candidate| {
                     let mut invalid = Vec::new();
                     for entry in candidate {
                         let candidate_pattern = DomainPattern::parse_for_constraints(entry);
@@ -292,7 +295,7 @@ pub fn validate_policy_against_constraints(
             .collect();
         match constraints.denylist_expansion_enabled {
             Some(false) => {
-                validate(config.network.denied_domains.clone(), move |candidate| {
+                validate(config_denied_domains, move |candidate| {
                     let candidate_set: HashSet<String> = candidate
                         .iter()
                         .map(|entry| entry.to_ascii_lowercase())
@@ -309,7 +312,7 @@ pub fn validate_policy_against_constraints(
                 })?;
             }
             Some(true) | None => {
-                validate(config.network.denied_domains.clone(), move |candidate| {
+                validate(config_denied_domains, move |candidate| {
                     let candidate_set: HashSet<String> =
                         candidate.iter().map(|s| s.to_ascii_lowercase()).collect();
                     let missing: Vec<String> = required_set
@@ -336,26 +339,23 @@ pub fn validate_policy_against_constraints(
             .iter()
             .map(|s| s.to_ascii_lowercase())
             .collect();
-        validate(
-            config.network.allow_unix_sockets.clone(),
-            move |candidate| {
-                let mut invalid = Vec::new();
-                for entry in candidate {
-                    if !allowed_set.contains(&entry.to_ascii_lowercase()) {
-                        invalid.push(entry.clone());
-                    }
+        validate(config_allow_unix_sockets, move |candidate| {
+            let mut invalid = Vec::new();
+            for entry in candidate {
+                if !allowed_set.contains(&entry.to_ascii_lowercase()) {
+                    invalid.push(entry.clone());
                 }
-                if invalid.is_empty() {
-                    Ok(())
-                } else {
-                    Err(invalid_value(
-                        "network.allow_unix_sockets",
-                        format!("{invalid:?}"),
-                        "subset of managed allow_unix_sockets",
-                    ))
-                }
-            },
-        )?;
+            }
+            if invalid.is_empty() {
+                Ok(())
+            } else {
+                Err(invalid_value(
+                    "network.allow_unix_sockets",
+                    format!("{invalid:?}"),
+                    "subset of managed allow_unix_sockets",
+                ))
+            }
+        })?;
     }
 
     Ok(())
@@ -399,5 +399,24 @@ fn network_mode_rank(mode: NetworkMode) -> u8 {
     match mode {
         NetworkMode::Limited => 0,
         NetworkMode::Full => 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partial_network_proxy_config_rejects_legacy_network_list_keys() {
+        let err = serde_json::from_str::<PartialNetworkProxyConfig>(
+            r#"{
+                "network": {
+                    "allowed_domains": ["example.com"]
+                }
+            }"#,
+        )
+        .expect_err("legacy network list keys should fail");
+
+        assert!(err.to_string().contains("unknown field `allowed_domains`"));
     }
 }

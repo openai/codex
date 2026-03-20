@@ -306,7 +306,9 @@ enabled = true
 proxy_url = "http://127.0.0.1:43128"
 enable_socks5 = false
 allow_upstream_proxy = false
-allowed_domains = ["openai.com"]
+
+[permissions.workspace.network.domains]
+"openai.com" = "allow"
 "#;
     let cfg: ConfigToml =
         toml::from_str(toml).expect("TOML deserialization should succeed for permissions profiles");
@@ -356,6 +358,19 @@ allowed_domains = ["openai.com"]
             )]),
         }
     );
+}
+
+#[test]
+fn config_toml_rejects_legacy_permission_profile_network_lists() {
+    let toml = r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network]
+allowed_domains = ["openai.com"]
+"#;
+    let err = toml::from_str::<ConfigToml>(toml).expect_err("legacy network lists should fail");
+
+    assert!(err.to_string().contains("unknown field `allowed_domains`"));
 }
 
 #[test]

@@ -4310,6 +4310,7 @@
       "type": "object"
     },
     {
+<<<<<<< HEAD
       "properties": {
         "id": {
           "$ref": "#/definitions/RequestId"
@@ -4334,6 +4335,8 @@
       "type": "object"
     },
     {
+=======
+>>>>>>> 4c42cf4a4 (changes)
       "properties": {
         "id": {
           "$ref": "#/definitions/RequestId"

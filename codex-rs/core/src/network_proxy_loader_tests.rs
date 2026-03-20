@@ -12,7 +12,9 @@ fn higher_precedence_profile_network_beats_lower_profile_network() {
 default_permissions = "workspace"
 
 [permissions.workspace.network]
-allowed_domains = ["lower.example.com"]
+
+[permissions.workspace.network.domains]
+"lower.example.com" = "allow"
 "#,
     )
     .expect("lower layer should parse");
@@ -21,7 +23,9 @@ allowed_domains = ["lower.example.com"]
 default_permissions = "workspace"
 
 [permissions.workspace.network]
-allowed_domains = ["higher.example.com"]
+
+[permissions.workspace.network.domains]
+"higher.example.com" = "allow"
 "#,
     )
     .expect("higher layer should parse");
@@ -38,14 +42,18 @@ allowed_domains = ["higher.example.com"]
     )
     .expect("higher layer should apply");
 
-    assert_eq!(config.network.allowed_domains, vec!["higher.example.com"]);
+    assert_eq!(config.network.allowed_domains(), vec!["higher.example.com"]);
 }
 
 #[test]
 fn execpolicy_network_rules_overlay_network_lists() {
     let mut config = NetworkProxyConfig::default();
-    config.network.allowed_domains = vec!["config.example.com".to_string()];
-    config.network.denied_domains = vec!["blocked.example.com".to_string()];
+    config
+        .network
+        .set_allowed_domains(vec!["config.example.com".to_string()]);
+    config
+        .network
+        .set_denied_domains(vec!["blocked.example.com".to_string()]);
 
     let mut exec_policy = Policy::empty();
     exec_policy
@@ -68,14 +76,14 @@ fn execpolicy_network_rules_overlay_network_lists() {
     apply_exec_policy_network_rules(&mut config, &exec_policy);
 
     assert_eq!(
-        config.network.allowed_domains,
+        config.network.allowed_domains(),
         vec![
-            "config.example.com".to_string(),
-            "blocked.example.com".to_string()
+            "blocked.example.com".to_string(),
+            "config.example.com".to_string()
         ]
     );
     assert_eq!(
-        config.network.denied_domains,
+        config.network.denied_domains(),
         vec!["api.example.com".to_string()]
     );
 }
@@ -101,4 +109,34 @@ dangerously_allow_all_unix_sockets = true
     apply_network_constraints(network, &mut constraints);
 
     assert_eq!(constraints.dangerously_allow_all_unix_sockets, Some(true));
+}
+
+#[test]
+fn apply_network_constraints_skips_empty_domain_sides() {
+    let config: toml::Value = toml::from_str(
+        r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network]
+
+[permissions.workspace.network.domains]
+"managed.example.com" = "allow"
+"ignored.example.com" = "none"
+"#,
+    )
+    .expect("permissions profile should parse");
+    let network = selected_network_from_tables(
+        network_tables_from_toml(&config).expect("permissions profile should deserialize"),
+    )
+    .expect("permissions profile should select a network table")
+    .expect("network table should be present");
+
+    let mut constraints = NetworkProxyConstraints::default();
+    apply_network_constraints(network, &mut constraints);
+
+    assert_eq!(
+        constraints.allowed_domains,
+        Some(vec!["managed.example.com".to_string()])
+    );
+    assert_eq!(constraints.denied_domains, None);
 }

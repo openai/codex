@@ -130,8 +130,16 @@ impl EnvironmentContext {
             .as_ref()?;
 
         Some(NetworkContext {
-            allowed_domains: network.allowed_domains(),
-            denied_domains: network.denied_domains(),
+            allowed_domains: network
+                .domains
+                .as_ref()
+                .and_then(codex_config::NetworkDomainPermissionsToml::allowed_domains)
+                .unwrap_or_default(),
+            denied_domains: network
+                .domains
+                .as_ref()
+                .and_then(codex_config::NetworkDomainPermissionsToml::denied_domains)
+                .unwrap_or_default(),
         })
     }
 

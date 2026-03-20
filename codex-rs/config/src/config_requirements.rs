@@ -142,6 +142,26 @@ impl NetworkDomainPermissionsToml {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    pub fn allowed_domains(&self) -> Option<Vec<String>> {
+        let allowed_domains: Vec<String> = self
+            .entries
+            .iter()
+            .filter(|(_, permission)| matches!(permission, NetworkDomainPermissionToml::Allow))
+            .map(|(pattern, _)| pattern.clone())
+            .collect();
+        (!allowed_domains.is_empty()).then_some(allowed_domains)
+    }
+
+    pub fn denied_domains(&self) -> Option<Vec<String>> {
+        let denied_domains: Vec<String> = self
+            .entries
+            .iter()
+            .filter(|(_, permission)| matches!(permission, NetworkDomainPermissionToml::Deny))
+            .map(|(pattern, _)| pattern.clone())
+            .collect();
+        (!denied_domains.is_empty()).then_some(denied_domains)
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -150,6 +170,17 @@ pub enum NetworkDomainPermissionToml {
     Allow,
     Deny,
     None,
+}
+
+impl std::fmt::Display for NetworkDomainPermissionToml {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let permission = match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+            Self::None => "none",
+        };
+        f.write_str(permission)
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -162,6 +193,14 @@ impl NetworkUnixSocketPermissionsToml {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    pub fn allow_unix_sockets(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|(_, permission)| matches!(permission, NetworkUnixSocketPermissionToml::Allow))
+            .map(|(path, _)| path.clone())
+            .collect()
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -171,7 +210,18 @@ pub enum NetworkUnixSocketPermissionToml {
     None,
 }
 
-#[derive(Serialize, Debug, Clone, Default, PartialEq, Eq)]
+impl std::fmt::Display for NetworkUnixSocketPermissionToml {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let permission = match self {
+            Self::Allow => "allow",
+            Self::None => "none",
+        };
+        f.write_str(permission)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct NetworkRequirementsToml {
     pub enabled: Option<bool>,
     pub http_port: Option<u16>,
@@ -202,60 +252,6 @@ pub struct NetworkConstraints {
     pub managed_allowed_domains_only: Option<bool>,
     pub unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
     pub allow_local_binding: Option<bool>,
-}
-
-#[derive(Deserialize)]
-struct RawNetworkRequirementsToml {
-    pub enabled: Option<bool>,
-    pub http_port: Option<u16>,
-    pub socks_port: Option<u16>,
-    pub allow_upstream_proxy: Option<bool>,
-    pub dangerously_allow_non_loopback_proxy: Option<bool>,
-    pub dangerously_allow_all_unix_sockets: Option<bool>,
-    pub domains: Option<NetworkDomainPermissionsToml>,
-    pub managed_allowed_domains_only: Option<bool>,
-    pub unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
-    pub allowed_domains: Option<Vec<String>>,
-    pub denied_domains: Option<Vec<String>>,
-    pub allow_unix_sockets: Option<Vec<String>>,
-    pub allow_local_binding: Option<bool>,
-}
-
-impl<'de> Deserialize<'de> for NetworkRequirementsToml {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let raw = RawNetworkRequirementsToml::deserialize(deserializer)?;
-        let RawNetworkRequirementsToml {
-            enabled,
-            http_port,
-            socks_port,
-            allow_upstream_proxy,
-            dangerously_allow_non_loopback_proxy,
-            dangerously_allow_all_unix_sockets,
-            domains,
-            managed_allowed_domains_only,
-            unix_sockets,
-            allowed_domains,
-            denied_domains,
-            allow_unix_sockets,
-            allow_local_binding,
-        } = raw;
-
-        Ok(Self {
-            enabled,
-            http_port,
-            socks_port,
-            allow_upstream_proxy,
-            dangerously_allow_non_loopback_proxy,
-            dangerously_allow_all_unix_sockets,
-            domains: merge_domain_permissions(allowed_domains, denied_domains, domains),
-            managed_allowed_domains_only,
-            unix_sockets: merge_unix_socket_permissions(allow_unix_sockets, unix_sockets),
-            allow_local_binding,
-        })
-    }
 }
 
 impl<'de> Deserialize<'de> for NetworkConstraints {
@@ -295,96 +291,6 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
             allow_local_binding,
         }
     }
-}
-
-impl NetworkConstraints {
-    pub fn allowed_domains(&self) -> Vec<String> {
-        self.domains
-            .as_ref()
-            .map(|domains| {
-                domains
-                    .entries
-                    .iter()
-                    .filter(|(_, permission)| {
-                        matches!(permission, NetworkDomainPermissionToml::Allow)
-                    })
-                    .map(|(pattern, _)| pattern.clone())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    pub fn denied_domains(&self) -> Vec<String> {
-        self.domains
-            .as_ref()
-            .map(|domains| {
-                domains
-                    .entries
-                    .iter()
-                    .filter(|(_, permission)| {
-                        matches!(permission, NetworkDomainPermissionToml::Deny)
-                    })
-                    .map(|(pattern, _)| pattern.clone())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    pub fn allow_unix_sockets(&self) -> Vec<String> {
-        self.unix_sockets
-            .as_ref()
-            .map(|unix_sockets| {
-                unix_sockets
-                    .entries
-                    .iter()
-                    .filter(|(_, permission)| {
-                        matches!(permission, NetworkUnixSocketPermissionToml::Allow)
-                    })
-                    .map(|(path, _)| path.clone())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-}
-
-fn merge_domain_permissions(
-    allowed_domains: Option<Vec<String>>,
-    denied_domains: Option<Vec<String>>,
-    domains: Option<NetworkDomainPermissionsToml>,
-) -> Option<NetworkDomainPermissionsToml> {
-    let mut entries = BTreeMap::new();
-
-    for pattern in allowed_domains.unwrap_or_default() {
-        entries.insert(pattern, NetworkDomainPermissionToml::Allow);
-    }
-    for pattern in denied_domains.unwrap_or_default() {
-        entries.insert(pattern, NetworkDomainPermissionToml::Deny);
-    }
-    if let Some(domains) = domains {
-        for (pattern, permission) in domains.entries {
-            entries.insert(pattern, permission);
-        }
-    }
-
-    (!entries.is_empty()).then_some(NetworkDomainPermissionsToml { entries })
-}
-
-fn merge_unix_socket_permissions(
-    allow_unix_sockets: Option<Vec<String>>,
-    unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
-) -> Option<NetworkUnixSocketPermissionsToml> {
-    let mut entries = BTreeMap::new();
-
-    for path in allow_unix_sockets.unwrap_or_default() {
-        entries.insert(path, NetworkUnixSocketPermissionToml::Allow);
-    }
-    if let Some(unix_sockets) = unix_sockets {
-        for (path, permission) in unix_sockets.entries {
-            entries.insert(path, permission);
-        }
-    }
-
-    (!entries.is_empty()).then_some(NetworkUnixSocketPermissionsToml { entries })
 }
 
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -1001,6 +907,18 @@ mod tests {
                 )),
             }
         );
+    }
+
+    #[test]
+    fn network_requirements_reject_legacy_network_list_keys() {
+        let err = from_str::<NetworkRequirementsToml>(
+            r#"
+allowed_domains = ["example.com"]
+"#,
+        )
+        .expect_err("legacy network list keys should fail");
+
+        assert!(err.to_string().contains("unknown field `allowed_domains`"));
     }
 
     #[test]
@@ -1727,6 +1645,68 @@ guardian_developer_instructions = """
         assert_eq!(sourced_network.value.allow_local_binding, Some(false));
 
         Ok(())
+    }
+
+    #[test]
+    fn network_permission_containers_project_allowed_and_denied_entries() {
+        let domains = NetworkDomainPermissionsToml {
+            entries: BTreeMap::from([
+                (
+                    "*.openai.com".to_string(),
+                    NetworkDomainPermissionToml::Allow,
+                ),
+                (
+                    "api.example.com".to_string(),
+                    NetworkDomainPermissionToml::Allow,
+                ),
+                (
+                    "blocked.example.com".to_string(),
+                    NetworkDomainPermissionToml::Deny,
+                ),
+                (
+                    "ignored.example.com".to_string(),
+                    NetworkDomainPermissionToml::None,
+                ),
+            ]),
+        };
+        let unix_sockets = NetworkUnixSocketPermissionsToml {
+            entries: BTreeMap::from([
+                (
+                    "/tmp/example.sock".to_string(),
+                    NetworkUnixSocketPermissionToml::Allow,
+                ),
+                (
+                    "/tmp/ignored.sock".to_string(),
+                    NetworkUnixSocketPermissionToml::None,
+                ),
+            ]),
+        };
+
+        assert_eq!(
+            domains.allowed_domains(),
+            Some(vec![
+                "*.openai.com".to_string(),
+                "api.example.com".to_string()
+            ])
+        );
+        assert_eq!(
+            domains.denied_domains(),
+            Some(vec!["blocked.example.com".to_string()])
+        );
+        assert_eq!(
+            NetworkDomainPermissionsToml {
+                entries: BTreeMap::from([(
+                    "api.example.com".to_string(),
+                    NetworkDomainPermissionToml::Allow,
+                )]),
+            }
+            .denied_domains(),
+            None
+        );
+        assert_eq!(
+            unix_sockets.allow_unix_sockets(),
+            vec!["/tmp/example.sock".to_string()]
+        );
     }
 
     #[test]
