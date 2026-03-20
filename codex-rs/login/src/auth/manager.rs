@@ -825,8 +825,10 @@ enum ReloadOutcome {
     ReloadedChanged,
     /// Reload was performed and the cached auth remained the same
     ReloadedNoChange,
-    /// Reload was skipped (missing or mismatched account id)
-    Skipped,
+    /// Reload was skipped because the on-disk auth is for a different account/workspace boundary.
+    SkippedDifferentIdentity,
+    /// Reload was skipped because the cached auth lacks enough identity to guard the reload.
+    SkippedUnknownIdentity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -852,6 +854,7 @@ pub struct UnauthorizedRecovery {
     manager: Arc<AuthManager>,
     step: UnauthorizedRecoveryStep,
     expected_account_id: Option<String>,
+    recovery_auth: Option<CodexAuth>,
     mode: UnauthorizedRecoveryMode,
 }
 
@@ -886,6 +889,7 @@ impl UnauthorizedRecovery {
             manager,
             step,
             expected_account_id,
+            recovery_auth: cached_auth,
             mode,
         }
     }
@@ -958,10 +962,10 @@ impl UnauthorizedRecovery {
 
         match self.step {
             UnauthorizedRecoveryStep::Reload => {
-                match self
-                    .manager
-                    .reload_if_account_id_matches(self.expected_account_id.as_deref())
-                {
+                match self.manager.reload_if_account_id_matches(
+                    self.recovery_auth.as_ref(),
+                    self.expected_account_id.as_deref(),
+                ) {
                     ReloadOutcome::ReloadedChanged => {
                         self.step = UnauthorizedRecoveryStep::RefreshToken;
                         return Ok(UnauthorizedRecoveryStepResult {
@@ -974,7 +978,8 @@ impl UnauthorizedRecovery {
                             auth_state_changed: Some(false),
                         });
                     }
-                    ReloadOutcome::Skipped => {
+                    ReloadOutcome::SkippedDifferentIdentity
+                    | ReloadOutcome::SkippedUnknownIdentity => {
                         self.step = UnauthorizedRecoveryStep::Done;
                         return Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
                             RefreshTokenFailedReason::Other,
@@ -1108,36 +1113,100 @@ impl AuthManager {
         self.set_cached_auth(new_auth)
     }
 
-    fn reload_if_account_id_matches(&self, expected_account_id: Option<&str>) -> ReloadOutcome {
+    fn reload_if_account_id_matches(
+        &self,
+        cached_auth: Option<&CodexAuth>,
+        expected_account_id: Option<&str>,
+    ) -> ReloadOutcome {
         let expected_account_id = match expected_account_id {
             Some(account_id) => account_id,
             None => {
                 tracing::info!("Skipping auth reload because no account id is available.");
-                return ReloadOutcome::Skipped;
+                return ReloadOutcome::SkippedUnknownIdentity;
             }
         };
 
         let new_auth = self.load_auth_from_storage();
         let new_account_id = new_auth.as_ref().and_then(CodexAuth::get_account_id);
 
+        if new_account_id.is_none() {
+            tracing::info!(
+                "Skipping auth reload because the on-disk auth does not contain account_id."
+            );
+            return ReloadOutcome::SkippedUnknownIdentity;
+        }
+
         if new_account_id.as_deref() != Some(expected_account_id) {
             let found_account_id = new_account_id.as_deref().unwrap_or("unknown");
             tracing::info!(
                 "Skipping auth reload due to account id mismatch (expected: {expected_account_id}, found: {found_account_id})"
             );
-            return ReloadOutcome::Skipped;
+            return ReloadOutcome::SkippedDifferentIdentity;
+        }
+
+        let cached_user_id = cached_auth.and_then(CodexAuth::get_chatgpt_user_id);
+        let new_user_id = new_auth.as_ref().and_then(CodexAuth::get_chatgpt_user_id);
+        if cached_user_id.is_some() && new_user_id.is_some() && cached_user_id != new_user_id {
+            tracing::info!("Skipping auth reload because chatgpt_user_id changed during refresh.");
+            return ReloadOutcome::SkippedDifferentIdentity;
         }
 
         tracing::info!("Reloading auth for account {expected_account_id}");
-        let cached_before_reload = self.auth_cached();
-        let auth_changed =
-            !Self::auths_equal_for_refresh(cached_before_reload.as_ref(), new_auth.as_ref());
+        let auth_changed = !Self::auths_equal_for_refresh(cached_auth, new_auth.as_ref());
         self.set_cached_auth(new_auth);
         if auth_changed {
             ReloadOutcome::ReloadedChanged
         } else {
             ReloadOutcome::ReloadedNoChange
         }
+    }
+
+    fn reload_for_refresh(&self, cached_auth: &CodexAuth) -> ReloadOutcome {
+        let new_auth = self.load_auth_from_storage();
+
+        if let Some(expected_account_id) = cached_auth.get_account_id() {
+            return self.reload_if_account_id_matches(
+                Some(cached_auth),
+                Some(expected_account_id.as_str()),
+            );
+        }
+
+        let Some(new_auth_ref) = new_auth.as_ref() else {
+            tracing::info!("Skipping auth reload because no auth is available on disk.");
+            return ReloadOutcome::SkippedUnknownIdentity;
+        };
+        if cached_auth.get_chatgpt_user_id().is_none() {
+            tracing::info!(
+                "Skipping guarded auth reload because the cached auth does not contain chatgpt_user_id."
+            );
+            return ReloadOutcome::SkippedUnknownIdentity;
+        }
+        if !Self::same_refresh_identity(cached_auth, new_auth_ref) {
+            tracing::info!(
+                "Skipping auth reload because chatgpt_user_id does not match during refresh."
+            );
+            return ReloadOutcome::SkippedDifferentIdentity;
+        }
+
+        if new_auth_ref.get_account_id().is_some() {
+            tracing::info!(
+                "Reloading auth for matching chatgpt_user_id after account_id appeared on disk."
+            );
+        }
+
+        let auth_changed = !Self::auths_equal_for_refresh(Some(cached_auth), new_auth.as_ref());
+        self.set_cached_auth(new_auth);
+        if auth_changed {
+            ReloadOutcome::ReloadedChanged
+        } else {
+            ReloadOutcome::ReloadedNoChange
+        }
+    }
+
+    fn same_refresh_identity(cached_auth: &CodexAuth, new_auth: &CodexAuth) -> bool {
+        let cached_user_id = cached_auth.get_chatgpt_user_id();
+        let new_user_id = new_auth.get_chatgpt_user_id();
+        cached_user_id.is_some() && cached_user_id == new_user_id
     }
 
     fn auths_equal_for_refresh(a: Option<&CodexAuth>, b: Option<&CodexAuth>) -> bool {
@@ -1256,13 +1325,16 @@ impl AuthManager {
             .as_ref()
             .and_then(CodexAuth::get_account_id);
 
-        match self.reload_if_account_id_matches(expected_account_id.as_deref()) {
+        match self.reload_if_account_id_matches(
+            auth_before_reload.as_ref(),
+            expected_account_id.as_deref(),
+        ) {
             ReloadOutcome::ReloadedChanged => {
                 tracing::info!("Skipping token refresh because auth changed after guarded reload.");
                 Ok(())
             }
             ReloadOutcome::ReloadedNoChange => self.refresh_token_from_authority().await,
-            ReloadOutcome::Skipped => {
+            ReloadOutcome::SkippedDifferentIdentity | ReloadOutcome::SkippedUnknownIdentity => {
                 Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
                     RefreshTokenFailedReason::Other,
                     REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE.to_string(),
@@ -1275,6 +1347,9 @@ impl AuthManager {
     /// the token. On success, reloads the auth state from disk so other components
     /// observe refreshed token. If the token refresh fails, returns the error to
     /// the caller.
+    ///
+    /// If the authority reports `refresh_token_reused`, reload local auth once
+    /// more before surfacing relogin.
     pub async fn refresh_token_from_authority(&self) -> Result<(), RefreshTokenError> {
         tracing::info!("Refreshing token");
 
@@ -1287,15 +1362,30 @@ impl AuthManager {
                 self.refresh_external_auth(ExternalAuthRefreshReason::Unauthorized)
                     .await
             }
-            CodexAuth::Chatgpt(chatgpt_auth) => {
+            CodexAuth::Chatgpt(ref chatgpt_auth) => {
                 let token_data = chatgpt_auth.current_token_data().ok_or_else(|| {
                     RefreshTokenError::Transient(std::io::Error::other(
                         "Token data is not available.",
                     ))
                 })?;
-                self.refresh_and_persist_chatgpt_token(&chatgpt_auth, token_data.refresh_token)
-                    .await?;
-                Ok(())
+                match self
+                    .refresh_and_persist_chatgpt_token(chatgpt_auth, token_data.refresh_token)
+                    .await
+                {
+                    Err(RefreshTokenError::Permanent(error))
+                        if error.reason == RefreshTokenFailedReason::Exhausted =>
+                    {
+                        match self.reload_for_refresh(&auth) {
+                            ReloadOutcome::ReloadedChanged => Ok(()),
+                            ReloadOutcome::ReloadedNoChange
+                            | ReloadOutcome::SkippedDifferentIdentity
+                            | ReloadOutcome::SkippedUnknownIdentity => {
+                                Err(RefreshTokenError::Permanent(error))
+                            }
+                        }
+                    }
+                    other => other,
+                }
             }
             CodexAuth::ApiKey(_) => Ok(()),
         }
@@ -1341,8 +1431,27 @@ impl AuthManager {
         if last_refresh >= Utc::now() - chrono::Duration::days(TOKEN_REFRESH_INTERVAL) {
             return Ok(false);
         }
-        self.refresh_and_persist_chatgpt_token(chatgpt_auth, tokens.refresh_token)
-            .await?;
+        match self.reload_for_refresh(auth) {
+            ReloadOutcome::ReloadedChanged => {
+                tracing::info!(
+                    "Skipping token refresh because auth changed after proactive reload."
+                );
+            }
+            ReloadOutcome::ReloadedNoChange => {
+                self.refresh_and_persist_chatgpt_token(chatgpt_auth, tokens.refresh_token)
+                    .await?;
+            }
+            ReloadOutcome::SkippedDifferentIdentity => {
+                tracing::info!(
+                    "Skipping proactive token refresh because on-disk auth moved to another account."
+                );
+                return Ok(false);
+            }
+            ReloadOutcome::SkippedUnknownIdentity => {
+                self.refresh_and_persist_chatgpt_token(chatgpt_auth, tokens.refresh_token)
+                    .await?;
+            }
+        }
         Ok(true)
     }
 

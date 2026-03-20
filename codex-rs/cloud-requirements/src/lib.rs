@@ -1261,7 +1261,7 @@ enabled = false
     }
 
     #[tokio::test]
-    async fn fetch_cloud_requirements_recovers_after_unauthorized_reload() {
+    async fn fetch_cloud_requirements_uses_reloaded_auth_before_unauthorized_retry() {
         let auth = managed_auth_context(
             "business",
             Some("user-12345"),
@@ -1309,11 +1309,11 @@ enabled = false
                 network: None,
             }))
         );
-        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 2);
+        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
-    async fn fetch_cloud_requirements_recovers_after_unauthorized_reload_updates_cache_identity() {
+    async fn fetch_cloud_requirements_rejects_different_user_in_same_account() {
         let auth = managed_auth_context(
             "business",
             Some("user-12345"),
@@ -1346,35 +1346,15 @@ enabled = false
             CLOUD_REQUIREMENTS_TIMEOUT,
         );
 
+        let err = service
+            .fetch()
+            .await
+            .expect_err("same-account different-user auth should be rejected");
         assert_eq!(
-            service.fetch().await,
-            Ok(Some(ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![AskForApproval::Never]),
-                allowed_sandbox_modes: None,
-                allowed_web_search_modes: None,
-                guardian_developer_instructions: None,
-                feature_requirements: None,
-                mcp_servers: None,
-                apps: None,
-                rules: None,
-                enforce_residency: None,
-                network: None,
-            }))
+            err.to_string(),
+            "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again."
         );
-
-        let path = codex_home.path().join(CLOUD_REQUIREMENTS_CACHE_FILENAME);
-        let cache_file: CloudRequirementsCacheFile =
-            serde_json::from_str(&std::fs::read_to_string(path).expect("read cache"))
-                .expect("parse cache");
-        assert_eq!(
-            cache_file.signed_payload.chatgpt_user_id,
-            Some("user-99999".to_string())
-        );
-        assert_eq!(
-            cache_file.signed_payload.account_id,
-            Some("account-12345".to_string())
-        );
-        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 2);
+        assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
