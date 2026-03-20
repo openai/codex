@@ -24,3 +24,29 @@
    build_dir().join("gn_out").join("obj")
  }
  
+@@ -794,22 +810,23 @@
+ }
+ 
+ fn print_link_flags() {
++  let target = env::var("TARGET").unwrap();
+   println!("cargo:rustc-link-lib=static=rusty_v8");
+   let should_dyn_link_libcxx = env::var("CARGO_FEATURE_USE_CUSTOM_LIBCXX")
+     .is_err()
++    || (target.contains("apple") && env::var("RUSTY_V8_ARCHIVE").is_ok())
+     || env::var("GN_ARGS").is_ok_and(|gn_args| {
+       gn_args
+         .split_whitespace()
+         .any(|ba| ba == "use_custom_libcxx=false")
+     });
+ 
+   if should_dyn_link_libcxx {
+     // Based on https://github.com/alexcrichton/cc-rs/blob/fba7feded71ee4f63cfe885673ead6d7b4f2f454/src/lib.rs#L2462
+     if let Ok(stdlib) = env::var("CXXSTDLIB") {
+       if !stdlib.is_empty() {
+         println!("cargo:rustc-link-lib=dylib={stdlib}");
+       }
+     } else {
+-      let target = env::var("TARGET").unwrap();
+       if target.contains("msvc") {
+         // nothing to link to
+       } else if target.contains("apple")
