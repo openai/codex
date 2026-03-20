@@ -1002,9 +1002,10 @@ mod tests {
 
     #[tokio::test]
     async fn http_connect_accept_blocks_in_limited_mode() {
-        let policy = NetworkProxySettings {
-            allowed_domains: vec!["example.com".to_string()],
-            ..Default::default()
+        let policy = {
+            let mut policy = NetworkProxySettings::default();
+            policy.set_allowed_domains(vec!["example.com".to_string()]);
+            policy
         };
         let state = Arc::new(network_proxy_state_for_policy(policy));
         state.set_network_mode(NetworkMode::Limited).await.unwrap();
@@ -1027,9 +1028,10 @@ mod tests {
 
     #[tokio::test]
     async fn http_connect_accept_allows_allowlisted_host_in_full_mode() {
-        let policy = NetworkProxySettings {
-            allowed_domains: vec!["example.com".to_string()],
-            ..Default::default()
+        let policy = {
+            let mut policy = NetworkProxySettings::default();
+            policy.set_allowed_domains(vec!["example.com".to_string()]);
+            policy
         };
         let state = Arc::new(network_proxy_state_for_policy(policy));
 
@@ -1062,10 +1064,11 @@ mod tests {
             let _ = timeout(Duration::from_secs(1), stream.read(&mut buf)).await;
         });
 
-        let state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["127.0.0.1".to_string()],
-            allow_local_binding: true,
-            ..NetworkProxySettings::default()
+        let state = Arc::new(network_proxy_state_for_policy({
+            let mut network = NetworkProxySettings::default();
+            network.set_allowed_domains(vec!["127.0.0.1".to_string()]);
+            network.allow_local_binding = true;
+            network
         }));
         let listener =
             StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("proxy listener should bind");
@@ -1161,9 +1164,10 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test(flavor = "current_thread")]
     async fn http_plain_proxy_attempts_allowed_unix_socket_proxy() {
-        let state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
-            allow_unix_sockets: vec!["/tmp/test.sock".to_string()],
-            ..NetworkProxySettings::default()
+        let state = Arc::new(network_proxy_state_for_policy({
+            let mut network = NetworkProxySettings::default();
+            network.set_allow_unix_sockets(vec!["/tmp/test.sock".to_string()]);
+            network
         }));
 
         let mut req = Request::builder()
@@ -1180,10 +1184,11 @@ mod tests {
 
     #[tokio::test]
     async fn http_connect_accept_denies_denylisted_host() {
-        let policy = NetworkProxySettings {
-            allowed_domains: vec!["**.openai.com".to_string()],
-            denied_domains: vec!["api.openai.com".to_string()],
-            ..Default::default()
+        let policy = {
+            let mut policy = NetworkProxySettings::default();
+            policy.set_allowed_domains(vec!["**.openai.com".to_string()]);
+            policy.set_denied_domains(vec!["api.openai.com".to_string()]);
+            policy
         };
         let state = Arc::new(network_proxy_state_for_policy(policy));
 

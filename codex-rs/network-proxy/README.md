@@ -40,9 +40,13 @@ mitm = false
 # Hosts must match the allowlist (unless denied).
 # Use exact hosts or scoped wildcards like `*.openai.com` or `**.openai.com`.
 # The global `*` wildcard is rejected.
-# If `allowed_domains` is empty, the proxy blocks requests until an allowlist is configured.
-allowed_domains = ["*.openai.com", "localhost", "127.0.0.1", "::1"]
-denied_domains = ["evil.example"]
+# If no domain entries are marked `allow`, the proxy blocks requests until an allowlist is configured.
+[domains]
+"*.openai.com" = "allow"
+"localhost" = "allow"
+"127.0.0.1" = "allow"
+"::1" = "allow"
+"evil.example" = "deny"
 
 # If false, local/private networking is rejected. Explicit allowlisting of local IP literals
 # (or `localhost`) is required to permit them.
@@ -50,7 +54,8 @@ denied_domains = ["evil.example"]
 allow_local_binding = false
 
 # macOS-only: allows proxying to a unix socket when request includes `x-unix-socket: /path`.
-allow_unix_sockets = ["/tmp/example.sock"]
+[unix_sockets]
+"/tmp/example.sock" = "allow"
 # DANGEROUS (macOS-only): bypasses unix socket allowlisting and permits any
 # absolute socket path from `x-unix-socket`.
 dangerously_allow_all_unix_sockets = false
@@ -123,7 +128,7 @@ let handle = proxy.run().await?;
 handle.shutdown().await?;
 ```
 
-When unix socket proxying is enabled (`allow_unix_sockets` or
+When unix socket proxying is enabled (`unix_sockets` or
 `dangerously_allow_all_unix_sockets`), proxy bind overrides are still clamped to loopback to
 avoid turning the proxy into a remote bridge to local daemons.
 
@@ -188,9 +193,9 @@ Audit events intentionally avoid logging full URL/path/query data.
 This section documents the protections implemented by `codex-network-proxy`, and the boundaries of
 what it can reasonably guarantee.
 
-- Allowlist-first policy: if `allowed_domains` is empty, requests are blocked until an allowlist is configured.
+- Allowlist-first policy: if `domains` has no `allow` entries, requests are blocked until an allowlist is configured.
 - Domain patterns: exact hosts plus scoped wildcards (`*.example.com`, `**.example.com`) are supported; the global `*` wildcard is rejected.
-- Deny wins: entries in `denied_domains` always override the allowlist.
+- Deny wins: `domains` entries marked `deny` always override the allowlist.
 - Local/private network protection: when `allow_local_binding = false`, the proxy blocks loopback
   and common private/link-local ranges. Explicit allowlisting of local IP literals (or `localhost`)
   is required to permit them; hostnames that resolve to local/private IPs are still blocked even if

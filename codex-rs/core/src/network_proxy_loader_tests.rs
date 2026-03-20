@@ -6,13 +6,16 @@ use codex_execpolicy::Policy;
 use pretty_assertions::assert_eq;
 
 #[test]
-fn higher_precedence_profile_network_beats_lower_profile_network() {
+fn higher_precedence_profile_network_overlays_domain_entries() {
     let lower_network: toml::Value = toml::from_str(
         r#"
 default_permissions = "workspace"
 
 [permissions.workspace.network]
-allowed_domains = ["lower.example.com"]
+
+[permissions.workspace.network.domains]
+"lower.example.com" = "allow"
+"blocked.example.com" = "deny"
 "#,
     )
     .expect("lower layer should parse");
@@ -21,7 +24,9 @@ allowed_domains = ["lower.example.com"]
 default_permissions = "workspace"
 
 [permissions.workspace.network]
-allowed_domains = ["higher.example.com"]
+
+[permissions.workspace.network.domains]
+"higher.example.com" = "allow"
 "#,
     )
     .expect("higher layer should parse");
@@ -38,14 +43,76 @@ allowed_domains = ["higher.example.com"]
     )
     .expect("higher layer should apply");
 
-    assert_eq!(config.network.allowed_domains, vec!["higher.example.com"]);
+    assert_eq!(
+        config.network.allowed_domains(),
+        Some(vec![
+            "lower.example.com".to_string(),
+            "higher.example.com".to_string()
+        ])
+    );
+    assert_eq!(
+        config.network.denied_domains(),
+        Some(vec!["blocked.example.com".to_string()])
+    );
+}
+
+#[test]
+fn higher_precedence_profile_network_overrides_matching_domain_entries() {
+    let lower_network: toml::Value = toml::from_str(
+        r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network]
+
+[permissions.workspace.network.domains]
+"shared.example.com" = "deny"
+"other.example.com" = "allow"
+"#,
+    )
+    .expect("lower layer should parse");
+    let higher_network: toml::Value = toml::from_str(
+        r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network]
+
+[permissions.workspace.network.domains]
+"shared.example.com" = "allow"
+"#,
+    )
+    .expect("higher layer should parse");
+
+    let mut config = NetworkProxyConfig::default();
+    apply_network_tables(
+        &mut config,
+        network_tables_from_toml(&lower_network).expect("lower layer should deserialize"),
+    )
+    .expect("lower layer should apply");
+    apply_network_tables(
+        &mut config,
+        network_tables_from_toml(&higher_network).expect("higher layer should deserialize"),
+    )
+    .expect("higher layer should apply");
+
+    assert_eq!(
+        config.network.allowed_domains(),
+        Some(vec![
+            "other.example.com".to_string(),
+            "shared.example.com".to_string()
+        ])
+    );
+    assert_eq!(config.network.denied_domains(), None);
 }
 
 #[test]
 fn execpolicy_network_rules_overlay_network_lists() {
     let mut config = NetworkProxyConfig::default();
-    config.network.allowed_domains = vec!["config.example.com".to_string()];
-    config.network.denied_domains = vec!["blocked.example.com".to_string()];
+    config
+        .network
+        .set_allowed_domains(vec!["config.example.com".to_string()]);
+    config
+        .network
+        .set_denied_domains(vec!["blocked.example.com".to_string()]);
 
     let mut exec_policy = Policy::empty();
     exec_policy
@@ -68,15 +135,15 @@ fn execpolicy_network_rules_overlay_network_lists() {
     apply_exec_policy_network_rules(&mut config, &exec_policy);
 
     assert_eq!(
-        config.network.allowed_domains,
-        vec![
+        config.network.allowed_domains(),
+        Some(vec![
             "config.example.com".to_string(),
             "blocked.example.com".to_string()
-        ]
+        ])
     );
     assert_eq!(
-        config.network.denied_domains,
-        vec!["api.example.com".to_string()]
+        config.network.denied_domains(),
+        Some(vec!["api.example.com".to_string()])
     );
 }
 
@@ -101,4 +168,128 @@ dangerously_allow_all_unix_sockets = true
     apply_network_constraints(network, &mut constraints);
 
     assert_eq!(constraints.dangerously_allow_all_unix_sockets, Some(true));
+}
+
+#[test]
+fn apply_network_constraints_skips_empty_domain_sides() {
+    let config: toml::Value = toml::from_str(
+        r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network]
+
+[permissions.workspace.network.domains]
+"managed.example.com" = "allow"
+"ignored.example.com" = "none"
+"#,
+    )
+    .expect("permissions profile should parse");
+    let network = selected_network_from_tables(
+        network_tables_from_toml(&config).expect("permissions profile should deserialize"),
+    )
+    .expect("permissions profile should select a network table")
+    .expect("network table should be present");
+
+    let mut constraints = NetworkProxyConstraints::default();
+    apply_network_constraints(network, &mut constraints);
+
+    assert_eq!(
+        constraints.allowed_domains,
+        Some(vec!["managed.example.com".to_string()])
+    );
+    assert_eq!(constraints.denied_domains, None);
+}
+
+#[test]
+fn apply_network_constraints_overlay_domain_entries() {
+    let lower_network: toml::Value = toml::from_str(
+        r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network]
+
+[permissions.workspace.network.domains]
+"blocked.example.com" = "deny"
+"#,
+    )
+    .expect("lower layer should parse");
+    let higher_network: toml::Value = toml::from_str(
+        r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network]
+
+[permissions.workspace.network.domains]
+"api.example.com" = "allow"
+"#,
+    )
+    .expect("higher layer should parse");
+
+    let lower_network = selected_network_from_tables(
+        network_tables_from_toml(&lower_network).expect("lower layer should deserialize"),
+    )
+    .expect("lower layer should select a network table")
+    .expect("lower network table should be present");
+    let higher_network = selected_network_from_tables(
+        network_tables_from_toml(&higher_network).expect("higher layer should deserialize"),
+    )
+    .expect("higher layer should select a network table")
+    .expect("higher network table should be present");
+
+    let mut constraints = NetworkProxyConstraints::default();
+    apply_network_constraints(lower_network, &mut constraints);
+    apply_network_constraints(higher_network, &mut constraints);
+
+    assert_eq!(
+        constraints.allowed_domains,
+        Some(vec!["api.example.com".to_string()])
+    );
+    assert_eq!(
+        constraints.denied_domains,
+        Some(vec!["blocked.example.com".to_string()])
+    );
+}
+
+#[test]
+fn apply_network_constraints_none_clears_matching_domain_entry() {
+    let lower_network: toml::Value = toml::from_str(
+        r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network]
+
+[permissions.workspace.network.domains]
+"blocked.example.com" = "deny"
+"#,
+    )
+    .expect("lower layer should parse");
+    let higher_network: toml::Value = toml::from_str(
+        r#"
+default_permissions = "workspace"
+
+[permissions.workspace.network]
+
+[permissions.workspace.network.domains]
+"blocked.example.com" = "none"
+"#,
+    )
+    .expect("higher layer should parse");
+
+    let lower_network = selected_network_from_tables(
+        network_tables_from_toml(&lower_network).expect("lower layer should deserialize"),
+    )
+    .expect("lower layer should select a network table")
+    .expect("lower network table should be present");
+    let higher_network = selected_network_from_tables(
+        network_tables_from_toml(&higher_network).expect("higher layer should deserialize"),
+    )
+    .expect("higher layer should select a network table")
+    .expect("higher network table should be present");
+
+    let mut constraints = NetworkProxyConstraints::default();
+    apply_network_constraints(lower_network, &mut constraints);
+    apply_network_constraints(higher_network, &mut constraints);
+
+    assert_eq!(constraints.allowed_domains, None);
+    assert_eq!(constraints.denied_domains, None);
 }

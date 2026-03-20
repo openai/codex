@@ -9014,6 +9014,14 @@
         ],
         "type": "string"
       },
+      "NetworkDomainPermission": {
+        "enum": [
+          "allow",
+          "deny",
+          "none"
+        ],
+        "type": "string"
+      },
       "NetworkRequirements": {
         "properties": {
           "allowLocalBinding": {
@@ -9022,27 +9030,9 @@
               "null"
             ]
           },
-          "allowUnixSockets": {
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
           "allowUpstreamProxy": {
             "type": [
               "boolean",
-              "null"
-            ]
-          },
-          "allowedDomains": {
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
               "null"
             ]
           },
@@ -9058,12 +9048,12 @@
               "null"
             ]
           },
-          "deniedDomains": {
-            "items": {
-              "type": "string"
+          "domains": {
+            "additionalProperties": {
+              "$ref": "#/definitions/v2/NetworkDomainPermission"
             },
             "type": [
-              "array",
+              "object",
               "null"
             ]
           },
@@ -9088,9 +9078,25 @@
               "integer",
               "null"
             ]
+          },
+          "unixSockets": {
+            "additionalProperties": {
+              "$ref": "#/definitions/v2/NetworkUnixSocketPermission"
+            },
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "type": "object"
+      },
+      "NetworkUnixSocketPermission": {
+        "enum": [
+          "allow",
+          "none"
+        ],
+        "type": "string"
       },
       "OverriddenMetadata": {
         "properties": {
