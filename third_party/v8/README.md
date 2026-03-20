@@ -32,5 +32,11 @@ It only builds musl release pairs from source:
 - `//third_party/v8:rusty_v8_release_pair_x86_64_unknown_linux_musl`
 - `//third_party/v8:rusty_v8_release_pair_aarch64_unknown_linux_musl`
 
+Cargo musl builds use `RUSTY_V8_ARCHIVE` plus a downloaded
+`RUSTY_V8_SRC_BINDING_PATH` to point at those `openai/codex` release assets
+directly. We do not use `RUSTY_V8_MIRROR` for musl because the upstream `v8`
+crate hardcodes a `v<crate_version>` tag layout, while our musl artifacts are
+published under `rusty-v8-v<crate_version>`.
+
 Do not mix artifacts across crate versions. The archive and binding must match
 the exact resolved `v8` crate version in `codex-rs/Cargo.lock`.

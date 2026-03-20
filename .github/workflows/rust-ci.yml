@@ -419,6 +419,24 @@ jobs:
           echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
           echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
 
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        name: Configure musl rusty_v8 artifact overrides
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(python3 .github/scripts/rusty_v8_bazel.py resolved-v8-crate-version)"
+          release_tag="rusty-v8-v${version}"
+          base_url="https://github.com/openai/codex/releases/download/${release_tag}"
+          archive="https://github.com/openai/codex/releases/download/rusty-v8-v${version}/librusty_v8_release_${TARGET}.a.gz"
+          binding_dir="${RUNNER_TEMP}/rusty_v8"
+          binding_path="${binding_dir}/src_binding_release_${TARGET}.rs"
+          mkdir -p "${binding_dir}"
+          curl -fsSL "${base_url}/src_binding_release_${TARGET}.rs" -o "${binding_path}"
+          echo "RUSTY_V8_ARCHIVE=${archive}" >> "$GITHUB_ENV"
+          echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
+
       - name: Install cargo-chef
         if: ${{ matrix.profile == 'release' }}
         uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
