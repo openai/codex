@@ -2129,6 +2129,7 @@ text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
         "SuppressedError",
         "Symbol",
         "SyntaxError",
+        "Temporal",
         "TypeError",
         "URIError",
         "Uint16Array",
