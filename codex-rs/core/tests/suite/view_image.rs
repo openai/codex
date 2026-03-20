@@ -3,6 +3,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_core::CodexAuth;
+use codex_core::config::Constrained;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
 use codex_protocol::config_types::ReasoningSummary;
@@ -14,9 +15,15 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
@@ -1146,7 +1153,10 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
         .function_call_output_content_and_success(call_id)
         .and_then(|(content, _)| content)
         .expect("output text present");
-    let expected_message = format!("image path `{}` is not a file", abs_path.display());
+    let expected_message = format!(
+        r#"unable to read image file `{path}`: ProcessFailed {{ exit_code: 1, message: "error: `{path}` is not a regular file" }}"#,
+        path = abs_path.display()
+    );
     assert_eq!(output_text, expected_message);
 
     assert!(
@@ -1301,7 +1311,10 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
         .function_call_output_content_and_success(call_id)
         .and_then(|(content, _)| content)
         .expect("output text present");
-    let expected_prefix = format!("unable to locate image at `{}`:", abs_path.display());
+    let expected_prefix = format!(
+        "unable to read image file `{path}`:",
+        path = abs_path.display()
+    );
     assert!(
         output_text.starts_with(&expected_prefix),
         "expected error to start with `{expected_prefix}` but got `{output_text}`"
@@ -1310,6 +1323,109 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
     assert!(
         find_image_message(&body_with_tool_output).is_none(),
         "missing file should not produce an input_image message"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn view_image_tool_respects_filesystem_sandbox() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let sandbox_policy_for_config = SandboxPolicy::ReadOnly {
+        access: ReadOnlyAccess::Restricted {
+            include_platform_defaults: true,
+            readable_roots: Vec::new(),
+        },
+        network_access: false,
+    };
+    let mut builder = test_codex().with_config({
+        let sandbox_policy_for_config = sandbox_policy_for_config.clone();
+        move |config| {
+            config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
+            config.permissions.file_system_sandbox_policy =
+                FileSystemSandboxPolicy::restricted(vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::Minimal,
+                        },
+                        access: FileSystemAccessMode::Read,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                        },
+                        access: FileSystemAccessMode::Read,
+                    },
+                ]);
+        }
+    });
+    let TestCodex {
+        codex,
+        config,
+        cwd,
+        session_configured,
+        ..
+    } = builder.build(&server).await?;
+
+    let outside_dir = tempfile::tempdir()?;
+    let abs_path = outside_dir.path().join("blocked.png");
+    let image = ImageBuffer::from_pixel(256, 128, Rgba([10u8, 20, 30, 255]));
+    image.save(&abs_path)?;
+
+    let call_id = "view-image-sandbox-denied";
+    let arguments = serde_json::json!({ "path": abs_path }).to_string();
+
+    let first_response = sse(vec![
+        ev_response_created("resp-1"),
+        ev_function_call(call_id, "view_image", &arguments),
+        ev_completed("resp-1"),
+    ]);
+    responses::mount_sse_once(&server, first_response).await;
+
+    let second_response = sse(vec![
+        ev_assistant_message("msg-1", "done"),
+        ev_completed("resp-2"),
+    ]);
+    let mock = responses::mount_sse_once(&server, second_response).await;
+
+    let session_model = session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "please attach the outside image".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: cwd.path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let request = mock.single_request();
+    assert!(
+        request.inputs_of_type("input_image").is_empty(),
+        "sandbox-denied image should not produce an input_image message"
+    );
+    let output_text = request
+        .function_call_output_content_and_success(call_id)
+        .and_then(|(content, _)| content)
+        .expect("output text present");
+    let expected_prefix = format!("unable to read image file `{}`:", abs_path.display());
+    assert!(
+        output_text.starts_with(&expected_prefix),
+        "expected sandbox denial prefix `{expected_prefix}` but got `{output_text}`"
     );
 
     Ok(())
