@@ -10,6 +10,9 @@ use crate::config_loader::Sourced;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecToolCallOutput;
 use crate::function_tool::FunctionCallError;
+use crate::mcp::ToolPluginProvenance;
+use crate::mcp_connection_manager::SharedMcpBackendAcquireMode;
+use crate::mcp_connection_manager::SharedMcpBackendPool;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::model_info;
 use crate::shell::default_user_shell;
@@ -2466,6 +2469,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             ),
         )),
         mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
+        shared_mcp_backend_pool: None,
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
         ),
@@ -3173,6 +3177,17 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     Arc<TurnContext>,
     async_channel::Receiver<Event>,
 ) {
+    make_session_and_context_with_dynamic_tools_and_rx_and_pool(dynamic_tools, false).await
+}
+
+async fn make_session_and_context_with_dynamic_tools_and_rx_and_pool(
+    dynamic_tools: Vec<DynamicToolSpec>,
+    pooled: bool,
+) -> (
+    Arc<Session>,
+    Arc<TurnContext>,
+    async_channel::Receiver<Event>,
+) {
     let (tx_event, rx_event) = async_channel::unbounded();
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let config = build_test_config(codex_home.path()).await;
@@ -3256,15 +3271,44 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             .await
             .expect("create environment"),
     );
+    let shared_mcp_backend_pool = pooled.then(|| Arc::new(SharedMcpBackendPool::new()));
+    let sandbox_state = SandboxState {
+        sandbox_policy: session_configuration.sandbox_policy.get().clone(),
+        codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+        sandbox_cwd: session_configuration.cwd.clone(),
+        use_legacy_landlock: config.features.use_legacy_landlock(),
+    };
+    let (mcp_connection_manager, mcp_startup_cancellation_token) =
+        match shared_mcp_backend_pool.as_ref() {
+            Some(shared_mcp_backend_pool) => {
+                McpConnectionManager::new_with_pool(
+                    shared_mcp_backend_pool.as_ref(),
+                    SharedMcpBackendAcquireMode::ReuseExisting,
+                    &HashMap::new(),
+                    config.mcp_oauth_credentials_store_mode,
+                    HashMap::new(),
+                    &config.permissions.approval_policy,
+                    tx_event.clone(),
+                    sandbox_state,
+                    config.codex_home.clone(),
+                    codex_apps_tools_cache_key(Some(&auth_manager.auth().await.expect("auth"))),
+                    ToolPluginProvenance::default(),
+                )
+                .await
+            }
+            None => (
+                McpConnectionManager::new_mcp_connection_manager_for_tests(
+                    &config.permissions.approval_policy,
+                ),
+                CancellationToken::new(),
+            ),
+        };
 
     let file_watcher = Arc::new(FileWatcher::noop());
     let services = SessionServices {
-        mcp_connection_manager: Arc::new(RwLock::new(
-            McpConnectionManager::new_mcp_connection_manager_for_tests(
-                &config.permissions.approval_policy,
-            ),
-        )),
-        mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
+        mcp_connection_manager: Arc::new(RwLock::new(mcp_connection_manager)),
+        mcp_startup_cancellation_token: Mutex::new(mcp_startup_cancellation_token),
+        shared_mcp_backend_pool,
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
         ),
@@ -3365,6 +3409,14 @@ pub(crate) async fn make_session_and_context_with_rx() -> (
     make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await
 }
 
+async fn make_pooled_session_and_context_with_rx() -> (
+    Arc<Session>,
+    Arc<TurnContext>,
+    async_channel::Receiver<Event>,
+) {
+    make_session_and_context_with_dynamic_tools_and_rx_and_pool(Vec::new(), true).await
+}
+
 #[tokio::test]
 async fn refresh_mcp_servers_is_deferred_until_next_turn() {
     let (session, turn_context) = make_session_and_context().await;
@@ -3403,6 +3455,29 @@ async fn refresh_mcp_servers_is_deferred_until_next_turn() {
             .await
             .is_none()
     );
+    let new_token = session.mcp_startup_cancellation_token().await;
+    assert!(!new_token.is_cancelled());
+}
+
+#[tokio::test]
+async fn pooled_new_turn_keeps_local_mcp_startup_token_when_sandbox_state_changes() {
+    let (session, _turn_context, _rx) = make_pooled_session_and_context_with_rx().await;
+    let old_token = session.mcp_startup_cancellation_token().await;
+    assert!(!old_token.is_cancelled());
+
+    let new_cwd = session.get_config().await.cwd.join("other-worktree");
+    session
+        .new_turn_with_sub_id(
+            "sandbox-change".to_string(),
+            SessionSettingsUpdate {
+                cwd: Some(new_cwd),
+                ..SessionSettingsUpdate::default()
+            },
+        )
+        .await
+        .expect("new turn");
+
+    assert!(!old_token.is_cancelled());
     let new_token = session.mcp_startup_cancellation_token().await;
     assert!(!new_token.is_cancelled());
 }

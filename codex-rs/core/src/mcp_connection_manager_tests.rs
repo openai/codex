@@ -1,7 +1,9 @@
 use super::*;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::McpAuthStatus;
+use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -58,6 +60,98 @@ fn create_codex_apps_tools_cache_context(
             is_workspace_account: false,
         },
     }
+}
+
+fn test_codex_apps_tools_cache_key() -> CodexAppsToolsCacheKey {
+    CodexAppsToolsCacheKey {
+        account_id: None,
+        chatgpt_user_id: None,
+        is_workspace_account: false,
+    }
+}
+
+fn stdio_server_config(command: &str) -> McpServerConfig {
+    McpServerConfig {
+        transport: McpServerTransportConfig::Stdio {
+            command: command.to_string(),
+            args: Vec::new(),
+            env: None,
+            env_vars: Vec::new(),
+            cwd: None,
+        },
+        enabled: true,
+        required: false,
+        disabled_reason: None,
+        startup_timeout_sec: Some(Duration::from_secs(1)),
+        tool_timeout_sec: Some(Duration::from_secs(1)),
+        enabled_tools: None,
+        disabled_tools: None,
+        scopes: None,
+        oauth_resource: None,
+    }
+}
+
+fn http_server_config(url: &str) -> McpServerConfig {
+    McpServerConfig {
+        transport: McpServerTransportConfig::StreamableHttp {
+            url: url.to_string(),
+            bearer_token_env_var: None,
+            http_headers: None,
+            env_http_headers: None,
+        },
+        enabled: true,
+        required: false,
+        disabled_reason: None,
+        startup_timeout_sec: Some(Duration::from_secs(1)),
+        tool_timeout_sec: Some(Duration::from_secs(1)),
+        enabled_tools: None,
+        disabled_tools: None,
+        scopes: None,
+        oauth_resource: None,
+    }
+}
+
+fn test_sandbox_state(cwd: PathBuf) -> SandboxState {
+    SandboxState {
+        sandbox_policy: SandboxPolicy::DangerFullAccess,
+        codex_linux_sandbox_exe: None,
+        sandbox_cwd: cwd,
+        use_legacy_landlock: false,
+    }
+}
+
+fn pooled_cache_key_for_tests(
+    mcp_servers: &HashMap<String, McpServerConfig>,
+    store_mode: OAuthCredentialsStoreMode,
+    sandbox_state: &SandboxState,
+) -> SharedMcpBackendCacheKey {
+    let (pooled_servers, _) = split_poolable_mcp_servers(mcp_servers);
+    SharedMcpBackendCacheKey::new(&pooled_servers, store_mode, sandbox_state)
+}
+
+async fn new_pooled_manager_for_tests(
+    pool: &SharedMcpBackendPool,
+    acquire_mode: SharedMcpBackendAcquireMode,
+    mcp_servers: &HashMap<String, McpServerConfig>,
+    sandbox_state: SandboxState,
+) -> McpConnectionManager {
+    let approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    let (tx_event, _rx_event) = async_channel::unbounded();
+    let (manager, _cancel_token) = McpConnectionManager::new_with_pool(
+        pool,
+        acquire_mode,
+        mcp_servers,
+        OAuthCredentialsStoreMode::Auto,
+        HashMap::new(),
+        &approval_policy,
+        tx_event,
+        sandbox_state,
+        PathBuf::from("/tmp"),
+        test_codex_apps_tools_cache_key(),
+        ToolPluginProvenance::default(),
+    )
+    .await;
+    manager
 }
 
 #[test]
@@ -516,6 +610,246 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
         .expect("tool from startup cache");
     assert_eq!(tool.server_name, CODEX_APPS_MCP_SERVER_NAME);
     assert_eq!(tool.tool_name, "calendar_create_event");
+}
+
+#[tokio::test]
+async fn parse_tool_name_searches_shared_backend() {
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let shared_tool = create_test_tool("shared_stdio", "tool_a");
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+
+    let mut shared_backend = SharedMcpBackend::new_uninitialized();
+    shared_backend.clients.insert(
+        "shared_stdio".to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            startup_snapshot: Some(vec![shared_tool]),
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+        },
+    );
+
+    let manager = McpConnectionManager::from_parts(
+        Arc::new(SharedMcpBackend::new_uninitialized()),
+        Some(Arc::new(shared_backend)),
+        SessionMcpHandle::new(approval_policy.value()),
+        None,
+    );
+
+    assert_eq!(
+        manager.parse_tool_name("mcp__shared_stdio__tool_a").await,
+        Some(("shared_stdio".to_string(), "tool_a".to_string()))
+    );
+}
+
+#[test]
+fn shared_mcp_backend_cache_key_is_stable_for_equivalent_stdio_configs() {
+    let mut left_servers = HashMap::new();
+    left_servers.insert("beta".to_string(), stdio_server_config("missing-beta"));
+    left_servers.insert("alpha".to_string(), stdio_server_config("missing-alpha"));
+
+    let mut right_servers = HashMap::new();
+    right_servers.insert("alpha".to_string(), stdio_server_config("missing-alpha"));
+    right_servers.insert("beta".to_string(), stdio_server_config("missing-beta"));
+
+    let sandbox_state = test_sandbox_state(PathBuf::from("/tmp/shared"));
+
+    assert_eq!(
+        pooled_cache_key_for_tests(
+            &left_servers,
+            OAuthCredentialsStoreMode::Auto,
+            &sandbox_state,
+        ),
+        pooled_cache_key_for_tests(
+            &right_servers,
+            OAuthCredentialsStoreMode::Auto,
+            &sandbox_state,
+        ),
+    );
+}
+
+#[test]
+fn shared_mcp_backend_cache_key_ignores_http_servers() {
+    let sandbox_state = test_sandbox_state(PathBuf::from("/tmp/shared"));
+
+    let mut left_servers = HashMap::new();
+    left_servers.insert("stdio".to_string(), stdio_server_config("missing-stdio"));
+    left_servers.insert(
+        "http".to_string(),
+        http_server_config("http://127.0.0.1:9/left"),
+    );
+
+    let mut right_servers = HashMap::new();
+    right_servers.insert("stdio".to_string(), stdio_server_config("missing-stdio"));
+    right_servers.insert(
+        "http".to_string(),
+        http_server_config("http://127.0.0.1:9/right"),
+    );
+
+    assert_eq!(
+        pooled_cache_key_for_tests(
+            &left_servers,
+            OAuthCredentialsStoreMode::Auto,
+            &sandbox_state,
+        ),
+        pooled_cache_key_for_tests(
+            &right_servers,
+            OAuthCredentialsStoreMode::Auto,
+            &sandbox_state,
+        ),
+    );
+}
+
+#[test]
+fn split_poolable_mcp_servers_keeps_http_servers_local() {
+    let mut servers = HashMap::new();
+    servers.insert("stdio".to_string(), stdio_server_config("missing-stdio"));
+    servers.insert(
+        "http".to_string(),
+        http_server_config("http://127.0.0.1:9/http"),
+    );
+
+    let (pooled_servers, local_servers) = split_poolable_mcp_servers(&servers);
+
+    assert_eq!(pooled_servers.len(), 1);
+    assert!(pooled_servers.contains_key("stdio"));
+    assert_eq!(local_servers.len(), 1);
+    assert!(local_servers.contains_key("http"));
+}
+
+#[test]
+fn shared_mcp_backend_cache_key_separates_sandbox_state() {
+    let mut servers = HashMap::new();
+    servers.insert("stdio".to_string(), stdio_server_config("missing-stdio"));
+
+    assert_ne!(
+        pooled_cache_key_for_tests(
+            &servers,
+            OAuthCredentialsStoreMode::Auto,
+            &test_sandbox_state(PathBuf::from("/tmp/left")),
+        ),
+        pooled_cache_key_for_tests(
+            &servers,
+            OAuthCredentialsStoreMode::Auto,
+            &test_sandbox_state(PathBuf::from("/tmp/right")),
+        ),
+    );
+}
+
+#[tokio::test]
+async fn shared_mcp_backend_pool_reuses_backend_for_same_stdio_config() {
+    let pool = SharedMcpBackendPool::new();
+    let sandbox_state = test_sandbox_state(PathBuf::from("/tmp/shared"));
+    let mut servers = HashMap::new();
+    servers.insert("stdio".to_string(), stdio_server_config("missing-stdio"));
+
+    let manager_1 = new_pooled_manager_for_tests(
+        &pool,
+        SharedMcpBackendAcquireMode::ReuseExisting,
+        &servers,
+        sandbox_state.clone(),
+    )
+    .await;
+    let manager_2 = new_pooled_manager_for_tests(
+        &pool,
+        SharedMcpBackendAcquireMode::ReuseExisting,
+        &servers,
+        sandbox_state,
+    )
+    .await;
+
+    assert!(Arc::ptr_eq(
+        manager_1
+            .shared_backend
+            .as_ref()
+            .expect("stdio backend should be pooled"),
+        manager_2
+            .shared_backend
+            .as_ref()
+            .expect("stdio backend should be pooled"),
+    ));
+}
+
+#[tokio::test]
+async fn shared_mcp_backend_pool_separates_backends_for_different_sandbox_states() {
+    let pool = SharedMcpBackendPool::new();
+    let mut servers = HashMap::new();
+    servers.insert("stdio".to_string(), stdio_server_config("missing-stdio"));
+
+    let manager_1 = new_pooled_manager_for_tests(
+        &pool,
+        SharedMcpBackendAcquireMode::ReuseExisting,
+        &servers,
+        test_sandbox_state(PathBuf::from("/tmp/left")),
+    )
+    .await;
+    let manager_2 = new_pooled_manager_for_tests(
+        &pool,
+        SharedMcpBackendAcquireMode::ReuseExisting,
+        &servers,
+        test_sandbox_state(PathBuf::from("/tmp/right")),
+    )
+    .await;
+
+    assert!(!Arc::ptr_eq(
+        manager_1
+            .shared_backend
+            .as_ref()
+            .expect("stdio backend should be pooled"),
+        manager_2
+            .shared_backend
+            .as_ref()
+            .expect("stdio backend should be pooled"),
+    ));
+}
+
+#[tokio::test]
+async fn shared_mcp_backend_pool_force_create_replaces_pool_entry_for_same_key() {
+    let pool = SharedMcpBackendPool::new();
+    let mut servers = HashMap::new();
+    servers.insert("stdio".to_string(), stdio_server_config("missing-stdio"));
+    let sandbox_state = test_sandbox_state(PathBuf::from("/tmp/shared"));
+
+    let manager_1 = new_pooled_manager_for_tests(
+        &pool,
+        SharedMcpBackendAcquireMode::ReuseExisting,
+        &servers,
+        sandbox_state.clone(),
+    )
+    .await;
+    let manager_2 = new_pooled_manager_for_tests(
+        &pool,
+        SharedMcpBackendAcquireMode::ForceCreate,
+        &servers,
+        sandbox_state.clone(),
+    )
+    .await;
+    let manager_3 = new_pooled_manager_for_tests(
+        &pool,
+        SharedMcpBackendAcquireMode::ReuseExisting,
+        &servers,
+        sandbox_state,
+    )
+    .await;
+
+    let shared_1 = manager_1
+        .shared_backend
+        .as_ref()
+        .expect("stdio backend should be pooled");
+    let shared_2 = manager_2
+        .shared_backend
+        .as_ref()
+        .expect("stdio backend should be pooled");
+    let shared_3 = manager_3
+        .shared_backend
+        .as_ref()
+        .expect("stdio backend should be pooled");
+
+    assert!(!Arc::ptr_eq(shared_1, shared_2));
+    assert!(Arc::ptr_eq(shared_2, shared_3));
+    assert!(!Arc::ptr_eq(shared_1, shared_3));
 }
 
 #[test]

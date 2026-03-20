@@ -220,6 +220,7 @@ use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::maybe_prompt_and_install_mcp_dependencies;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
+use crate::mcp_connection_manager::SharedMcpBackendAcquireMode;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::mcp_connection_manager::filter_non_codex_apps_mcp_tools_only;
 use crate::memories;
@@ -1249,6 +1250,23 @@ impl Session {
         per_turn_config
     }
 
+    fn sandbox_state_for_session_configuration(
+        session_configuration: &SessionConfiguration,
+    ) -> SandboxState {
+        SandboxState {
+            sandbox_policy: session_configuration.sandbox_policy.get().clone(),
+            codex_linux_sandbox_exe: session_configuration
+                .original_config_do_not_use
+                .codex_linux_sandbox_exe
+                .clone(),
+            sandbox_cwd: session_configuration.cwd.clone(),
+            use_legacy_landlock: session_configuration
+                .original_config_do_not_use
+                .features
+                .use_legacy_landlock(),
+        }
+    }
+
     pub(crate) async fn codex_home(&self) -> PathBuf {
         let state = self.state.lock().await;
         state.session_configuration.codex_home().clone()
@@ -1800,6 +1818,7 @@ impl Session {
                 &config.permissions.approval_policy,
             ))),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
+            shared_mcp_backend_pool: agent_control.shared_mcp_backend_pool(),
             unified_exec_manager: UnifiedExecProcessManager::new(
                 config.background_terminal_max_timeout,
             ),
@@ -1924,17 +1943,40 @@ impl Session {
             cancel_guard.cancel();
             *cancel_guard = CancellationToken::new();
         }
-        let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
-            &mcp_servers,
-            config.mcp_oauth_credentials_store_mode,
-            auth_statuses.clone(),
-            &session_configuration.approval_policy,
-            tx_event.clone(),
-            sandbox_state,
-            config.codex_home.clone(),
-            codex_apps_tools_cache_key(auth),
-            tool_plugin_provenance,
-        )
+        let (mcp_connection_manager, cancel_token) = async {
+            match sess.services.shared_mcp_backend_pool.as_ref() {
+                Some(shared_mcp_backend_pool) => {
+                    McpConnectionManager::new_with_pool(
+                        shared_mcp_backend_pool.as_ref(),
+                        SharedMcpBackendAcquireMode::ReuseExisting,
+                        &mcp_servers,
+                        config.mcp_oauth_credentials_store_mode,
+                        auth_statuses.clone(),
+                        &session_configuration.approval_policy,
+                        tx_event.clone(),
+                        sandbox_state,
+                        config.codex_home.clone(),
+                        codex_apps_tools_cache_key(auth),
+                        tool_plugin_provenance,
+                    )
+                    .await
+                }
+                None => {
+                    McpConnectionManager::new(
+                        &mcp_servers,
+                        config.mcp_oauth_credentials_store_mode,
+                        auth_statuses.clone(),
+                        &session_configuration.approval_policy,
+                        tx_event.clone(),
+                        sandbox_state,
+                        config.codex_home.clone(),
+                        codex_apps_tools_cache_key(auth),
+                        tool_plugin_provenance,
+                    )
+                    .await
+                }
+            }
+        }
         .instrument(info_span!(
             "session_init.mcp_manager_init",
             otel.name = "session_init.mcp_manager_init",
@@ -2308,23 +2350,29 @@ impl Session {
     ) -> ConstraintResult<Arc<TurnContext>> {
         let (
             session_configuration,
-            sandbox_policy_changed,
+            sandbox_state,
+            sandbox_state_changed,
             previous_cwd,
             codex_home,
             session_source,
         ) = {
             let mut state = self.state.lock().await;
-            match state.session_configuration.clone().apply(&updates) {
+            let previous_session_configuration = state.session_configuration.clone();
+            match previous_session_configuration.apply(&updates) {
                 Ok(next) => {
-                    let previous_cwd = state.session_configuration.cwd.clone();
-                    let sandbox_policy_changed =
-                        state.session_configuration.sandbox_policy != next.sandbox_policy;
+                    let previous_cwd = previous_session_configuration.cwd.clone();
+                    let previous_sandbox_state = Self::sandbox_state_for_session_configuration(
+                        &previous_session_configuration,
+                    );
+                    let sandbox_state = Self::sandbox_state_for_session_configuration(&next);
+                    let sandbox_state_changed = previous_sandbox_state != sandbox_state;
                     let codex_home = next.codex_home.clone();
                     let session_source = next.session_source.clone();
                     state.session_configuration = next.clone();
                     (
                         next,
-                        sandbox_policy_changed,
+                        sandbox_state,
+                        sandbox_state_changed,
                         previous_cwd,
                         codex_home,
                         session_source,
@@ -2357,7 +2405,8 @@ impl Session {
                 sub_id,
                 session_configuration,
                 updates.final_output_json_schema,
-                sandbox_policy_changed,
+                sandbox_state,
+                sandbox_state_changed,
             )
             .await)
     }
@@ -2367,23 +2416,55 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
-        sandbox_policy_changed: bool,
+        sandbox_state: SandboxState,
+        sandbox_state_changed: bool,
     ) -> Arc<TurnContext> {
         let per_turn_config = Self::build_per_turn_config(&session_configuration);
-        self.services
-            .mcp_connection_manager
-            .read()
-            .await
-            .set_approval_policy(&session_configuration.approval_policy);
 
-        if sandbox_policy_changed {
-            let sandbox_state = SandboxState {
-                sandbox_policy: per_turn_config.permissions.sandbox_policy.get().clone(),
-                codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
-                sandbox_cwd: per_turn_config.cwd.clone(),
-                use_legacy_landlock: per_turn_config.features.use_legacy_landlock(),
-            };
-            if let Err(e) = self
+        if sandbox_state_changed {
+            if let Some(shared_mcp_backend_pool) = self.services.shared_mcp_backend_pool.as_ref() {
+                let auth = self.services.auth_manager.auth().await;
+                let config = session_configuration.original_config_do_not_use.clone();
+                let mcp_servers = self
+                    .services
+                    .mcp_manager
+                    .effective_servers(config.as_ref(), auth.as_ref());
+                let auth_statuses = compute_auth_statuses(
+                    mcp_servers.iter(),
+                    config.mcp_oauth_credentials_store_mode,
+                )
+                .await;
+                let tool_plugin_provenance = self
+                    .services
+                    .mcp_manager
+                    .tool_plugin_provenance(config.as_ref());
+                {
+                    let manager = self.services.mcp_connection_manager.read().await;
+                    if let Err(e) = manager
+                        .notify_local_sandbox_state_change(&sandbox_state)
+                        .await
+                    {
+                        warn!("failed to notify local MCP sandbox state change: {e:#}");
+                    }
+                    let rebuilt_manager = manager
+                        .rebuild_pooled_backend(
+                            shared_mcp_backend_pool.as_ref(),
+                            SharedMcpBackendAcquireMode::ReuseExisting,
+                            &mcp_servers,
+                            config.mcp_oauth_credentials_store_mode,
+                            auth_statuses,
+                            self.get_tx_event(),
+                            sandbox_state.clone(),
+                            config.codex_home.clone(),
+                            codex_apps_tools_cache_key(auth.as_ref()),
+                            tool_plugin_provenance,
+                        )
+                        .await;
+                    drop(manager);
+                    let mut manager = self.services.mcp_connection_manager.write().await;
+                    *manager = rebuilt_manager;
+                }
+            } else if let Err(e) = self
                 .services
                 .mcp_connection_manager
                 .read()
@@ -2394,6 +2475,11 @@ impl Session {
                 warn!("Failed to notify sandbox state change to MCP servers: {e:#}");
             }
         }
+        self.services
+            .mcp_connection_manager
+            .read()
+            .await
+            .set_approval_policy(&session_configuration.approval_policy);
 
         let model_info = self
             .services
@@ -2536,9 +2622,10 @@ impl Session {
         };
         self.new_turn_from_configuration(
             sub_id,
-            session_configuration,
+            session_configuration.clone(),
             /*final_output_json_schema*/ None,
-            /*sandbox_policy_changed*/ false,
+            Self::sandbox_state_for_session_configuration(&session_configuration),
+            /*sandbox_state_changed*/ false,
         )
         .await
     }
@@ -4059,18 +4146,39 @@ impl Session {
             guard.cancel();
             *guard = CancellationToken::new();
         }
-        let (refreshed_manager, cancel_token) = McpConnectionManager::new(
-            &mcp_servers,
-            store_mode,
-            auth_statuses,
-            &turn_context.config.permissions.approval_policy,
-            self.get_tx_event(),
-            sandbox_state,
-            config.codex_home.clone(),
-            codex_apps_tools_cache_key(auth.as_ref()),
-            tool_plugin_provenance,
-        )
-        .await;
+        let (refreshed_manager, cancel_token) = match self.services.shared_mcp_backend_pool.as_ref()
+        {
+            Some(shared_mcp_backend_pool) => {
+                McpConnectionManager::new_with_pool(
+                    shared_mcp_backend_pool.as_ref(),
+                    SharedMcpBackendAcquireMode::ForceCreate,
+                    &mcp_servers,
+                    store_mode,
+                    auth_statuses,
+                    &turn_context.config.permissions.approval_policy,
+                    self.get_tx_event(),
+                    sandbox_state,
+                    config.codex_home.clone(),
+                    codex_apps_tools_cache_key(auth.as_ref()),
+                    tool_plugin_provenance,
+                )
+                .await
+            }
+            None => {
+                McpConnectionManager::new(
+                    &mcp_servers,
+                    store_mode,
+                    auth_statuses,
+                    &turn_context.config.permissions.approval_policy,
+                    self.get_tx_event(),
+                    sandbox_state,
+                    config.codex_home.clone(),
+                    codex_apps_tools_cache_key(auth.as_ref()),
+                    tool_plugin_provenance,
+                )
+                .await
+            }
+        };
         {
             let mut guard = self.services.mcp_startup_cancellation_token.lock().await;
             if guard.is_cancelled() {

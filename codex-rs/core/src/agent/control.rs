@@ -8,6 +8,7 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::find_archived_thread_path_by_id_str;
 use crate::find_thread_path_by_id_str;
+use crate::mcp_connection_manager::SharedMcpBackendPool;
 use crate::rollout::RolloutRecorder;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
@@ -88,6 +89,12 @@ impl AgentControl {
             manager,
             ..Default::default()
         }
+    }
+
+    pub(crate) fn shared_mcp_backend_pool(&self) -> Option<Arc<SharedMcpBackendPool>> {
+        self.manager
+            .upgrade()
+            .map(|state| state.shared_mcp_backend_pool())
     }
 
     /// Spawn a new agent thread and submit the initial prompt.

@@ -1,5 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::sync::Arc;
 
 use rmcp::ErrorData as McpError;
@@ -36,6 +38,7 @@ struct TestToolServer {
 const MEMO_URI: &str = "memo://codex/example-note";
 const MEMO_CONTENT: &str = "This is a sample MCP resource served by the rmcp test server.";
 const SMALL_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+const STARTUP_COUNT_FILE_ENV_VAR: &str = "MCP_STARTUP_COUNT_FILE";
 
 pub fn stdio() -> (tokio::io::Stdin, tokio::io::Stdout) {
     (tokio::io::stdin(), tokio::io::stdout())
@@ -454,8 +457,18 @@ fn parse_data_url(url: &str) -> Option<(String, String)> {
     Some((mime.to_string(), data.to_string()))
 }
 
+fn record_startup_if_requested() -> std::io::Result<()> {
+    let Some(path) = std::env::var_os(STARTUP_COUNT_FILE_ENV_VAR) else {
+        return Ok(());
+    };
+
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    writeln!(file, "started")
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    record_startup_if_requested()?;
     eprintln!("starting rmcp test server");
     // Run the server with STDIO transport. If the client disconnects we simply
     // bubble up the error so the process exits.

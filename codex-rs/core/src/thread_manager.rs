@@ -14,6 +14,7 @@ use crate::error::Result as CodexResult;
 use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
 use crate::mcp::McpManager;
+use crate::mcp_connection_manager::SharedMcpBackendPool;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::ModelsManager;
 use crate::plugins::PluginsManager;
@@ -155,6 +156,7 @@ pub(crate) struct ThreadManagerState {
     skills_manager: Arc<SkillsManager>,
     plugins_manager: Arc<PluginsManager>,
     mcp_manager: Arc<McpManager>,
+    shared_mcp_backend_pool: Arc<SharedMcpBackendPool>,
     file_watcher: Arc<FileWatcher>,
     session_source: SessionSource,
     // Captures submitted ops for testing purpose when test mode is enabled.
@@ -202,6 +204,7 @@ impl ThreadManager {
                 skills_manager,
                 plugins_manager,
                 mcp_manager,
+                shared_mcp_backend_pool: Arc::new(SharedMcpBackendPool::new()),
                 file_watcher,
                 auth_manager,
                 session_source,
@@ -266,6 +269,7 @@ impl ThreadManager {
                 skills_manager,
                 plugins_manager,
                 mcp_manager,
+                shared_mcp_backend_pool: Arc::new(SharedMcpBackendPool::new()),
                 file_watcher,
                 auth_manager,
                 session_source: SessionSource::Exec,
@@ -582,6 +586,10 @@ impl ThreadManager {
 }
 
 impl ThreadManagerState {
+    pub(crate) fn shared_mcp_backend_pool(&self) -> Arc<SharedMcpBackendPool> {
+        Arc::clone(&self.shared_mcp_backend_pool)
+    }
+
     pub(crate) async fn list_thread_ids(&self) -> Vec<ThreadId> {
         self.threads.read().await.keys().copied().collect()
     }
