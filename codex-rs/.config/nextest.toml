@@ -16,6 +16,14 @@ slow-timeout = { period = "1m", terminate-after = 4 }
 
 [[profile.default.overrides]]
 filter = 'test(approval_matrix_covers_all_modes)'
+slow-timeout = { period = "30s", terminate-after = 4 }
+
+[[profile.default.overrides]]
+filter = 'package(codex-core) & (test(matched_prefix_rule_runs_unsandboxed_under_zsh_fork) | test(shell_zsh_fork_))'
+slow-timeout = { period = "30s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+filter = 'package(codex-app-server) & (test(turn_start_file_change_approval_v2) | test(turn_start_file_change_approval_accept_for_session_persists_v2))'
 slow-timeout = { period = "30s", terminate-after = 2 }
 
 [[profile.default.overrides]]

@@ -262,7 +262,7 @@ fn resolve_current_codex_cli(codex_home: &std::path::Path) -> Result<Option<Path
     #[cfg(target_os = "windows")]
     {
         let exe = codex_windows_sandbox::resolve_current_exe_for_launch(codex_home, "codex.exe");
-        return Ok(is_codex_cli(&exe).then_some(exe));
+        Ok(is_codex_cli(&exe).then_some(exe))
     }
 
     #[cfg(not(target_os = "windows"))]
