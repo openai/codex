@@ -1743,7 +1743,9 @@ impl ChatWidget {
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
         self.submit_pending_steers_after_interrupt = false;
-        self.manual_compact_turn_pending_or_running = false;
+        if !from_replay {
+            self.manual_compact_turn_pending_or_running = false;
+        }
         if let Some(message) = last_agent_message.as_ref()
             && !message.trim().is_empty()
         {

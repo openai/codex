@@ -3720,6 +3720,41 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
 }
 
 #[tokio::test]
+async fn replayed_turn_complete_keeps_manual_compact_queue_gate_from_restored_input_state() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.restore_thread_input_state(Some(ThreadInputState {
+        composer: None,
+        pending_steers: VecDeque::new(),
+        queued_user_messages: VecDeque::new(),
+        current_collaboration_mode: chat.current_collaboration_mode.clone(),
+        active_collaboration_mask: chat.active_collaboration_mask.clone(),
+        agent_turn_running: true,
+        manual_compact_turn_pending_or_running: true,
+    }));
+
+    chat.handle_codex_event_replay(Event {
+        id: "turn-complete-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+        }),
+    });
+
+    assert!(chat.manual_compact_turn_pending_or_running);
+
+    chat.submit_user_message(UserMessage::from("queued after replayed completion"));
+
+    assert!(chat.pending_steers.is_empty());
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["queued after replayed completion"]
+    );
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
 async fn alt_up_edits_most_recent_queued_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.queued_message_edit_binding = crate::key_hint::alt(KeyCode::Up);
