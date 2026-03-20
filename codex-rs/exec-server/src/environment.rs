@@ -122,7 +122,7 @@ mod tests {
         let environment = Environment::create(None).await.expect("create environment");
 
         assert_eq!(environment.experimental_exec_server_url(), None);
-        assert!(environment.remote_exec_server_client().is_none());
+        assert!(environment.remote_exec_server_client.is_none());
     }
 
     #[tokio::test]
