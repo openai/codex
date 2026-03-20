@@ -44,7 +44,7 @@ diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
              self.manifest_dir
                  .join("aws-lc")
 @@ -742,6 +761,40 @@
-         }
+         );
          let _ = fs::remove_file(exec_path);
      }
 +
@@ -84,3 +84,31 @@ diff --git a/builder/cc_builder.rs b/builder/cc_builder.rs
      fn run_compiler_checks(&self, cc_build: &mut cc::Build) {
          if self.compiler_check("stdalign_check", Vec::<&'static str>::new()) {
              cc_build.define("AWS_LC_STDALIGN_AVAILABLE", Some("1"));
+diff --git a/builder/main.rs b/builder/main.rs
+--- a/builder/main.rs
++++ b/builder/main.rs
+@@ -944,10 +944,12 @@
+     // iterate over all the include paths and copy them into the final output
+     for path in include_paths {
+         for child in std::fs::read_dir(path).into_iter().flatten().flatten() {
+-            if child.file_type().map_or(false, |t| t.is_file()) {
++            let child_path = child.path();
++
++            if child_path.is_file() {
+                 std::fs::copy(
+-                    child.path(),
+-                    include_dir.join(child.path().file_name().unwrap()),
++                    &child_path,
++                    include_dir.join(child_path.file_name().unwrap()),
+                 )
+                 .expect("Failed to copy include file during build setup");
+                 continue;
+@@ -957,7 +959,7 @@
+             let options = fs_extra::dir::CopyOptions::new()
+                 .skip_exist(true)
+                 .copy_inside(true);
+-            fs_extra::dir::copy(child.path(), &include_dir, &options)
++            fs_extra::dir::copy(child_path, &include_dir, &options)
+                 .expect("Failed to copy include directory during build setup");
+         }
+     }
