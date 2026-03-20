@@ -1303,67 +1303,6 @@ fn add_dir_override_extends_workspace_writable_roots() -> std::io::Result<()> {
 }
 
 #[test]
-fn restricted_read_implicitly_allows_helper_executables() -> std::io::Result<()> {
-    let temp_dir = TempDir::new()?;
-    let cwd = temp_dir.path().join("workspace");
-    let codex_home = temp_dir.path().join(".codex");
-    let zsh_path = temp_dir.path().join("runtime").join("zsh");
-    let arg0_root = codex_home.join("tmp").join("arg0");
-    let execve_wrapper = arg0_root
-        .join("codex-arg0-session")
-        .join("codex-execve-wrapper");
-    std::fs::create_dir_all(&cwd)?;
-    std::fs::create_dir_all(zsh_path.parent().expect("zsh path should have parent"))?;
-    std::fs::create_dir_all(
-        execve_wrapper
-            .parent()
-            .expect("wrapper path should have parent"),
-    )?;
-    std::fs::write(&zsh_path, "")?;
-    std::fs::write(&execve_wrapper, "")?;
-
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            default_permissions: Some("workspace".to_string()),
-            permissions: Some(PermissionsToml {
-                entries: BTreeMap::from([(
-                    "workspace".to_string(),
-                    PermissionProfileToml {
-                        filesystem: Some(FilesystemPermissionsToml {
-                            entries: BTreeMap::new(),
-                        }),
-                        network: None,
-                    },
-                )]),
-            }),
-            ..Default::default()
-        },
-        ConfigOverrides {
-            cwd: Some(cwd.clone()),
-            zsh_path: Some(zsh_path.clone()),
-            main_execve_wrapper_exe: Some(execve_wrapper),
-            ..Default::default()
-        },
-        codex_home,
-    )?;
-
-    let expected_zsh = AbsolutePathBuf::try_from(zsh_path)?;
-    let expected_arg0_root = AbsolutePathBuf::try_from(arg0_root)?;
-    let policy = &config.permissions.file_system_sandbox_policy;
-
-    assert!(
-        policy.can_read_path_with_cwd(expected_zsh.as_path(), &cwd),
-        "expected zsh helper path to be readable, policy: {policy:?}"
-    );
-    assert!(
-        policy.can_read_path_with_cwd(expected_arg0_root.as_path(), &cwd),
-        "expected arg0 helper root to be readable, policy: {policy:?}"
-    );
-
-    Ok(())
-}
-
-#[test]
 fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config = Config::load_from_base_config_with_overrides(

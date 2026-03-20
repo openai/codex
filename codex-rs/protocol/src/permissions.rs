@@ -347,6 +347,48 @@ impl FileSystemSandboxPolicy {
         self.resolve_access_with_cwd(path, cwd).can_write()
     }
 
+    pub fn with_additional_readable_roots(
+        mut self,
+        cwd: &Path,
+        additional_readable_roots: &[AbsolutePathBuf],
+    ) -> Self {
+        if self.has_full_disk_read_access() {
+            return self;
+        }
+
+        for path in additional_readable_roots {
+            if self.can_read_path_with_cwd(path.as_path(), cwd) {
+                continue;
+            }
+
+            self.entries.push(FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: path.clone() },
+                access: FileSystemAccessMode::Read,
+            });
+        }
+
+        self
+    }
+
+    pub fn with_additional_writable_roots(
+        mut self,
+        cwd: &Path,
+        additional_writable_roots: &[AbsolutePathBuf],
+    ) -> Self {
+        for path in additional_writable_roots {
+            if self.can_write_path_with_cwd(path.as_path(), cwd) {
+                continue;
+            }
+
+            self.entries.push(FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: path.clone() },
+                access: FileSystemAccessMode::Write,
+            });
+        }
+
+        self
+    }
+
     pub fn needs_direct_runtime_enforcement(
         &self,
         network_policy: NetworkSandboxPolicy,
@@ -1779,6 +1821,74 @@ mod tests {
         assert_eq!(
             policy.resolve_access_with_cwd(docs.as_path(), cwd.path()),
             FileSystemAccessMode::Write
+        );
+    }
+
+    #[test]
+    fn with_additional_readable_roots_skips_existing_effective_access() {
+        let cwd = TempDir::new().expect("tempdir");
+        let cwd_root = AbsolutePathBuf::from_absolute_path(cwd.path()).expect("absolute cwd");
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+            },
+            access: FileSystemAccessMode::Read,
+        }]);
+
+        let actual = policy
+            .clone()
+            .with_additional_readable_roots(cwd.path(), std::slice::from_ref(&cwd_root));
+
+        assert_eq!(actual, policy);
+    }
+
+    #[test]
+    fn with_additional_writable_roots_skips_existing_effective_access() {
+        let cwd = TempDir::new().expect("tempdir");
+        let cwd_root = AbsolutePathBuf::from_absolute_path(cwd.path()).expect("absolute cwd");
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let actual = policy
+            .clone()
+            .with_additional_writable_roots(cwd.path(), std::slice::from_ref(&cwd_root));
+
+        assert_eq!(actual, policy);
+    }
+
+    #[test]
+    fn with_additional_writable_roots_adds_new_root() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let cwd = temp_dir.path().join("workspace");
+        let extra = AbsolutePathBuf::from_absolute_path(temp_dir.path().join("extra"))
+            .expect("resolve extra root");
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let actual = policy.with_additional_writable_roots(&cwd, std::slice::from_ref(&extra));
+
+        assert_eq!(
+            actual,
+            FileSystemSandboxPolicy::restricted(vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path { path: extra },
+                    access: FileSystemAccessMode::Write,
+                },
+            ])
         );
     }
 
