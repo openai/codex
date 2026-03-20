@@ -13,8 +13,8 @@ use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginSummary;
-use codex_core::features::Feature;
 use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
+use codex_features::Feature;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 
