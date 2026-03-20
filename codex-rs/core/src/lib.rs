@@ -110,7 +110,15 @@ pub type CodexConversation = CodexThread;
 pub use analytics_client::AnalyticsEventsClient;
 pub use auth::AuthManager;
 pub use auth::CodexAuth;
-pub mod default_client;
+mod default_client_forwarding;
+
+/// Default Codex HTTP client headers and reqwest construction.
+///
+/// Implemented in [`codex_login::default_client`]; this module re-exports that API for crates
+/// that import `codex_core::default_client`.
+pub mod default_client {
+    pub use super::default_client_forwarding::*;
+}
 pub mod project_doc;
 mod rollout;
 pub(crate) mod safety;

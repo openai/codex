@@ -24,12 +24,12 @@ pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::create_auth_storage;
 use crate::auth::util::try_parse_error_message;
+use crate::default_client::create_client;
 use crate::token_data::KnownPlan as InternalKnownPlan;
 use crate::token_data::PlanType as InternalPlanType;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
 use codex_client::CodexHttpClient;
-use codex_client::build_reqwest_client_with_custom_ca;
 use codex_protocol::account::PlanType as AccountPlanType;
 use serde_json::Value;
 use thiserror::Error;
@@ -154,15 +154,6 @@ impl From<RefreshTokenError> for std::io::Error {
     }
 }
 
-fn build_auth_http_client() -> CodexHttpClient {
-    let inner =
-        build_reqwest_client_with_custom_ca(reqwest::Client::builder()).unwrap_or_else(|error| {
-            tracing::warn!(error = %error, "failed to build auth reqwest client");
-            reqwest::Client::new()
-        });
-    CodexHttpClient::new(inner)
-}
-
 impl CodexAuth {
     fn from_auth_dot_json(
         codex_home: &Path,
@@ -170,7 +161,7 @@ impl CodexAuth {
         auth_credentials_store_mode: AuthCredentialsStoreMode,
     ) -> std::io::Result<Self> {
         let auth_mode = auth_dot_json.resolved_mode();
-        let client = build_auth_http_client();
+        let client = create_client();
         if auth_mode == ApiAuthMode::ApiKey {
             let Some(api_key) = auth_dot_json.openai_api_key.as_deref() else {
                 return Err(std::io::Error::other("API key auth is missing a key."));
@@ -341,7 +332,7 @@ impl CodexAuth {
             last_refresh: Some(Utc::now()),
         };
 
-        let client = build_auth_http_client();
+        let client = create_client();
         let state = ChatgptAuthState {
             auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
             client,

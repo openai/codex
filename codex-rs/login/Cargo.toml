@@ -13,10 +13,13 @@ base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 codex-app-server-protocol = { workspace = true }
 codex-client = { workspace = true }
+codex-config = { workspace = true }
 codex-keyring-store = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
+codex-terminal-detection = { workspace = true }
 once_cell = { workspace = true }
+os_info = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "blocking"] }
 schemars = { workspace = true }
@@ -42,6 +45,7 @@ anyhow = { workspace = true }
 core_test_support = { workspace = true }
 keyring = { workspace = true }
 pretty_assertions = { workspace = true }
+regex-lite = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 wiremock = { workspace = true }

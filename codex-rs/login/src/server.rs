@@ -26,6 +26,7 @@ use std::time::Duration;
 use crate::auth::AuthCredentialsStoreMode;
 use crate::auth::AuthDotJson;
 use crate::auth::save_auth;
+use crate::default_client::originator;
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
 use crate::token_data::TokenData;
@@ -483,11 +484,7 @@ fn build_authorize_url(
         ("id_token_add_organizations".to_string(), "true".to_string()),
         ("codex_cli_simplified_flow".to_string(), "true".to_string()),
         ("state".to_string(), state.to_string()),
-        (
-            "originator".to_string(),
-            std::env::var("CODEX_INTERNAL_ORIGINATOR_OVERRIDE")
-                .unwrap_or_else(|_| "codex_cli_rs".to_string()),
-        ),
+        ("originator".to_string(), originator().value),
     ];
     if let Some(workspace_id) = forced_chatgpt_workspace_id {
         query.push(("allowed_workspace_id".to_string(), workspace_id.to_string()));
