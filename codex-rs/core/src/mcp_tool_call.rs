@@ -11,6 +11,9 @@ use tracing::error;
 use crate::analytics_client::AppInvocation;
 use crate::analytics_client::InvocationType;
 use crate::analytics_client::build_track_events_context;
+use crate::arc_monitor::ARC_MONITOR_CALLSITE_ALWAYS_ALLOW;
+use crate::arc_monitor::ARC_MONITOR_CALLSITE_FULL_ACCESS;
+use crate::arc_monitor::ARC_MONITOR_CALLSITE_NORMAL;
 use crate::arc_monitor::ArcMonitorOutcome;
 use crate::arc_monitor::monitor_action;
 use crate::codex::Session;
@@ -502,8 +505,14 @@ async fn maybe_request_mcp_tool_approval(
             return None;
         }
 
-        match maybe_monitor_auto_approved_mcp_tool_call(sess, turn_context, invocation, metadata)
-            .await
+        match maybe_monitor_auto_approved_mcp_tool_call(
+            sess,
+            turn_context,
+            invocation,
+            metadata,
+            approval_mode,
+        )
+        .await
         {
             ArcMonitorOutcome::Ok => return None,
             ArcMonitorOutcome::AskUser(reason) => {
@@ -652,9 +661,16 @@ async fn maybe_monitor_auto_approved_mcp_tool_call(
     turn_context: &TurnContext,
     invocation: &McpInvocation,
     metadata: Option<&McpToolApprovalMetadata>,
+    approval_mode: AppToolApproval,
 ) -> ArcMonitorOutcome {
     let action = prepare_arc_request_action(invocation, metadata);
-    monitor_action(sess, turn_context, action).await
+    monitor_action(
+        sess,
+        turn_context,
+        action,
+        mcp_tool_approval_callsite_mode(approval_mode, turn_context),
+    )
+    .await
 }
 
 fn prepare_arc_request_action(
@@ -746,6 +762,22 @@ fn is_full_access_mode(turn_context: &TurnContext) -> bool {
             turn_context.sandbox_policy.get(),
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
         )
+}
+
+fn mcp_tool_approval_callsite_mode(
+    approval_mode: AppToolApproval,
+    turn_context: &TurnContext,
+) -> &'static str {
+    match approval_mode {
+        AppToolApproval::Approve => ARC_MONITOR_CALLSITE_ALWAYS_ALLOW,
+        AppToolApproval::Auto | AppToolApproval::Prompt => {
+            if approval_mode == AppToolApproval::Auto && is_full_access_mode(turn_context) {
+                ARC_MONITOR_CALLSITE_FULL_ACCESS
+            } else {
+                ARC_MONITOR_CALLSITE_NORMAL
+            }
+        }
+    }
 }
 
 pub(crate) async fn lookup_mcp_tool_metadata(

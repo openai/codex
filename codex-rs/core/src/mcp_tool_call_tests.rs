@@ -776,6 +776,38 @@ fn approval_elicitation_meta_merges_session_and_always_persist_with_connector_so
     );
 }
 
+#[tokio::test]
+async fn approval_callsite_mode_distinguishes_normal_always_allow_and_full_access() {
+    let (_session, mut turn_context) = make_session_and_context().await;
+
+    assert_eq!(
+        mcp_tool_approval_callsite_mode(AppToolApproval::Auto, &turn_context),
+        ARC_MONITOR_CALLSITE_NORMAL
+    );
+    assert_eq!(
+        mcp_tool_approval_callsite_mode(AppToolApproval::Prompt, &turn_context),
+        ARC_MONITOR_CALLSITE_NORMAL
+    );
+    assert_eq!(
+        mcp_tool_approval_callsite_mode(AppToolApproval::Approve, &turn_context),
+        ARC_MONITOR_CALLSITE_ALWAYS_ALLOW
+    );
+
+    turn_context
+        .approval_policy
+        .set(AskForApproval::Never)
+        .expect("test setup should allow updating approval policy");
+    turn_context
+        .sandbox_policy
+        .set(SandboxPolicy::DangerFullAccess)
+        .expect("test setup should allow updating sandbox policy");
+
+    assert_eq!(
+        mcp_tool_approval_callsite_mode(AppToolApproval::Auto, &turn_context),
+        ARC_MONITOR_CALLSITE_FULL_ACCESS
+    );
+}
+
 #[test]
 fn declined_elicitation_response_stays_decline() {
     let response = parse_mcp_tool_approval_elicitation_response(

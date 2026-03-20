@@ -178,6 +178,7 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
         &turn_context,
         serde_json::from_value(serde_json::json!({ "tool": "mcp_tool_call" }))
             .expect("action should deserialize"),
+        ARC_MONITOR_CALLSITE_NORMAL,
     )
     .await;
 
@@ -188,7 +189,7 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
                 codex_thread_id: session.conversation_id.to_string(),
                 codex_turn_id: turn_context.sub_id.clone(),
                 conversation_id: Some(session.conversation_id.to_string()),
-                protection_client_callsite: None,
+                protection_client_callsite: Some(ARC_MONITOR_CALLSITE_NORMAL.to_string()),
             },
             messages: Some(vec![
                 ArcMonitorChatMessage {
@@ -285,6 +286,7 @@ async fn monitor_action_posts_expected_arc_request() {
                 "codex_thread_id": session.conversation_id.to_string(),
                 "codex_turn_id": turn_context.sub_id.clone(),
                 "conversation_id": session.conversation_id.to_string(),
+                "protection_client_callsite": ARC_MONITOR_CALLSITE_NORMAL,
             },
             "messages": [{
                 "role": "user",
@@ -320,6 +322,7 @@ async fn monitor_action_posts_expected_arc_request() {
         &session,
         &turn_context,
         serde_json::json!({ "tool": "mcp_tool_call" }),
+        ARC_MONITOR_CALLSITE_NORMAL,
     )
     .await;
 
@@ -377,6 +380,7 @@ async fn monitor_action_uses_env_url_and_token_overrides() {
         &session,
         &turn_context,
         serde_json::json!({ "tool": "mcp_tool_call" }),
+        ARC_MONITOR_CALLSITE_NORMAL,
     )
     .await;
 
@@ -428,6 +432,7 @@ async fn monitor_action_rejects_legacy_response_fields() {
         &session,
         &turn_context,
         serde_json::json!({ "tool": "mcp_tool_call" }),
+        ARC_MONITOR_CALLSITE_NORMAL,
     )
     .await;
 
