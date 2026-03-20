@@ -1,7 +1,7 @@
 #![cfg(not(target_os = "windows"))]
 
 use codex_core::CodexAuth;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;

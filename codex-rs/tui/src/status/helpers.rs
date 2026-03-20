@@ -92,7 +92,7 @@ pub(crate) fn compose_account_display(
 
     match auth.auth_mode() {
         CoreAuthMode::ApiKey => Some(StatusAccountDisplay::ApiKey),
-        CoreAuthMode::Chatgpt => {
+        CoreAuthMode::Chatgpt | CoreAuthMode::ChatgptAuthTokens => {
             let email = auth.get_account_email();
             let plan = plan
                 .map(|plan_type| title_case(format!("{plan_type:?}").as_str()))

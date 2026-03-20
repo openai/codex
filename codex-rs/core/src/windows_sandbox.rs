@@ -4,10 +4,10 @@ use crate::config::edit::ConfigEditsBuilder;
 use crate::config::profile::ConfigProfile;
 use crate::config::types::WindowsSandboxModeToml;
 use crate::default_client::originator;
-use crate::features::Feature;
-use crate::features::Features;
-use crate::features::FeaturesToml;
 use crate::protocol::SandboxPolicy;
+use codex_features::Feature;
+use codex_features::Features;
+use codex_features::FeaturesToml;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use std::collections::BTreeMap;
@@ -185,8 +185,8 @@ pub fn run_elevated_setup(
         command_cwd,
         env_map,
         codex_home,
-        None,
-        None,
+        /*read_roots_override*/ None,
+        /*write_roots_override*/ None,
     )
 }
 
@@ -421,7 +421,11 @@ fn emit_windows_sandbox_setup_failure_metrics(
             if let Some(message) = message_tag.as_deref() {
                 failure_tags.push(("message", message));
             }
-            let _ = metrics.counter(elevated_setup_failure_metric_name(_err), 1, &failure_tags);
+            let _ = metrics.counter(
+                elevated_setup_failure_metric_name(_err),
+                /*inc*/ 1,
+                &failure_tags,
+            );
         }
     } else {
         let _ = metrics.counter(

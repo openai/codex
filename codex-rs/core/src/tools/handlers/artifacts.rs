@@ -13,7 +13,6 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::StreamOutput;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::packages::versions;
 use crate::protocol::ExecCommandSource;
@@ -26,6 +25,7 @@ use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_features::Feature;
 
 const ARTIFACTS_TOOL_NAME: &str = "artifacts";
 const ARTIFACT_TOOL_PRAGMA_PREFIX: &str = "// codex-artifact-tool:";

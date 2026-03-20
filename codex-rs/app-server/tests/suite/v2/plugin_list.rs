@@ -28,6 +28,7 @@ use wiremock::matchers::path;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const TEST_CURATED_PLUGIN_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+const STARTUP_REMOTE_PLUGIN_SYNC_MARKER_FILE: &str = ".tmp/app-server-remote-plugin-sync-v1";
 
 fn write_plugins_enabled_config(codex_home: &std::path::Path) -> std::io::Result<()> {
     std::fs::write(
@@ -756,6 +757,91 @@ async fn plugin_list_force_remote_sync_reconciles_curated_plugin_state() -> Resu
 }
 
 #[tokio::test]
+async fn app_server_startup_remote_plugin_sync_runs_once() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_plugin_sync_config(codex_home.path(), &format!("{}/backend-api/", server.uri()))?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    write_openai_curated_marketplace(codex_home.path(), &["linear"])?;
+
+    Mock::given(method("GET"))
+        .and(path("/backend-api/plugins/list"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            r#"[
+  {"id":"1","name":"linear","marketplace_name":"openai-curated","version":"1.0.0","enabled":true}
+]"#,
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/backend-api/plugins/featured"))
+        .and(header("authorization", "Bearer chatgpt-token"))
+        .and(header("chatgpt-account-id", "account-123"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"["linear@openai-curated"]"#))
+        .mount(&server)
+        .await;
+
+    let marker_path = codex_home
+        .path()
+        .join(STARTUP_REMOTE_PLUGIN_SYNC_MARKER_FILE);
+
+    {
+        let mut mcp = McpProcess::new(codex_home.path()).await?;
+        timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+        wait_for_path_exists(&marker_path).await?;
+        wait_for_remote_plugin_request_count(&server, "/plugins/list", 1).await?;
+        let request_id = mcp
+            .send_plugin_list_request(PluginListParams {
+                cwds: None,
+                force_remote_sync: false,
+            })
+            .await?;
+        let response: JSONRPCResponse = timeout(
+            DEFAULT_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        let response: PluginListResponse = to_response(response)?;
+        let curated_marketplace = response
+            .marketplaces
+            .into_iter()
+            .find(|marketplace| marketplace.name == "openai-curated")
+            .expect("expected openai-curated marketplace entry");
+        assert_eq!(
+            curated_marketplace
+                .plugins
+                .into_iter()
+                .map(|plugin| (plugin.id, plugin.installed, plugin.enabled))
+                .collect::<Vec<_>>(),
+            vec![("linear@openai-curated".to_string(), true, true)]
+        );
+        wait_for_remote_plugin_request_count(&server, "/plugins/list", 1).await?;
+    }
+
+    let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+    assert!(config.contains(r#"[plugins."linear@openai-curated"]"#));
+
+    {
+        let mut mcp = McpProcess::new(codex_home.path()).await?;
+        timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    }
+
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    wait_for_remote_plugin_request_count(&server, "/plugins/list", 1).await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_list_fetches_featured_plugin_ids_without_chatgpt_auth() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
@@ -837,24 +923,45 @@ async fn wait_for_featured_plugin_request_count(
     server: &MockServer,
     expected_count: usize,
 ) -> Result<()> {
+    wait_for_remote_plugin_request_count(server, "/plugins/featured", expected_count).await
+}
+
+async fn wait_for_remote_plugin_request_count(
+    server: &MockServer,
+    path_suffix: &str,
+    expected_count: usize,
+) -> Result<()> {
     timeout(DEFAULT_TIMEOUT, async {
         loop {
             let Some(requests) = server.received_requests().await else {
                 bail!("wiremock did not record requests");
             };
-            let featured_request_count = requests
+            let request_count = requests
                 .iter()
                 .filter(|request| {
-                    request.method == "GET" && request.url.path().ends_with("/plugins/featured")
+                    request.method == "GET" && request.url.path().ends_with(path_suffix)
                 })
                 .count();
-            if featured_request_count == expected_count {
+            if request_count == expected_count {
                 return Ok::<(), anyhow::Error>(());
             }
-            if featured_request_count > expected_count {
+            if request_count > expected_count {
                 bail!(
-                    "expected exactly {expected_count} /plugins/featured requests, got {featured_request_count}"
+                    "expected exactly {expected_count} {path_suffix} requests, got {request_count}"
                 );
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    Ok(())
+}
+
+async fn wait_for_path_exists(path: &std::path::Path) -> Result<()> {
+    timeout(DEFAULT_TIMEOUT, async {
+        loop {
+            if path.exists() {
+                return Ok::<(), anyhow::Error>(());
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }

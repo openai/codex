@@ -11,6 +11,9 @@
 use std::path::PathBuf;
 
 use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::PluginListResponse;
+use codex_app_server_protocol::PluginReadParams;
+use codex_app_server_protocol::PluginReadResponse;
 use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
@@ -25,7 +28,7 @@ use crate::bottom_pane::StatusLineItem;
 use crate::history_cell::HistoryCell;
 
 use codex_core::config::types::ApprovalsReviewer;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
@@ -162,6 +165,34 @@ pub(crate) enum AppEvent {
     /// Refresh app connector state and mention bindings.
     RefreshConnectors {
         force_refetch: bool,
+    },
+
+    /// Fetch plugin marketplace state for the provided working directory.
+    FetchPluginsList {
+        cwd: PathBuf,
+    },
+
+    /// Result of fetching plugin marketplace state.
+    PluginsLoaded {
+        cwd: PathBuf,
+        result: Result<PluginListResponse, String>,
+    },
+
+    /// Replace the plugins popup with a plugin-detail loading state.
+    OpenPluginDetailLoading {
+        plugin_display_name: String,
+    },
+
+    /// Fetch detail for a specific plugin from a marketplace.
+    FetchPluginDetail {
+        cwd: PathBuf,
+        params: PluginReadParams,
+    },
+
+    /// Result of fetching plugin detail.
+    PluginDetailLoaded {
+        cwd: PathBuf,
+        result: Result<PluginReadResponse, String>,
     },
 
     /// Fetch MCP inventory via app-server RPCs and render it into history.

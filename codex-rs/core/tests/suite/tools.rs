@@ -7,8 +7,8 @@ use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_core::features::Feature;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_features::Feature;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::assert_regex_match;

@@ -13,6 +13,7 @@ use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use codex_core::ThreadSortKey;
+use codex_core::auth::AuthConfig;
 use codex_core::auth::AuthMode;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::check_execpolicy_for_warnings;
@@ -265,7 +266,7 @@ pub use public_widgets::composer_input::ComposerInput;
 pub async fn run_main(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
-    _loader_overrides: LoaderOverrides,
+    loader_overrides: LoaderOverrides,
 ) -> std::io::Result<AppExitInfo> {
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
@@ -454,7 +455,12 @@ pub async fn run_main(
     }
 
     #[allow(clippy::print_stderr)]
-    if let Err(err) = enforce_login_restrictions(&config) {
+    if let Err(err) = enforce_login_restrictions(&AuthConfig {
+        codex_home: config.codex_home.clone(),
+        auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
+        forced_login_method: config.forced_login_method,
+        forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
+    }) {
         eprintln!("{err}");
         std::process::exit(1);
     }
@@ -563,9 +569,11 @@ pub async fn run_main(
 
     run_ratatui_app(
         cli,
+        arg0_paths,
         config,
         overrides,
         cli_kv_overrides,
+        loader_overrides,
         cloud_requirements,
         feedback,
     )
@@ -576,9 +584,11 @@ pub async fn run_main(
 #[allow(clippy::too_many_arguments)]
 async fn run_ratatui_app(
     cli: Cli,
+    arg0_paths: Arg0DispatchPaths,
     initial_config: Config,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
+    loader_overrides: LoaderOverrides,
     mut cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
 ) -> color_eyre::Result<AppExitInfo> {
@@ -979,6 +989,9 @@ async fn run_ratatui_app(
         auth_manager,
         config,
         cli_kv_overrides.clone(),
+        arg0_paths,
+        loader_overrides,
+        cloud_requirements,
         overrides.clone(),
         active_profile,
         prompt,
@@ -1240,7 +1253,7 @@ mod tests {
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ProjectConfig;
-    use codex_core::features::Feature;
+    use codex_features::Feature;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::RolloutLine;
@@ -1265,7 +1278,7 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
         config.active_project = ProjectConfig { trust_level: None };
-        config.set_windows_sandbox_enabled(false);
+        config.set_windows_sandbox_enabled(/*value*/ false);
 
         let should_show = should_show_trust_screen(&config);
         assert!(
@@ -1281,7 +1294,7 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
         config.active_project = ProjectConfig { trust_level: None };
-        config.set_windows_sandbox_enabled(true);
+        config.set_windows_sandbox_enabled(/*value*/ true);
 
         let should_show = should_show_trust_screen(&config);
         if cfg!(target_os = "windows") {

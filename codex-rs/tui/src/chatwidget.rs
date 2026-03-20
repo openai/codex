@@ -67,8 +67,6 @@ use codex_core::config::types::ApprovalsReviewer;
 use codex_core::config::types::Notifications;
 use codex_core::config::types::WindowsSandboxModeToml;
 use codex_core::config_loader::ConfigLayerStackOrdering;
-use codex_core::features::FEATURES;
-use codex_core::features::Feature;
 use codex_core::find_thread_name_by_id;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::get_git_repo_root;
@@ -80,6 +78,8 @@ use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::skills::model::SkillMetadata;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_features::FEATURES;
+use codex_features::Feature;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
@@ -289,6 +289,8 @@ mod skills;
 use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
+mod plugins;
+use self::plugins::PluginsCacheState;
 mod realtime;
 use self::realtime::RealtimeConversationUiState;
 use self::realtime::RenderedUserMessageEvent;
@@ -520,6 +522,12 @@ enum ConnectorsCacheState {
     Failed(String),
 }
 
+#[derive(Debug, Clone, Default)]
+struct PluginListFetchState {
+    cache_cwd: Option<PathBuf>,
+    in_flight_cwd: Option<PathBuf>,
+}
+
 #[derive(Debug)]
 enum RateLimitErrorKind {
     ServerOverloaded,
@@ -712,6 +720,8 @@ pub(crate) struct ChatWidget {
     connectors_partial_snapshot: Option<ConnectorsSnapshot>,
     connectors_prefetch_in_flight: bool,
     connectors_force_refetch_pending: bool,
+    plugins_cache: PluginsCacheState,
+    plugins_fetch_state: PluginListFetchState,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
     // Accumulates the current reasoning block text to extract a header
@@ -3654,6 +3664,8 @@ impl ChatWidget {
             connectors_partial_snapshot: None,
             connectors_prefetch_in_flight: false,
             connectors_force_refetch_pending: false,
+            plugins_cache: PluginsCacheState::default(),
+            plugins_fetch_state: PluginListFetchState::default(),
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -3852,6 +3864,8 @@ impl ChatWidget {
             connectors_partial_snapshot: None,
             connectors_prefetch_in_flight: false,
             connectors_force_refetch_pending: false,
+            plugins_cache: PluginsCacheState::default(),
+            plugins_fetch_state: PluginListFetchState::default(),
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -4042,6 +4056,8 @@ impl ChatWidget {
             connectors_partial_snapshot: None,
             connectors_prefetch_in_flight: false,
             connectors_force_refetch_pending: false,
+            plugins_cache: PluginsCacheState::default(),
+            plugins_fetch_state: PluginListFetchState::default(),
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -4536,7 +4552,7 @@ impl ChatWidget {
 
                     self.session_telemetry.counter(
                         "codex.windows_sandbox.setup_elevated_sandbox_command",
-                        1,
+                        /*inc*/ 1,
                         &[],
                     );
                     self.app_event_tx
@@ -4654,6 +4670,9 @@ impl ChatWidget {
             }
             SlashCommand::Apps => {
                 self.add_connectors_output();
+            }
+            SlashCommand::Plugins => {
+                self.add_plugins_output();
             }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
@@ -7525,8 +7544,11 @@ impl ChatWidget {
             return;
         }
 
-        self.session_telemetry
-            .counter("codex.windows_sandbox.elevated_prompt_shown", 1, &[]);
+        self.session_telemetry.counter(
+            "codex.windows_sandbox.elevated_prompt_shown",
+            /*inc*/ 1,
+            &[],
+        );
 
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(
@@ -7545,7 +7567,11 @@ impl ChatWidget {
                 name: "Set up default sandbox (requires Administrator permissions)".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    accept_otel.counter("codex.windows_sandbox.elevated_prompt_accept", 1, &[]);
+                    accept_otel.counter(
+                        "codex.windows_sandbox.elevated_prompt_accept",
+                        /*inc*/ 1,
+                        &[],
+                    );
                     tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
                         preset: preset.clone(),
                     });
@@ -7557,7 +7583,11 @@ impl ChatWidget {
                 name: "Use non-admin sandbox (higher risk if prompt injected)".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    legacy_otel.counter("codex.windows_sandbox.elevated_prompt_use_legacy", 1, &[]);
+                    legacy_otel.counter(
+                        "codex.windows_sandbox.elevated_prompt_use_legacy",
+                        /*inc*/ 1,
+                        &[],
+                    );
                     tx.send(AppEvent::BeginWindowsSandboxLegacySetup {
                         preset: legacy_preset.clone(),
                     });
@@ -7569,7 +7599,11 @@ impl ChatWidget {
                 name: "Quit".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    quit_otel.counter("codex.windows_sandbox.elevated_prompt_quit", 1, &[]);
+                    quit_otel.counter(
+                        "codex.windows_sandbox.elevated_prompt_quit",
+                        /*inc*/ 1,
+                        &[],
+                    );
                     tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
                 })],
                 dismiss_on_select: true,
@@ -7619,7 +7653,11 @@ impl ChatWidget {
                     let otel = self.session_telemetry.clone();
                     let preset = elevated_preset;
                     move |tx| {
-                        otel.counter("codex.windows_sandbox.fallback_retry_elevated", 1, &[]);
+                        otel.counter(
+                            "codex.windows_sandbox.fallback_retry_elevated",
+                            /*inc*/ 1,
+                            &[],
+                        );
                         tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
                             preset: preset.clone(),
                         });
@@ -7635,7 +7673,11 @@ impl ChatWidget {
                     let otel = self.session_telemetry.clone();
                     let preset = legacy_preset;
                     move |tx| {
-                        otel.counter("codex.windows_sandbox.fallback_use_legacy", 1, &[]);
+                        otel.counter(
+                            "codex.windows_sandbox.fallback_use_legacy",
+                            /*inc*/ 1,
+                            &[],
+                        );
                         tx.send(AppEvent::BeginWindowsSandboxLegacySetup {
                             preset: preset.clone(),
                         });
@@ -7648,7 +7690,11 @@ impl ChatWidget {
                 name: "Quit".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    quit_otel.counter("codex.windows_sandbox.fallback_prompt_quit", 1, &[]);
+                    quit_otel.counter(
+                        "codex.windows_sandbox.fallback_prompt_quit",
+                        /*inc*/ 1,
+                        &[],
+                    );
                     tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
                 })],
                 dismiss_on_select: true,
@@ -7688,11 +7734,12 @@ impl ChatWidget {
         // While elevated sandbox setup runs, prevent typing so the user doesn't
         // accidentally queue messages that will run under an unexpected mode.
         self.bottom_pane.set_composer_input_enabled(
-            false,
+            /*enabled*/ false,
             Some("Input disabled until setup completes.".to_string()),
         );
         self.bottom_pane.ensure_status_indicator();
-        self.bottom_pane.set_interrupt_hint_visible(false);
+        self.bottom_pane
+            .set_interrupt_hint_visible(/*visible*/ false);
         self.set_status(
             "Setting up sandbox...".to_string(),
             Some("Hang tight, this may take a few minutes".to_string()),
@@ -7708,7 +7755,8 @@ impl ChatWidget {
 
     #[cfg(target_os = "windows")]
     pub(crate) fn clear_windows_sandbox_setup_status(&mut self) {
-        self.bottom_pane.set_composer_input_enabled(true, None);
+        self.bottom_pane
+            .set_composer_input_enabled(/*enabled*/ true, /*placeholder*/ None);
         self.bottom_pane.hide_status_indicator();
         self.request_redraw();
     }

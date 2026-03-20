@@ -33,11 +33,11 @@ use codex_core::config_loader::ConfigLayerStack;
 use codex_core::config_loader::ConfigRequirements;
 use codex_core::config_loader::ConfigRequirementsToml;
 use codex_core::config_loader::RequirementSource;
-use codex_core::features::FEATURES;
-use codex_core::features::Feature;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::skills::model::SkillMetadata;
+use codex_features::FEATURES;
+use codex_features::Feature;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
@@ -979,8 +979,10 @@ async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
 
     let remote_url = "https://example.com/remote-only.png".to_string();
     chat.set_remote_image_urls(vec![remote_url.clone()]);
-    chat.bottom_pane
-        .set_composer_input_enabled(false, Some("Input disabled for test.".to_string()));
+    chat.bottom_pane.set_composer_input_enabled(
+        /*enabled*/ false,
+        Some("Input disabled for test.".to_string()),
+    );
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -1893,6 +1895,8 @@ async fn make_chatwidget_manual(
         connectors_partial_snapshot: None,
         connectors_prefetch_in_flight: false,
         connectors_force_refetch_pending: false,
+        plugins_cache: PluginsCacheState::default(),
+        plugins_fetch_state: PluginListFetchState::default(),
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),

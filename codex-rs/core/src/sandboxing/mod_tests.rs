@@ -158,6 +158,7 @@ fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() 
                 cwd: cwd.clone(),
                 env: HashMap::new(),
                 expiration: crate::exec::ExecExpiration::DefaultTimeout,
+                capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
                 sandbox_permissions: super::SandboxPermissions::UseDefault,
                 additional_permissions: None,
                 justification: None,
@@ -518,6 +519,7 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
                 cwd: cwd.clone(),
                 env: HashMap::new(),
                 expiration: crate::exec::ExecExpiration::DefaultTimeout,
+                capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
                 sandbox_permissions: super::SandboxPermissions::WithAdditionalPermissions,
                 additional_permissions: Some(PermissionProfile {
                     network: Some(NetworkPermissions {
@@ -580,6 +582,7 @@ fn transform_additional_permissions_preserves_denied_entries() {
                 cwd: cwd.clone(),
                 env: HashMap::new(),
                 expiration: crate::exec::ExecExpiration::DefaultTimeout,
+                capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
                 sandbox_permissions: super::SandboxPermissions::WithAdditionalPermissions,
                 additional_permissions: Some(PermissionProfile {
                     file_system: Some(FileSystemPermissions {

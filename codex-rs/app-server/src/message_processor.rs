@@ -50,20 +50,22 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_core::AnalyticsEventsClient;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
-use codex_core::auth::ExternalAuthRefreshContext;
-use codex_core::auth::ExternalAuthRefreshReason;
-use codex_core::auth::ExternalAuthRefresher;
-use codex_core::auth::ExternalAuthTokens;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
+use codex_core::default_client::DEFAULT_ORIGINATOR;
 use codex_core::default_client::SetOriginatorError;
 use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_features::Feature;
 use codex_feedback::CodexFeedback;
+use codex_login::auth::ExternalAuthRefreshContext;
+use codex_login::auth::ExternalAuthRefreshReason;
+use codex_login::auth::ExternalAuthRefresher;
+use codex_login::auth::ExternalAuthTokens;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
@@ -77,6 +79,7 @@ use toml::Value as TomlValue;
 use tracing::Instrument;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
+const TUI_APP_SERVER_CLIENT_NAME: &str = "codex-tui";
 
 #[derive(Clone)]
 struct ExternalAuthRefreshBridge {
@@ -212,7 +215,7 @@ impl MessageProcessor {
                     CollaborationModesConfig {
                         default_mode_request_user_input: config
                             .features
-                            .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
+                            .enabled(Feature::DefaultModeRequestUserInput),
                     },
                 ));
                 (auth_manager, thread_manager)
@@ -245,7 +248,7 @@ impl MessageProcessor {
         // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
         thread_manager
             .plugins_manager()
-            .maybe_start_curated_repo_sync_for_config(&config, auth_manager.clone());
+            .maybe_start_plugin_startup_tasks_for_config(&config, auth_manager.clone());
         let config_api = ConfigApi::new(
             config.codex_home.clone(),
             cli_overrides,
@@ -550,7 +553,14 @@ impl MessageProcessor {
                 } = params.client_info;
                 session.app_server_client_name = Some(name.clone());
                 session.client_version = Some(version.clone());
-                if let Err(error) = set_default_originator(name.clone()) {
+                let originator = if name == TUI_APP_SERVER_CLIENT_NAME {
+                    // TODO: Remove this temporary workaround once app-server clients no longer
+                    // need to retain the legacy TUI `codex_cli_rs` originator behavior.
+                    DEFAULT_ORIGINATOR.to_string()
+                } else {
+                    name.clone()
+                };
+                if let Err(error) = set_default_originator(originator) {
                     match error {
                         SetOriginatorError::InvalidHeaderValue => {
                             let error = JSONRPCErrorError {
@@ -789,7 +799,7 @@ impl MessageProcessor {
             Ok(response) => {
                 self.codex_message_processor.clear_plugin_related_caches();
                 self.codex_message_processor
-                    .maybe_start_curated_repo_sync_for_latest_config()
+                    .maybe_start_plugin_startup_tasks_for_latest_config()
                     .await;
                 self.outgoing.send_response(request_id, response).await;
             }
@@ -806,7 +816,7 @@ impl MessageProcessor {
             Ok(response) => {
                 self.codex_message_processor.clear_plugin_related_caches();
                 self.codex_message_processor
-                    .maybe_start_curated_repo_sync_for_latest_config()
+                    .maybe_start_plugin_startup_tasks_for_latest_config()
                     .await;
                 self.outgoing.send_response(request_id, response).await;
             }

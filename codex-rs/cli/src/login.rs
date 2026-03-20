@@ -328,7 +328,7 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                     std::process::exit(1);
                 }
             },
-            AuthMode::Chatgpt => {
+            AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => {
                 eprintln!("Logged in using ChatGPT");
                 std::process::exit(0);
             }

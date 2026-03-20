@@ -11,6 +11,7 @@ members = [
     "apply-patch",
     "arg0",
     "feedback",
+    "features",
     "codex-backend-openapi-models",
     "cloud-requirements",
     "cloud-tasks",
@@ -111,6 +112,7 @@ codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
 codex-feedback = { path = "feedback" }
+codex-features = { path = "features" }
 codex-file-search = { path = "file-search" }
 codex-git = { path = "utils/git" }
 codex-hooks = { path = "hooks" }

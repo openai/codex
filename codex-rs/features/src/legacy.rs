@@ -1,5 +1,5 @@
-use super::Feature;
-use super::Features;
+use crate::Feature;
+use crate::Features;
 use tracing::info;
 
 #[derive(Clone, Copy)]
@@ -47,7 +47,7 @@ const ALIASES: &[Alias] = &[
     },
 ];
 
-pub(crate) fn legacy_feature_keys() -> impl Iterator<Item = &'static str> {
+pub fn legacy_feature_keys() -> impl Iterator<Item = &'static str> {
     ALIASES.iter().map(|alias| alias.legacy_key)
 }
 
@@ -62,7 +62,7 @@ pub(crate) fn feature_for_key(key: &str) -> Option<Feature> {
 }
 
 #[derive(Debug, Default)]
-pub struct LegacyFeatureToggles {
+pub(crate) struct LegacyFeatureToggles {
     pub include_apply_patch_tool: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,

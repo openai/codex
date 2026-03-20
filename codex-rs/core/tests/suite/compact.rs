@@ -5,6 +5,7 @@ use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
+use codex_features::Feature;
 use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
@@ -3115,9 +3116,7 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            let _ = config
-                .features
-                .enable(codex_core::features::Feature::RemoteModels);
+            let _ = config.features.enable(Feature::RemoteModels);
             config.model_auto_compact_token_limit = Some(200);
         })
         .build(&server)

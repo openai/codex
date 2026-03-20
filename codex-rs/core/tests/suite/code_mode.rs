@@ -5,7 +5,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -2277,14 +2277,9 @@ async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
             false,
         )
         .await?;
-    let test = TestCodex {
-        home: base_test.home,
-        cwd: base_test.cwd,
-        codex: new_thread.thread,
-        session_configured: new_thread.session_configured,
-        config: base_test.config,
-        thread_manager: base_test.thread_manager,
-    };
+    let mut test = base_test;
+    test.codex = new_thread.thread;
+    test.session_configured = new_thread.session_configured;
 
     let code = r#"
 import { ALL_TOOLS, hidden_dynamic_tool } from "tools.js";
