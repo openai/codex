@@ -27,6 +27,7 @@ use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionRequestApprovalSkillMetadata;
+use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ContextCompactedNotification;
 use codex_app_server_protocol::DeprecationNoticeNotification;
@@ -56,6 +57,8 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
+use codex_app_server_protocol::McpServerStartupState;
+use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::McpToolCallError;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
@@ -110,6 +113,7 @@ use codex_core::sandboxing::intersect_permission_profiles;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
+use codex_protocol::items::parse_hook_prompt_message;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
@@ -304,6 +308,34 @@ pub(crate) async fn apply_bespoke_event_handling(
                 outgoing
                     .send_server_notification(ServerNotification::SkillsChanged(
                         SkillsChangedNotification {},
+                    ))
+                    .await;
+            }
+        }
+        EventMsg::McpStartupUpdate(update) => {
+            if let ApiVersion::V2 = api_version {
+                let (status, error) = match update.status {
+                    codex_protocol::protocol::McpStartupStatus::Starting => {
+                        (McpServerStartupState::Starting, None)
+                    }
+                    codex_protocol::protocol::McpStartupStatus::Ready => {
+                        (McpServerStartupState::Ready, None)
+                    }
+                    codex_protocol::protocol::McpStartupStatus::Failed { error } => {
+                        (McpServerStartupState::Failed, Some(error))
+                    }
+                    codex_protocol::protocol::McpStartupStatus::Cancelled => {
+                        (McpServerStartupState::Cancelled, None)
+                    }
+                };
+                let notification = McpServerStatusUpdatedNotification {
+                    name: update.server,
+                    status,
+                    error,
+                };
+                outgoing
+                    .send_server_notification(ServerNotification::McpServerStatusUpdated(
+                        notification,
                     ))
                     .await;
             }
@@ -1483,6 +1515,14 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await;
         }
         EventMsg::RawResponseItem(raw_response_item_event) => {
+            maybe_emit_hook_prompt_item_completed(
+                api_version,
+                conversation_id,
+                &event_turn_id,
+                &raw_response_item_event.item,
+                &outgoing,
+            )
+            .await;
             maybe_emit_raw_response_item_completed(
                 api_version,
                 conversation_id,
@@ -1563,6 +1603,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 command,
                 cwd,
                 process_id,
+                source: exec_command_begin_event.source.into(),
                 status: CommandExecutionStatus::InProgress,
                 command_actions,
                 aggregated_output: None,
@@ -1580,7 +1621,6 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::ExecCommandOutputDelta(exec_command_output_delta_event) => {
             let item_id = exec_command_output_delta_event.call_id.clone();
-            let delta = String::from_utf8_lossy(&exec_command_output_delta_event.chunk).to_string();
             // The underlying EventMsg::ExecCommandOutputDelta is used for shell, unified_exec,
             // and apply_patch tool calls. We represent apply_patch with the FileChange item, and
             // everything else with the CommandExecution item.
@@ -1592,6 +1632,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 state.turn_summary.file_change_started.contains(&item_id)
             };
             if is_file_change {
+                let delta =
+                    String::from_utf8_lossy(&exec_command_output_delta_event.chunk).to_string();
                 let notification = FileChangeOutputDeltaNotification {
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
@@ -1608,7 +1650,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                     thread_id: conversation_id.to_string(),
                     turn_id: event_turn_id.clone(),
                     item_id,
-                    delta,
+                    delta: String::from_utf8_lossy(&exec_command_output_delta_event.chunk)
+                        .to_string(),
                 };
                 outgoing
                     .send_server_notification(ServerNotification::CommandExecutionOutputDelta(
@@ -1641,6 +1684,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 aggregated_output,
                 exit_code,
                 duration,
+                source,
                 status,
                 ..
             } = exec_command_end_event;
@@ -1672,6 +1716,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 command: shlex_join(&command),
                 cwd,
                 process_id,
+                source: source.into(),
                 status,
                 command_actions,
                 aggregated_output,
@@ -1935,6 +1980,7 @@ async fn complete_command_execution_item(
     command: String,
     cwd: PathBuf,
     process_id: Option<String>,
+    source: CommandExecutionSource,
     command_actions: Vec<V2ParsedCommand>,
     status: CommandExecutionStatus,
     outgoing: &ThreadScopedOutgoingMessageSender,
@@ -1944,6 +1990,7 @@ async fn complete_command_execution_item(
         command,
         cwd,
         process_id,
+        source,
         status,
         command_actions,
         aggregated_output: None,
@@ -1978,6 +2025,49 @@ async fn maybe_emit_raw_response_item_completed(
     };
     outgoing
         .send_server_notification(ServerNotification::RawResponseItemCompleted(notification))
+        .await;
+}
+
+async fn maybe_emit_hook_prompt_item_completed(
+    api_version: ApiVersion,
+    conversation_id: ThreadId,
+    turn_id: &str,
+    item: &codex_protocol::models::ResponseItem,
+    outgoing: &ThreadScopedOutgoingMessageSender,
+) {
+    let ApiVersion::V2 = api_version else {
+        return;
+    };
+
+    let codex_protocol::models::ResponseItem::Message {
+        role, content, id, ..
+    } = item
+    else {
+        return;
+    };
+
+    if role != "user" {
+        return;
+    }
+
+    let Some(hook_prompt) = parse_hook_prompt_message(id.as_ref(), content) else {
+        return;
+    };
+
+    let notification = ItemCompletedNotification {
+        thread_id: conversation_id.to_string(),
+        turn_id: turn_id.to_string(),
+        item: ThreadItem::HookPrompt {
+            id: hook_prompt.id,
+            fragments: hook_prompt
+                .fragments
+                .into_iter()
+                .map(codex_app_server_protocol::HookPromptFragment::from)
+                .collect(),
+        },
+    };
+    outgoing
+        .send_server_notification(ServerNotification::ItemCompleted(notification))
         .await;
 }
 
@@ -2607,6 +2697,7 @@ async fn on_command_execution_request_approval_response(
             completion_item.command,
             completion_item.cwd,
             /*process_id*/ None,
+            CommandExecutionSource::Agent,
             completion_item.command_actions,
             status,
             &outgoing,
@@ -2751,6 +2842,8 @@ mod tests {
     use codex_app_server_protocol::GuardianApprovalReviewStatus;
     use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::TurnPlanStepStatus;
+    use codex_protocol::items::HookPromptFragment;
+    use codex_protocol::items::build_hook_prompt_message;
     use codex_protocol::mcp::CallToolResult;
     use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
     use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
@@ -3783,6 +3876,61 @@ mod tests {
         .await;
 
         assert!(rx.try_recv().is_err(), "no messages expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_hook_prompt_raw_response_emits_item_completed() -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let conversation_id = ThreadId::new();
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            conversation_id,
+        );
+        let item = build_hook_prompt_message(&[
+            HookPromptFragment::from_single_hook("Retry with tests.", "hook-run-1"),
+            HookPromptFragment::from_single_hook("Then summarize cleanly.", "hook-run-2"),
+        ])
+        .expect("hook prompt message");
+
+        maybe_emit_hook_prompt_item_completed(
+            ApiVersion::V2,
+            conversation_id,
+            "turn-1",
+            &item,
+            &outgoing,
+        )
+        .await;
+
+        let msg = recv_broadcast_message(&mut rx).await?;
+        match msg {
+            OutgoingMessage::AppServerNotification(ServerNotification::ItemCompleted(
+                notification,
+            )) => {
+                assert_eq!(notification.thread_id, conversation_id.to_string());
+                assert_eq!(notification.turn_id, "turn-1");
+                assert_eq!(
+                    notification.item,
+                    ThreadItem::HookPrompt {
+                        id: notification.item.id().to_string(),
+                        fragments: vec![
+                            codex_app_server_protocol::HookPromptFragment {
+                                text: "Retry with tests.".into(),
+                                hook_run_id: "hook-run-1".into(),
+                            },
+                            codex_app_server_protocol::HookPromptFragment {
+                                text: "Then summarize cleanly.".into(),
+                                hook_run_id: "hook-run-2".into(),
+                            },
+                        ],
+                    }
+                );
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "no extra messages expected");
         Ok(())
     }
 }

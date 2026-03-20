@@ -3,8 +3,6 @@ use crate::client_common::tools::FreeformToolFormat;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::config::AgentRoleConfig;
-use crate::features::Feature;
-use crate::features::Features;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -35,6 +33,8 @@ use crate::tools::handlers::request_permissions_tool_description;
 use crate::tools::handlers::request_user_input_tool_description;
 use crate::tools::registry::ToolRegistryBuilder;
 use crate::tools::registry::tool_handler_key;
+use codex_features::Feature;
+use codex_features::Features;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -129,20 +129,29 @@ fn agent_status_output_schema() -> JsonValue {
     })
 }
 
-fn spawn_agent_output_schema() -> JsonValue {
+fn spawn_agent_output_schema(multi_agent_v2: bool) -> JsonValue {
+    let task_name_description = if multi_agent_v2 {
+        "Canonical task name for the spawned agent."
+    } else {
+        "Canonical task name for the spawned agent when one was assigned."
+    };
     json!({
         "type": "object",
         "properties": {
             "agent_id": {
-                "type": "string",
-                "description": "Thread identifier for the spawned agent."
+                "type": ["string", "null"],
+                "description": "Thread identifier for the spawned agent when no task name was assigned."
+            },
+            "task_name": {
+                "type": ["string", "null"],
+                "description": task_name_description
             },
             "nickname": {
                 "type": ["string", "null"],
                 "description": "User-facing nickname for the spawned agent when available."
             }
         },
-        "required": ["agent_id", "nickname"],
+        "required": ["agent_id", "task_name", "nickname"],
         "additionalProperties": false
     })
 }
@@ -178,7 +187,7 @@ fn wait_output_schema() -> JsonValue {
         "properties": {
             "status": {
                 "type": "object",
-                "description": "Final statuses keyed by agent id for agents that finished before the timeout.",
+                "description": "Final statuses keyed by canonical task name when available, otherwise by agent id.",
                 "additionalProperties": agent_status_output_schema()
             },
             "timed_out": {
@@ -276,6 +285,7 @@ pub(crate) struct ToolsConfig {
     pub js_repl_tools_only: bool,
     pub can_request_original_image_detail: bool,
     pub collab_tools: bool,
+    pub multi_agent_v2: bool,
     pub artifact_tools: bool,
     pub request_user_input: bool,
     pub default_mode_request_user_input: bool,
@@ -325,6 +335,7 @@ impl ToolsConfig {
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
+        let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
         let include_request_user_input = !matches!(session_source, SessionSource::SubAgent(_));
         let include_default_mode_request_user_input =
@@ -408,6 +419,7 @@ impl ToolsConfig {
             js_repl_tools_only: include_js_repl_tools_only,
             can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
+            multi_agent_v2: include_multi_agent_v2,
             artifact_tools: include_artifact_tools,
             request_user_input: include_request_user_input,
             default_mode_request_user_input: include_default_mode_request_user_input,
@@ -587,6 +599,12 @@ fn create_request_permissions_schema() -> JsonSchema {
     }
 }
 
+fn windows_destructive_filesystem_guidance() -> &'static str {
+    r#"Windows safety rules:
+- Do not compose destructive filesystem commands across shells. Do not enumerate paths in PowerShell and then pass them to `cmd /c`, batch builtins, or another shell for deletion or moving. Use one shell end-to-end, prefer native PowerShell cmdlets such as `Remove-Item` / `Move-Item` with `-LiteralPath`, and avoid string-built shell commands for file operations.
+- Before any recursive delete or move on Windows, verify the resolved absolute target paths stay within the intended workspace or explicitly named target directory. Never issue a recursive delete or move against a computed path if the final target has not been checked."#
+}
+
 fn create_approval_parameters(
     exec_permission_approvals_enabled: bool,
 ) -> BTreeMap<String, JsonSchema> {
@@ -709,9 +727,15 @@ fn create_exec_command_tool(
 
     ToolSpec::Function(ResponsesApiTool {
         name: "exec_command".to_string(),
-        description:
+        description: if cfg!(windows) {
+            format!(
+                "Runs a command in a PTY, returning output or a session ID for ongoing interaction.\n\n{}",
+                windows_destructive_filesystem_guidance()
+            )
+        } else {
             "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
-                .to_string(),
+                .to_string()
+        },
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::Object {
@@ -848,22 +872,28 @@ fn create_shell_tool(exec_permission_approvals_enabled: bool) -> ToolSpec {
         exec_permission_approvals_enabled,
     ));
 
-    let description  = if cfg!(windows) {
-        r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
+    let description = if cfg!(windows) {
+        format!(
+            r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
 
 Examples of valid command strings:
 
 - ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
 - recursive find by name: ["powershell.exe", "-Command", "Get-ChildItem -Recurse -Filter *.py"]
 - recursive grep: ["powershell.exe", "-Command", "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"]
-- ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"]
+- ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object {{ $_.ProcessName -like '*python*' }}"]
 - setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
-- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]"#
+- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]
+
+{}"#,
+            windows_destructive_filesystem_guidance()
+        )
     } else {
         r#"Runs a shell command and returns its output.
 - The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
 - Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
-    }.to_string();
+            .to_string()
+    };
 
     ToolSpec::Function(ResponsesApiTool {
         name: "shell".to_string(),
@@ -921,20 +951,26 @@ fn create_shell_command_tool(
     ));
 
     let description = if cfg!(windows) {
-        r#"Runs a Powershell command (Windows) and returns its output.
+        format!(
+            r#"Runs a Powershell command (Windows) and returns its output.
 
 Examples of valid command strings:
 
 - ls -a (show hidden): "Get-ChildItem -Force"
 - recursive find by name: "Get-ChildItem -Recurse -Filter *.py"
 - recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
-- ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
+- ps aux | grep python: "Get-Process | Where-Object {{ $_.ProcessName -like '*python*' }}"
 - setting an env var: "$env:FOO='bar'; echo $env:FOO"
-- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"#
+- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"
+
+{}"#,
+            windows_destructive_filesystem_guidance()
+        )
     } else {
         r#"Runs a shell command and returns its output.
 - Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#
-    }.to_string();
+            .to_string()
+    };
 
     ToolSpec::Function(ResponsesApiTool {
         name: "shell_command".to_string(),
@@ -980,7 +1016,21 @@ fn create_view_image_tool(can_request_original_image_detail: bool) -> ToolSpec {
             required: Some(vec!["path".to_string()]),
             additional_properties: Some(false.into()),
         },
-        output_schema: None,
+        output_schema: Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "image_url": {
+                    "type": "string",
+                    "description": "Data URL for the loaded image."
+                },
+                "detail": {
+                    "type": ["string", "null"],
+                    "description": "Image detail hint returned by view_image. Returns `original` when original resolution is preserved, otherwise `null`."
+                }
+            },
+            "required": ["image_url", "detail"],
+            "additionalProperties": false
+        })),
     })
 }
 
@@ -1038,7 +1088,8 @@ fn create_collab_input_items_schema() -> JsonSchema {
 
 fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
     let available_models_description = spawn_agent_models_description(&config.available_models);
-    let properties = BTreeMap::from([
+    let return_value_description = "Returns the canonical task name when the spawned agent was named, otherwise the agent id, plus the user-facing nickname when available.";
+    let mut properties = BTreeMap::from([
         (
             "message".to_string(),
             JsonSchema::String {
@@ -1085,6 +1136,15 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
             },
         ),
     ]);
+    properties.insert(
+        "task_name".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional task name for the new agent. Use lowercase letters, digits, and underscores."
+                    .to_string(),
+            ),
+        },
+    );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
@@ -1093,7 +1153,7 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
         Only use `spawn_agent` if and only if the user explicitly asks for sub-agents, delegation, or parallel agent work.
         Requests for depth, thoroughness, research, investigation, or detailed codebase analysis do not count as permission to spawn.
         Agent-role guidance below only helps choose which agent to use after spawning is already authorized; it never authorizes spawning by itself.
-        Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent. This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
+        Spawn a sub-agent for a well-scoped task. {return_value_description} This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
 
 {available_models_description}
 ### When to delegate vs. do the subtask yourself
@@ -1132,7 +1192,7 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
             required: None,
             additional_properties: Some(false.into()),
         },
-        output_schema: Some(spawn_agent_output_schema()),
+        output_schema: Some(spawn_agent_output_schema(config.multi_agent_v2)),
     })
 }
 
@@ -1297,9 +1357,11 @@ fn create_report_agent_job_result_tool() -> ToolSpec {
 fn create_send_input_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
-            "id".to_string(),
+            "target".to_string(),
             JsonSchema::String {
-                description: Some("Agent id to message (from spawn_agent).".to_string()),
+                description: Some(
+                    "Agent id or canonical task name to message (from spawn_agent).".to_string(),
+                ),
             },
         ),
         (
@@ -1331,7 +1393,7 @@ fn create_send_input_tool() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["id".to_string()]),
+            required: Some(vec!["target".to_string()]),
             additional_properties: Some(false.into()),
         },
         output_schema: Some(send_input_output_schema()),
@@ -1366,11 +1428,11 @@ fn create_resume_agent_tool() -> ToolSpec {
 fn create_wait_agent_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
-        "ids".to_string(),
+        "targets".to_string(),
         JsonSchema::Array {
             items: Box::new(JsonSchema::String { description: None }),
             description: Some(
-                "Agent ids to wait on. Pass multiple ids to wait for whichever finishes first."
+                "Agent ids or canonical task names to wait on. Pass multiple targets to wait for whichever finishes first."
                     .to_string(),
             ),
         },
@@ -1392,7 +1454,7 @@ fn create_wait_agent_tool() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["ids".to_string()]),
+            required: Some(vec!["targets".to_string()]),
             additional_properties: Some(false.into()),
         },
         output_schema: Some(wait_output_schema()),
@@ -1518,20 +1580,22 @@ fn create_request_permissions_tool() -> ToolSpec {
 fn create_close_agent_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
-        "id".to_string(),
+        "target".to_string(),
         JsonSchema::String {
-            description: Some("Agent id to close (from spawn_agent).".to_string()),
+            description: Some(
+                "Agent id or canonical task name to close (from spawn_agent).".to_string(),
+            ),
         },
     );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "close_agent".to_string(),
-        description: "Close an agent when it is no longer needed and return its previous status before shutdown was requested. Don't keep agents open for too long if they are not needed anymore.".to_string(),
+        description: "Close an agent and any open descendants when they are no longer needed, and return the target agent's previous status before shutdown was requested. Don't keep agents open for too long if they are not needed anymore.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["id".to_string()]),
+            required: Some(vec!["target".to_string()]),
             additional_properties: Some(false.into()),
         },
         output_schema: Some(close_agent_output_schema()),
@@ -2928,12 +2992,15 @@ pub(crate) fn build_specs_with_discoverable_tools(
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
-        push_tool_spec(
-            &mut builder,
-            create_resume_agent_tool(),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
+        if !config.multi_agent_v2 {
+            push_tool_spec(
+                &mut builder,
+                create_resume_agent_tool(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            builder.register_handler("resume_agent", Arc::new(ResumeAgentHandler));
+        }
         push_tool_spec(
             &mut builder,
             create_wait_agent_tool(),
@@ -2948,7 +3015,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
         );
         builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandler));
         builder.register_handler("send_input", Arc::new(SendInputHandler));
-        builder.register_handler("resume_agent", Arc::new(ResumeAgentHandler));
         builder.register_handler("wait_agent", Arc::new(WaitAgentHandler));
         builder.register_handler("close_agent", Arc::new(CloseAgentHandler));
     }

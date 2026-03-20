@@ -1,3 +1,5 @@
+use codex_protocol::items::HookPromptItem;
+use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
@@ -94,10 +96,7 @@ const CONTEXTUAL_USER_FRAGMENTS: &[ContextualUserFragmentDefinition] = &[
     SUBAGENT_NOTIFICATION_FRAGMENT,
 ];
 
-pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
-    let ContentItem::InputText { text } = content_item else {
-        return false;
-    };
+fn is_standard_contextual_user_text(text: &str) -> bool {
     CONTEXTUAL_USER_FRAGMENTS
         .iter()
         .any(|definition| definition.matches_text(text))
@@ -116,6 +115,40 @@ pub(crate) fn is_memory_excluded_contextual_user_fragment(content_item: &Content
         return false;
     };
     AGENTS_MD_FRAGMENT.matches_text(text) || SKILL_FRAGMENT.matches_text(text)
+}
+
+pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
+    let ContentItem::InputText { text } = content_item else {
+        return false;
+    };
+    parse_hook_prompt_fragment(text).is_some() || is_standard_contextual_user_text(text)
+}
+
+pub(crate) fn parse_visible_hook_prompt_message(
+    id: Option<&String>,
+    content: &[ContentItem],
+) -> Option<HookPromptItem> {
+    let mut fragments = Vec::new();
+
+    for content_item in content {
+        let ContentItem::InputText { text } = content_item else {
+            return None;
+        };
+        if let Some(fragment) = parse_hook_prompt_fragment(text) {
+            fragments.push(fragment);
+            continue;
+        }
+        if is_standard_contextual_user_text(text) {
+            continue;
+        }
+        return None;
+    }
+
+    if fragments.is_empty() {
+        return None;
+    }
+
+    Some(HookPromptItem::from_fragments(id, fragments))
 }
 
 #[cfg(test)]

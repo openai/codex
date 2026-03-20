@@ -408,7 +408,9 @@ impl RealtimeWebsocketEvents {
                 append_transcript_delta(&mut active_transcript.entries, "assistant", delta);
             }
             RealtimeEvent::HandoffRequested(handoff) => {
-                handoff.active_transcript = std::mem::take(&mut active_transcript.entries);
+                if self.event_parser == RealtimeEventParser::V1 {
+                    handoff.active_transcript = std::mem::take(&mut active_transcript.entries);
+                }
             }
             RealtimeEvent::SessionUpdated { .. }
             | RealtimeEvent::AudioOut(_)
@@ -1173,7 +1175,10 @@ mod tests {
             let fourth_json: Value = serde_json::from_str(&fourth).expect("json");
             assert_eq!(fourth_json["type"], "conversation.handoff.append");
             assert_eq!(fourth_json["handoff_id"], "handoff_1");
-            assert_eq!(fourth_json["output_text"], "hello from codex");
+            assert_eq!(
+                fourth_json["output_text"],
+                "\"Agent Final Message\":\n\nhello from codex"
+            );
 
             ws.send(Message::Text(
                 json!({
@@ -1504,7 +1509,7 @@ mod tests {
             );
             assert_eq!(
                 third_json["item"]["output"],
-                Value::String("delegated result".to_string())
+                Value::String("\"Agent Final Message\":\n\ndelegated result".to_string())
             );
         });
 

@@ -57,11 +57,10 @@ use codex_core::config_loader::ConfigLayerStack;
 use codex_core::config_loader::ConfigRequirements;
 use codex_core::config_loader::ConfigRequirementsToml;
 use codex_core::config_loader::RequirementSource;
-use codex_core::features::FEATURES;
-use codex_core::features::Feature;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::skills::model::SkillMetadata;
-use codex_core::terminal::TerminalName;
+use codex_features::FEATURES;
+use codex_features::Feature;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
@@ -144,6 +143,7 @@ use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
+use codex_terminal_detection::TerminalName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::builtin_approval_presets;
 use crossterm::event::KeyCode;
@@ -1003,8 +1003,10 @@ async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
 
     let remote_url = "https://example.com/remote-only.png".to_string();
     chat.set_remote_image_urls(vec![remote_url.clone()]);
-    chat.bottom_pane
-        .set_composer_input_enabled(false, Some("Input disabled for test.".to_string()));
+    chat.bottom_pane.set_composer_input_enabled(
+        /*enabled*/ false,
+        Some("Input disabled for test.".to_string()),
+    );
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -1914,6 +1916,8 @@ async fn make_chatwidget_manual(
         connectors_partial_snapshot: None,
         connectors_prefetch_in_flight: false,
         connectors_force_refetch_pending: false,
+        plugins_cache: PluginsCacheState::default(),
+        plugins_fetch_state: PluginListFetchState::default(),
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
@@ -7097,7 +7101,7 @@ async fn image_generation_call_adds_history_cell() {
             status: "completed".into(),
             revised_prompt: Some("A tiny blue square".into()),
             result: "Zm9v".into(),
-            saved_path: Some("/tmp/ig-1.png".into()),
+            saved_path: Some("file:///tmp/ig-1.png".into()),
         }),
     });
 
@@ -8840,7 +8844,7 @@ async fn user_shell_command_renders_output_not_exploring() {
 }
 
 #[tokio::test]
-async fn bang_shell_command_is_disabled_in_app_server_tui() {
+async fn bang_shell_command_submits_run_user_shell_command_in_app_server_tui() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     let conversation_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
@@ -8873,22 +8877,11 @@ async fn bang_shell_command_is_disabled_in_app_server_tui() {
         .set_composer_text("!echo hi".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
-
-    let mut rendered = None;
-    while let Ok(event) = rx.try_recv() {
-        if let AppEvent::InsertHistoryCell(cell) = event {
-            rendered = Some(lines_to_single_string(&cell.display_lines(80)));
-            break;
-        }
+    match op_rx.try_recv() {
+        Ok(Op::RunUserShellCommand { command }) => assert_eq!(command, "echo hi"),
+        other => panic!("expected RunUserShellCommand op, got {other:?}"),
     }
-    let rendered = rendered.expect("expected disabled bang-shell error");
-    assert!(
-        rendered.contains(
-            "`!` shell commands are unavailable in app-server TUI because command output is not yet persisted in thread history."
-        ),
-        "expected bang-shell disabled message, got: {rendered}"
-    );
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 #[tokio::test]

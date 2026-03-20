@@ -3,7 +3,8 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_core::features::Feature;
+use codex_features::Feature;
+use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
@@ -82,21 +83,68 @@ else:
     Ok(())
 }
 
+fn write_parallel_stop_hooks(home: &Path, prompts: &[&str]) -> Result<()> {
+    let hook_entries = prompts
+        .iter()
+        .enumerate()
+        .map(|(index, prompt)| {
+            let script_path = home.join(format!("stop_hook_{index}.py"));
+            let script = format!(
+                r#"import json
+import sys
+
+payload = json.load(sys.stdin)
+if payload["stop_hook_active"]:
+    print(json.dumps({{"systemMessage": "done"}}))
+else:
+    print(json.dumps({{"decision": "block", "reason": {prompt:?}}}))
+"#
+            );
+            fs::write(&script_path, script).with_context(|| {
+                format!(
+                    "write stop hook script fixture at {}",
+                    script_path.display()
+                )
+            })?;
+            Ok(serde_json::json!({
+                "type": "command",
+                "command": format!("python3 {}", script_path.display()),
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let hooks = serde_json::json!({
+        "hooks": {
+            "Stop": [{
+                "hooks": hook_entries,
+            }]
+        }
+    });
+
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
 fn write_user_prompt_submit_hook(
     home: &Path,
     blocked_prompt: &str,
     additional_context: &str,
 ) -> Result<()> {
     let script_path = home.join("user_prompt_submit_hook.py");
+    let log_path = home.join("user_prompt_submit_hook_log.jsonl");
+    let log_path = log_path.display();
     let blocked_prompt_json =
         serde_json::to_string(blocked_prompt).context("serialize blocked prompt for test")?;
     let additional_context_json = serde_json::to_string(additional_context)
         .context("serialize user prompt submit additional context for test")?;
     let script = format!(
         r#"import json
+from pathlib import Path
 import sys
 
 payload = json.load(sys.stdin)
+with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
 
 if payload.get("prompt") == {blocked_prompt_json}:
     print(json.dumps({{
@@ -163,7 +211,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     Ok(())
 }
 
-fn rollout_developer_texts(text: &str) -> Result<Vec<String>> {
+fn rollout_hook_prompt_texts(text: &str) -> Result<Vec<String>> {
     let mut texts = Vec::new();
     for line in text.lines() {
         let trimmed = line.trim();
@@ -172,16 +220,28 @@ fn rollout_developer_texts(text: &str) -> Result<Vec<String>> {
         }
         let rollout: RolloutLine = serde_json::from_str(trimmed).context("parse rollout line")?;
         if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = rollout.item
-            && role == "developer"
+            && role == "user"
         {
             for item in content {
-                if let ContentItem::InputText { text } = item {
-                    texts.push(text);
+                if let ContentItem::InputText { text } = item
+                    && let Some(fragment) = parse_hook_prompt_fragment(&text)
+                {
+                    texts.push(fragment.text);
                 }
             }
         }
     }
     Ok(texts)
+}
+
+fn request_hook_prompt_texts(
+    request: &core_test_support::responses::ResponsesRequest,
+) -> Vec<String> {
+    request
+        .message_input_texts("user")
+        .into_iter()
+        .filter_map(|text| parse_hook_prompt_fragment(&text).map(|fragment| fragment.text))
+        .collect()
 }
 
 fn read_stop_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
@@ -199,6 +259,15 @@ fn read_session_start_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>>
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).context("parse session start hook log line"))
+        .collect()
+}
+
+fn read_user_prompt_submit_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
+    fs::read_to_string(home.join("user_prompt_submit_hook_log.jsonl"))
+        .context("read user prompt submit hook log")?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).context("parse user prompt submit hook log line"))
         .collect()
 }
 
@@ -284,27 +353,47 @@ async fn stop_hook_can_block_multiple_times_in_same_turn() -> Result<()> {
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 3);
-    assert!(
-        requests[1]
-            .message_input_texts("developer")
-            .contains(&FIRST_CONTINUATION_PROMPT.to_string()),
-        "second request should include the first continuation prompt",
+    assert_eq!(
+        request_hook_prompt_texts(&requests[1]),
+        vec![FIRST_CONTINUATION_PROMPT.to_string()],
+        "second request should include the first continuation prompt as user hook context",
     );
-    assert!(
-        requests[2]
-            .message_input_texts("developer")
-            .contains(&FIRST_CONTINUATION_PROMPT.to_string()),
-        "third request should retain the first continuation prompt from history",
-    );
-    assert!(
-        requests[2]
-            .message_input_texts("developer")
-            .contains(&SECOND_CONTINUATION_PROMPT.to_string()),
-        "third request should include the second continuation prompt",
+    assert_eq!(
+        request_hook_prompt_texts(&requests[2]),
+        vec![
+            FIRST_CONTINUATION_PROMPT.to_string(),
+            SECOND_CONTINUATION_PROMPT.to_string(),
+        ],
+        "third request should retain hook prompts in user history",
     );
 
     let hook_inputs = read_stop_hook_inputs(test.codex_home_path())?;
     assert_eq!(hook_inputs.len(), 3);
+    let stop_turn_ids = hook_inputs
+        .iter()
+        .map(|input| {
+            input["turn_id"]
+                .as_str()
+                .expect("stop hook input turn_id")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        stop_turn_ids.iter().all(|turn_id| !turn_id.is_empty()),
+        "stop hook turn ids should be non-empty",
+    );
+    let first_stop_turn_id = stop_turn_ids
+        .first()
+        .expect("stop hook inputs should include a first turn id")
+        .clone();
+    assert_eq!(
+        stop_turn_ids,
+        vec![
+            first_stop_turn_id.clone(),
+            first_stop_turn_id.clone(),
+            first_stop_turn_id,
+        ],
+    );
     assert_eq!(
         hook_inputs
             .iter()
@@ -317,13 +406,13 @@ async fn stop_hook_can_block_multiple_times_in_same_turn() -> Result<()> {
 
     let rollout_path = test.codex.rollout_path().expect("rollout path");
     let rollout_text = fs::read_to_string(&rollout_path)?;
-    let developer_texts = rollout_developer_texts(&rollout_text)?;
+    let hook_prompt_texts = rollout_hook_prompt_texts(&rollout_text)?;
     assert!(
-        developer_texts.contains(&FIRST_CONTINUATION_PROMPT.to_string()),
+        hook_prompt_texts.contains(&FIRST_CONTINUATION_PROMPT.to_string()),
         "rollout should persist the first continuation prompt",
     );
     assert!(
-        developer_texts.contains(&SECOND_CONTINUATION_PROMPT.to_string()),
+        hook_prompt_texts.contains(&SECOND_CONTINUATION_PROMPT.to_string()),
         "rollout should persist the second continuation prompt",
     );
 
@@ -442,11 +531,76 @@ async fn resumed_thread_keeps_stop_continuation_prompt_in_history() -> Result<()
     resumed.submit_turn("and now continue").await?;
 
     let resumed_request = resumed_response.single_request();
-    assert!(
-        resumed_request
-            .message_input_texts("developer")
-            .contains(&FIRST_CONTINUATION_PROMPT.to_string()),
-        "resumed request should keep the persisted continuation prompt in history",
+    assert_eq!(
+        request_hook_prompt_texts(&resumed_request),
+        vec![FIRST_CONTINUATION_PROMPT.to_string()],
+        "resumed request should keep the persisted continuation prompt in user history",
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn multiple_blocking_stop_hooks_persist_multiple_hook_prompt_fragments() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_assistant_message("msg-1", "draft one"),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-2", "final draft"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_parallel_stop_hooks(
+                home,
+                &[FIRST_CONTINUATION_PROMPT, SECOND_CONTINUATION_PROMPT],
+            ) {
+                panic!("failed to write parallel stop hook fixtures: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("hello again").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        request_hook_prompt_texts(&requests[1]),
+        vec![
+            FIRST_CONTINUATION_PROMPT.to_string(),
+            SECOND_CONTINUATION_PROMPT.to_string(),
+        ],
+        "second request should receive one user hook prompt message with both fragments",
+    );
+
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
+    let rollout_text = fs::read_to_string(&rollout_path)?;
+    assert_eq!(
+        rollout_hook_prompt_texts(&rollout_text)?,
+        vec![
+            FIRST_CONTINUATION_PROMPT.to_string(),
+            SECOND_CONTINUATION_PROMPT.to_string(),
+        ],
+        "rollout should preserve both hook prompt fragments in order",
     );
 
     Ok(())
@@ -506,6 +660,30 @@ async fn blocked_user_prompt_submit_persists_additional_context_for_next_turn() 
             .iter()
             .any(|text| text.contains("second prompt")),
         "second request should include the accepted prompt",
+    );
+
+    let hook_inputs = read_user_prompt_submit_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 2);
+    assert_eq!(
+        hook_inputs
+            .iter()
+            .map(|input| {
+                input["prompt"]
+                    .as_str()
+                    .expect("user prompt submit hook prompt")
+                    .to_string()
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            "blocked first prompt".to_string(),
+            "second prompt".to_string()
+        ],
+    );
+    assert!(
+        hook_inputs.iter().all(|input| input["turn_id"]
+            .as_str()
+            .is_some_and(|turn_id| !turn_id.is_empty())),
+        "blocked and accepted prompt hooks should both receive a non-empty turn_id",
     );
 
     Ok(())
@@ -622,6 +800,50 @@ async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Resu
     assert!(
         !second_user_texts.contains(&"blocked queued prompt".to_string()),
         "second request should not include the blocked queued prompt",
+    );
+
+    let hook_inputs = read_user_prompt_submit_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 3);
+    assert_eq!(
+        hook_inputs
+            .iter()
+            .map(|input| {
+                input["prompt"]
+                    .as_str()
+                    .expect("queued prompt hook prompt")
+                    .to_string()
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            "initial prompt".to_string(),
+            "accepted queued prompt".to_string(),
+            "blocked queued prompt".to_string(),
+        ],
+    );
+    let queued_turn_ids = hook_inputs
+        .iter()
+        .map(|input| {
+            input["turn_id"]
+                .as_str()
+                .expect("queued prompt hook turn_id")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        queued_turn_ids.iter().all(|turn_id| !turn_id.is_empty()),
+        "queued prompt hook turn ids should be non-empty",
+    );
+    let first_queued_turn_id = queued_turn_ids
+        .first()
+        .expect("queued prompt hook inputs should include a first turn id")
+        .clone();
+    assert_eq!(
+        queued_turn_ids,
+        vec![
+            first_queued_turn_id.clone(),
+            first_queued_turn_id.clone(),
+            first_queued_turn_id,
+        ],
     );
 
     server.shutdown().await;

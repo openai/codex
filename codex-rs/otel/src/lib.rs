@@ -31,15 +31,26 @@ pub use codex_utils_string::sanitize_metric_tag_value;
 #[derive(Debug, Clone, Serialize, Display)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolDecisionSource {
+    AutomatedReviewer,
     Config,
     User,
 }
 
-/// Maps to core AuthMode to avoid a circular dependency on codex-core.
+/// Maps to API/auth `AuthMode` to avoid a circular dependency on codex-core.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display)]
 pub enum TelemetryAuthMode {
     ApiKey,
     Chatgpt,
+}
+
+impl From<codex_app_server_protocol::AuthMode> for TelemetryAuthMode {
+    fn from(mode: codex_app_server_protocol::AuthMode) -> Self {
+        match mode {
+            codex_app_server_protocol::AuthMode::ApiKey => Self::ApiKey,
+            codex_app_server_protocol::AuthMode::Chatgpt
+            | codex_app_server_protocol::AuthMode::ChatgptAuthTokens => Self::Chatgpt,
+        }
+    }
 }
 
 /// Start a metrics timer using the globally installed metrics client.

@@ -1,9 +1,9 @@
 #![allow(clippy::unwrap_used)]
 
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
-use codex_core::features::Feature;
 use codex_core::shell::Shell;
 use codex_core::shell::default_user_shell;
+use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ReasoningSummary;

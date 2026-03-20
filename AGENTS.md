@@ -48,6 +48,8 @@ Run `just fmt` (in `codex-rs` directory) automatically after you have finished m
 
 Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates. Do not re-run tests after running `fix` or `fmt`.
 
+Also run `just argument-comment-lint` to ensure the codebase is clean of comment lint errors.
+
 ## TUI style conventions
 
 See `codex-rs/tui/styles.md`.

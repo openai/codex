@@ -437,6 +437,7 @@ mod phase2 {
     use codex_state::ThreadMetadataBuilder;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::time::Duration;
     use tempfile::TempDir;
 
     fn stage1_output_with_source_updated_at(source_updated_at: i64) -> Stage1Output {
@@ -663,9 +664,10 @@ mod phase2 {
         pretty_assertions::assert_eq!(user_input_ops, 1);
         let thread_ids = harness.manager.list_thread_ids().await;
         pretty_assertions::assert_eq!(thread_ids.len(), 1);
+        let thread_id = thread_ids[0];
         let subagent = harness
             .manager
-            .get_thread(thread_ids[0])
+            .get_thread(thread_id)
             .await
             .expect("get consolidation thread");
         let config_snapshot = subagent.config_snapshot().await;
@@ -682,6 +684,34 @@ mod phase2 {
             }
             other => panic!("unexpected sandbox policy: {other:?}"),
         }
+        subagent.codex.session.ensure_rollout_materialized().await;
+        subagent.codex.session.flush_rollout().await;
+        let rollout_path = subagent
+            .rollout_path()
+            .expect("consolidation thread should have a rollout path");
+        crate::state_db::read_repair_rollout_path(
+            Some(harness.state_db.as_ref()),
+            Some(thread_id),
+            Some(/*archived_only*/ false),
+            rollout_path.as_path(),
+        )
+        .await;
+        let memory_mode = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let memory_mode = harness
+                    .state_db
+                    .get_thread_memory_mode(thread_id)
+                    .await
+                    .expect("read consolidation thread memory mode");
+                if memory_mode.is_some() {
+                    break memory_mode;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("timed out waiting for consolidation thread memory mode to persist");
+        pretty_assertions::assert_eq!(memory_mode.as_deref(), Some("disabled"));
 
         harness.shutdown_threads().await;
     }

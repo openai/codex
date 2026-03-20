@@ -38,6 +38,7 @@ mod thread_name_websocket;
 mod thread_read;
 mod thread_resume;
 mod thread_rollback;
+mod thread_shell_command;
 mod thread_start;
 mod thread_status;
 mod thread_unarchive;

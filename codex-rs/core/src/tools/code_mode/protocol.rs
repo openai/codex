@@ -70,6 +70,8 @@ pub(super) enum HostToNodeMessage {
         request_id: String,
         id: String,
         code_mode_result: JsonValue,
+        #[serde(default)]
+        error_text: Option<String>,
     },
 }
 

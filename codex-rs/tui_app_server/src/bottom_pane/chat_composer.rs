@@ -7268,6 +7268,7 @@ mod tests {
             vec![FileMatch {
                 score: 1,
                 path: PathBuf::from("src/main.rs"),
+                match_type: codex_file_search::MatchType::File,
                 root: PathBuf::from("/tmp"),
                 indices: None,
             }],

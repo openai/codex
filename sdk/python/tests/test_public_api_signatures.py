@@ -4,7 +4,7 @@ import importlib.resources as resources
 import inspect
 from typing import Any
 
-from codex_app_server import AppServerConfig
+from codex_app_server import AppServerConfig, RunResult
 from codex_app_server.models import InitializeResponse
 from codex_app_server.api import AsyncCodex, AsyncThread, Codex, Thread
 
@@ -29,6 +29,10 @@ def _assert_no_any_annotations(fn: object) -> None:
 
 def test_root_exports_app_server_config() -> None:
     assert AppServerConfig.__name__ == "AppServerConfig"
+
+
+def test_root_exports_run_result() -> None:
+    assert RunResult.__name__ == "RunResult"
 
 
 def test_package_includes_py_typed_marker() -> None:
@@ -101,6 +105,18 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "service_tier",
             "summary",
         ],
+        Thread.run: [
+            "approval_policy",
+            "approvals_reviewer",
+            "cwd",
+            "effort",
+            "model",
+            "output_schema",
+            "personality",
+            "sandbox_policy",
+            "service_tier",
+            "summary",
+        ],
         AsyncCodex.thread_start: [
             "approval_policy",
             "approvals_reviewer",
@@ -153,6 +169,18 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "service_tier",
         ],
         AsyncThread.turn: [
+            "approval_policy",
+            "approvals_reviewer",
+            "cwd",
+            "effort",
+            "model",
+            "output_schema",
+            "personality",
+            "sandbox_policy",
+            "service_tier",
+            "summary",
+        ],
+        AsyncThread.run: [
             "approval_policy",
             "approvals_reviewer",
             "cwd",

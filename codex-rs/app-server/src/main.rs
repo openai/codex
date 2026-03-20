@@ -23,16 +23,14 @@ struct AppServerArgs {
     )]
     listen: AppServerTransport,
 
-    /// Session source stamped into new threads started by this app-server.
-    ///
-    /// Known values such as `vscode`, `cli`, `exec`, and `mcp` map to built-in
-    /// sources. Any other non-empty value is recorded as a custom source.
+    /// Session source used to derive product restrictions and metadata.
     #[arg(
         long = "session-source",
         value_name = "SOURCE",
-        default_value = "vscode"
+        default_value = "vscode",
+        value_parser = SessionSource::from_startup_arg
     )]
-    session_source: String,
+    session_source: SessionSource,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -44,8 +42,7 @@ fn main() -> anyhow::Result<()> {
             ..Default::default()
         };
         let transport = args.listen;
-        let session_source = SessionSource::from_startup_arg(args.session_source.as_str())
-            .map_err(|err| anyhow::anyhow!("invalid --session-source: {err}"))?;
+        let session_source = args.session_source;
 
         run_main_with_transport(
             arg0_paths,

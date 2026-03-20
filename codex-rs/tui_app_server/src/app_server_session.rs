@@ -42,6 +42,8 @@ use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSetNameResponse;
+use codex_app_server_protocol::ThreadShellCommandParams;
+use codex_app_server_protocol::ThreadShellCommandResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
@@ -489,6 +491,26 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/compact/start failed in app-server TUI")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_shell_command(
+        &mut self,
+        thread_id: ThreadId,
+        command: String,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadShellCommandResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadShellCommand {
+                request_id,
+                params: ThreadShellCommandParams {
+                    thread_id: thread_id.to_string(),
+                    command,
+                },
+            })
+            .await
+            .wrap_err("thread/shellCommand failed in app-server TUI")?;
         Ok(())
     }
 

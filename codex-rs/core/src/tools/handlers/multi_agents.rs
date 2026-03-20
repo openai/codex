@@ -6,12 +6,13 @@
 //! then optionally layer role-specific config on top.
 
 use crate::agent::AgentStatus;
+use crate::agent::agent_resolver::resolve_agent_target;
+use crate::agent::agent_resolver::resolve_agent_targets;
 use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::CodexErr;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::models_manager::manager::RefreshStrategy;
 use crate::tools::context::FunctionToolOutput;
@@ -22,6 +23,8 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
+use codex_features::Feature;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseInputItem;
@@ -58,11 +61,6 @@ pub(crate) use wait::Handler as WaitAgentHandler;
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
 pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
-
-#[derive(Debug, Deserialize)]
-struct CloseAgentArgs {
-    id: String,
-}
 
 fn function_arguments(payload: ToolPayload) -> Result<String, FunctionCallError> {
     match payload {
@@ -111,11 +109,6 @@ mod send_input;
 mod spawn;
 pub(crate) mod wait;
 
-fn agent_id(id: &str) -> Result<ThreadId, FunctionCallError> {
-    ThreadId::from_string(id)
-        .map_err(|e| FunctionCallError::RespondToModel(format!("invalid agent id {id}: {e:?}")))
-}
-
 fn build_wait_agent_statuses(
     statuses: &HashMap<ThreadId, AgentStatus>,
     receiver_agents: &[CollabAgentRef],
@@ -155,9 +148,10 @@ fn build_wait_agent_statuses(
 
 fn collab_spawn_error(err: CodexErr) -> FunctionCallError {
     match err {
-        CodexErr::UnsupportedOperation(_) => {
+        CodexErr::UnsupportedOperation(message) if message == "thread manager dropped" => {
             FunctionCallError::RespondToModel("collab manager unavailable".to_string())
         }
+        CodexErr::UnsupportedOperation(message) => FunctionCallError::RespondToModel(message),
         err => FunctionCallError::RespondToModel(format!("collab spawn failed: {err}")),
     }
 }
@@ -179,15 +173,28 @@ fn collab_agent_error(agent_id: ThreadId, err: CodexErr) -> FunctionCallError {
 
 fn thread_spawn_source(
     parent_thread_id: ThreadId,
+    parent_session_source: &SessionSource,
     depth: i32,
     agent_role: Option<&str>,
-) -> SessionSource {
-    SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+    task_name: Option<String>,
+) -> Result<SessionSource, FunctionCallError> {
+    let agent_path = task_name
+        .as_deref()
+        .map(|task_name| {
+            parent_session_source
+                .get_agent_path()
+                .unwrap_or_else(AgentPath::root)
+                .join(task_name)
+                .map_err(FunctionCallError::RespondToModel)
+        })
+        .transpose()?;
+    Ok(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
         parent_thread_id,
         depth,
+        agent_path,
         agent_nickname: None,
         agent_role: agent_role.map(str::to_string),
-    })
+    }))
 }
 
 fn parse_collab_input(

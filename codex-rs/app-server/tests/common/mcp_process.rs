@@ -68,6 +68,7 @@ use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadRollbackParams;
 use codex_app_server_protocol::ThreadSetNameParams;
+use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
@@ -114,7 +115,7 @@ impl McpProcess {
         Self::new_with_env_and_args(codex_home, env_overrides, &[]).await
     }
 
-    pub async fn new_with_env_and_args(
+    async fn new_with_env_and_args(
         codex_home: &Path,
         env_overrides: &[(&str, Option<&str>)],
         args: &[&str],
@@ -397,6 +398,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/compact/start", params).await
+    }
+
+    /// Send a `thread/shellCommand` JSON-RPC request.
+    pub async fn send_thread_shell_command_request(
+        &mut self,
+        params: ThreadShellCommandParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/shellCommand", params).await
     }
 
     /// Send a `thread/rollback` JSON-RPC request.

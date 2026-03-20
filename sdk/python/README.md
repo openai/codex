@@ -19,14 +19,17 @@ installs the pinned runtime package automatically.
 ## Quickstart
 
 ```python
-from codex_app_server import Codex, TextInput
+from codex_app_server import Codex
 
 with Codex() as codex:
     thread = codex.thread_start(model="gpt-5")
-    completed_turn = thread.turn(TextInput("Say hello in one sentence.")).run()
-    print(completed_turn.status)
-    print(completed_turn.id)
+    result = thread.run("Say hello in one sentence.")
+    print(result.final_response)
+    print(len(result.items))
 ```
+
+`result.final_response` is `None` when the turn completes without a final-answer
+or phase-less assistant message item.
 
 ## Docs map
 
@@ -95,4 +98,6 @@ This supports the CI release flow:
 
 - `Codex()` is eager and performs startup + `initialize` in the constructor.
 - Use context managers (`with Codex() as codex:`) to ensure shutdown.
+- Prefer `thread.run("...")` for the common case. Use `thread.turn(...)` when
+  you need streaming, steering, or interrupt control.
 - For transient overload, use `codex_app_server.retry.retry_on_overload`.

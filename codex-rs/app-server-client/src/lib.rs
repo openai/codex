@@ -47,6 +47,7 @@ use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_features::Feature;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use serde::de::DeserializeOwned;
@@ -215,7 +216,7 @@ impl InProcessClientStartArgs {
                 default_mode_request_user_input: self
                     .config
                     .features
-                    .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
+                    .enabled(Feature::DefaultModeRequestUserInput),
             },
         ));
 
@@ -1033,10 +1034,6 @@ mod tests {
         for (session_source, expected_source) in [
             (SessionSource::Exec, ApiSessionSource::Exec),
             (SessionSource::Cli, ApiSessionSource::Cli),
-            (
-                SessionSource::Custom("atlas".to_string()),
-                ApiSessionSource::Custom("atlas".to_string()),
-            ),
         ] {
             let client = start_test_client(session_source).await;
             let parsed: ThreadStartResponse = client
@@ -1488,7 +1485,7 @@ mod tests {
             CollaborationModesConfig {
                 default_mode_request_user_input: config
                     .features
-                    .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
+                    .enabled(Feature::DefaultModeRequestUserInput),
             },
         ));
         event_tx

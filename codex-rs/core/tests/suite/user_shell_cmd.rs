@@ -1,5 +1,5 @@
 use anyhow::Context;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
