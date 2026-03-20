@@ -4150,6 +4150,48 @@ async fn later_plan_deltas_flush_non_plan_active_cells_before_replacing_active_s
 }
 
 #[tokio::test]
+async fn commit_tick_flushes_non_stream_active_cell_before_stream_replacement() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.on_task_started();
+    chat.on_plan_delta("- Step 1\n".to_string());
+
+    chat.on_web_search_begin(WebSearchBeginEvent {
+        call_id: "search-1".to_string(),
+    });
+    drain_insert_history(&mut rx);
+    assert!(
+        chat.active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<WebSearchCell>())
+    );
+
+    chat.on_commit_tick();
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected commit tick to flush web search active cell into history"
+    );
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Searching"),
+        "expected flushed web search history cell, got {rendered:?}"
+    );
+    assert!(
+        chat.active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<history_cell::ProposedPlanStreamCell>())
+    );
+}
+
+#[tokio::test]
 async fn preamble_keeps_working_status_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());

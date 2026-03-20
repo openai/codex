@@ -3179,6 +3179,12 @@ impl ChatWidget {
             now,
         );
         if let Some(cell) = outcome.active_cell {
+            if self.active_cell.as_ref().is_some_and(|active| {
+                !active.as_any().is::<AgentMessageCell>()
+                    && !active.as_any().is::<history_cell::ProposedPlanStreamCell>()
+            }) {
+                self.flush_active_cell();
+            }
             self.bottom_pane.hide_status_indicator();
             self.active_cell = Some(cell);
             self.bump_active_cell_revision();
