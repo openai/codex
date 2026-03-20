@@ -1,30 +1,11 @@
 use crate::client_common::tools::ToolSpec;
-use crate::mcp::split_qualified_tool_name;
-use crate::tools::code_mode::PUBLIC_TOOL_NAME;
-use serde_json::Value as JsonValue;
 
-pub(crate) struct CodeModeToolReference {
-    pub(crate) module_path: String,
-    pub(crate) namespace: Vec<String>,
-    pub(crate) tool_key: String,
-}
-
-pub(crate) fn code_mode_tool_reference(tool_name: &str) -> CodeModeToolReference {
-    if let Some((server_name, tool_key)) = split_qualified_tool_name(tool_name) {
-        let namespace = vec!["mcp".to_string(), server_name];
-        return CodeModeToolReference {
-            module_path: format!("tools/{}.js", namespace.join("/")),
-            namespace,
-            tool_key,
-        };
-    }
-
-    CodeModeToolReference {
-        module_path: "tools.js".to_string(),
-        namespace: Vec::new(),
-        tool_key: tool_name.to_string(),
-    }
-}
+#[allow(unused_imports)]
+#[cfg(test)]
+pub(crate) use codex_code_mode::append_code_mode_sample;
+#[allow(unused_imports)]
+#[cfg(test)]
+pub(crate) use codex_code_mode::render_json_schema_to_typescript;
 
 pub(crate) fn augment_tool_spec_for_code_mode(spec: ToolSpec, code_mode_enabled: bool) -> ToolSpec {
     if !code_mode_enabled {
@@ -32,268 +13,39 @@ pub(crate) fn augment_tool_spec_for_code_mode(spec: ToolSpec, code_mode_enabled:
     }
 
     match spec {
-        ToolSpec::Function(mut tool) => {
-            if tool.name != PUBLIC_TOOL_NAME {
-                tool.description = append_code_mode_sample(
-                    &tool.description,
-                    &tool.name,
-                    "args",
-                    serde_json::to_value(&tool.parameters)
-                        .ok()
-                        .as_ref()
-                        .map(render_json_schema_to_typescript)
-                        .unwrap_or_else(|| "unknown".to_string()),
-                    tool.output_schema
-                        .as_ref()
-                        .map(render_json_schema_to_typescript)
-                        .unwrap_or_else(|| "unknown".to_string()),
-                );
-            }
-            ToolSpec::Function(tool)
+        ToolSpec::Function(tool) => {
+            let definition = codex_code_mode::ToolDefinition {
+                name: tool.name.clone(),
+                description: tool.description,
+                kind: codex_code_mode::CodeModeToolKind::Function,
+                input_schema: serde_json::to_value(&tool.parameters).ok(),
+                output_schema: tool.output_schema,
+            };
+            let definition = codex_code_mode::augment_tool_definition(definition);
+            ToolSpec::Function(crate::client_common::tools::ResponsesApiTool {
+                name: tool.name,
+                description: definition.description,
+                strict: tool.strict,
+                defer_loading: tool.defer_loading,
+                parameters: tool.parameters,
+                output_schema: definition.output_schema,
+            })
         }
-        ToolSpec::Freeform(mut tool) => {
-            if tool.name != PUBLIC_TOOL_NAME {
-                tool.description = append_code_mode_sample(
-                    &tool.description,
-                    &tool.name,
-                    "input",
-                    "string".to_string(),
-                    "unknown".to_string(),
-                );
-            }
-            ToolSpec::Freeform(tool)
+        ToolSpec::Freeform(tool) => {
+            let definition = codex_code_mode::ToolDefinition {
+                name: tool.name.clone(),
+                description: tool.description,
+                kind: codex_code_mode::CodeModeToolKind::Freeform,
+                input_schema: None,
+                output_schema: None,
+            };
+            let definition = codex_code_mode::augment_tool_definition(definition);
+            ToolSpec::Freeform(crate::client_common::tools::FreeformTool {
+                name: tool.name,
+                description: definition.description,
+                format: tool.format,
+            })
         }
         other => other,
     }
 }
-
-fn append_code_mode_sample(
-    description: &str,
-    tool_name: &str,
-    input_name: &str,
-    input_type: String,
-    output_type: String,
-) -> String {
-    let declaration = format!(
-        "declare const tools: {{ {} }};",
-        render_code_mode_tool_declaration(tool_name, input_name, input_type, output_type)
-    );
-    format!("{description}\n\nexec tool declaration:\n```ts\n{declaration}\n```")
-}
-
-fn render_code_mode_tool_declaration(
-    tool_name: &str,
-    input_name: &str,
-    input_type: String,
-    output_type: String,
-) -> String {
-    let tool_name = normalize_code_mode_identifier(tool_name);
-    format!("{tool_name}({input_name}: {input_type}): Promise<{output_type}>;")
-}
-
-pub(crate) fn normalize_code_mode_identifier(tool_key: &str) -> String {
-    let mut identifier = String::new();
-
-    for (index, ch) in tool_key.chars().enumerate() {
-        let is_valid = if index == 0 {
-            ch == '_' || ch == '$' || ch.is_ascii_alphabetic()
-        } else {
-            ch == '_' || ch == '$' || ch.is_ascii_alphanumeric()
-        };
-
-        if is_valid {
-            identifier.push(ch);
-        } else {
-            identifier.push('_');
-        }
-    }
-
-    if identifier.is_empty() {
-        "_".to_string()
-    } else {
-        identifier
-    }
-}
-
-fn render_json_schema_to_typescript(schema: &JsonValue) -> String {
-    render_json_schema_to_typescript_inner(schema)
-}
-
-fn render_json_schema_to_typescript_inner(schema: &JsonValue) -> String {
-    match schema {
-        JsonValue::Bool(true) => "unknown".to_string(),
-        JsonValue::Bool(false) => "never".to_string(),
-        JsonValue::Object(map) => {
-            if let Some(value) = map.get("const") {
-                return render_json_schema_literal(value);
-            }
-
-            if let Some(values) = map.get("enum").and_then(serde_json::Value::as_array) {
-                let rendered = values
-                    .iter()
-                    .map(render_json_schema_literal)
-                    .collect::<Vec<_>>();
-                if !rendered.is_empty() {
-                    return rendered.join(" | ");
-                }
-            }
-
-            for key in ["anyOf", "oneOf"] {
-                if let Some(variants) = map.get(key).and_then(serde_json::Value::as_array) {
-                    let rendered = variants
-                        .iter()
-                        .map(render_json_schema_to_typescript_inner)
-                        .collect::<Vec<_>>();
-                    if !rendered.is_empty() {
-                        return rendered.join(" | ");
-                    }
-                }
-            }
-
-            if let Some(variants) = map.get("allOf").and_then(serde_json::Value::as_array) {
-                let rendered = variants
-                    .iter()
-                    .map(render_json_schema_to_typescript_inner)
-                    .collect::<Vec<_>>();
-                if !rendered.is_empty() {
-                    return rendered.join(" & ");
-                }
-            }
-
-            if let Some(schema_type) = map.get("type") {
-                if let Some(types) = schema_type.as_array() {
-                    let rendered = types
-                        .iter()
-                        .filter_map(serde_json::Value::as_str)
-                        .map(|schema_type| render_json_schema_type_keyword(map, schema_type))
-                        .collect::<Vec<_>>();
-                    if !rendered.is_empty() {
-                        return rendered.join(" | ");
-                    }
-                }
-
-                if let Some(schema_type) = schema_type.as_str() {
-                    return render_json_schema_type_keyword(map, schema_type);
-                }
-            }
-
-            if map.contains_key("properties")
-                || map.contains_key("additionalProperties")
-                || map.contains_key("required")
-            {
-                return render_json_schema_object(map);
-            }
-
-            if map.contains_key("items") || map.contains_key("prefixItems") {
-                return render_json_schema_array(map);
-            }
-
-            "unknown".to_string()
-        }
-        _ => "unknown".to_string(),
-    }
-}
-
-fn render_json_schema_type_keyword(
-    map: &serde_json::Map<String, JsonValue>,
-    schema_type: &str,
-) -> String {
-    match schema_type {
-        "string" => "string".to_string(),
-        "number" | "integer" => "number".to_string(),
-        "boolean" => "boolean".to_string(),
-        "null" => "null".to_string(),
-        "array" => render_json_schema_array(map),
-        "object" => render_json_schema_object(map),
-        _ => "unknown".to_string(),
-    }
-}
-
-fn render_json_schema_array(map: &serde_json::Map<String, JsonValue>) -> String {
-    if let Some(items) = map.get("items") {
-        let item_type = render_json_schema_to_typescript_inner(items);
-        return format!("Array<{item_type}>");
-    }
-
-    if let Some(items) = map.get("prefixItems").and_then(serde_json::Value::as_array) {
-        let item_types = items
-            .iter()
-            .map(render_json_schema_to_typescript_inner)
-            .collect::<Vec<_>>();
-        if !item_types.is_empty() {
-            return format!("[{}]", item_types.join(", "));
-        }
-    }
-
-    "unknown[]".to_string()
-}
-
-fn render_json_schema_object(map: &serde_json::Map<String, JsonValue>) -> String {
-    let required = map
-        .get("required")
-        .and_then(serde_json::Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let properties = map
-        .get("properties")
-        .and_then(serde_json::Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-
-    let mut sorted_properties = properties.iter().collect::<Vec<_>>();
-    sorted_properties.sort_unstable_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
-    let mut lines = sorted_properties
-        .into_iter()
-        .map(|(name, value)| {
-            let optional = if required.iter().any(|required_name| required_name == name) {
-                ""
-            } else {
-                "?"
-            };
-            let property_name = render_json_schema_property_name(name);
-            let property_type = render_json_schema_to_typescript_inner(value);
-            format!("{property_name}{optional}: {property_type};")
-        })
-        .collect::<Vec<_>>();
-
-    if let Some(additional_properties) = map.get("additionalProperties") {
-        let additional_type = match additional_properties {
-            JsonValue::Bool(true) => Some("unknown".to_string()),
-            JsonValue::Bool(false) => None,
-            value => Some(render_json_schema_to_typescript_inner(value)),
-        };
-
-        if let Some(additional_type) = additional_type {
-            lines.push(format!("[key: string]: {additional_type};"));
-        }
-    } else if properties.is_empty() {
-        lines.push("[key: string]: unknown;".to_string());
-    }
-
-    if lines.is_empty() {
-        return "{}".to_string();
-    }
-
-    format!("{{ {} }}", lines.join(" "))
-}
-
-fn render_json_schema_property_name(name: &str) -> String {
-    if normalize_code_mode_identifier(name) == name {
-        name.to_string()
-    } else {
-        serde_json::to_string(name).unwrap_or_else(|_| format!("\"{}\"", name.replace('"', "\\\"")))
-    }
-}
-
-fn render_json_schema_literal(value: &JsonValue) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "unknown".to_string())
-}
-
-#[cfg(test)]
-#[path = "code_mode_description_tests.rs"]
-mod tests;

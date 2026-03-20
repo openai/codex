@@ -8,13 +8,10 @@ use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
-use super::CodeModeSessionProgress;
 use super::DEFAULT_WAIT_YIELD_TIME_MS;
 use super::ExecContext;
-use super::PUBLIC_TOOL_NAME;
 use super::WAIT_TOOL_NAME;
-use super::handle_node_message;
-use super::protocol::HostToNodeMessage;
+use super::handle_runtime_response;
 
 pub struct CodeModeWaitHandler;
 
@@ -63,66 +60,21 @@ impl ToolHandler for CodeModeWaitHandler {
             ToolPayload::Function { arguments } if tool_name == WAIT_TOOL_NAME => {
                 let args: ExecWaitArgs = parse_arguments(&arguments)?;
                 let exec = ExecContext { session, turn };
-                let request_id = exec
-                    .session
-                    .services
-                    .code_mode_service
-                    .allocate_request_id()
-                    .await;
                 let started_at = std::time::Instant::now();
-                let message = if args.terminate {
-                    HostToNodeMessage::Terminate {
-                        request_id: request_id.clone(),
-                        cell_id: args.cell_id.clone(),
-                    }
-                } else {
-                    HostToNodeMessage::Poll {
-                        request_id: request_id.clone(),
-                        cell_id: args.cell_id.clone(),
-                        yield_time_ms: args.yield_time_ms,
-                    }
-                };
-                let process_slot = exec
+                let response = exec
                     .session
                     .services
                     .code_mode_service
-                    .ensure_started()
+                    .wait(codex_code_mode::WaitRequest {
+                        cell_id: args.cell_id,
+                        yield_time_ms: args.yield_time_ms,
+                        terminate: args.terminate,
+                    })
                     .await
-                    .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
-                let result = {
-                    let mut process_slot = process_slot;
-                    let Some(process) = process_slot.as_mut() else {
-                        return Err(FunctionCallError::RespondToModel(format!(
-                            "{PUBLIC_TOOL_NAME} runner failed to start"
-                        )));
-                    };
-                    if !matches!(process.has_exited(), Ok(false)) {
-                        return Err(FunctionCallError::RespondToModel(format!(
-                            "{PUBLIC_TOOL_NAME} runner failed to start"
-                        )));
-                    }
-                    let message = process
-                        .send(&request_id, &message)
-                        .await
-                        .map_err(|err| err.to_string());
-                    let message = match message {
-                        Ok(message) => message,
-                        Err(error) => return Err(FunctionCallError::RespondToModel(error)),
-                    };
-                    handle_node_message(
-                        &exec,
-                        args.cell_id,
-                        message,
-                        Some(args.max_tokens),
-                        started_at,
-                    )
+                    .map_err(FunctionCallError::RespondToModel)?;
+                handle_runtime_response(&exec, response, Some(args.max_tokens), started_at)
                     .await
-                };
-                match result {
-                    Ok(CodeModeSessionProgress::Finished(output))
-                    | Ok(CodeModeSessionProgress::Yielded { output }) => Ok(output),
-                    Err(error) => Err(FunctionCallError::RespondToModel(error)),
-                }
+                    .map_err(FunctionCallError::RespondToModel)
             }
             _ => Err(FunctionCallError::RespondToModel(format!(
                 "{WAIT_TOOL_NAME} expects JSON arguments"
