@@ -56,6 +56,7 @@ where
         network,
         stdio_policy,
         env,
+        stdin_open: false,
     })
     .await
 }

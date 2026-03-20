@@ -105,6 +105,56 @@ async fn read_output_limits_retained_bytes_for_shell_capture() {
     assert_eq!(out.text.len(), EXEC_OUTPUT_MAX_BYTES);
 }
 
+#[tokio::test]
+async fn exec_passes_stdin_bytes_to_child() -> Result<()> {
+    let command = if cfg!(windows) {
+        vec![
+            "cmd.exe".to_string(),
+            "/Q".to_string(),
+            "/D".to_string(),
+            "/C".to_string(),
+            "more".to_string(),
+        ]
+    } else {
+        vec!["/bin/cat".to_string()]
+    };
+    let params = ExecParams {
+        command,
+        cwd: std::env::current_dir()?,
+        expiration: 1_000.into(),
+        env: std::env::vars().collect(),
+        network: None,
+        stdin: ExecStdin::Bytes(b"hello from stdin\n".to_vec()),
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+        windows_sandbox_private_desktop: false,
+        justification: None,
+        arg0: None,
+    };
+
+    let output = exec(
+        params,
+        SandboxType::None,
+        &SandboxPolicy::DangerFullAccess,
+        &FileSystemSandboxPolicy::from(&SandboxPolicy::DangerFullAccess),
+        NetworkSandboxPolicy::Enabled,
+        None,
+        None,
+    )
+    .await?;
+
+    let expected_stdout = if cfg!(windows) {
+        "hello from stdin\r\n"
+    } else {
+        "hello from stdin\n"
+    };
+    assert_eq!(output.exit_status.code(), Some(0));
+    assert_eq!(output.stdout.from_utf8_lossy().text, expected_stdout);
+    assert_eq!(output.stderr.from_utf8_lossy().text, "");
+
+    Ok(())
+}
+
 #[test]
 fn aggregate_output_prefers_stderr_on_contention() {
     let stdout = StreamOutput {
@@ -588,6 +638,7 @@ async fn kill_child_process_group_kills_grandchildren_on_timeout() -> Result<()>
         capture_policy: ExecCapturePolicy::ShellTool,
         env,
         network: None,
+        stdin: ExecStdin::Closed,
         sandbox_permissions: SandboxPermissions::UseDefault,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
@@ -646,6 +697,7 @@ async fn process_exec_tool_call_respects_cancellation_token() -> Result<()> {
         capture_policy: ExecCapturePolicy::ShellTool,
         env,
         network: None,
+        stdin: ExecStdin::Closed,
         sandbox_permissions: SandboxPermissions::UseDefault,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,

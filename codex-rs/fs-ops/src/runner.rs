@@ -36,7 +36,7 @@ fn run_from_args(
 
 fn try_run_from_args(
     args: impl Iterator<Item = OsString>,
-    _stdin: &mut impl Read,
+    stdin: &mut impl Read,
     stdout: &mut impl Write,
 ) -> std::io::Result<()> {
     let command = parse_command_from_args(args)
@@ -57,6 +57,12 @@ fn try_run_from_args(
             }
 
             std::io::copy(&mut file, stdout).map(|_| ())
+        }
+        FsCommand::WriteFile { path } => {
+            let mut file = std::fs::File::create(path).map_err(FsError::from)?;
+            std::io::copy(stdin, &mut file)
+                .map(|_| ())
+                .map_err(FsError::from)
         }
     }
 }

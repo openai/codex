@@ -41,6 +41,7 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
         capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
         network: None,
+        stdin: codex_core::exec::ExecStdin::Closed,
         sandbox_permissions: SandboxPermissions::UseDefault,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,

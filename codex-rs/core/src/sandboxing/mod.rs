@@ -10,6 +10,7 @@ pub(crate) mod macos_permissions;
 
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
+use crate::exec::ExecStdin;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
@@ -68,6 +69,7 @@ pub struct ExecRequest {
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
+    pub stdin: ExecStdin,
     pub expiration: ExecExpiration,
     pub capture_policy: ExecCapturePolicy,
     pub sandbox: SandboxType,
@@ -709,6 +711,7 @@ impl SandboxManager {
             cwd: spec.cwd,
             env,
             network: network.cloned(),
+            stdin: ExecStdin::Closed,
             expiration: spec.expiration,
             capture_policy: spec.capture_policy,
             sandbox,

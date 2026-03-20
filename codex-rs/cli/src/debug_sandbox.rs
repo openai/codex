@@ -170,6 +170,7 @@ async fn run_command_under_sandbox(
                         command_vec,
                         &cwd_clone,
                         env_map,
+                        /*stdin_bytes*/ None,
                         /*timeout_ms*/ None,
                         config.permissions.windows_sandbox_private_desktop,
                     )
@@ -181,6 +182,7 @@ async fn run_command_under_sandbox(
                         command_vec,
                         &cwd_clone,
                         env_map,
+                        /*stdin_bytes*/ None,
                         /*timeout_ms*/ None,
                         config.permissions.windows_sandbox_private_desktop,
                     )

@@ -265,6 +265,7 @@ mod windows_impl {
         command: Vec<String>,
         cwd: &Path,
         mut env_map: HashMap<String, String>,
+        stdin_bytes: Option<Vec<u8>>,
         timeout_ms: Option<u64>,
         use_private_desktop: bool,
     ) -> Result<CaptureResult> {
@@ -406,7 +407,30 @@ mod windows_impl {
 
         unsafe {
             CloseHandle(in_r);
-            // Close the parent's stdin write end so the child sees EOF immediately.
+            if let Some(stdin_bytes) = stdin_bytes {
+                let mut offset = 0;
+                while offset < stdin_bytes.len() {
+                    let remaining = stdin_bytes.len() - offset;
+                    let chunk_len = remaining.min(u32::MAX as usize);
+                    let mut written: u32 = 0;
+                    let ok = windows_sys::Win32::Storage::FileSystem::WriteFile(
+                        in_w,
+                        stdin_bytes[offset..offset + chunk_len].as_ptr(),
+                        chunk_len as u32,
+                        &mut written,
+                        std::ptr::null_mut(),
+                    );
+                    if ok == 0 {
+                        CloseHandle(in_w);
+                        CloseHandle(out_w);
+                        CloseHandle(err_w);
+                        CloseHandle(pi.hThread);
+                        CloseHandle(pi.hProcess);
+                        return Err(std::io::Error::from_raw_os_error(GetLastError() as i32).into());
+                    }
+                    offset += written as usize;
+                }
+            }
             CloseHandle(in_w);
             CloseHandle(out_w);
             CloseHandle(err_w);
@@ -615,6 +639,7 @@ mod stub {
         _command: Vec<String>,
         _cwd: &Path,
         _env_map: HashMap<String, String>,
+        _stdin_bytes: Option<Vec<u8>>,
         _timeout_ms: Option<u64>,
         _use_private_desktop: bool,
     ) -> Result<CaptureResult> {

@@ -128,6 +128,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
         capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
         network: None,
+        stdin: crate::exec::ExecStdin::Closed,
         sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
         windows_sandbox_level: turn_context.windows_sandbox_level,
         windows_sandbox_private_desktop: turn_context

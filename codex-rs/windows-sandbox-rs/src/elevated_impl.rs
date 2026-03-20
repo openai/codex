@@ -209,6 +209,7 @@ mod windows_impl {
         command: Vec<String>,
         cwd: &Path,
         mut env_map: HashMap<String, String>,
+        stdin_bytes: Option<Vec<u8>>,
         timeout_ms: Option<u64>,
         use_private_desktop: bool,
     ) -> Result<CaptureResult> {
@@ -383,13 +384,26 @@ mod windows_impl {
                         cap_sids,
                         timeout_ms,
                         tty: false,
-                        stdin_open: false,
+                        stdin_open: stdin_bytes.is_some(),
                         use_private_desktop,
                     }),
                 },
             };
             write_frame(&mut pipe_write, &spawn_request)?;
             read_spawn_ready(&mut pipe_read)?;
+            if let Some(stdin_bytes) = stdin_bytes {
+                write_frame(
+                    &mut pipe_write,
+                    &FramedMessage {
+                        version: 1,
+                        message: Message::Stdin {
+                            payload: crate::ipc_framed::StdinPayload {
+                                data_b64: crate::ipc_framed::encode_bytes(&stdin_bytes),
+                            },
+                        },
+                    },
+                )?;
+            }
             drop(pipe_write);
 
             let mut stdout = Vec::new();
@@ -503,6 +517,7 @@ mod stub {
         _command: Vec<String>,
         _cwd: &Path,
         _env_map: HashMap<String, String>,
+        _stdin_bytes: Option<Vec<u8>>,
         _timeout_ms: Option<u64>,
         _use_private_desktop: bool,
     ) -> Result<CaptureResult> {
