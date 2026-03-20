@@ -21,6 +21,7 @@ use codex_core::features::Feature;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::shell::Shell;
 use codex_core::shell::get_shell_by_model_provided_path;
+use codex_exec_server::CreateDirectoryOptions;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
@@ -30,6 +31,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value;
 use tempfile::TempDir;
 use wiremock::MockServer;
@@ -59,13 +61,21 @@ struct RemoteExecServerProcess {
     pid: u32,
     remote_exec_server_path: String,
     stdout_path: String,
+    cleanup_paths: Vec<String>,
 }
 
 impl Drop for RemoteExecServerProcess {
     fn drop(&mut self) {
+        let cleanup_paths = self.cleanup_paths.join(" ");
+        let cleanup_paths_script = if cleanup_paths.is_empty() {
+            String::new()
+        } else {
+            format!("rm -rf {cleanup_paths}; ")
+        };
         let script = format!(
-            "if kill -0 {pid} 2>/dev/null; then kill {pid}; fi; rm -f {remote_exec_server_path} {stdout_path}",
+            "if kill -0 {pid} 2>/dev/null; then kill {pid}; fi; {cleanup_paths_script}rm -f {remote_exec_server_path} {stdout_path}",
             pid = self.pid,
+            cleanup_paths_script = cleanup_paths_script,
             remote_exec_server_path = self.remote_exec_server_path,
             stdout_path = self.stdout_path
         );
@@ -73,13 +83,21 @@ impl Drop for RemoteExecServerProcess {
     }
 }
 
+impl RemoteExecServerProcess {
+    fn register_cleanup_path(&mut self, path: &Path) {
+        self.cleanup_paths.push(path.display().to_string());
+    }
+}
+
 #[derive(Debug)]
-pub struct ExecutorEnvironment {
+pub struct TestEnv {
     environment: codex_exec_server::Environment,
+    cwd: PathBuf,
+    _local_cwd_temp_dir: Option<TempDir>,
     _remote_exec_server_process: Option<RemoteExecServerProcess>,
 }
 
-impl ExecutorEnvironment {
+impl TestEnv {
     pub fn environment(&self) -> &codex_exec_server::Environment {
         &self.environment
     }
@@ -87,24 +105,55 @@ impl ExecutorEnvironment {
     pub fn experimental_exec_server_url(&self) -> Option<&str> {
         self.environment.experimental_exec_server_url()
     }
+
+    pub fn cwd_path(&self) -> &Path {
+        &self.cwd
+    }
+
+    async fn from_config(config: &Config) -> Result<Self> {
+        let environment =
+            codex_exec_server::Environment::create(config.experimental_exec_server_url.clone())
+                .await?;
+        Ok(Self {
+            environment,
+            cwd: config.cwd.clone(),
+            _local_cwd_temp_dir: None,
+            _remote_exec_server_process: None,
+        })
+    }
 }
 
-pub async fn test_env() -> Result<ExecutorEnvironment> {
+pub async fn test_env() -> Result<TestEnv> {
     match get_remote_test_env() {
         Some(remote_env) => {
-            let remote_process = start_remote_exec_server(&remote_env)?;
+            let mut remote_process = start_remote_exec_server(&remote_env)?;
             let remote_ip = remote_container_ip(&remote_env.container_name)?;
             let websocket_url = rewrite_websocket_host(&remote_process.listen_url, &remote_ip)?;
             let environment = codex_exec_server::Environment::create(Some(websocket_url)).await?;
-            Ok(ExecutorEnvironment {
+            let cwd = remote_aware_cwd_path();
+            environment
+                .get_filesystem()
+                .create_directory(
+                    &absolute_path(&cwd)?,
+                    CreateDirectoryOptions { recursive: true },
+                )
+                .await?;
+            remote_process.process.register_cleanup_path(&cwd);
+            Ok(TestEnv {
                 environment,
+                cwd,
+                _local_cwd_temp_dir: None,
                 _remote_exec_server_process: Some(remote_process.process),
             })
         }
         None => {
+            let local_cwd_temp_dir = TempDir::new()?;
+            let cwd = local_cwd_temp_dir.path().to_path_buf();
             let environment = codex_exec_server::Environment::create(None).await?;
-            Ok(ExecutorEnvironment {
+            Ok(TestEnv {
                 environment,
+                cwd,
+                _local_cwd_temp_dir: Some(local_cwd_temp_dir),
                 _remote_exec_server_process: None,
             })
         }
@@ -155,9 +204,17 @@ echo $!"
             pid,
             remote_exec_server_path,
             stdout_path,
+            cleanup_paths: Vec::new(),
         },
         listen_url,
     })
+}
+
+fn remote_aware_cwd_path() -> PathBuf {
+    PathBuf::from(format!(
+        "/tmp/codex-core-test-cwd-{}",
+        remote_exec_server_instance_id()
+    ))
 }
 
 fn wait_for_remote_listen_url(container_name: &str, stdout_path: &str) -> Result<String> {
@@ -251,6 +308,11 @@ fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<Stri
     String::from_utf8(output.stdout).context("docker stdout must be utf-8")
 }
 
+fn absolute_path(path: &Path) -> Result<AbsolutePathBuf> {
+    AbsolutePathBuf::try_from(path.to_path_buf())
+        .map_err(|err| anyhow!("invalid absolute path {}: {err}", path.display()))
+}
+
 /// A collection of different ways the model can output an apply_patch call
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ApplyPatchModelOutput {
@@ -331,6 +393,24 @@ impl TestCodexBuilder {
             None => Arc::new(TempDir::new()?),
         };
         Box::pin(self.build_with_home(server, home, /*resume_from*/ None)).await
+    }
+
+    pub async fn build_remote_aware(
+        &mut self,
+        server: &wiremock::MockServer,
+    ) -> anyhow::Result<TestCodex> {
+        let test_env = test_env().await?;
+        let experimental_exec_server_url =
+            test_env.experimental_exec_server_url().map(str::to_owned);
+        let remote_aware_cwd = test_env.cwd_path().to_path_buf();
+        self.config_mutators.push(Box::new(move |config| {
+            config.experimental_exec_server_url = experimental_exec_server_url;
+            config.cwd = remote_aware_cwd;
+        }));
+
+        let mut test = self.build(server).await?;
+        test._executor_environment = test_env;
+        Ok(test)
     }
 
     pub async fn build_with_streaming_server(
@@ -459,6 +539,7 @@ impl TestCodexBuilder {
             }
             (None, None) => Box::pin(thread_manager.start_thread(config.clone())).await?,
         };
+        let executor_environment = TestEnv::from_config(&config).await?;
 
         Ok(TestCodex {
             home,
@@ -467,6 +548,7 @@ impl TestCodexBuilder {
             codex: new_conversation.thread,
             session_configured: new_conversation.session_configured,
             thread_manager,
+            _executor_environment: executor_environment,
         })
     }
 
@@ -563,6 +645,7 @@ pub struct TestCodex {
     pub session_configured: SessionConfiguredEvent,
     pub config: Config,
     pub thread_manager: Arc<ThreadManager>,
+    _executor_environment: TestEnv,
 }
 
 impl TestCodex {
@@ -576,6 +659,10 @@ impl TestCodex {
 
     pub fn workspace_path(&self, rel: impl AsRef<Path>) -> PathBuf {
         self.cwd_path().join(rel)
+    }
+
+    pub fn executor_environment(&self) -> &TestEnv {
+        &self._executor_environment
     }
 
     pub async fn submit_turn(&self, prompt: &str) -> Result<()> {
@@ -640,7 +727,7 @@ impl TestCodex {
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
-                cwd: self.cwd.path().to_path_buf(),
+                cwd: self.config.cwd.clone(),
                 approval_policy,
                 sandbox_policy,
                 model: session_model,

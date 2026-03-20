@@ -4,6 +4,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_core::CodexAuth;
 use codex_core::features::Feature;
+use codex_exec_server::CreateDirectoryOptions;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -32,12 +33,16 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
+use image::DynamicImage;
 use image::GenericImageView;
 use image::ImageBuffer;
 use image::Rgba;
 use image::load_from_memory;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use std::io::Cursor;
+use std::path::Path;
+use std::path::PathBuf;
 use tokio::time::Duration;
 use wiremock::BodyPrintLimit;
 use wiremock::MockServer;
@@ -71,6 +76,11 @@ fn image_messages(body: &Value) -> Vec<&Value> {
 
 fn find_image_message(body: &Value) -> Option<&Value> {
     image_messages(body).into_iter().next()
+}
+
+fn absolute_path(path: &Path) -> anyhow::Result<codex_utils_absolute_path::AbsolutePathBuf> {
+    codex_utils_absolute_path::AbsolutePathBuf::try_from(path.to_path_buf())
+        .map_err(|err| anyhow::anyhow!("invalid absolute path {}: {err}", path.display()))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -171,23 +181,37 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-
+    let mut builder = test_codex();
+    let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        cwd,
         session_configured,
+        config,
         ..
-    } = test_codex().build(&server).await?;
+    } = &test;
+    let cwd = config.cwd.clone();
 
-    let rel_path = "assets/example.png";
-    let abs_path = cwd.path().join(rel_path);
-    if let Some(parent) = abs_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    let rel_path = PathBuf::from("assets/example.png");
+    let abs_path = cwd.join(&rel_path);
+    let abs_path_absolute = absolute_path(&abs_path)?;
+    let assets_dir = cwd.join("assets");
+
+    let file_system = test.executor_environment().environment().get_filesystem();
+
     let original_width = 2304;
     let original_height = 864;
     let image = ImageBuffer::from_pixel(original_width, original_height, Rgba([255u8, 0, 0, 255]));
-    image.save(&abs_path)?;
+    let mut cursor = Cursor::new(Vec::new());
+    DynamicImage::ImageRgba8(image).write_to(&mut cursor, image::ImageFormat::Png)?;
+    file_system
+        .create_directory(
+            &absolute_path(&assets_dir)?,
+            CreateDirectoryOptions { recursive: true },
+        )
+        .await?;
+    file_system
+        .write_file(&abs_path_absolute, cursor.into_inner())
+        .await?;
 
     let call_id = "view-image-call";
     let arguments = serde_json::json!({ "path": rel_path }).to_string();
@@ -214,7 +238,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: cwd.clone(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
