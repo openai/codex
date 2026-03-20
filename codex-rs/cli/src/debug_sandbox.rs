@@ -170,7 +170,7 @@ async fn run_command_under_sandbox(
                         command_vec,
                         &cwd_clone,
                         env_map,
-                        None,
+                        /*timeout_ms*/ None,
                         config.permissions.windows_sandbox_private_desktop,
                     )
                 } else {
@@ -181,7 +181,7 @@ async fn run_command_under_sandbox(
                         command_vec,
                         &cwd_clone,
                         env_map,
-                        None,
+                        /*timeout_ms*/ None,
                         config.permissions.windows_sandbox_private_desktop,
                     )
                 }
@@ -251,15 +251,15 @@ async fn run_command_under_sandbox(
                 &config.permissions.file_system_sandbox_policy,
                 config.permissions.network_sandbox_policy,
                 sandbox_policy_cwd.as_path(),
-                false,
+                /*enforce_managed_network*/ false,
                 network.as_ref(),
-                None,
+                /*extensions*/ None,
             );
             let network_policy = config.permissions.network_sandbox_policy;
             spawn_debug_sandbox_child(
                 PathBuf::from("/usr/bin/sandbox-exec"),
                 args,
-                None,
+                /*arg0*/ None,
                 cwd,
                 network_policy,
                 env,

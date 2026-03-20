@@ -4699,7 +4699,7 @@ impl ChatWidget {
 
                     self.session_telemetry.counter(
                         "codex.windows_sandbox.setup_elevated_sandbox_command",
-                        1,
+                        /*inc*/ 1,
                         &[],
                     );
                     self.app_event_tx
@@ -8707,8 +8707,11 @@ impl ChatWidget {
             return;
         }
 
-        self.session_telemetry
-            .counter("codex.windows_sandbox.elevated_prompt_shown", 1, &[]);
+        self.session_telemetry.counter(
+            "codex.windows_sandbox.elevated_prompt_shown",
+            /*inc*/ 1,
+            &[],
+        );
 
         let mut header = ColumnRenderable::new();
         header.push(*Box::new(
@@ -8727,7 +8730,11 @@ impl ChatWidget {
                 name: "Set up default sandbox (requires Administrator permissions)".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    accept_otel.counter("codex.windows_sandbox.elevated_prompt_accept", 1, &[]);
+                    accept_otel.counter(
+                        "codex.windows_sandbox.elevated_prompt_accept",
+                        /*inc*/ 1,
+                        &[],
+                    );
                     tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
                         preset: preset.clone(),
                     });
@@ -8739,7 +8746,11 @@ impl ChatWidget {
                 name: "Use non-admin sandbox (higher risk if prompt injected)".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    legacy_otel.counter("codex.windows_sandbox.elevated_prompt_use_legacy", 1, &[]);
+                    legacy_otel.counter(
+                        "codex.windows_sandbox.elevated_prompt_use_legacy",
+                        /*inc*/ 1,
+                        &[],
+                    );
                     tx.send(AppEvent::BeginWindowsSandboxLegacySetup {
                         preset: legacy_preset.clone(),
                     });
@@ -8751,7 +8762,11 @@ impl ChatWidget {
                 name: "Quit".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    quit_otel.counter("codex.windows_sandbox.elevated_prompt_quit", 1, &[]);
+                    quit_otel.counter(
+                        "codex.windows_sandbox.elevated_prompt_quit",
+                        /*inc*/ 1,
+                        &[],
+                    );
                     tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
                 })],
                 dismiss_on_select: true,
@@ -8801,7 +8816,11 @@ impl ChatWidget {
                     let otel = self.session_telemetry.clone();
                     let preset = elevated_preset;
                     move |tx| {
-                        otel.counter("codex.windows_sandbox.fallback_retry_elevated", 1, &[]);
+                        otel.counter(
+                            "codex.windows_sandbox.fallback_retry_elevated",
+                            /*inc*/ 1,
+                            &[],
+                        );
                         tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
                             preset: preset.clone(),
                         });
@@ -8817,7 +8836,11 @@ impl ChatWidget {
                     let otel = self.session_telemetry.clone();
                     let preset = legacy_preset;
                     move |tx| {
-                        otel.counter("codex.windows_sandbox.fallback_use_legacy", 1, &[]);
+                        otel.counter(
+                            "codex.windows_sandbox.fallback_use_legacy",
+                            /*inc*/ 1,
+                            &[],
+                        );
                         tx.send(AppEvent::BeginWindowsSandboxLegacySetup {
                             preset: preset.clone(),
                         });
@@ -8830,7 +8853,11 @@ impl ChatWidget {
                 name: "Quit".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    quit_otel.counter("codex.windows_sandbox.fallback_prompt_quit", 1, &[]);
+                    quit_otel.counter(
+                        "codex.windows_sandbox.fallback_prompt_quit",
+                        /*inc*/ 1,
+                        &[],
+                    );
                     tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
                 })],
                 dismiss_on_select: true,
@@ -8870,11 +8897,12 @@ impl ChatWidget {
         // While elevated sandbox setup runs, prevent typing so the user doesn't
         // accidentally queue messages that will run under an unexpected mode.
         self.bottom_pane.set_composer_input_enabled(
-            false,
+            /*enabled*/ false,
             Some("Input disabled until setup completes.".to_string()),
         );
         self.bottom_pane.ensure_status_indicator();
-        self.bottom_pane.set_interrupt_hint_visible(false);
+        self.bottom_pane
+            .set_interrupt_hint_visible(/*visible*/ false);
         self.set_status(
             "Setting up sandbox...".to_string(),
             Some("Hang tight, this may take a few minutes".to_string()),
@@ -8890,7 +8918,8 @@ impl ChatWidget {
 
     #[cfg(target_os = "windows")]
     pub(crate) fn clear_windows_sandbox_setup_status(&mut self) {
-        self.bottom_pane.set_composer_input_enabled(true, None);
+        self.bottom_pane
+            .set_composer_input_enabled(/*enabled*/ true, /*placeholder*/ None);
         self.bottom_pane.hide_status_indicator();
         self.request_redraw();
     }

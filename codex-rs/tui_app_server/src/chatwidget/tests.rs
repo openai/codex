@@ -1003,8 +1003,10 @@ async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
 
     let remote_url = "https://example.com/remote-only.png".to_string();
     chat.set_remote_image_urls(vec![remote_url.clone()]);
-    chat.bottom_pane
-        .set_composer_input_enabled(false, Some("Input disabled for test.".to_string()));
+    chat.bottom_pane.set_composer_input_enabled(
+        /*enabled*/ false,
+        Some("Input disabled for test.".to_string()),
+    );
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 

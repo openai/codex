@@ -185,8 +185,8 @@ pub fn run_elevated_setup(
         command_cwd,
         env_map,
         codex_home,
-        None,
-        None,
+        /*read_roots_override*/ None,
+        /*write_roots_override*/ None,
     )
 }
 
@@ -421,7 +421,11 @@ fn emit_windows_sandbox_setup_failure_metrics(
             if let Some(message) = message_tag.as_deref() {
                 failure_tags.push(("message", message));
             }
-            let _ = metrics.counter(elevated_setup_failure_metric_name(_err), 1, &failure_tags);
+            let _ = metrics.counter(
+                elevated_setup_failure_metric_name(_err),
+                /*inc*/ 1,
+                &failure_tags,
+            );
         }
     } else {
         let _ = metrics.counter(
