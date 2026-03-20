@@ -2084,9 +2084,14 @@ name = "codex-feedback"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "codex-protocol",
+ "codex-state",
+ "codex-utils-home-dir",
  "pretty_assertions",
  "sentry",
+ "tempfile",
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]

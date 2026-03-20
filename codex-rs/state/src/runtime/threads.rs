@@ -142,6 +142,17 @@ ON CONFLICT(child_thread_id) DO UPDATE SET
             .await
     }
 
+    /// List all spawned descendants of `root_thread_id`.
+    ///
+    /// Descendants are returned breadth-first by depth, then by thread id for stable ordering.
+    pub async fn list_thread_spawn_descendants(
+        &self,
+        root_thread_id: ThreadId,
+    ) -> anyhow::Result<Vec<ThreadId>> {
+        self.list_thread_spawn_descendants_matching(root_thread_id, /*status*/ None)
+            .await
+    }
+
     async fn list_thread_spawn_children_matching(
         &self,
         parent_thread_id: ThreadId,

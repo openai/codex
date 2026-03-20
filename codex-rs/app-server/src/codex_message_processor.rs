@@ -7067,32 +7067,13 @@ impl CodexMessageProcessor {
         {
             tracing::info!(target: "feedback_tags", chatgpt_user_id);
         }
-        let snapshot = self.feedback.snapshot(conversation_id);
+        let snapshot = self
+            .feedback
+            .snapshot_with_sqlite_home(conversation_id, Some(self.config.sqlite_home.clone()));
         let thread_id = snapshot.thread_id.clone();
-        let sqlite_feedback_logs = if include_logs {
-            if let Some(log_db) = self.log_db.as_ref() {
-                log_db.flush().await;
-            }
-            let state_db_ctx = get_state_db(&self.config).await;
-            match (state_db_ctx.as_ref(), conversation_id) {
-                (Some(state_db_ctx), Some(conversation_id)) => {
-                    let thread_id_text = conversation_id.to_string();
-                    match state_db_ctx.query_feedback_logs(&thread_id_text).await {
-                        Ok(logs) if logs.is_empty() => None,
-                        Ok(logs) => Some(logs),
-                        Err(err) => {
-                            warn!(
-                                "failed to query feedback logs from sqlite for thread_id={thread_id_text}: {err}"
-                            );
-                            None
-                        }
-                    }
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
+        if include_logs && let Some(log_db) = self.log_db.as_ref() {
+            log_db.flush().await;
+        }
 
         let validated_rollout_path = if include_logs {
             match conversation_id {
@@ -7116,7 +7097,7 @@ impl CodexMessageProcessor {
                 include_logs,
                 &attachment_paths,
                 Some(session_source),
-                sqlite_feedback_logs,
+                /*logs_override*/ None,
             )
         })
         .await;

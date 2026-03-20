@@ -315,26 +315,71 @@ WHERE id IN (
 
     /// Query per-thread feedback logs, capped to the per-thread SQLite retention budget.
     pub async fn query_feedback_logs(&self, thread_id: &str) -> anyhow::Result<Vec<u8>> {
+        self.query_feedback_logs_for_threads(&[thread_id.to_string()])
+            .await
+    }
+
+    /// Query feedback logs for multiple threads, capped to the combined SQLite retention budget.
+    pub async fn query_feedback_logs_for_threads(
+        &self,
+        thread_ids: &[String],
+    ) -> anyhow::Result<Vec<u8>> {
+        if thread_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let max_bytes = usize::try_from(LOG_PARTITION_SIZE_LIMIT_BYTES).unwrap_or(usize::MAX);
         // Bound the fetched rows in SQL first so over-retained partitions do not have to load
         // every row into memory, then apply the exact whole-line byte cap after formatting.
-        let rows = sqlx::query_as::<_, FeedbackLogRow>(
+        let mut builder = QueryBuilder::<Sqlite>::new(
             r#"
-WITH latest_process AS (
-    SELECT process_uuid
+WITH latest_process_candidates AS (
+    SELECT
+        thread_id,
+        process_uuid,
+        ROW_NUMBER() OVER (
+            PARTITION BY thread_id
+            ORDER BY ts DESC, ts_nanos DESC, id DESC
+        ) AS row_number
     FROM logs
-    WHERE thread_id = ? AND process_uuid IS NOT NULL
-    ORDER BY ts DESC, ts_nanos DESC, id DESC
-    LIMIT 1
+    WHERE process_uuid IS NOT NULL
+      AND thread_id IN (
+"#,
+        );
+        {
+            let mut separated = builder.separated(", ");
+            for thread_id in thread_ids {
+                separated.push_bind(thread_id);
+            }
+        }
+        builder.push(
+            r#"
+      )
+),
+latest_processes AS (
+    SELECT DISTINCT process_uuid
+    FROM latest_process_candidates
+    WHERE row_number = 1
 ),
 feedback_logs AS (
     SELECT ts, ts_nanos, level, feedback_log_body, estimated_bytes, id
     FROM logs
     WHERE feedback_log_body IS NOT NULL AND (
-        thread_id = ?
+        thread_id IN (
+"#,
+        );
+        {
+            let mut separated = builder.separated(", ");
+            for thread_id in thread_ids {
+                separated.push_bind(thread_id);
+            }
+        }
+        builder.push(
+            r#"
+        )
         OR (
             thread_id IS NULL
-            AND process_uuid IN (SELECT process_uuid FROM latest_process)
+            AND process_uuid IN (SELECT process_uuid FROM latest_processes)
         )
     )
 ),
@@ -352,15 +397,19 @@ bounded_feedback_logs AS (
 )
 SELECT ts, ts_nanos, level, feedback_log_body
 FROM bounded_feedback_logs
-WHERE cumulative_estimated_bytes <= ?
+WHERE cumulative_estimated_bytes <=
+"#,
+        );
+        builder.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
+        builder.push(
+            r#"
 ORDER BY ts DESC, ts_nanos DESC, id DESC
 "#,
-        )
-        .bind(thread_id)
-        .bind(thread_id)
-        .bind(LOG_PARTITION_SIZE_LIMIT_BYTES)
-        .fetch_all(self.logs_pool.as_ref())
-        .await?;
+        );
+        let rows = builder
+            .build_query_as::<FeedbackLogRow>()
+            .fetch_all(self.logs_pool.as_ref())
+            .await?;
 
         let mut lines = Vec::new();
         let mut total_bytes = 0usize;
@@ -1277,6 +1326,89 @@ mod tests {
             .expect("query feedback logs");
 
         assert_eq!(bytes, Vec::<u8>::new());
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn query_feedback_logs_for_threads_merges_threads_and_dedupes_threadless_process_rows() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+
+        runtime
+            .insert_logs(&[
+                LogEntry {
+                    ts: 1,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("thread-1".to_string()),
+                    feedback_log_body: None,
+                    thread_id: Some("thread-1".to_string()),
+                    process_uuid: Some("proc-shared".to_string()),
+                    file: None,
+                    line: None,
+                    module_path: None,
+                },
+                LogEntry {
+                    ts: 2,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("shared-threadless".to_string()),
+                    feedback_log_body: None,
+                    thread_id: None,
+                    process_uuid: Some("proc-shared".to_string()),
+                    file: None,
+                    line: None,
+                    module_path: None,
+                },
+                LogEntry {
+                    ts: 3,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("thread-2".to_string()),
+                    feedback_log_body: None,
+                    thread_id: Some("thread-2".to_string()),
+                    process_uuid: Some("proc-shared".to_string()),
+                    file: None,
+                    line: None,
+                    module_path: None,
+                },
+                LogEntry {
+                    ts: 4,
+                    ts_nanos: 0,
+                    level: "INFO".to_string(),
+                    target: "cli".to_string(),
+                    message: Some("other-threadless".to_string()),
+                    feedback_log_body: None,
+                    thread_id: None,
+                    process_uuid: Some("proc-other".to_string()),
+                    file: None,
+                    line: None,
+                    module_path: None,
+                },
+            ])
+            .await
+            .expect("insert test logs");
+
+        let bytes = runtime
+            .query_feedback_logs_for_threads(&["thread-1".to_string(), "thread-2".to_string()])
+            .await
+            .expect("query feedback logs");
+
+        assert_eq!(
+            String::from_utf8(bytes).expect("valid utf-8"),
+            [
+                format_feedback_log_line(1, 0, "INFO", "thread-1"),
+                format_feedback_log_line(2, 0, "INFO", "shared-threadless"),
+                format_feedback_log_line(3, 0, "INFO", "thread-2"),
+            ]
+            .concat()
+        );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }

@@ -7,9 +7,14 @@ license.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 codex-protocol = { workspace = true }
+codex-state = { workspace = true }
+codex-utils-home-dir = { workspace = true }
 sentry = { version = "0.46" }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
+chrono = { workspace = true }
 pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
