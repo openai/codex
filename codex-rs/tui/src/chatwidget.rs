@@ -1696,6 +1696,14 @@ impl ChatWidget {
                 None
             };
         if let Some(cell) = finalized_streamed_cell {
+            if self
+                .active_cell
+                .as_ref()
+                .is_some_and(|active| !active.as_any().is::<history_cell::ProposedPlanStreamCell>())
+            {
+                self.flush_unified_exec_wait_streak();
+                self.flush_active_cell();
+            }
             self.active_cell = Some(cell);
             self.bump_active_cell_revision();
             self.flush_active_cell();
