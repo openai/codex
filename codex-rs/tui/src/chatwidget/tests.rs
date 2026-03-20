@@ -363,6 +363,46 @@ async fn thread_snapshot_replay_uses_turn_complete_last_agent_message_without_co
 }
 
 #[tokio::test]
+async fn thread_snapshot_replay_does_not_duplicate_commentary_item_from_turn_complete() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event_replay(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: ThreadId::new(),
+            turn_id: "turn-1".to_string(),
+            item: TurnItem::AgentMessage(AgentMessageItem {
+                id: "msg-1".to_string(),
+                content: vec![AgentMessageContent::Text {
+                    text: "commentary reply".to_string(),
+                }],
+                phase: Some(MessagePhase::Commentary),
+                memory_citation: None,
+            }),
+        }),
+    });
+    chat.handle_codex_event_replay(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: Some("commentary reply".to_string()),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected TurnComplete fallback to skip duplicate commentary text"
+    );
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("commentary reply"),
+        "expected replayed commentary message, got {rendered:?}"
+    );
+}
+
+#[tokio::test]
 async fn replayed_user_message_preserves_text_elements_and_local_images() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
 
@@ -1985,6 +2025,7 @@ async fn make_chatwidget_manual(
         retry_status_header: None,
         pending_status_indicator_restore: false,
         thread_snapshot_replay_saw_final_agent_message_item: false,
+        thread_snapshot_replay_last_agent_message_item: None,
         suppress_queue_autosend: false,
         thread_id: None,
         thread_name: None,
@@ -4100,7 +4141,8 @@ async fn later_plan_deltas_flush_non_plan_active_cells_before_replacing_active_s
         "expected flushed web search history cell, got {rendered:?}"
     );
     assert!(
-        !chat.active_cell
+        !chat
+            .active_cell
             .as_ref()
             .is_some_and(|cell| cell.as_any().is::<WebSearchCell>())
     );

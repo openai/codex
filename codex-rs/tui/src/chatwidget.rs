@@ -733,8 +733,10 @@ pub(crate) struct ChatWidget {
     pending_status_indicator_restore: bool,
     // Older thread snapshots may lack a final `AgentMessageItem` and only preserve
     // `TurnComplete.last_agent_message`. Track whether the replayed turn already produced a
-    // final assistant item so replay can fall back only when needed.
+    // final assistant item, plus the latest replayed assistant item text, so replay can fall
+    // back only when needed without duplicating commentary echoed by `TurnComplete`.
     thread_snapshot_replay_saw_final_agent_message_item: bool,
+    thread_snapshot_replay_last_agent_message_item: Option<String>,
     suppress_queue_autosend: bool,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
@@ -1774,6 +1776,7 @@ impl ChatWidget {
         self.retry_status_header = None;
         self.pending_status_indicator_restore = false;
         self.thread_snapshot_replay_saw_final_agent_message_item = false;
+        self.thread_snapshot_replay_last_agent_message_item = None;
         self.bottom_pane
             .set_interrupt_hint_visible(/*visible*/ true);
         self.terminal_title_status_kind = TerminalTitleStatusKind::Working;
@@ -1799,6 +1802,10 @@ impl ChatWidget {
             && !self.thread_snapshot_replay_saw_final_agent_message_item
             && let Some(message) = last_agent_message.as_deref()
             && !message.trim().is_empty()
+            && self
+                .thread_snapshot_replay_last_agent_message_item
+                .as_deref()
+                != Some(message)
             && let Some(cell) = self.completed_agent_message_cell(message)
         {
             self.add_boxed_history(cell);
@@ -1848,6 +1855,7 @@ impl ChatWidget {
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
         self.thread_snapshot_replay_saw_final_agent_message_item = false;
+        self.thread_snapshot_replay_last_agent_message_item = None;
         self.request_redraw();
 
         let had_pending_steers = !self.pending_steers.is_empty();
@@ -3124,6 +3132,9 @@ impl ChatWidget {
                 AgentMessageContent::Text { text } => message.push_str(text),
             }
         }
+        if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot)) && !message.is_empty() {
+            self.thread_snapshot_replay_last_agent_message_item = Some(message.clone());
+        }
         self.finalize_completed_assistant_message(
             (!message.is_empty()).then_some(message.as_str()),
             replay_kind,
@@ -3732,6 +3743,7 @@ impl ChatWidget {
             retry_status_header: None,
             pending_status_indicator_restore: false,
             thread_snapshot_replay_saw_final_agent_message_item: false,
+            thread_snapshot_replay_last_agent_message_item: None,
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
@@ -3931,6 +3943,7 @@ impl ChatWidget {
             retry_status_header: None,
             pending_status_indicator_restore: false,
             thread_snapshot_replay_saw_final_agent_message_item: false,
+            thread_snapshot_replay_last_agent_message_item: None,
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
@@ -4122,6 +4135,7 @@ impl ChatWidget {
             retry_status_header: None,
             pending_status_indicator_restore: false,
             thread_snapshot_replay_saw_final_agent_message_item: false,
+            thread_snapshot_replay_last_agent_message_item: None,
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
