@@ -213,16 +213,10 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
     assert_eq!(second_transcript_update.thread_id, output_audio.thread_id);
     assert_eq!(
         second_transcript_update.transcript,
-        vec![
-            ThreadRealtimeTranscriptEntry {
-                role: "user".to_string(),
-                text: "delegate now".to_string(),
-            },
-            ThreadRealtimeTranscriptEntry {
-                role: "assistant".to_string(),
-                text: "working".to_string(),
-            },
-        ]
+        vec![ThreadRealtimeTranscriptEntry {
+            role: "assistant".to_string(),
+            text: "working".to_string(),
+        }]
     );
 
     let realtime_error =

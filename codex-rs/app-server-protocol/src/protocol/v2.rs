@@ -3787,7 +3787,7 @@ pub struct ThreadRealtimeItemAddedNotification {
     pub item: JsonValue,
 }
 
-/// EXPERIMENTAL - flat transcript snapshot emitted whenever realtime
+/// EXPERIMENTAL - flat transcript delta emitted whenever realtime
 /// transcript text changes.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
