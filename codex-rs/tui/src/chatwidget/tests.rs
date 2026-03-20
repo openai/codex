@@ -2026,6 +2026,8 @@ async fn make_chatwidget_manual(
         pending_status_indicator_restore: false,
         thread_snapshot_replay_saw_final_agent_message_item: false,
         thread_snapshot_replay_last_agent_message_item: None,
+        thread_snapshot_replay_agent_delta_turn_id: None,
+        thread_snapshot_replay_agent_deltas_active: false,
         suppress_queue_autosend: false,
         thread_id: None,
         thread_name: None,
@@ -4222,6 +4224,51 @@ async fn plan_completion_flushes_non_plan_active_cell_before_finalized_plan() {
         cells.len(),
         2,
         "expected web search row and finalized plan row to both reach history"
+    );
+    let search = lines_to_single_string(&cells[0]);
+    assert!(
+        search.contains("Searching"),
+        "expected flushed web search history cell, got {search:?}"
+    );
+    let plan = lines_to_single_string(&cells[1]);
+    assert!(
+        plan.contains("Proposed Plan"),
+        "expected finalized plan history cell, got {plan:?}"
+    );
+    assert!(chat.active_cell.is_none());
+}
+
+#[tokio::test]
+async fn task_complete_flushes_non_plan_active_cell_before_finalized_plan() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    let plan_mask =
+        collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
+            .expect("expected plan collaboration mask");
+    chat.set_collaboration_mask(plan_mask);
+
+    chat.on_task_started();
+    chat.on_plan_delta("- Step 1\n".to_string());
+    chat.on_commit_tick();
+    drain_insert_history(&mut rx);
+
+    chat.on_web_search_begin(WebSearchBeginEvent {
+        call_id: "search-1".to_string(),
+    });
+    drain_insert_history(&mut rx);
+    assert!(
+        chat.active_cell
+            .as_ref()
+            .is_some_and(|cell| cell.as_any().is::<WebSearchCell>())
+    );
+
+    chat.on_task_complete(None, None);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        2,
+        "expected web search row and finalized plan row to both reach history on task completion"
     );
     let search = lines_to_single_string(&cells[0]);
     assert!(

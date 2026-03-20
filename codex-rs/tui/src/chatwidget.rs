@@ -737,6 +737,8 @@ pub(crate) struct ChatWidget {
     // back only when needed without duplicating commentary echoed by `TurnComplete`.
     thread_snapshot_replay_saw_final_agent_message_item: bool,
     thread_snapshot_replay_last_agent_message_item: Option<String>,
+    thread_snapshot_replay_agent_delta_turn_id: Option<String>,
+    thread_snapshot_replay_agent_deltas_active: bool,
     suppress_queue_autosend: bool,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
@@ -1823,6 +1825,14 @@ impl ChatWidget {
         if let Some(mut controller) = self.plan_stream_controller.take()
             && let Some(cell) = controller.finalize()
         {
+            if self
+                .active_cell
+                .as_ref()
+                .is_some_and(|active| !active.as_any().is::<history_cell::ProposedPlanStreamCell>())
+            {
+                self.flush_unified_exec_wait_streak();
+                self.flush_active_cell();
+            }
             self.active_cell = Some(cell);
             self.bump_active_cell_revision();
             self.flush_active_cell();
@@ -1858,6 +1868,7 @@ impl ChatWidget {
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
         self.update_task_running_state();
+        self.thread_snapshot_replay_agent_deltas_active = false;
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
@@ -3758,6 +3769,8 @@ impl ChatWidget {
             pending_status_indicator_restore: false,
             thread_snapshot_replay_saw_final_agent_message_item: false,
             thread_snapshot_replay_last_agent_message_item: None,
+            thread_snapshot_replay_agent_delta_turn_id: None,
+            thread_snapshot_replay_agent_deltas_active: false,
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
@@ -3958,6 +3971,8 @@ impl ChatWidget {
             pending_status_indicator_restore: false,
             thread_snapshot_replay_saw_final_agent_message_item: false,
             thread_snapshot_replay_last_agent_message_item: None,
+            thread_snapshot_replay_agent_delta_turn_id: None,
+            thread_snapshot_replay_agent_deltas_active: false,
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
@@ -4150,6 +4165,8 @@ impl ChatWidget {
             pending_status_indicator_restore: false,
             thread_snapshot_replay_saw_final_agent_message_item: false,
             thread_snapshot_replay_last_agent_message_item: None,
+            thread_snapshot_replay_agent_delta_turn_id: None,
+            thread_snapshot_replay_agent_deltas_active: false,
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
@@ -5385,6 +5402,21 @@ impl ChatWidget {
         self.dispatch_event_msg(/*id*/ None, msg, Some(ReplayKind::ThreadSnapshot));
     }
 
+    pub(crate) fn prepare_thread_snapshot_replay(&mut self, active_delta_turn_id: Option<String>) {
+        self.thread_snapshot_replay_agent_delta_turn_id = active_delta_turn_id;
+        self.thread_snapshot_replay_agent_deltas_active = false;
+        self.thread_snapshot_replay_saw_final_agent_message_item = false;
+        self.thread_snapshot_replay_last_agent_message_item = None;
+    }
+
+    pub(crate) fn finish_thread_snapshot_replay(&mut self) {
+        if self.thread_snapshot_replay_agent_deltas_active {
+            self.run_commit_tick();
+        }
+        self.thread_snapshot_replay_agent_delta_turn_id = None;
+        self.thread_snapshot_replay_agent_deltas_active = false;
+    }
+
     /// Dispatch a protocol `EventMsg` to the appropriate handler.
     ///
     /// `id` is `Some` for live events and `None` for replayed events from
@@ -5431,7 +5463,8 @@ impl ChatWidget {
             }
             EventMsg::AgentMessage(AgentMessageEvent { .. }) => {}
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta })
-                if !matches!(replay_kind, Some(ReplayKind::ThreadSnapshot)) =>
+                if !matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
+                    || self.thread_snapshot_replay_agent_deltas_active =>
             {
                 self.on_agent_message_delta(delta)
             }
@@ -5448,9 +5481,15 @@ impl ChatWidget {
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TurnStarted(event) => {
+                let replay_agent_deltas = matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
+                    && self.thread_snapshot_replay_agent_delta_turn_id.as_deref()
+                        == Some(event.turn_id.as_str());
                 if !is_resume_initial_replay {
                     self.apply_turn_started_context_window(event.model_context_window);
                     self.on_task_started();
+                }
+                if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot)) {
+                    self.thread_snapshot_replay_agent_deltas_active = replay_agent_deltas;
                 }
             }
             EventMsg::TurnComplete(TurnCompleteEvent {
@@ -5672,6 +5711,9 @@ impl ChatWidget {
                     self.on_plan_item_completed(plan_item.text.clone());
                 }
                 if let codex_protocol::items::TurnItem::AgentMessage(item) = item {
+                    if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot)) {
+                        self.thread_snapshot_replay_agent_deltas_active = false;
+                    }
                     if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
                         && matches!(item.phase, Some(MessagePhase::FinalAnswer) | None)
                     {

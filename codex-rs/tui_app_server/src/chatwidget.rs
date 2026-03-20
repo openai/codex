@@ -1494,7 +1494,9 @@ impl ChatWidget {
         if let Some(mut controller) = self.stream_controller.take()
             && let Some(cell) = controller.finalize()
         {
-            self.add_boxed_history(cell);
+            self.active_cell = Some(cell);
+            self.bump_active_cell_revision();
+            self.flush_active_cell();
         }
         self.adaptive_chunking.reset();
     }
@@ -1973,11 +1975,19 @@ impl ChatWidget {
             self.plan_delta_buffer.clear();
         }
         self.plan_delta_buffer.push_str(&delta);
-        // Before streaming plan content, flush any active exec cell group.
-        self.flush_unified_exec_wait_streak();
-        self.flush_active_cell();
+        if self
+            .active_cell
+            .as_ref()
+            .is_some_and(|cell| !cell.as_any().is::<history_cell::ProposedPlanStreamCell>())
+        {
+            self.flush_unified_exec_wait_streak();
+            self.flush_active_cell();
+        }
 
         if self.plan_stream_controller.is_none() {
+            // Before streaming plan content, flush any active exec cell group.
+            self.flush_unified_exec_wait_streak();
+            self.flush_active_cell();
             self.plan_stream_controller = Some(PlanStreamController::new(
                 self.last_rendered_width.get().map(|w| w.saturating_sub(4)),
                 &self.config.cwd,
@@ -2015,7 +2025,17 @@ impl ChatWidget {
                 None
             };
         if let Some(cell) = finalized_streamed_cell {
-            self.add_boxed_history(cell);
+            if self
+                .active_cell
+                .as_ref()
+                .is_some_and(|active| !active.as_any().is::<history_cell::ProposedPlanStreamCell>())
+            {
+                self.flush_unified_exec_wait_streak();
+                self.flush_active_cell();
+            }
+            self.active_cell = Some(cell);
+            self.bump_active_cell_revision();
+            self.flush_active_cell();
             // TODO: Replace streamed output with the final plan item text if plan streaming is
             // removed or if we need to reconcile mismatches between streamed and final content.
         } else if !plan_text.is_empty() {
@@ -2110,7 +2130,17 @@ impl ChatWidget {
         if let Some(mut controller) = self.plan_stream_controller.take()
             && let Some(cell) = controller.finalize()
         {
-            self.add_boxed_history(cell);
+            if self
+                .active_cell
+                .as_ref()
+                .is_some_and(|active| !active.as_any().is::<history_cell::ProposedPlanStreamCell>())
+            {
+                self.flush_unified_exec_wait_streak();
+                self.flush_active_cell();
+            }
+            self.active_cell = Some(cell);
+            self.bump_active_cell_revision();
+            self.flush_active_cell();
         }
         self.flush_unified_exec_wait_streak();
         if !from_replay {
@@ -3646,9 +3676,17 @@ impl ChatWidget {
             scope,
             now,
         );
-        for cell in outcome.cells {
+        if let Some(cell) = outcome.active_cell {
+            if self.active_cell.as_ref().is_some_and(|active| {
+                !active.as_any().is::<history_cell::AgentMessageCell>()
+                    && !active.as_any().is::<history_cell::ProposedPlanStreamCell>()
+            }) {
+                self.flush_active_cell();
+            }
             self.bottom_pane.hide_status_indicator();
-            self.add_boxed_history(cell);
+            self.active_cell = Some(cell);
+            self.bump_active_cell_revision();
+            self.request_redraw();
         }
 
         if outcome.has_controller && outcome.all_idle {
@@ -3694,11 +3732,10 @@ impl ChatWidget {
 
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
-        // Before streaming agent content, flush any active exec cell group.
-        self.flush_unified_exec_wait_streak();
-        self.flush_active_cell();
-
         if self.stream_controller.is_none() {
+            // Before streaming agent content, flush any active exec cell group.
+            self.flush_unified_exec_wait_streak();
+            self.flush_active_cell();
             // If the previous turn inserted non-stream history (exec output, patch status, MCP
             // calls), render a separator before starting the next streamed assistant message.
             if self.needs_final_message_separator && self.had_work_activity {

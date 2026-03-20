@@ -1955,6 +1955,9 @@ impl App {
         snapshot: ThreadEventSnapshot,
         resume_restored_queue: bool,
     ) {
+        let active_delta_turn_id = Self::thread_snapshot_active_delta_turn_id(&snapshot);
+        self.chat_widget
+            .prepare_thread_snapshot_replay(active_delta_turn_id);
         if let Some(event) = snapshot.session_configured {
             self.handle_codex_event_replay(event);
         }
@@ -1967,10 +1970,43 @@ impl App {
         }
         self.chat_widget
             .set_queue_autosend_suppressed(/*suppressed*/ false);
+        self.chat_widget.finish_thread_snapshot_replay();
         if resume_restored_queue {
             self.chat_widget.maybe_send_next_queued_input();
         }
         self.refresh_status_surfaces();
+    }
+
+    fn thread_snapshot_active_delta_turn_id(snapshot: &ThreadEventSnapshot) -> Option<String> {
+        let mut active_turn_id: Option<String> = None;
+        let mut active_turn_has_completed_message = false;
+
+        for event in &snapshot.events {
+            match &event.msg {
+                EventMsg::TurnStarted(event) => {
+                    active_turn_id = Some(event.turn_id.clone());
+                    active_turn_has_completed_message = false;
+                }
+                EventMsg::ItemCompleted(event) => {
+                    if active_turn_id.as_deref() == Some(event.turn_id.as_str())
+                        && matches!(event.item, TurnItem::AgentMessage(_))
+                    {
+                        active_turn_has_completed_message = true;
+                    }
+                }
+                EventMsg::TurnComplete(event) => {
+                    if active_turn_id.as_deref() == Some(event.turn_id.as_str()) {
+                        active_turn_id = None;
+                        active_turn_has_completed_message = false;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        (!active_turn_has_completed_message)
+            .then_some(active_turn_id)
+            .flatten()
     }
 
     fn should_wait_for_initial_session(session_selection: &SessionSelection) -> bool {
@@ -4951,6 +4987,77 @@ mod tests {
             transcript_texts,
             vec![completed_message],
             "replayed agent message should use the clean completed item"
+        );
+    }
+
+    #[tokio::test]
+    async fn replay_thread_snapshot_replays_active_turn_deltas_without_completed_message() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let turn_id = "turn-1".to_string();
+        let partial_message = "in-progress assistant line\n".to_string();
+
+        app.replay_thread_snapshot(
+            ThreadEventSnapshot {
+                session_configured: Some(Event {
+                    id: "session-configured".to_string(),
+                    msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                        session_id: thread_id,
+                        forked_from_id: None,
+                        thread_name: None,
+                        model: "gpt-test".to_string(),
+                        model_provider_id: "test-provider".to_string(),
+                        service_tier: None,
+                        approval_policy: AskForApproval::Never,
+                        approvals_reviewer: ApprovalsReviewer::User,
+                        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                        cwd: PathBuf::from("/tmp/project"),
+                        reasoning_effort: None,
+                        history_log_id: 0,
+                        history_entry_count: 0,
+                        initial_messages: None,
+                        network_proxy: None,
+                        rollout_path: Some(PathBuf::new()),
+                    }),
+                }),
+                events: vec![
+                    Event {
+                        id: "turn-started".to_string(),
+                        msg: EventMsg::TurnStarted(TurnStartedEvent {
+                            turn_id,
+                            model_context_window: None,
+                            collaboration_mode_kind: Default::default(),
+                        }),
+                    },
+                    Event {
+                        id: "agent-delta".to_string(),
+                        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                            delta: partial_message,
+                        }),
+                    },
+                ],
+                input_state: None,
+            },
+            false,
+        );
+
+        let active_text = app
+            .chat_widget
+            .active_cell_transcript_lines(u16::MAX)
+            .expect("expected replayed live turn to restore active streamed text")
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            active_text.contains("in-progress assistant line"),
+            "expected active replayed streamed text, got {active_text:?}"
         );
     }
 
