@@ -3,7 +3,8 @@ use crate::codex::make_session_and_context;
 use crate::config::test_config;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::RefreshStrategy;
-use assert_matches::assert_matches;
+use crate::rollout::RolloutRecorder;
+use crate::tasks::interrupted_turn_history_marker;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
@@ -38,7 +39,7 @@ fn assistant_msg(text: &str) -> ResponseItem {
 }
 
 #[test]
-fn drops_from_last_user_only() {
+fn truncates_before_requested_user_message() {
     let items = [
         user_msg("u1"),
         assistant_msg("a1"),
@@ -68,7 +69,11 @@ fn drops_from_last_user_only() {
         .cloned()
         .map(RolloutItem::ResponseItem)
         .collect();
-    let truncated = truncate_before_nth_user_message(InitialHistory::Forked(initial), 1);
+    let truncated = truncate_before_nth_user_message(
+        InitialHistory::Forked(initial),
+        1,
+        /*snapshot_mid_turn*/ false,
+    );
     let got_items = truncated.get_rollout_items();
     let expected_items = vec![
         RolloutItem::ResponseItem(items[0].clone()),
@@ -85,8 +90,36 @@ fn drops_from_last_user_only() {
         .cloned()
         .map(RolloutItem::ResponseItem)
         .collect();
-    let truncated2 = truncate_before_nth_user_message(InitialHistory::Forked(initial2), 2);
-    assert_matches!(truncated2, InitialHistory::New);
+    let truncated2 = truncate_before_nth_user_message(
+        InitialHistory::Forked(initial2.clone()),
+        2,
+        /*snapshot_mid_turn*/ false,
+    );
+    assert_eq!(
+        serde_json::to_value(truncated2.get_rollout_items()).unwrap(),
+        serde_json::to_value(initial2).unwrap()
+    );
+}
+
+#[test]
+fn out_of_range_truncation_drops_only_unfinished_suffix_mid_turn() {
+    let items = vec![
+        RolloutItem::ResponseItem(user_msg("u1")),
+        RolloutItem::ResponseItem(assistant_msg("a1")),
+        RolloutItem::ResponseItem(user_msg("u2")),
+        RolloutItem::ResponseItem(assistant_msg("partial")),
+    ];
+
+    let truncated = truncate_before_nth_user_message(
+        InitialHistory::Forked(items.clone()),
+        usize::MAX,
+        /*snapshot_mid_turn*/ true,
+    );
+
+    assert_eq!(
+        serde_json::to_value(truncated.get_rollout_items()).unwrap(),
+        serde_json::to_value(items[..2].to_vec()).unwrap()
+    );
 }
 
 #[tokio::test]
@@ -104,7 +137,11 @@ async fn ignores_session_prefix_messages_when_truncating() {
         .map(RolloutItem::ResponseItem)
         .collect();
 
-    let truncated = truncate_before_nth_user_message(InitialHistory::Forked(rollout_items), 1);
+    let truncated = truncate_before_nth_user_message(
+        InitialHistory::Forked(rollout_items),
+        1,
+        /*snapshot_mid_turn*/ false,
+    );
     let got_items = truncated.get_rollout_items();
 
     let expected: Vec<RolloutItem> = vec![
@@ -184,4 +221,106 @@ async fn new_uses_configured_openai_provider_for_model_refresh() {
 
     let _ = manager.list_models(RefreshStrategy::Online).await;
     assert_eq!(models_mock.requests().len(), 1);
+}
+
+#[test]
+fn interrupted_fork_snapshot_appends_interrupt_marker() {
+    let committed_history =
+        InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("hello"))]);
+
+    assert_eq!(
+        serde_json::to_value(inject_interrupted_marker(committed_history).get_rollout_items())
+            .expect("serialize interrupted fork history"),
+        serde_json::to_value(vec![
+            RolloutItem::ResponseItem(user_msg("hello")),
+            RolloutItem::ResponseItem(interrupted_turn_history_marker()),
+        ])
+        .expect("serialize expected interrupted fork history"),
+    );
+    assert_eq!(
+        serde_json::to_value(inject_interrupted_marker(InitialHistory::New).get_rollout_items())
+            .expect("serialize interrupted empty fork history"),
+        serde_json::to_value(vec![RolloutItem::ResponseItem(
+            interrupted_turn_history_marker()
+        )])
+        .expect("serialize expected interrupted empty history"),
+    );
+}
+
+#[tokio::test]
+async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_source() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config();
+    config.codex_home = temp_dir.path().join("codex-home");
+    config.cwd = config.codex_home.clone();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager.clone(),
+        SessionSource::Exec,
+        CollaborationModesConfig::default(),
+    );
+
+    let source = manager
+        .resume_thread_with_history(
+            config.clone(),
+            InitialHistory::Forked(vec![
+                RolloutItem::ResponseItem(user_msg("hello")),
+                RolloutItem::ResponseItem(assistant_msg("partial")),
+            ]),
+            auth_manager,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("create source thread from partial history");
+    let source_path = source
+        .thread
+        .rollout_path()
+        .expect("source rollout path should exist");
+    let source_history = RolloutRecorder::get_rollout_history(&source_path)
+        .await
+        .expect("read source rollout history");
+    assert!(snapshot_ends_mid_turn(&source_history));
+    manager.remove_thread(&source.thread_id).await;
+
+    let forked = manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            config,
+            source_path,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("fork interrupted snapshot");
+    let forked_path = forked
+        .thread
+        .rollout_path()
+        .expect("forked rollout path should exist");
+    let history = RolloutRecorder::get_rollout_history(&forked_path)
+        .await
+        .expect("read forked rollout history");
+
+    let forked_rollout_items: Vec<_> = history
+        .get_rollout_items()
+        .into_iter()
+        .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
+        .collect();
+    let interrupted_marker_json =
+        serde_json::to_value(RolloutItem::ResponseItem(interrupted_turn_history_marker()))
+            .expect("serialize interrupted marker");
+    assert_eq!(
+        forked_rollout_items
+            .iter()
+            .filter(|item| {
+                serde_json::to_value(item).expect("serialize forked rollout item")
+                    == interrupted_marker_json
+            })
+            .count(),
+        1,
+    );
 }

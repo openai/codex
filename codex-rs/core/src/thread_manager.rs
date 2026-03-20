@@ -24,6 +24,8 @@ use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillsManager;
+use crate::tasks::interrupted_turn_history_marker;
+use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelPreset;
@@ -122,6 +124,37 @@ pub struct NewThread {
     pub thread_id: ThreadId,
     pub thread: Arc<CodexThread>,
     pub session_configured: SessionConfiguredEvent,
+}
+
+// TODO(ccunningham): Add an explicit non-interrupting live-turn snapshot once
+// core can represent sampling boundaries directly instead of relying on
+// whichever items happened to be persisted mid-turn.
+//
+// Two likely future variants:
+// - `TruncateToLastSamplingBoundary` for callers that want a coherent fork from
+//   the last stable model boundary without synthesizing an interrupt.
+// - `WaitUntilNextSamplingBoundary` (or similar) for callers that prefer to
+//   fork after the next sampling boundary rather than interrupting immediately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForkSnapshot {
+    /// Fork a committed prefix ending strictly before the nth user message.
+    ///
+    /// When `n` is within range, this cuts before that 0-based user-message
+    /// boundary. When `n` is out of range and the source thread is currently
+    /// mid-turn, this instead cuts before the last user message so the fork
+    /// drops the unfinished turn suffix. When `n` is out of range and the
+    /// source thread is already at a turn boundary, this returns the full
+    /// committed history unchanged.
+    TruncateBeforeNthUserMessage(usize),
+
+    /// Fork the current persisted history as if the source thread had been
+    /// interrupted now.
+    ///
+    /// If the persisted snapshot ends mid-turn, this appends the same
+    /// `<turn_aborted>` marker produced by a real interrupt. If the snapshot is
+    /// already at a turn boundary, this returns the current persisted history
+    /// unchanged.
+    Interrupted,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -539,20 +572,37 @@ impl ThreadManager {
         report
     }
 
-    /// Fork an existing thread by taking messages up to the given position (not including
-    /// the message at the given position) and starting a new thread with identical
-    /// configuration (unless overridden by the caller's `config`). The new thread will have
-    /// a fresh id. Pass `usize::MAX` to keep the full rollout history.
+    /// Fork an existing thread by snapshotting rollout history according to
+    /// `snapshot` and starting a new thread with identical configuration
+    /// (unless overridden by the caller's `config`). The new thread will have
+    /// a fresh id.
     pub async fn fork_thread(
         &self,
-        nth_user_message: usize,
+        snapshot: ForkSnapshot,
         config: Config,
         path: PathBuf,
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
         let history = RolloutRecorder::get_rollout_history(&path).await?;
-        let history = truncate_before_nth_user_message(history, nth_user_message);
+        let snapshot_mid_turn = snapshot_ends_mid_turn(&history);
+        let history = match snapshot {
+            ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
+                truncate_before_nth_user_message(history, nth_user_message, snapshot_mid_turn)
+            }
+            ForkSnapshot::Interrupted => {
+                let history = match history {
+                    InitialHistory::New => InitialHistory::New,
+                    InitialHistory::Forked(history) => InitialHistory::Forked(history),
+                    InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
+                };
+                if snapshot_mid_turn {
+                    inject_interrupted_marker(history)
+                } else {
+                    history
+                }
+            }
+        };
         Box::pin(self.state.spawn_thread(
             config,
             history,
@@ -825,16 +875,81 @@ impl ThreadManagerState {
     }
 }
 
-/// Return a prefix of `items` obtained by cutting strictly before the nth user message
-/// (0-based) and all items that follow it.
-fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> InitialHistory {
+/// Return a fork snapshot cut strictly before the nth user message (0-based).
+///
+/// Out-of-range values keep the full committed history at a turn boundary, but
+/// fall back to cutting before the last user message when the source thread is
+/// currently mid-turn so the fork omits the unfinished suffix.
+fn truncate_before_nth_user_message(
+    history: InitialHistory,
+    n: usize,
+    snapshot_mid_turn: bool,
+) -> InitialHistory {
     let items: Vec<RolloutItem> = history.get_rollout_items();
-    let rolled = truncation::truncate_rollout_before_nth_user_message_from_start(&items, n);
+    let user_positions = truncation::user_message_positions_in_rollout(&items);
+    let rolled = if snapshot_mid_turn && n >= user_positions.len() {
+        if let Some(cut_idx) = user_positions.last().copied() {
+            items[..cut_idx].to_vec()
+        } else {
+            items
+        }
+    } else {
+        truncation::truncate_rollout_before_nth_user_message_from_start(&items, n)
+    };
 
     if rolled.is_empty() {
         InitialHistory::New
     } else {
         InitialHistory::Forked(rolled)
+    }
+}
+
+fn snapshot_ends_mid_turn(history: &InitialHistory) -> bool {
+    let rollout_items = history.get_rollout_items();
+    let mut builder = ThreadHistoryBuilder::new();
+    for item in &rollout_items {
+        builder.handle_rollout_item(item);
+    }
+    if builder.has_active_turn() {
+        return true;
+    }
+
+    let Some(last_user_position) = truncation::user_message_positions_in_rollout(&rollout_items)
+        .last()
+        .copied()
+    else {
+        return false;
+    };
+
+    // Synthetic fork/resume histories can contain user/assistant response items
+    // without explicit turn lifecycle events. If the persisted snapshot has no
+    // terminating boundary after its last user message, treat it as mid-turn.
+    !rollout_items[last_user_position + 1..].iter().any(|item| {
+        matches!(
+            item,
+            RolloutItem::EventMsg(EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
+        )
+    })
+}
+
+/// Append the same model-visible interruption marker used by the live interrupt
+/// path to an existing fork snapshot after the source thread has been confirmed
+/// to be mid-turn.
+fn inject_interrupted_marker(history: InitialHistory) -> InitialHistory {
+    match history {
+        InitialHistory::New => InitialHistory::Forked(vec![RolloutItem::ResponseItem(
+            interrupted_turn_history_marker(),
+        )]),
+        InitialHistory::Forked(mut history) => {
+            history.push(RolloutItem::ResponseItem(interrupted_turn_history_marker()));
+            InitialHistory::Forked(history)
+        }
+        InitialHistory::Resumed(mut resumed) => {
+            resumed
+                .history
+                .push(RolloutItem::ResponseItem(interrupted_turn_history_marker()));
+            InitialHistory::Forked(resumed.history)
+        }
     }
 }
 
