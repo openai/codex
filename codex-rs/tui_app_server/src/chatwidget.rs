@@ -1791,6 +1791,7 @@ impl ChatWidget {
         self.refresh_model_display();
         self.sync_fast_command_enabled();
         self.sync_personality_command_enabled();
+        self.sync_plugins_command_enabled();
         self.refresh_plugin_mentions();
         let startup_tooltip_override = self.startup_tooltip_override.take();
         let show_fast_status = self.should_show_fast_status(&model_for_header, event.service_tier);
@@ -4290,6 +4291,7 @@ impl ChatWidget {
             .set_collaboration_modes_enabled(/*enabled*/ true);
         widget.sync_fast_command_enabled();
         widget.sync_personality_command_enabled();
+        widget.sync_plugins_command_enabled();
         widget
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_binding);
@@ -9002,6 +9004,7 @@ impl ChatWidget {
             self.sync_personality_command_enabled();
         }
         if feature == Feature::Plugins {
+            self.sync_plugins_command_enabled();
             self.refresh_plugin_mentions();
         }
         if feature == Feature::PreventIdleSleep {
@@ -9230,6 +9233,11 @@ impl ChatWidget {
     fn sync_personality_command_enabled(&mut self) {
         self.bottom_pane
             .set_personality_command_enabled(self.config.features.enabled(Feature::Personality));
+    }
+
+    fn sync_plugins_command_enabled(&mut self) {
+        self.bottom_pane
+            .set_plugins_command_enabled(self.config.features.enabled(Feature::Plugins));
     }
 
     fn current_model_supports_personality(&self) -> bool {

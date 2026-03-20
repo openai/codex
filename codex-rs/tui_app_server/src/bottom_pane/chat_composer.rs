@@ -403,6 +403,7 @@ pub(crate) struct ChatComposer {
     config: ChatComposerConfig,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     connectors_enabled: bool,
+    plugins_command_enabled: bool,
     fast_command_enabled: bool,
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
@@ -441,6 +442,7 @@ impl ChatComposer {
         BuiltinCommandFlags {
             collaboration_modes_enabled: self.collaboration_modes_enabled,
             connectors_enabled: self.connectors_enabled,
+            plugins_command_enabled: self.plugins_command_enabled,
             fast_command_enabled: self.fast_command_enabled,
             personality_command_enabled: self.personality_command_enabled,
             realtime_conversation_enabled: self.realtime_conversation_enabled,
@@ -525,6 +527,7 @@ impl ChatComposer {
             config,
             collaboration_mode_indicator: None,
             connectors_enabled: false,
+            plugins_command_enabled: false,
             fast_command_enabled: false,
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
@@ -557,6 +560,10 @@ impl ChatComposer {
     pub fn set_plugin_mentions(&mut self, plugins: Option<Vec<PluginCapabilitySummary>>) {
         self.plugins = plugins;
         self.sync_popups();
+    }
+
+    pub fn set_plugins_command_enabled(&mut self, enabled: bool) {
+        self.plugins_command_enabled = enabled;
     }
 
     /// Toggle composer-side image paste handling.
@@ -3491,6 +3498,7 @@ impl ChatComposer {
                 if is_editing_slash_command_name {
                     let collaboration_modes_enabled = self.collaboration_modes_enabled;
                     let connectors_enabled = self.connectors_enabled;
+                    let plugins_command_enabled = self.plugins_command_enabled;
                     let fast_command_enabled = self.fast_command_enabled;
                     let personality_command_enabled = self.personality_command_enabled;
                     let realtime_conversation_enabled = self.realtime_conversation_enabled;
@@ -3500,6 +3508,7 @@ impl ChatComposer {
                         CommandPopupFlags {
                             collaboration_modes_enabled,
                             connectors_enabled,
+                            plugins_command_enabled,
                             fast_command_enabled,
                             personality_command_enabled,
                             realtime_conversation_enabled,
