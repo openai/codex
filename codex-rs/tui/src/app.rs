@@ -1932,7 +1932,14 @@ impl App {
                 self.start_fresh_session_with_summary_hint(tui).await;
             }
             AppEvent::OpenResumePicker => {
-                match crate::resume_picker::run_resume_picker(tui, &self.config, false).await? {
+                match crate::resume_picker::run_resume_picker(
+                    tui,
+                    &self.config,
+                    false,
+                    crate::resume_picker::SessionSourceFilter::InteractiveOnly,
+                )
+                .await?
+                {
                     SessionSelection::Resume(target_session) => {
                         let current_cwd = self.config.cwd.clone();
                         let resume_cwd = match crate::resolve_cwd_for_resume_or_fork(
