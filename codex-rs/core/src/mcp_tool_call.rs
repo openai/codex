@@ -494,8 +494,10 @@ async fn maybe_request_mcp_tool_approval(
     let annotations = metadata.and_then(|metadata| metadata.annotations.as_ref());
     let approval_required = annotations.is_some_and(requires_mcp_tool_approval);
     let mut monitor_reason = None;
+    let auto_approved_by_policy = approval_mode == AppToolApproval::Approve
+        || (approval_mode == AppToolApproval::Auto && is_full_access_mode(turn_context));
 
-    if approval_mode == AppToolApproval::Approve {
+    if auto_approved_by_policy {
         if !approval_required {
             return None;
         }
@@ -516,9 +518,6 @@ async fn maybe_request_mcp_tool_approval(
     }
 
     if approval_mode == AppToolApproval::Auto {
-        if is_full_access_mode(turn_context) {
-            return None;
-        }
         if !approval_required {
             return None;
         }

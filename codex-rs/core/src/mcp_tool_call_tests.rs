@@ -1036,6 +1036,83 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_for_model() {
 }
 
 #[tokio::test]
+async fn full_access_auto_mode_blocks_when_arc_returns_interrupt_for_model() {
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/safety/arc"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "outcome": "steer-model",
+            "short_reason": "needs approval",
+            "rationale": "high-risk action",
+            "risk_score": 96,
+            "risk_level": "critical",
+            "evidence": [{
+                "message": "dangerous_tool",
+                "why": "high-risk action",
+            }],
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (session, mut turn_context) = make_session_and_context().await;
+    turn_context.auth_manager = Some(crate::test_support::auth_manager_from_auth(
+        crate::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    ));
+    turn_context
+        .approval_policy
+        .set(AskForApproval::Never)
+        .expect("test setup should allow updating approval policy");
+    turn_context
+        .sandbox_policy
+        .set(SandboxPolicy::DangerFullAccess)
+        .expect("test setup should allow updating sandbox policy");
+    let mut config = (*turn_context.config).clone();
+    config.chatgpt_base_url = server.uri();
+    turn_context.config = Arc::new(config);
+
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let invocation = McpInvocation {
+        server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        tool: "dangerous_tool".to_string(),
+        arguments: Some(serde_json::json!({ "id": 1 })),
+    };
+    let metadata = McpToolApprovalMetadata {
+        annotations: Some(annotations(Some(false), Some(true), Some(true))),
+        connector_id: Some("calendar".to_string()),
+        connector_name: Some("Calendar".to_string()),
+        connector_description: Some("Manage events".to_string()),
+        tool_title: Some("Dangerous Tool".to_string()),
+        tool_description: Some("Performs a risky action.".to_string()),
+        codex_apps_meta: None,
+    };
+
+    let decision = maybe_request_mcp_tool_approval(
+        &session,
+        &turn_context,
+        "call-2",
+        &invocation,
+        Some(&metadata),
+        AppToolApproval::Auto,
+    )
+    .await;
+
+    assert_eq!(
+        decision,
+        Some(McpToolApprovalDecision::BlockedBySafetyMonitor(
+            "Tool call was cancelled because of safety risks: high-risk action".to_string(),
+        ))
+    );
+}
+
+#[tokio::test]
 async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_enabled() {
     use wiremock::Mock;
     use wiremock::ResponseTemplate;
