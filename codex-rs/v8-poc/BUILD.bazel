@@ -1,41 +1,5 @@
 load("//:defs.bzl", "codex_rust_crate")
 
-package(default_visibility = ["//visibility:public"])
-
-alias(
-    name = "rusty_v8_archive_for_target",
-    actual = select({
-        "@rules_rs//rs/experimental/platforms/config:aarch64-apple-darwin": "//third_party/v8:v8_146_4_0_aarch64_apple_darwin",
-        "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-gnullvm": "//third_party/v8:v8_146_4_0_aarch64_pc_windows_gnullvm",
-        "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-msvc": "//third_party/v8:v8_146_4_0_aarch64_pc_windows_msvc",
-        "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-gnu": "//third_party/v8:v8_146_4_0_aarch64_unknown_linux_gnu",
-        "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-musl": "//third_party/v8:v8_146_4_0_aarch64_unknown_linux_musl",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-apple-darwin": "//third_party/v8:v8_146_4_0_x86_64_apple_darwin",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-gnullvm": "//third_party/v8:v8_146_4_0_x86_64_pc_windows_gnullvm",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-msvc": "//third_party/v8:v8_146_4_0_x86_64_pc_windows_msvc",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-gnu": "//third_party/v8:v8_146_4_0_x86_64_unknown_linux_gnu",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-musl": "//third_party/v8:v8_146_4_0_x86_64_unknown_linux_musl",
-        "//conditions:default": "//third_party/v8:v8_146_4_0_x86_64_unknown_linux_gnu",
-    }),
-)
-
-alias(
-    name = "rusty_v8_binding_for_target",
-    actual = select({
-        "@rules_rs//rs/experimental/platforms/config:aarch64-apple-darwin": "//third_party/v8:src_binding_release_aarch64_apple_darwin",
-        "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-gnullvm": "//third_party/v8:src_binding_release_aarch64_pc_windows_gnullvm",
-        "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-msvc": "//third_party/v8:src_binding_release_aarch64_pc_windows_msvc",
-        "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-gnu": "//third_party/v8:src_binding_release_aarch64_unknown_linux_gnu",
-        "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-musl": "//third_party/v8:src_binding_release_aarch64_unknown_linux_musl",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-apple-darwin": "//third_party/v8:src_binding_release_x86_64_apple_darwin",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-gnullvm": "//third_party/v8:src_binding_release_x86_64_pc_windows_gnullvm",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-msvc": "//third_party/v8:src_binding_release_x86_64_pc_windows_msvc",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-gnu": "//third_party/v8:src_binding_release_x86_64_unknown_linux_gnu",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-musl": "//third_party/v8:src_binding_release_x86_64_unknown_linux_musl",
-        "//conditions:default": "//third_party/v8:src_binding_release_x86_64_unknown_linux_gnu",
-    }),
-)
-
 codex_rust_crate(
     name = "v8-poc",
     crate_name = "codex_v8_poc",
