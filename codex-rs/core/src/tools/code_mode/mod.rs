@@ -18,6 +18,7 @@ use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
+use crate::mcp_openai_file::retain_openai_file_tool_meta_map;
 use crate::tools::ToolRouter;
 use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
 use crate::tools::context::FunctionToolOutput;
@@ -285,19 +286,20 @@ fn enabled_tool_from_spec(spec: ToolSpec) -> Option<codex_code_mode::ToolDefinit
 
 async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
     let nested_tools_config = exec.turn.tools_config.for_code_mode_nested_tools();
-    let mcp_tools = exec
-        .session
-        .services
-        .mcp_connection_manager
-        .read()
-        .await
-        .list_all_tools()
-        .await;
+    let mcp_tools = retain_openai_file_tool_meta_map(Some(
+        exec.session
+            .services
+            .mcp_connection_manager
+            .read()
+            .await
+            .list_all_tools()
+            .await,
+    ));
 
     ToolRouter::from_config(
         &nested_tools_config,
         ToolRouterParams {
-            mcp_tools: Some(mcp_tools),
+            mcp_tools,
             app_tools: None,
             discoverable_tools: None,
             dynamic_tools: exec.turn.dynamic_tools.as_slice(),

@@ -370,7 +370,6 @@ pub(crate) async fn upload_local_file(
 pub(crate) async fn download_file_to_managed_temp(
     config: &Config,
     auth: Option<&CodexAuth>,
-    cwd: &Path,
     reference: &str,
     scope: &str,
     max_bytes: u64,
@@ -386,13 +385,7 @@ pub(crate) async fn download_file_to_managed_temp(
         });
     }
 
-    let download_dir = managed_download_dir(cwd, scope);
-    tokio::fs::create_dir_all(&download_dir)
-        .await
-        .map_err(|source| OpenAiFileError::CreateDirectory {
-            path: download_dir.clone(),
-            source,
-        })?;
+    let download_dir = managed_download_dir(scope)?;
 
     let file_name = sanitize_download_file_name(
         resolved
@@ -470,11 +463,20 @@ pub(crate) async fn download_file_to_managed_temp(
     })
 }
 
-pub(crate) fn managed_download_dir(cwd: &Path, scope: &str) -> PathBuf {
-    cwd.join(".codex")
-        .join("tmp")
-        .join("openai-files")
-        .join(scope)
+pub(crate) fn managed_download_dir(scope: &str) -> Result<PathBuf, OpenAiFileError> {
+    let parent = std::env::temp_dir().join("codex-openai-files").join(scope);
+    std::fs::create_dir_all(&parent).map_err(|source| OpenAiFileError::CreateDirectory {
+        path: parent.clone(),
+        source,
+    })?;
+    tempfile::Builder::new()
+        .prefix("download-")
+        .tempdir_in(&parent)
+        .map(|temp_dir| temp_dir.keep())
+        .map_err(|source| OpenAiFileError::CreateDirectory {
+            path: parent,
+            source,
+        })
 }
 
 pub(crate) fn unique_manual_download_scope() -> String {
@@ -628,11 +630,9 @@ mod tests {
             .mount(&server)
             .await;
 
-        let workspace = TempDir::new().expect("workspace");
         let downloaded = download_file_to_managed_temp(
             &test_config_for(&server),
             Some(&chatgpt_auth()),
-            workspace.path(),
             "sediment://file_123",
             "call-1",
             OPENAI_FILE_DOWNLOAD_LIMIT_BYTES,
@@ -646,7 +646,7 @@ mod tests {
         assert!(
             downloaded
                 .destination_path
-                .starts_with(workspace.path().join(".codex/tmp/openai-files/call-1"))
+                .starts_with(std::env::temp_dir().join("codex-openai-files/call-1"))
         );
         assert_eq!(
             tokio::fs::read_to_string(&downloaded.destination_path)
@@ -671,11 +671,9 @@ mod tests {
             .mount(&server)
             .await;
 
-        let workspace = TempDir::new().expect("workspace");
         let error = download_file_to_managed_temp(
             &test_config_for(&server),
             Some(&chatgpt_auth()),
-            workspace.path(),
             "file_123",
             "call-2",
             128,

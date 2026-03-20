@@ -1096,7 +1096,6 @@ async fn auto_download_openai_file_value(
     match download_file_to_managed_temp(
         turn_context.config.as_ref(),
         auth,
-        turn_context.cwd.as_path(),
         file_ref,
         call_id,
         max_bytes,

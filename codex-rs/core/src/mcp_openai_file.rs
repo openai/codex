@@ -1,6 +1,7 @@
 use serde_json::Map;
 use serde_json::Value as JsonValue;
 
+use crate::mcp_connection_manager::ToolInfo;
 use crate::openai_files::META_OPENAI_FILE_OUTPUTS;
 use crate::openai_files::META_OPENAI_FILE_PARAMS;
 
@@ -18,6 +19,40 @@ pub(crate) fn mask_input_schema_for_model(input_schema: &mut JsonValue, file_par
 
 pub(crate) fn mask_output_schema_for_model(output_schema: &mut JsonValue, file_outputs: &[String]) {
     mask_object_properties(output_schema, file_outputs, MaskTarget::Output);
+}
+
+pub(crate) fn retain_openai_file_tool_meta(mut tool_info: ToolInfo) -> ToolInfo {
+    tool_info.tool.meta =
+        filtered_openai_file_tool_meta(tool_info.tool.meta.as_deref()).map(rmcp::model::Meta);
+    tool_info
+}
+
+pub(crate) fn retain_openai_file_tool_meta_map(
+    tools: Option<std::collections::HashMap<String, ToolInfo>>,
+) -> Option<std::collections::HashMap<String, ToolInfo>> {
+    tools.map(|tools| {
+        tools
+            .into_iter()
+            .map(|(name, tool_info)| (name, retain_openai_file_tool_meta(tool_info)))
+            .collect()
+    })
+}
+
+fn filtered_openai_file_tool_meta(
+    meta: Option<&Map<String, JsonValue>>,
+) -> Option<Map<String, JsonValue>> {
+    let Some(meta) = meta else {
+        return None;
+    };
+
+    let mut filtered = Map::new();
+    for key in [META_OPENAI_FILE_PARAMS, META_OPENAI_FILE_OUTPUTS] {
+        if let Some(value) = meta.get(key) {
+            filtered.insert(key.to_string(), value.clone());
+        }
+    }
+
+    (!filtered.is_empty()).then_some(filtered)
 }
 
 fn declared_top_level_fields(meta: Option<&Map<String, JsonValue>>, key: &str) -> Vec<String> {
@@ -191,6 +226,49 @@ mod tests {
                     }
                 }
             })
+        );
+    }
+
+    #[test]
+    fn retain_openai_file_tool_meta_drops_unrelated_meta_entries() {
+        let tool_info = ToolInfo {
+            server_name: "codex_apps".to_string(),
+            tool_name: "tool".to_string(),
+            tool_namespace: "ns".to_string(),
+            tool: rmcp::model::Tool {
+                name: "tool".to_string(),
+                title: None,
+                description: None,
+                input_schema: std::sync::Arc::new(rmcp::model::JsonObject::default()),
+                output_schema: None,
+                annotations: None,
+                icons: None,
+                meta: Some(serde_json::json!({
+                    "openai/fileParams": ["file"],
+                    "openai/fileOutputs": ["outputFile"],
+                    "_codex_apps": {"connector_id": "calendar"},
+                    "other": true
+                })),
+            },
+            connector_id: None,
+            connector_name: None,
+            plugin_display_names: Vec::new(),
+            connector_description: None,
+        };
+
+        let retained = retain_openai_file_tool_meta(tool_info);
+
+        assert_eq!(
+            retained.tool.meta,
+            Some(rmcp::model::Meta(
+                serde_json::json!({
+                    "openai/fileParams": ["file"],
+                    "openai/fileOutputs": ["outputFile"]
+                })
+                .as_object()
+                .expect("meta object")
+                .clone()
+            ))
         );
     }
 }

@@ -2,7 +2,6 @@ use std::ffi::OsString;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 
 pub use runfiles;
 
@@ -46,19 +45,11 @@ pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
     }
     match resolve_bin_via_assert_cmd(name) {
         Ok(path) => Ok(path),
-        Err(fallback) => {
-            if !runfiles_available()
-                && build_bin_with_cargo(name).is_ok()
-                && let Ok(path) = resolve_bin_via_assert_cmd(name)
-            {
-                return Ok(path);
-            }
-            Err(CargoBinError::NotFound {
-                name: name.to_owned(),
-                env_keys,
-                fallback,
-            })
-        }
+        Err(fallback) => Err(CargoBinError::NotFound {
+            name: name.to_owned(),
+            env_keys,
+            fallback,
+        }),
     }
 }
 
@@ -216,30 +207,6 @@ pub fn repo_root() -> io::Result<PathBuf> {
             .to_path_buf();
     }
     Ok(root)
-}
-
-fn build_bin_with_cargo(name: &str) -> io::Result<()> {
-    let workspace_root = cargo_workspace_root()?;
-    let status = Command::new("cargo")
-        .args(["build", "--quiet", "--bin", name])
-        .current_dir(workspace_root)
-        .status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "cargo build --bin {name} exited with status {status}"
-        )))
-    }
-}
-
-fn cargo_workspace_root() -> io::Result<PathBuf> {
-    let repo_root = repo_root()?;
-    if repo_root.join("Cargo.toml").is_file() {
-        Ok(repo_root)
-    } else {
-        Ok(repo_root.join("codex-rs"))
-    }
 }
 
 fn normalize_runfile_path(path: &Path) -> PathBuf {
