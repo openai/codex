@@ -703,6 +703,8 @@ mod tests {
     #[tokio::test]
     async fn download_file_to_managed_temp_authenticates_same_origin_download_urls() {
         let server = MockServer::start().await;
+        let auth = chatgpt_auth();
+        let token = auth.get_token().expect("dummy auth token");
         Mock::given(method("GET"))
             .and(path("/backend-api/files/download/file_123"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -716,7 +718,7 @@ mod tests {
             .await;
         Mock::given(method("GET"))
             .and(path("/backend-api/estuary/content"))
-            .and(header("authorization", "Bearer dummy_token"))
+            .and(header("authorization", format!("Bearer {token}")))
             .and(header("chatgpt-account-id", "account_id"))
             .respond_with(ResponseTemplate::new(200).set_body_raw("test", "text/plain"))
             .mount(&server)
@@ -724,7 +726,7 @@ mod tests {
 
         let downloaded = download_file_to_managed_temp(
             &test_config_for(&server),
-            Some(&chatgpt_auth()),
+            Some(&auth),
             "sediment://file_123",
             "call-3",
             OPENAI_FILE_DOWNLOAD_LIMIT_BYTES,
