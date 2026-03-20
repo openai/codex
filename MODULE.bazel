@@ -135,19 +135,32 @@ crate.annotation(
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+new_local_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:local.bzl", "new_local_repository")
+
+new_local_repository(
+    name = "v8_targets",
+    build_file = "//third_party/v8:BUILD.bazel",
+    path = "third_party/v8",
+)
 
 crate.annotation(
     build_script_data = [
-        "@//third_party/v8:rusty_v8_archive_for_target",
-        "@//third_party/v8:rusty_v8_binding_for_target",
+        "@v8_targets//:rusty_v8_archive_for_target",
+        "@v8_targets//:rusty_v8_binding_for_target",
     ],
     build_script_env = {
-        "RUSTY_V8_ARCHIVE": "$(execpath @//third_party/v8:rusty_v8_archive_for_target)",
-        "RUSTY_V8_SRC_BINDING_PATH": "$(execpath @//third_party/v8:rusty_v8_binding_for_target)",
+        "RUSTY_V8_ARCHIVE": "$(execpath @v8_targets//:rusty_v8_archive_for_target)",
+        "RUSTY_V8_SRC_BINDING_PATH": "$(execpath @v8_targets//:rusty_v8_binding_for_target)",
     },
     crate = "v8",
     gen_build_script = "on",
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:rusty_v8_prebuilt_out_dir.patch",
+    ],
 )
+
+inject_repo(crate, "v8_targets")
 
 llvm = use_extension("@llvm//extensions:llvm.bzl", "llvm")
 use_repo(llvm, "llvm-project")
