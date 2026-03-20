@@ -139,14 +139,6 @@ fn sanitize_rollout_item_for_persistence(
     mode: EventPersistenceMode,
 ) -> RolloutItem {
     match item {
-        RolloutItem::EventMsg(EventMsg::ImageGenerationEnd(mut event))
-            if mode == EventPersistenceMode::Limited && event.saved_path.is_some() =>
-        {
-            // ResponseItem::ImageGenerationCall already persists the inline base64 payload.
-            // Keep only the saved-path metadata in limited rollouts to avoid storing the blob twice.
-            event.result.clear();
-            RolloutItem::EventMsg(EventMsg::ImageGenerationEnd(event))
-        }
         RolloutItem::EventMsg(EventMsg::ExecCommandEnd(mut event)) => {
             if mode != EventPersistenceMode::Extended {
                 return RolloutItem::EventMsg(EventMsg::ExecCommandEnd(event));
