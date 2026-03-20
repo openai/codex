@@ -332,8 +332,7 @@ async fn request_plugin_detail(
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
-    marketplace_path: AbsolutePathBuf,
-    plugin_name: String,
+    params: PluginReadParams,
 ) -> Result<PluginReadResponse> {
     let client = start_plugin_request_client(
         arg0_paths,
@@ -347,13 +346,7 @@ async fn request_plugin_detail(
     let request_handle = client.request_handle();
     let request_id = RequestId::String(format!("plugin-read-{}", Uuid::new_v4()));
     let response = request_handle
-        .request_typed(ClientRequest::PluginRead {
-            request_id,
-            params: PluginReadParams {
-                marketplace_path,
-                plugin_name,
-            },
-        })
+        .request_typed(ClientRequest::PluginRead { request_id, params })
         .await
         .wrap_err("plugin/read failed in legacy TUI");
     if let Err(err) = client.shutdown().await {
@@ -1344,12 +1337,7 @@ impl App {
         });
     }
 
-    fn fetch_plugin_detail(
-        &mut self,
-        cwd: PathBuf,
-        marketplace_path: AbsolutePathBuf,
-        plugin_name: String,
-    ) {
+    fn fetch_plugin_detail(&mut self, cwd: PathBuf, params: PluginReadParams) {
         let config = self.config.clone();
         let arg0_paths = self.arg0_paths.clone();
         let cli_kv_overrides = self.cli_kv_overrides.clone();
@@ -1366,8 +1354,7 @@ impl App {
                 loader_overrides,
                 cloud_requirements,
                 feedback,
-                marketplace_path,
-                plugin_name,
+                params,
             )
             .await
             .map_err(|err| format!("Failed to load plugin details: {err}"));
@@ -2990,12 +2977,8 @@ impl App {
             AppEvent::PluginsLoaded { cwd, result } => {
                 self.chat_widget.on_plugins_loaded(cwd, result);
             }
-            AppEvent::FetchPluginDetail {
-                cwd,
-                marketplace_path,
-                plugin_name,
-            } => {
-                self.fetch_plugin_detail(cwd, marketplace_path, plugin_name);
+            AppEvent::FetchPluginDetail { cwd, params } => {
+                self.fetch_plugin_detail(cwd, params);
             }
             AppEvent::PluginDetailLoaded { cwd, result } => {
                 self.chat_widget.on_plugin_detail_loaded(cwd, result);

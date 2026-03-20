@@ -1845,13 +1845,12 @@ impl App {
         &mut self,
         app_server: &AppServerSession,
         cwd: PathBuf,
-        marketplace_path: AbsolutePathBuf,
-        plugin_name: String,
+        params: PluginReadParams,
     ) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
-            let result = fetch_plugin_detail(request_handle, marketplace_path, plugin_name)
+            let result = fetch_plugin_detail(request_handle, params)
                 .await
                 .map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::PluginDetailLoaded { cwd, result });
@@ -3692,12 +3691,8 @@ impl App {
             AppEvent::PluginsLoaded { cwd, result } => {
                 self.chat_widget.on_plugins_loaded(cwd, result);
             }
-            AppEvent::FetchPluginDetail {
-                cwd,
-                marketplace_path,
-                plugin_name,
-            } => {
-                self.fetch_plugin_detail(app_server, cwd, marketplace_path, plugin_name);
+            AppEvent::FetchPluginDetail { cwd, params } => {
+                self.fetch_plugin_detail(app_server, cwd, params);
             }
             AppEvent::PluginDetailLoaded { cwd, result } => {
                 self.chat_widget.on_plugin_detail_loaded(cwd, result);
@@ -5266,18 +5261,11 @@ async fn fetch_plugins_list(
 
 async fn fetch_plugin_detail(
     request_handle: AppServerRequestHandle,
-    marketplace_path: AbsolutePathBuf,
-    plugin_name: String,
+    params: PluginReadParams,
 ) -> Result<PluginReadResponse> {
     let request_id = RequestId::String(format!("plugin-read-{}", Uuid::new_v4()));
     request_handle
-        .request_typed(ClientRequest::PluginRead {
-            request_id,
-            params: PluginReadParams {
-                marketplace_path,
-                plugin_name,
-            },
-        })
+        .request_typed(ClientRequest::PluginRead { request_id, params })
         .await
         .wrap_err("plugin/read failed in app-server TUI")
 }

@@ -330,8 +330,10 @@ impl ChatWidget {
                         });
                         tx.send(AppEvent::FetchPluginDetail {
                             cwd: cwd.clone(),
-                            marketplace_path: marketplace_path.clone(),
-                            plugin_name: plugin_name.clone(),
+                            params: codex_app_server_protocol::PluginReadParams {
+                                marketplace_path: marketplace_path.clone(),
+                                plugin_name: plugin_name.clone(),
+                            },
                         });
                     })],
                     ..Default::default()

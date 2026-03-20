@@ -11,6 +11,7 @@
 use std::path::PathBuf;
 
 use codex_app_server_protocol::PluginListResponse;
+use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
@@ -18,7 +19,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::RateLimitSnapshot;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 
 use crate::bottom_pane::ApprovalRequest;
@@ -184,8 +184,7 @@ pub(crate) enum AppEvent {
     /// Fetch detail for a specific plugin from a marketplace.
     FetchPluginDetail {
         cwd: PathBuf,
-        marketplace_path: AbsolutePathBuf,
-        plugin_name: String,
+        params: PluginReadParams,
     },
 
     /// Result of fetching plugin detail.
