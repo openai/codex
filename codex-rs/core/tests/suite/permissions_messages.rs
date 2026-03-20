@@ -1,5 +1,5 @@
 use anyhow::Result;
-use codex_core::ForkSnapshotMode;
+use codex_core::ForkSnapshot;
 use codex_core::config::Constrained;
 use codex_execpolicy::Policy;
 use codex_protocol::models::DeveloperInstructions;
@@ -421,12 +421,11 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
     let forked = initial
         .thread_manager
         .fork_thread(
-            usize::MAX,
+            ForkSnapshot::TruncateBeforeNthUserMessage(usize::MAX),
             fork_config,
             rollout_path,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
-            ForkSnapshotMode::Committed,
         )
         .await?;
     forked

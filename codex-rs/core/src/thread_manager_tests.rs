@@ -193,11 +193,8 @@ fn interrupted_fork_snapshot_appends_interrupt_marker() {
         InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("hello"))]);
 
     assert_eq!(
-        serde_json::to_value(
-            snapshot_fork_history(committed_history, ForkSnapshotMode::Interrupted)
-                .get_rollout_items()
-        )
-        .expect("serialize interrupted fork history"),
+        serde_json::to_value(inject_interrupted_marker(committed_history).get_rollout_items())
+            .expect("serialize interrupted fork history"),
         serde_json::to_value(vec![
             RolloutItem::ResponseItem(user_msg("hello")),
             RolloutItem::ResponseItem(interrupted_turn_history_marker()),
@@ -205,12 +202,11 @@ fn interrupted_fork_snapshot_appends_interrupt_marker() {
         .expect("serialize expected interrupted fork history"),
     );
     assert_eq!(
-        serde_json::to_value(
-            snapshot_fork_history(InitialHistory::New, ForkSnapshotMode::Interrupted)
-                .get_rollout_items()
-        )
-        .expect("serialize interrupted empty fork history"),
-        serde_json::to_value(Vec::<RolloutItem>::new())
-            .expect("serialize expected interrupted empty fork history"),
+        serde_json::to_value(inject_interrupted_marker(InitialHistory::New).get_rollout_items())
+            .expect("serialize interrupted empty fork history"),
+        serde_json::to_value(vec![RolloutItem::ResponseItem(
+            interrupted_turn_history_marker()
+        )])
+        .expect("serialize expected interrupted empty history"),
     );
 }

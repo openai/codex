@@ -126,8 +126,17 @@ pub struct NewThread {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ForkSnapshotMode {
-    Committed,
+pub enum ForkSnapshot {
+    /// Fork a committed prefix ending strictly before the nth user message.
+    TruncateBeforeNthUserMessage(usize),
+
+    /// Fork the current persisted history as if the source thread had been
+    /// interrupted now.
+    ///
+    /// If the source thread is mid-turn, this appends the same
+    /// `<turn_aborted>` marker produced by a real interrupt. If the source
+    /// thread is already at a turn boundary, this returns the current persisted
+    /// history unchanged.
     Interrupted,
 }
 
@@ -546,26 +555,45 @@ impl ThreadManager {
         report
     }
 
-    /// Fork an existing thread by taking messages up to the given position (not including
-    /// the message at the given position) and starting a new thread with identical
-    /// configuration (unless overridden by the caller's `config`). The new thread will have
-    /// a fresh id. Pass `usize::MAX` to keep the full rollout history.
+    /// Fork an existing thread by snapshotting rollout history according to
+    /// `snapshot` and starting a new thread with identical configuration
+    /// (unless overridden by the caller's `config`). The new thread will have
+    /// a fresh id.
     pub async fn fork_thread(
         &self,
-        nth_user_message: usize,
+        snapshot: ForkSnapshot,
         config: Config,
         path: PathBuf,
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
-        snapshot_mode: ForkSnapshotMode,
     ) -> CodexResult<NewThread> {
-        let history = snapshot_fork_history(
-            truncate_before_nth_user_message(
-                RolloutRecorder::get_rollout_history(&path).await?,
-                nth_user_message,
-            ),
-            snapshot_mode,
-        );
+        let history = RolloutRecorder::get_rollout_history(&path).await?;
+        let history = match snapshot {
+            ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
+                truncate_before_nth_user_message(history, nth_user_message)
+            }
+            ForkSnapshot::Interrupted => {
+                let source_thread = {
+                    let threads = self.state.threads.read().await;
+                    threads
+                        .values()
+                        .find(|thread| thread.rollout_path().as_ref() == Some(&path))
+                        .cloned()
+                };
+                let history = match history {
+                    InitialHistory::New => InitialHistory::New,
+                    InitialHistory::Forked(history) => InitialHistory::Forked(history),
+                    InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
+                };
+                if let Some(thread) = source_thread
+                    && thread.codex.session.active_turn.lock().await.is_some()
+                {
+                    inject_interrupted_marker(history)
+                } else {
+                    history
+                }
+            }
+        };
         Box::pin(self.state.spawn_thread(
             config,
             history,
@@ -851,31 +879,19 @@ fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> Initia
     }
 }
 
-fn snapshot_fork_history(
-    history: InitialHistory,
-    snapshot_mode: ForkSnapshotMode,
-) -> InitialHistory {
-    match (history, snapshot_mode) {
-        (InitialHistory::New, _) => InitialHistory::New,
-        (InitialHistory::Forked(history), ForkSnapshotMode::Committed) => {
-            InitialHistory::Forked(history)
-        }
-        (InitialHistory::Forked(mut history), ForkSnapshotMode::Interrupted) => {
+/// Append the same model-visible interruption marker used by the live interrupt
+/// path to an existing fork snapshot after the source thread has been confirmed
+/// to be mid-turn.
+fn inject_interrupted_marker(history: InitialHistory) -> InitialHistory {
+    match history {
+        InitialHistory::New => InitialHistory::Forked(vec![RolloutItem::ResponseItem(
+            interrupted_turn_history_marker(),
+        )]),
+        InitialHistory::Forked(mut history) => {
             history.push(RolloutItem::ResponseItem(interrupted_turn_history_marker()));
             InitialHistory::Forked(history)
         }
-        (InitialHistory::Resumed(resumed), ForkSnapshotMode::Committed) => {
-            debug_assert!(
-                false,
-                "truncate_before_nth_user_message should not return InitialHistory::Resumed"
-            );
-            InitialHistory::Forked(resumed.history)
-        }
-        (InitialHistory::Resumed(mut resumed), ForkSnapshotMode::Interrupted) => {
-            debug_assert!(
-                false,
-                "truncate_before_nth_user_message should not return InitialHistory::Resumed"
-            );
+        InitialHistory::Resumed(mut resumed) => {
             resumed
                 .history
                 .push(RolloutItem::ResponseItem(interrupted_turn_history_marker()));

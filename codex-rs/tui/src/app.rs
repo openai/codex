@@ -42,7 +42,7 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
-use codex_core::ForkSnapshotMode;
+use codex_core::ForkSnapshot;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -2174,12 +2174,11 @@ impl App {
                 );
                 let forked = thread_manager
                     .fork_thread(
-                        usize::MAX,
+                        ForkSnapshot::TruncateBeforeNthUserMessage(usize::MAX),
                         config.clone(),
                         target_session.path.clone(),
                         /*persist_extended_history*/ false,
                         /*parent_trace*/ None,
-                        ForkSnapshotMode::Committed,
                     )
                     .await
                     .wrap_err_with(|| {
@@ -2595,12 +2594,11 @@ impl App {
                         match self
                             .server
                             .fork_thread(
-                                usize::MAX,
+                                ForkSnapshot::TruncateBeforeNthUserMessage(usize::MAX),
                                 self.config.clone(),
                                 path.clone(),
                                 /*persist_extended_history*/ false,
                                 /*parent_trace*/ None,
-                                ForkSnapshotMode::Committed,
                             )
                             .await
                         {

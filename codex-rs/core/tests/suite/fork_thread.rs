@@ -1,4 +1,4 @@
-use codex_core::ForkSnapshotMode;
+use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 use codex_core::parse_turn_item;
 use codex_protocol::items::TurnItem;
@@ -112,12 +112,11 @@ async fn fork_thread_twice_drops_to_first_message() {
         ..
     } = thread_manager
         .fork_thread(
-            1,
+            ForkSnapshot::TruncateBeforeNthUserMessage(1),
             config_for_fork.clone(),
             base_path.clone(),
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
-            ForkSnapshotMode::Committed,
         )
         .await
         .expect("fork 1");
@@ -138,12 +137,11 @@ async fn fork_thread_twice_drops_to_first_message() {
         ..
     } = thread_manager
         .fork_thread(
-            0,
+            ForkSnapshot::TruncateBeforeNthUserMessage(0),
             config_for_fork.clone(),
             fork1_path.clone(),
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
-            ForkSnapshotMode::Committed,
         )
         .await
         .expect("fork 2");

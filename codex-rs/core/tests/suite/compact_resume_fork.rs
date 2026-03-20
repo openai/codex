@@ -12,7 +12,7 @@ use super::compact::FIRST_REPLY;
 use super::compact::SUMMARY_TEXT;
 use anyhow::Result;
 use codex_core::CodexThread;
-use codex_core::ForkSnapshotMode;
+use codex_core::ForkSnapshot;
 use codex_core::ThreadManager;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
@@ -703,12 +703,11 @@ async fn fork_thread(
     nth_user_message: usize,
 ) -> Arc<CodexThread> {
     Box::pin(manager.fork_thread(
-        nth_user_message,
+        ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message),
         config.clone(),
         path,
         /*persist_extended_history*/ false,
         /*parent_trace*/ None,
-        ForkSnapshotMode::Committed,
     ))
     .await
     .expect("fork conversation")
