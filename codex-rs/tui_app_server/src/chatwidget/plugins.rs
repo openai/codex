@@ -199,7 +199,7 @@ impl ChatWidget {
 
         match result {
             Ok(response) => {
-                self.plugin_install_apps_needing_auth = response.apps_needing_auth.clone();
+                self.plugin_install_apps_needing_auth = response.apps_needing_auth;
                 self.plugin_install_auth_flow = None;
                 if self.plugin_install_apps_needing_auth.is_empty() {
                     self.add_info_message(
@@ -754,7 +754,7 @@ impl ChatWidget {
         if plugin.summary.installed {
             let uninstall_cwd = self.config.cwd.clone();
             let plugin_id = plugin.summary.id.clone();
-            let plugin_display_name = display_name.clone();
+            let plugin_display_name = display_name;
             items.push(SelectionItem {
                 name: "Uninstall plugin".to_string(),
                 description: Some("Remove this plugin now.".to_string()),
@@ -784,7 +784,7 @@ impl ChatWidget {
             let install_cwd = self.config.cwd.clone();
             let marketplace_path = plugin.marketplace_path.clone();
             let plugin_name = plugin.summary.name.clone();
-            let plugin_display_name = display_name.clone();
+            let plugin_display_name = display_name;
             items.push(SelectionItem {
                 name: "Install plugin".to_string(),
                 description: Some("Install this plugin now.".to_string()),
