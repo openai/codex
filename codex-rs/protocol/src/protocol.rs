@@ -1537,6 +1537,15 @@ pub enum AgentStatus {
     NotFound,
 }
 
+/// Turn kinds that reject same-turn steering.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum NonSteerableTurnKind {
+    Review,
+    Compact,
+}
+
 /// Codex errors that we expose to clients.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
@@ -1564,6 +1573,9 @@ pub enum CodexErrorInfo {
     ResponseTooManyFailedAttempts {
         http_status_code: Option<u16>,
     },
+    ActiveTurnNotSteerable {
+        turn_kind: NonSteerableTurnKind,
+    },
     ThreadRollbackFailed,
     Other,
 }
@@ -1572,7 +1584,7 @@ impl CodexErrorInfo {
     /// Whether this error should mark the current turn as failed when replaying history.
     pub fn affects_turn_status(&self) -> bool {
         match self {
-            Self::ThreadRollbackFailed => false,
+            Self::ThreadRollbackFailed | Self::ActiveTurnNotSteerable { .. } => false,
             Self::ContextWindowExceeded
             | Self::UsageLimitExceeded
             | Self::ServerOverloaded
@@ -4182,6 +4194,17 @@ mod tests {
         let event = ErrorEvent {
             message: "rollback failed".into(),
             codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+        };
+        assert!(!event.affects_turn_status());
+    }
+
+    #[test]
+    fn active_turn_not_steerable_error_does_not_affect_turn_status() {
+        let event = ErrorEvent {
+            message: "cannot steer a review turn".into(),
+            codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
+                turn_kind: NonSteerableTurnKind::Review,
+            }),
         };
         assert!(!event.affects_turn_status());
     }

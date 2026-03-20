@@ -13,9 +13,9 @@ expression: term.backend().vt100().screen().contents()
 
 • Working (0s • esc to interrupt)
 
-• Queued follow-up messages
+• Messages to be submitted after next tool call (press esc to interrupt and send
+  immediately)
   ↳ Queued while /review is running.
-    ⌥ + ↑ edit last queued message
 
 › Ask Codex to do anything
 

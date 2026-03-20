@@ -194,6 +194,7 @@ export type { NetworkApprovalProtocol } from "./NetworkApprovalProtocol";
 export type { NetworkPolicyAmendment } from "./NetworkPolicyAmendment";
 export type { NetworkPolicyRuleAction } from "./NetworkPolicyRuleAction";
 export type { NetworkRequirements } from "./NetworkRequirements";
+export type { NonSteerableTurnKind } from "./NonSteerableTurnKind";
 export type { OverriddenMetadata } from "./OverriddenMetadata";
 export type { PatchApplyStatus } from "./PatchApplyStatus";
 export type { PatchChangeKind } from "./PatchChangeKind";
