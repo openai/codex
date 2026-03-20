@@ -73,6 +73,12 @@ ignore = [
     { id = "RUSTSEC-2024-0388", reason = "derivative is unmaintained; pulled in via starlark v0.13.0 used by execpolicy/cli/core; no fixed release yet" },
     { id = "RUSTSEC-2025-0057", reason = "fxhash is unmaintained; pulled in via starlark_map/starlark v0.13.0 used by execpolicy/cli/core; no fixed release yet" },
     { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained; pulled in via ratatui/rmcp/starlark used by tui/execpolicy; no fixed release yet" },
+    # TODO(fcoury): remove these exceptions when the aws-lc-sys upgrade path is Bazel-compatible in this workspace.
+    { id = "RUSTSEC-2026-0044", reason = "aws-lc-sys remains on 0.37.0 because upgrading currently breaks Bazel fetch/build for this workspace" },
+    { id = "RUSTSEC-2026-0045", reason = "aws-lc-sys remains on 0.37.0 because upgrading currently breaks Bazel fetch/build for this workspace" },
+    { id = "RUSTSEC-2026-0046", reason = "aws-lc-sys remains on 0.37.0 because upgrading currently breaks Bazel fetch/build for this workspace" },
+    { id = "RUSTSEC-2026-0047", reason = "aws-lc-sys remains on 0.37.0 because upgrading currently breaks Bazel fetch/build for this workspace" },
+    { id = "RUSTSEC-2026-0048", reason = "aws-lc-sys remains on 0.37.0 because upgrading currently breaks Bazel fetch/build for this workspace" },
     # TODO(fcoury): remove this exception when syntect drops yaml-rust and bincode, or updates to versions that have fixed the vulnerabilities.
     { id = "RUSTSEC-2024-0320", reason = "yaml-rust is unmaintained; pulled in via syntect v5.3.0 used by codex-tui for syntax highlighting; no fixed release yet" },
     { id = "RUSTSEC-2025-0141", reason = "bincode is unmaintained; pulled in via syntect v5.3.0 used by codex-tui for syntax highlighting; no fixed release yet" },
