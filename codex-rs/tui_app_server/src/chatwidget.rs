@@ -171,10 +171,6 @@ use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::RealtimeConversationClosedEvent;
-use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
-use codex_protocol::protocol::RealtimeConversationStartedEvent;
-use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
@@ -6007,39 +6003,54 @@ impl ChatWidget {
             }
             ServerNotification::ThreadRealtimeStarted(notification) => {
                 if !from_replay {
-                    self.on_realtime_conversation_started(RealtimeConversationStartedEvent {
-                        session_id: notification.session_id,
-                        version: notification.version,
-                    });
+                    self.on_realtime_conversation_started(
+                        codex_protocol::protocol::RealtimeConversationStartedEvent {
+                            session_id: notification.session_id,
+                            version: notification.version,
+                        },
+                    );
                 }
             }
             ServerNotification::ThreadRealtimeItemAdded(notification) => {
                 if !from_replay {
-                    self.on_realtime_conversation_realtime(RealtimeConversationRealtimeEvent {
-                        payload: RealtimeEvent::ConversationItemAdded(notification.item),
-                    });
+                    self.on_realtime_conversation_realtime(
+                        codex_protocol::protocol::RealtimeConversationRealtimeEvent {
+                            payload: codex_protocol::protocol::RealtimeEvent::ConversationItemAdded(
+                                notification.item,
+                            ),
+                        },
+                    );
                 }
             }
-            ServerNotification::ThreadRealtimeTranscriptUpdated(_) => {}
             ServerNotification::ThreadRealtimeOutputAudioDelta(notification) => {
                 if !from_replay {
-                    self.on_realtime_conversation_realtime(RealtimeConversationRealtimeEvent {
-                        payload: RealtimeEvent::AudioOut(notification.audio.into()),
-                    });
+                    self.on_realtime_conversation_realtime(
+                        codex_protocol::protocol::RealtimeConversationRealtimeEvent {
+                            payload: codex_protocol::protocol::RealtimeEvent::AudioOut(
+                                notification.audio.into(),
+                            ),
+                        },
+                    );
                 }
             }
             ServerNotification::ThreadRealtimeError(notification) => {
                 if !from_replay {
-                    self.on_realtime_conversation_realtime(RealtimeConversationRealtimeEvent {
-                        payload: RealtimeEvent::Error(notification.message),
-                    });
+                    self.on_realtime_conversation_realtime(
+                        codex_protocol::protocol::RealtimeConversationRealtimeEvent {
+                            payload: codex_protocol::protocol::RealtimeEvent::Error(
+                                notification.message,
+                            ),
+                        },
+                    );
                 }
             }
             ServerNotification::ThreadRealtimeClosed(notification) => {
                 if !from_replay {
-                    self.on_realtime_conversation_closed(RealtimeConversationClosedEvent {
-                        reason: notification.reason,
-                    });
+                    self.on_realtime_conversation_closed(
+                        codex_protocol::protocol::RealtimeConversationClosedEvent {
+                            reason: notification.reason,
+                        },
+                    );
                 }
             }
             ServerNotification::ServerRequestResolved(_)
@@ -6058,6 +6069,7 @@ impl ChatWidget {
             | ServerNotification::ContextCompacted(_)
             | ServerNotification::FuzzyFileSearchSessionUpdated(_)
             | ServerNotification::FuzzyFileSearchSessionCompleted(_)
+            | ServerNotification::ThreadRealtimeTranscriptUpdated(_)
             | ServerNotification::WindowsWorldWritableWarning(_)
             | ServerNotification::WindowsSandboxSetupCompleted(_)
             | ServerNotification::AccountLoginCompleted(_) => {}
