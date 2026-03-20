@@ -6208,7 +6208,6 @@ impl ChatWidget {
             ThreadItem::ImageGeneration { id, .. } => {
                 self.on_image_generation_begin(ImageGenerationBeginEvent { call_id: id });
             }
-            ThreadItem::ContextCompaction { .. } => {}
             ThreadItem::CollabAgentToolCall {
                 id,
                 tool,
