@@ -190,14 +190,6 @@ impl GuardianReviewSession {
 }
 
 impl GuardianReviewSessionManager {
-    #[cfg(test)]
-    pub(crate) fn new_for_test(active_fork_cap: usize) -> Self {
-        Self {
-            state: Arc::default(),
-            fork_pool: GuardianForkPool::new(active_fork_cap),
-        }
-    }
-
     pub(crate) fn spawn_initialize_trunk_if_needed(
         &self,
         parent_session: Arc<Session>,
