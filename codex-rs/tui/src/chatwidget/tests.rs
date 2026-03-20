@@ -7756,6 +7756,36 @@ async fn experimental_popup_includes_guardian_approval() {
 }
 
 #[tokio::test]
+async fn experimental_popup_includes_image_detail_original() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    let image_detail_stage = FEATURES
+        .iter()
+        .find(|spec| spec.id == Feature::ImageDetailOriginal)
+        .map(|spec| spec.stage)
+        .expect("expected image_detail_original feature metadata");
+    let image_detail_name = image_detail_stage
+        .experimental_menu_name()
+        .expect("expected image_detail_original experimental name");
+    let image_detail_description = image_detail_stage
+        .experimental_menu_description()
+        .expect("expected image_detail_original experimental description");
+
+    chat.open_experimental_popup();
+
+    let popup = render_bottom_popup(&chat, 120);
+    let normalized_popup = popup.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        popup.contains(image_detail_name),
+        "expected original image detail entry in experimental popup, got:\n{popup}"
+    );
+    assert!(
+        normalized_popup.contains(image_detail_description),
+        "expected original image detail description in experimental popup, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
 async fn multi_agent_enable_prompt_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 

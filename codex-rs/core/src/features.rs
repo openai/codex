@@ -632,7 +632,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ImageDetailOriginal,
         key: "image_detail_original",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Original image detail",
+            menu_description: "Allow the model to request `detail: \"original\"` for tool-emitted images on supported models so it sees the full-resolution image instead of a resized approximation. This affects tools like `view_image` and `js_repl`, not images attached directly in the UI. It is particularly important for localization and precise UI targeting, for reading small text, and for reasoning about precise layout.",
+            announcement: "NEW: Original image detail is now available in /experimental. Enable it to let tools request full-resolution image detail on supported models for CUA and localization tasks.",
+        },
         default_enabled: false,
     },
     FeatureSpec {
