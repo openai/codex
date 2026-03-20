@@ -12,7 +12,7 @@ use std::time::UNIX_EPOCH;
 use codex_core::CodexAuth;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
-use codex_core::models_manager::manager::RefreshStrategy;
+use codex_models::RefreshStrategy;
 
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;

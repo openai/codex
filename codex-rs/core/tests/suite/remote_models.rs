@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use codex_core::CodexAuth;
-use codex_core::ModelProviderInfo;
-use codex_core::built_in_model_providers;
-use codex_core::models_manager::manager::ModelsManager;
-use codex_core::models_manager::manager::RefreshStrategy;
+use codex_models::ModelProviderInfo;
+use codex_models::ModelsManager;
+use codex_models::RefreshStrategy;
+use codex_models::built_in_model_providers;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -26,6 +26,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
+use core_test_support::model_info_config_overrides;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -105,7 +106,9 @@ async fn remote_models_get_model_info_uses_longest_matching_prefix() -> Result<(
 
     manager.list_models(RefreshStrategy::OnlineIfUncached).await;
 
-    let model_info = manager.get_model_info("gpt-5.3-codex-test", &config).await;
+    let model_info = manager
+        .get_model_info("gpt-5.3-codex-test", &model_info_config_overrides(&config))
+        .await;
 
     assert_eq!(model_info.slug, "gpt-5.3-codex-test");
     assert_eq!(model_info.base_instructions, specific.base_instructions);
@@ -346,7 +349,10 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
     assert_eq!(requests[0].url.path(), "/v1/models");
 
     let model_info = models_manager
-        .get_model_info(REMOTE_MODEL_SLUG, &config)
+        .get_model_info(
+            REMOTE_MODEL_SLUG,
+            &model_info_config_overrides(config.as_ref()),
+        )
         .await;
     assert_eq!(model_info.shell_type, ConfigShellToolType::UnifiedExec);
 
@@ -452,7 +458,9 @@ async fn remote_models_truncation_policy_without_override_preserves_remote() -> 
     let models_manager = test.thread_manager.get_models_manager();
     wait_for_model_available(&models_manager, slug).await;
 
-    let model_info = models_manager.get_model_info(slug, &test.config).await;
+    let model_info = models_manager
+        .get_model_info(slug, &model_info_config_overrides(test.config.as_ref()))
+        .await;
     assert_eq!(
         model_info.truncation_policy,
         TruncationPolicyConfig::bytes(12_000)
@@ -497,7 +505,9 @@ async fn remote_models_truncation_policy_with_tool_output_override() -> Result<(
     let models_manager = test.thread_manager.get_models_manager();
     wait_for_model_available(&models_manager, slug).await;
 
-    let model_info = models_manager.get_model_info(slug, &test.config).await;
+    let model_info = models_manager
+        .get_model_info(slug, &model_info_config_overrides(test.config.as_ref()))
+        .await;
     assert_eq!(
         model_info.truncation_policy,
         TruncationPolicyConfig::bytes(200)
@@ -624,7 +634,9 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
 
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
-    let base_model_info = models_manager.get_model_info("gpt-5.1", &config).await;
+    let base_model_info = models_manager
+        .get_model_info("gpt-5.1", &model_info_config_overrides(config.as_ref()))
+        .await;
     let body = response_mock.single_request().body_json();
     let instructions = body["instructions"].as_str().unwrap();
     assert_eq!(instructions, base_model_info.base_instructions);
@@ -954,8 +966,9 @@ async fn wait_for_model_available(manager: &Arc<ModelsManager>, slug: &str) -> M
 }
 
 fn bundled_model_slug() -> String {
-    let response: ModelsResponse = serde_json::from_str(include_str!("../../models.json"))
-        .expect("bundled models.json should deserialize");
+    let response: ModelsResponse =
+        serde_json::from_str(include_str!("../../../models/models.json"))
+            .expect("bundled models.json should deserialize");
     response
         .models
         .first()

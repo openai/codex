@@ -10,6 +10,7 @@ use crate::memories::metrics;
 use crate::memories::phase_one;
 use crate::memories::phase_one::PRUNE_BATCH_SIZE;
 use crate::memories::prompts::build_stage_one_input_message;
+use crate::model_info_overrides::model_info_config_overrides;
 use crate::rollout::INTERACTIVE_SESSION_SOURCES;
 use crate::rollout::policy::should_persist_response_item_for_memories;
 use codex_api::ResponseEvent;
@@ -228,7 +229,7 @@ async fn build_request_context(session: &Arc<Session>, config: &Config) -> Reque
     let model = session
         .services
         .models_manager
-        .get_model_info(&model_name, config)
+        .get_model_info(&model_name, &model_info_config_overrides(config))
         .await;
     let turn_context = session.new_default_turn().await;
     RequestContext::from_turn_context(

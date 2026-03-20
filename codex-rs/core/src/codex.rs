@@ -27,10 +27,7 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
-#[cfg(test)]
-use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use crate::models_manager::manager::ModelsManager;
-use crate::models_manager::manager::RefreshStrategy;
+use crate::model_info_overrides::model_info_config_overrides;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
@@ -65,6 +62,11 @@ use codex_hooks::HookPayload;
 use codex_hooks::HookResult;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
+#[cfg(test)]
+use codex_models::CollaborationModesConfig;
+use codex_models::ModelProviderInfo;
+use codex_models::ModelsManager;
+use codex_models::RefreshStrategy;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_network_proxy::normalize_host;
@@ -154,7 +156,6 @@ use tracing::trace_span;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::ModelProviderInfo;
 use crate::client::ModelClient;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
@@ -502,15 +503,10 @@ impl Codex {
 
         let config = Arc::new(config);
         let refresh_strategy = match session_source {
-            SessionSource::SubAgent(_) => crate::models_manager::manager::RefreshStrategy::Offline,
-            _ => crate::models_manager::manager::RefreshStrategy::OnlineIfUncached,
+            SessionSource::SubAgent(_) => RefreshStrategy::Offline,
+            _ => RefreshStrategy::OnlineIfUncached,
         };
-        if config.model.is_none()
-            || !matches!(
-                refresh_strategy,
-                crate::models_manager::manager::RefreshStrategy::Offline
-            )
-        {
+        if config.model.is_none() || !matches!(refresh_strategy, RefreshStrategy::Offline) {
             let _ = models_manager.list_models(refresh_strategy).await;
         }
         let model = models_manager
@@ -521,7 +517,9 @@ impl Codex {
         // 1. config.base_instructions override
         // 2. conversation history => session_meta.base_instructions
         // 3. base_instructions for current model
-        let model_info = models_manager.get_model_info(model.as_str(), &config).await;
+        let model_info = models_manager
+            .get_model_info(model.as_str(), &model_info_config_overrides(&config))
+            .await;
         let base_instructions = config
             .base_instructions
             .clone()
@@ -848,7 +846,9 @@ impl TurnContext {
     pub(crate) async fn with_model(&self, model: String, models_manager: &ModelsManager) -> Self {
         let mut config = (*self.config).clone();
         config.model = Some(model.clone());
-        let model_info = models_manager.get_model_info(model.as_str(), &config).await;
+        let model_info = models_manager
+            .get_model_info(model.as_str(), &model_info_config_overrides(&config))
+            .await;
         let truncation_policy = model_info.truncation_policy.into();
         let supported_reasoning_levels = model_info
             .supported_reasoning_levels
@@ -2400,7 +2400,7 @@ impl Session {
             .models_manager
             .get_model_info(
                 session_configuration.collaboration_mode.model(),
-                &per_turn_config,
+                &model_info_config_overrides(&per_turn_config),
             )
             .await;
         let skills_outcome = Arc::new(
@@ -5172,7 +5172,7 @@ async fn spawn_review_thread(
     let review_model_info = sess
         .services
         .models_manager
-        .get_model_info(&model, &config)
+        .get_model_info(&model, &model_info_config_overrides(&config))
         .await;
     // For reviews, disable web_search and view_image regardless of global settings.
     let mut review_features = sess.features.clone();

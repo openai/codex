@@ -5,10 +5,9 @@
 //!   2. User-defined entries inside `~/.codex/config.toml` under the `model_providers`
 //!      key. These override or extend the defaults at runtime.
 
-use crate::auth::AuthMode;
-use crate::error::EnvVarError;
 use codex_api::Provider as ApiProvider;
 use codex_api::provider::RetryConfig as ApiRetryConfig;
+use codex_login::AuthMode;
 use http::HeaderMap;
 use http::header::HeaderName;
 use http::header::HeaderValue;
@@ -18,11 +17,12 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
+use thiserror::Error;
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_STREAM_MAX_RETRIES: u64 = 5;
 const DEFAULT_REQUEST_MAX_RETRIES: u64 = 4;
-pub(crate) const DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS: u64 = 15_000;
+pub const DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS: u64 = 15_000;
 /// Hard cap for user-configured `stream_max_retries`.
 const MAX_STREAM_MAX_RETRIES: u64 = 100;
 /// Hard cap for user-configured `request_max_retries`.
@@ -31,8 +31,15 @@ const MAX_REQUEST_MAX_RETRIES: u64 = 100;
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
 const CHAT_WIRE_API_REMOVED_ERROR: &str = "`wire_api = \"chat\"` is no longer supported.\nHow to fix: set `wire_api = \"responses\"` in your provider config.\nMore info: https://github.com/openai/codex/discussions/7782";
-pub(crate) const LEGACY_OLLAMA_CHAT_PROVIDER_ID: &str = "ollama-chat";
-pub(crate) const OLLAMA_CHAT_PROVIDER_REMOVED_ERROR: &str = "`ollama-chat` is no longer supported.\nHow to fix: replace `ollama-chat` with `ollama` in `model_provider`, `oss_provider`, or `--local-provider`.\nMore info: https://github.com/openai/codex/discussions/7782";
+pub const LEGACY_OLLAMA_CHAT_PROVIDER_ID: &str = "ollama-chat";
+pub const OLLAMA_CHAT_PROVIDER_REMOVED_ERROR: &str = "`ollama-chat` is no longer supported.\nHow to fix: replace `ollama-chat` with `ollama` in `model_provider`, `oss_provider`, or `--local-provider`.\nMore info: https://github.com/openai/codex/discussions/7782";
+
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+#[error("environment variable {var} is required but missing or empty")]
+pub struct EnvKeyError {
+    pub var: String,
+    pub instructions: Option<String>,
+}
 
 /// Wire protocol that the provider speaks.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
@@ -130,7 +137,7 @@ pub struct ModelProviderInfo {
 }
 
 impl ModelProviderInfo {
-    fn build_header_map(&self) -> crate::error::Result<HeaderMap> {
+    fn build_header_map(&self) -> HeaderMap {
         let capacity = self.http_headers.as_ref().map_or(0, HashMap::len)
             + self.env_http_headers.as_ref().map_or(0, HashMap::len);
         let mut headers = HeaderMap::with_capacity(capacity);
@@ -154,13 +161,10 @@ impl ModelProviderInfo {
             }
         }
 
-        Ok(headers)
+        headers
     }
 
-    pub(crate) fn to_api_provider(
-        &self,
-        auth_mode: Option<AuthMode>,
-    ) -> crate::error::Result<ApiProvider> {
+    pub fn to_api_provider(&self, auth_mode: Option<AuthMode>) -> ApiProvider {
         let default_base_url = if matches!(auth_mode, Some(AuthMode::Chatgpt)) {
             "https://chatgpt.com/backend-api/codex"
         } else {
@@ -171,7 +175,7 @@ impl ModelProviderInfo {
             .clone()
             .unwrap_or_else(|| default_base_url.to_string());
 
-        let headers = self.build_header_map()?;
+        let headers = self.build_header_map();
         let retry = ApiRetryConfig {
             max_attempts: self.request_max_retries(),
             base_delay: Duration::from_millis(200),
@@ -180,30 +184,28 @@ impl ModelProviderInfo {
             retry_transport: true,
         };
 
-        Ok(ApiProvider {
+        ApiProvider {
             name: self.name.clone(),
             base_url,
             query_params: self.query_params.clone(),
             headers,
             retry,
             stream_idle_timeout: self.stream_idle_timeout(),
-        })
+        }
     }
 
     /// If `env_key` is Some, returns the API key for this provider if present
     /// (and non-empty) in the environment. If `env_key` is required but
     /// cannot be found, returns an error.
-    pub fn api_key(&self) -> crate::error::Result<Option<String>> {
+    pub fn api_key(&self) -> Result<Option<String>, EnvKeyError> {
         match &self.env_key {
             Some(env_key) => {
                 let api_key = std::env::var(env_key)
                     .ok()
                     .filter(|v| !v.trim().is_empty())
-                    .ok_or_else(|| {
-                        crate::error::CodexErr::EnvVar(EnvVarError {
-                            var: env_key.clone(),
-                            instructions: self.env_key_instructions.clone(),
-                        })
+                    .ok_or_else(|| EnvKeyError {
+                        var: env_key.clone(),
+                        instructions: self.env_key_instructions.clone(),
                     })?;
                 Ok(Some(api_key))
             }

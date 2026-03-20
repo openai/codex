@@ -17,6 +17,7 @@ use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
+use codex_models::WireApi;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -1721,10 +1722,7 @@ fn responses_websocket_features_do_not_change_wire_api() -> std::io::Result<()> 
             codex_home.path().to_path_buf(),
         )?;
 
-        assert_eq!(
-            config.model_provider.wire_api,
-            crate::model_provider_info::WireApi::Responses
-        );
+        assert_eq!(config.model_provider.wire_api, WireApi::Responses);
     }
 
     Ok(())
@@ -4074,7 +4072,8 @@ fn model_catalog_json_loads_from_path() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let catalog_path = codex_home.path().join("catalog.json");
     let mut catalog: ModelsResponse =
-        serde_json::from_str(include_str!("../../models.json")).expect("valid models.json");
+        serde_json::from_str(include_str!("../../../models/models.json"))
+            .expect("valid models.json");
     catalog.models = catalog.models.into_iter().take(1).collect();
     std::fs::write(
         &catalog_path,
@@ -4188,7 +4187,7 @@ model_verbosity = "high"
         name: "OpenAI custom".to_string(),
         base_url: Some("https://api.openai.com/v1".to_string()),
         env_key: Some("OPENAI_API_KEY".to_string()),
-        wire_api: crate::WireApi::Responses,
+        wire_api: WireApi::Responses,
         env_key_instructions: None,
         experimental_bearer_token: None,
         query_params: None,

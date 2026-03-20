@@ -12,7 +12,7 @@ use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::error::CodexErr;
 use crate::function_tool::FunctionCallError;
-use crate::models_manager::manager::RefreshStrategy;
+use crate::model_info_overrides::model_info_config_overrides;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -22,6 +22,7 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use async_trait::async_trait;
 use codex_features::Feature;
+use codex_models::RefreshStrategy;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseInputItem;
@@ -340,7 +341,7 @@ async fn apply_requested_spawn_agent_model_overrides(
         let selected_model_info = session
             .services
             .models_manager
-            .get_model_info(&selected_model_name, config)
+            .get_model_info(&selected_model_name, &model_info_config_overrides(config))
             .await;
 
         config.model = Some(selected_model_name.clone());

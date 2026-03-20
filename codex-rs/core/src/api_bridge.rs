@@ -6,16 +6,18 @@ use codex_api::TransportError;
 use codex_api::error::ApiError;
 use codex_api::rate_limits::parse_promo_message;
 use codex_api::rate_limits::parse_rate_limit_for_limit;
+use codex_models::EnvKeyError;
+use codex_models::ModelProviderInfo;
 use http::HeaderMap;
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::auth::CodexAuth;
 use crate::error::CodexErr;
+use crate::error::EnvVarError;
 use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
 use crate::error::UsageLimitReachedError;
-use crate::model_provider_info::ModelProviderInfo;
 use crate::token_data::PlanType;
 
 pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
@@ -168,7 +170,7 @@ pub(crate) fn auth_provider_from_auth(
     auth: Option<CodexAuth>,
     provider: &ModelProviderInfo,
 ) -> crate::error::Result<CoreAuthProvider> {
-    if let Some(api_key) = provider.api_key()? {
+    if let Some(api_key) = provider.api_key().map_err(map_env_key_error)? {
         return Ok(CoreAuthProvider {
             token: Some(api_key),
             account_id: None,
@@ -194,6 +196,13 @@ pub(crate) fn auth_provider_from_auth(
             account_id: None,
         })
     }
+}
+
+fn map_env_key_error(error: EnvKeyError) -> CodexErr {
+    CodexErr::EnvVar(EnvVarError {
+        var: error.var,
+        instructions: error.instructions,
+    })
 }
 
 #[derive(Debug, Deserialize)]

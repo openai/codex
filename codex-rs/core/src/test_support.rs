@@ -7,6 +7,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_models::CollaborationModesConfig;
+use codex_models::ModelProviderInfo;
+use codex_models::ModelsManager;
+use codex_models::builtin_collaboration_mode_presets as builtin_models_collaboration_mode_presets;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
@@ -15,16 +19,14 @@ use once_cell::sync::Lazy;
 
 use crate::AuthManager;
 use crate::CodexAuth;
-use crate::ModelProviderInfo;
 use crate::ThreadManager;
 use crate::config::Config;
-use crate::models_manager::collaboration_mode_presets;
-use crate::models_manager::manager::ModelsManager;
+use crate::model_info_overrides::model_info_config_overrides;
 use crate::thread_manager;
 use crate::unified_exec;
 
 static TEST_MODEL_PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
-    let file_contents = include_str!("../models.json");
+    let file_contents = include_str!("../../models/models.json");
     let mut response: ModelsResponse = serde_json::from_str(file_contents)
         .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
     response.models.sort_by(|a, b| a.priority.cmp(&b.priority));
@@ -104,7 +106,11 @@ pub fn get_model_offline(model: Option<&str>) -> String {
 }
 
 pub fn construct_model_info_offline(model: &str, config: &Config) -> ModelInfo {
-    ModelsManager::construct_model_info_offline_for_tests(model, config)
+    ModelsManager::construct_model_info_offline_for_tests(
+        model,
+        config.model_catalog.as_ref(),
+        &model_info_config_overrides(config),
+    )
 }
 
 pub fn all_model_presets() -> &'static Vec<ModelPreset> {
@@ -112,7 +118,5 @@ pub fn all_model_presets() -> &'static Vec<ModelPreset> {
 }
 
 pub fn builtin_collaboration_mode_presets() -> Vec<CollaborationModeMask> {
-    collaboration_mode_presets::builtin_collaboration_mode_presets(
-        collaboration_mode_presets::CollaborationModesConfig::default(),
-    )
+    builtin_models_collaboration_mode_presets(CollaborationModesConfig::default())
 }

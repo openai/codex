@@ -1,4 +1,4 @@
-use codex_core::models_manager::manager::ModelsManager;
+use codex_models::ModelsManager;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 

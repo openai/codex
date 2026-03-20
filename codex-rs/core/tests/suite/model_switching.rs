@@ -1,8 +1,8 @@
 use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::config::types::Personality;
-use codex_core::models_manager::manager::RefreshStrategy;
 use codex_features::Feature;
+use codex_models::RefreshStrategy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ConfigShellToolType;
@@ -19,6 +19,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
+use core_test_support::model_info_config_overrides;
 use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_image_generation_call;
 use core_test_support::responses::ev_response_created;
@@ -949,11 +950,17 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         "expected {smaller_model_slug} to be available in remote model list"
     );
     let large_model_info = models_manager
-        .get_model_info(large_model_slug, &test.config)
+        .get_model_info(
+            large_model_slug,
+            &model_info_config_overrides(test.config.as_ref()),
+        )
         .await;
     assert_eq!(large_model_info.context_window, Some(large_context_window));
     let smaller_model_info = models_manager
-        .get_model_info(smaller_model_slug, &test.config)
+        .get_model_info(
+            smaller_model_slug,
+            &model_info_config_overrides(test.config.as_ref()),
+        )
         .await;
     assert_eq!(
         smaller_model_info.context_window,

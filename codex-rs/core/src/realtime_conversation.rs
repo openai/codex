@@ -22,6 +22,8 @@ use codex_api::RealtimeSessionMode;
 use codex_api::RealtimeWebsocketClient;
 use codex_api::endpoint::realtime_websocket::RealtimeWebsocketEvents;
 use codex_api::endpoint::realtime_websocket::RealtimeWebsocketWriter;
+use codex_models::EnvKeyError;
+use codex_models::ModelProviderInfo;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
@@ -454,7 +456,7 @@ async fn prepare_realtime_start(
     let provider = sess.provider().await;
     let auth = sess.services.auth_manager.auth().await;
     let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
-    let mut api_provider = provider.to_api_provider(Some(crate::auth::AuthMode::ApiKey))?;
+    let mut api_provider = provider.to_api_provider(Some(crate::auth::AuthMode::ApiKey));
     let config = sess.get_config().await;
     if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
         api_provider.base_url = realtime_ws_base_url.clone();
@@ -625,11 +627,8 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
         .or((!handoff.input_transcript.is_empty()).then_some(handoff.input_transcript.clone()))
 }
 
-fn realtime_api_key(
-    auth: Option<&CodexAuth>,
-    provider: &crate::ModelProviderInfo,
-) -> CodexResult<String> {
-    if let Some(api_key) = provider.api_key()? {
+fn realtime_api_key(auth: Option<&CodexAuth>, provider: &ModelProviderInfo) -> CodexResult<String> {
+    if let Some(api_key) = provider.api_key().map_err(map_env_key_error)? {
         return Ok(api_key);
     }
 
@@ -652,6 +651,13 @@ fn realtime_api_key(
     Err(CodexErr::InvalidRequest(
         "realtime conversation requires API key auth".to_string(),
     ))
+}
+
+fn map_env_key_error(error: EnvKeyError) -> CodexErr {
+    CodexErr::EnvVar(crate::error::EnvVarError {
+        var: error.var,
+        instructions: error.instructions,
+    })
 }
 
 fn realtime_request_headers(

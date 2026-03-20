@@ -1,7 +1,5 @@
 use crate::AuthManager;
 use crate::CodexAuth;
-use crate::ModelProviderInfo;
-use crate::OPENAI_PROVIDER_ID;
 use crate::agent::AgentControl;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnArgs;
@@ -14,8 +12,6 @@ use crate::error::Result as CodexResult;
 use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
 use crate::mcp::McpManager;
-use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use crate::models_manager::manager::ModelsManager;
 use crate::plugins::PluginsManager;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
@@ -24,6 +20,11 @@ use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillsManager;
+use codex_models::CollaborationModesConfig;
+use codex_models::ModelProviderInfo;
+use codex_models::ModelsManager;
+use codex_models::OPENAI_PROVIDER_ID;
+use codex_models::RefreshStrategy;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelPreset;
@@ -304,10 +305,7 @@ impl ThreadManager {
         self.state.models_manager.clone()
     }
 
-    pub async fn list_models(
-        &self,
-        refresh_strategy: crate::models_manager::manager::RefreshStrategy,
-    ) -> Vec<ModelPreset> {
+    pub async fn list_models(&self, refresh_strategy: RefreshStrategy) -> Vec<ModelPreset> {
         self.state
             .models_manager
             .list_models(refresh_strategy)

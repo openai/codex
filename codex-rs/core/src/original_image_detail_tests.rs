@@ -1,15 +1,19 @@
 use super::*;
 
 use crate::config::test_config;
-use crate::models_manager::manager::ModelsManager;
+use crate::model_info_overrides::model_info_config_overrides;
 use codex_features::Features;
+use codex_models::ModelsManager;
 use pretty_assertions::assert_eq;
 
 #[test]
 fn image_detail_original_feature_enables_explicit_original_without_force() {
     let config = test_config();
-    let mut model_info =
-        ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut model_info = ModelsManager::construct_model_info_offline_for_tests(
+        "gpt-5-codex",
+        config.model_catalog.as_ref(),
+        &model_info_config_overrides(&config),
+    );
     model_info.supports_image_detail_original = true;
     let mut features = Features::with_defaults();
     features.enable(Feature::ImageDetailOriginal);
@@ -28,8 +32,11 @@ fn image_detail_original_feature_enables_explicit_original_without_force() {
 #[test]
 fn explicit_original_is_dropped_without_feature_or_model_support() {
     let config = test_config();
-    let mut model_info =
-        ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut model_info = ModelsManager::construct_model_info_offline_for_tests(
+        "gpt-5-codex",
+        config.model_catalog.as_ref(),
+        &model_info_config_overrides(&config),
+    );
     model_info.supports_image_detail_original = true;
     let features = Features::with_defaults();
 
@@ -50,8 +57,11 @@ fn explicit_original_is_dropped_without_feature_or_model_support() {
 #[test]
 fn unsupported_non_original_detail_is_dropped() {
     let config = test_config();
-    let mut model_info =
-        ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut model_info = ModelsManager::construct_model_info_offline_for_tests(
+        "gpt-5-codex",
+        config.model_catalog.as_ref(),
+        &model_info_config_overrides(&config),
+    );
     model_info.supports_image_detail_original = true;
     let mut features = Features::with_defaults();
     features.enable(Feature::ImageDetailOriginal);

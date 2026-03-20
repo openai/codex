@@ -15,6 +15,7 @@ codex-arg0 = { workspace = true }
 codex-core = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
+codex-models = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }

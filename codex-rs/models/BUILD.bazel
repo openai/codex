@@ -1,0 +1,20 @@
+load("//:defs.bzl", "codex_rust_crate")
+
+filegroup(
+    name = "model_availability_nux_fixtures",
+    srcs = [
+        "models.json",
+        "//codex-rs/core:cli_responses_fixture_sse",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+codex_rust_crate(
+    name = "models",
+    crate_name = "codex_models",
+    compile_data = [
+        "models.json",
+        "templates/collaboration_mode/default.md",
+        "templates/collaboration_mode/plan.md",
+    ],
+)

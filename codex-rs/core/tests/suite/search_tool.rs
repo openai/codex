@@ -95,7 +95,8 @@ fn configure_apps(config: &mut Config, apps_base_url: &str) {
     config.model = Some("gpt-5-codex".to_string());
 
     let mut model_catalog: ModelsResponse =
-        serde_json::from_str(include_str!("../../models.json")).expect("valid models.json");
+        serde_json::from_str(include_str!("../../../models/models.json"))
+            .expect("valid models.json");
     let model = model_catalog
         .models
         .iter_mut()

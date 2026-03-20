@@ -3,6 +3,8 @@
 use anyhow::Context as _;
 use anyhow::ensure;
 use codex_arg0::Arg0PathEntryGuard;
+use codex_features::Feature;
+use codex_models::ModelInfoConfigOverrides;
 use codex_utils_cargo_bin::CargoBinError;
 use ctor::ctor;
 use std::sync::OnceLock;
@@ -110,6 +112,17 @@ pub fn test_tmp_path() -> AbsolutePathBuf {
 
 pub fn test_tmp_path_buf() -> PathBuf {
     test_tmp_path().into_path_buf()
+}
+
+pub fn model_info_config_overrides(config: &Config) -> ModelInfoConfigOverrides {
+    ModelInfoConfigOverrides {
+        model_supports_reasoning_summaries: config.model_supports_reasoning_summaries,
+        model_context_window: config.model_context_window,
+        model_auto_compact_token_limit: config.model_auto_compact_token_limit,
+        tool_output_token_limit: config.tool_output_token_limit,
+        base_instructions: config.base_instructions.clone(),
+        personality_enabled: config.features.enabled(Feature::Personality),
+    }
 }
 
 /// Fetch a DotSlash resource and return the resolved executable/file path.

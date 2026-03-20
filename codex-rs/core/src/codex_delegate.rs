@@ -48,7 +48,7 @@ use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
 use crate::mcp_tool_call::build_guardian_mcp_tool_review_request;
 use crate::mcp_tool_call::is_mcp_tool_approval_question_id;
 use crate::mcp_tool_call::lookup_mcp_tool_metadata;
-use crate::models_manager::manager::ModelsManager;
+use codex_models::ModelsManager;
 use codex_protocol::protocol::InitialHistory;
 
 #[cfg(test)]

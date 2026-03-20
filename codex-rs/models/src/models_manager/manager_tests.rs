@@ -1,13 +1,11 @@
 use super::*;
-use crate::CodexAuth;
-use crate::auth::AuthCredentialsStoreMode;
-use crate::config::ConfigBuilder;
-use crate::model_provider_info::WireApi;
 use base64::Engine as _;
 use chrono::Utc;
 use codex_api::TransportError;
+use codex_login::AuthCredentialsStoreMode;
+use codex_login::AuthManager;
+use codex_login::CodexAuth;
 use codex_protocol::openai_models::ModelsResponse;
-use core_test_support::responses::mount_models_once;
 use http::HeaderMap;
 use http::StatusCode;
 use pretty_assertions::assert_eq;
@@ -24,7 +22,14 @@ use tracing_subscriber::layer::Context;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
+use wiremock::Match;
+use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path_regex;
+
+use crate::WireApi;
 
 fn remote_model(slug: &str, display: &str, priority: i32) -> ModelInfo {
     remote_model_with_visibility(slug, display, priority, "list")
@@ -92,6 +97,46 @@ fn provider_for(base_url: String) -> ModelProviderInfo {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ModelsMock {
+    requests: Arc<Mutex<Vec<wiremock::Request>>>,
+}
+
+impl ModelsMock {
+    fn new() -> Self {
+        Self {
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn requests(&self) -> Vec<wiremock::Request> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+impl Match for ModelsMock {
+    fn matches(&self, request: &wiremock::Request) -> bool {
+        self.requests.lock().unwrap().push(request.clone());
+        true
+    }
+}
+
+async fn mount_models_once(server: &MockServer, body: ModelsResponse) -> ModelsMock {
+    let models_mock = ModelsMock::new();
+    Mock::given(method("GET"))
+        .and(path_regex(".*/models$"))
+        .and(models_mock.clone())
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_json(body),
+        )
+        .up_to_n_times(1)
+        .mount(server)
+        .await;
+    models_mock
+}
+
 #[derive(Default)]
 struct TagCollectorVisitor {
     tags: BTreeMap<String, String>,
@@ -136,11 +181,7 @@ where
 #[tokio::test]
 async fn get_model_info_tracks_fallback_usage() {
     let codex_home = tempdir().expect("temp dir");
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .build()
-        .await
-        .expect("load default test config");
+    let overrides = ModelInfoConfigOverrides::default();
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let manager = ModelsManager::new(
         codex_home.path().to_path_buf(),
@@ -156,12 +197,14 @@ async fn get_model_info_tracks_fallback_usage() {
         .slug
         .clone();
 
-    let known = manager.get_model_info(known_slug.as_str(), &config).await;
+    let known = manager
+        .get_model_info(known_slug.as_str(), &overrides)
+        .await;
     assert!(!known.used_fallback_model_metadata);
     assert_eq!(known.slug, known_slug);
 
     let unknown = manager
-        .get_model_info("model-that-does-not-exist", &config)
+        .get_model_info("model-that-does-not-exist", &overrides)
         .await;
     assert!(unknown.used_fallback_model_metadata);
     assert_eq!(unknown.slug, "model-that-does-not-exist");
@@ -170,11 +213,7 @@ async fn get_model_info_tracks_fallback_usage() {
 #[tokio::test]
 async fn get_model_info_uses_custom_catalog() {
     let codex_home = tempdir().expect("temp dir");
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .build()
-        .await
-        .expect("load default test config");
+    let overrides = ModelInfoConfigOverrides::default();
     let mut overlay = remote_model("gpt-overlay", "Overlay", 0);
     overlay.supports_image_detail_original = true;
 
@@ -189,7 +228,7 @@ async fn get_model_info_uses_custom_catalog() {
     );
 
     let model_info = manager
-        .get_model_info("gpt-overlay-experiment", &config)
+        .get_model_info("gpt-overlay-experiment", &overrides)
         .await;
 
     assert_eq!(model_info.slug, "gpt-overlay-experiment");
@@ -203,11 +242,7 @@ async fn get_model_info_uses_custom_catalog() {
 #[tokio::test]
 async fn get_model_info_matches_namespaced_suffix() {
     let codex_home = tempdir().expect("temp dir");
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .build()
-        .await
-        .expect("load default test config");
+    let overrides = ModelInfoConfigOverrides::default();
     let mut remote = remote_model("gpt-image", "Image", 0);
     remote.supports_image_detail_original = true;
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
@@ -221,7 +256,7 @@ async fn get_model_info_matches_namespaced_suffix() {
     );
     let namespaced_model = "custom/gpt-image".to_string();
 
-    let model_info = manager.get_model_info(&namespaced_model, &config).await;
+    let model_info = manager.get_model_info(&namespaced_model, &overrides).await;
 
     assert_eq!(model_info.slug, namespaced_model);
     assert!(model_info.supports_image_detail_original);
@@ -231,11 +266,7 @@ async fn get_model_info_matches_namespaced_suffix() {
 #[tokio::test]
 async fn get_model_info_rejects_multi_segment_namespace_suffix_matching() {
     let codex_home = tempdir().expect("temp dir");
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .build()
-        .await
-        .expect("load default test config");
+    let overrides = ModelInfoConfigOverrides::default();
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let manager = ModelsManager::new(
         codex_home.path().to_path_buf(),
@@ -252,7 +283,7 @@ async fn get_model_info_rejects_multi_segment_namespace_suffix_matching() {
         .clone();
     let namespaced_model = format!("ns1/ns2/{known_slug}");
 
-    let model_info = manager.get_model_info(&namespaced_model, &config).await;
+    let model_info = manager.get_model_info(&namespaced_model, &overrides).await;
 
     assert_eq!(model_info.slug, namespaced_model);
     assert!(model_info.used_fallback_model_metadata);
@@ -444,7 +475,7 @@ async fn refresh_available_models_refetches_when_version_mismatch() {
     manager
         .cache_manager
         .mutate_cache_for_test(|cache| {
-            let client_version = crate::models_manager::client_version_to_whole();
+            let client_version = crate::client_version_to_whole();
             cache.client_version = Some(format!("{client_version}-mismatch"));
         })
         .await

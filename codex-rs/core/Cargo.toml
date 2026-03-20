@@ -36,6 +36,7 @@ codex-config = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
 codex-login = { workspace = true }
+codex-models = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-skills = { workspace = true }
 codex-execpolicy = { workspace = true }

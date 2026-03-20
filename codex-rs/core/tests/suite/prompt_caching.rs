@@ -17,6 +17,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::model_info_config_overrides;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -139,7 +140,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
                 .model
                 .as_deref()
                 .expect("test config should have a model"),
-            &config,
+            &model_info_config_overrides(config.as_ref()),
         )
         .await
         .base_instructions;

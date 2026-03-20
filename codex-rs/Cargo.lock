@@ -410,6 +410,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-core",
  "codex-features",
+ "codex-models",
  "codex-protocol",
  "codex-utils-cargo-bin",
  "core_test_support",
@@ -1433,6 +1434,7 @@ dependencies = [
  "codex-feedback",
  "codex-file-search",
  "codex-login",
+ "codex-models",
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
@@ -1478,6 +1480,7 @@ dependencies = [
  "codex-core",
  "codex-features",
  "codex-feedback",
+ "codex-models",
  "codex-protocol",
  "futures",
  "pretty_assertions",
@@ -1854,6 +1857,7 @@ dependencies = [
  "codex-git",
  "codex-hooks",
  "codex-login",
+ "codex-models",
  "codex-network-proxy",
  "codex-otel",
  "codex-protocol",
@@ -1964,6 +1968,7 @@ dependencies = [
  "codex-cloud-requirements",
  "codex-core",
  "codex-feedback",
+ "codex-models",
  "codex-otel",
  "codex-protocol",
  "codex-utils-absolute-path",
@@ -2175,6 +2180,7 @@ name = "codex-lmstudio"
 version = "0.0.0"
 dependencies = [
  "codex-core",
+ "codex-models",
  "reqwest",
  "serde_json",
  "tokio",
@@ -2229,6 +2235,7 @@ dependencies = [
  "codex-arg0",
  "codex-core",
  "codex-features",
+ "codex-models",
  "codex-protocol",
  "codex-shell-command",
  "codex-utils-cli",
@@ -2244,6 +2251,31 @@ dependencies = [
  "shlex",
  "tempfile",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "wiremock",
+]
+
+[[package]]
+name = "codex-models"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "codex-api",
+ "codex-login",
+ "codex-otel",
+ "codex-protocol",
+ "http 1.4.0",
+ "maplit",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.9.11+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
  "wiremock",
@@ -2288,6 +2320,7 @@ dependencies = [
  "async-stream",
  "bytes",
  "codex-core",
+ "codex-models",
  "futures",
  "pretty_assertions",
  "reqwest",
@@ -2579,6 +2612,7 @@ dependencies = [
  "codex-feedback",
  "codex-file-search",
  "codex-login",
+ "codex-models",
  "codex-otel",
  "codex-protocol",
  "codex-shell-command",
@@ -2672,6 +2706,7 @@ dependencies = [
  "codex-feedback",
  "codex-file-search",
  "codex-login",
+ "codex-models",
  "codex-otel",
  "codex-protocol",
  "codex-shell-command",
@@ -2835,6 +2870,7 @@ version = "0.0.0"
 dependencies = [
  "codex-core",
  "codex-lmstudio",
+ "codex-models",
  "codex-ollama",
 ]
 
@@ -2877,6 +2913,7 @@ name = "codex-utils-sandbox-summary"
 version = "0.0.0"
 dependencies = [
  "codex-core",
+ "codex-models",
  "codex-protocol",
  "codex-utils-absolute-path",
  "pretty_assertions",
@@ -3123,6 +3160,7 @@ dependencies = [
  "codex-core",
  "codex-exec-server",
  "codex-features",
+ "codex-models",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",

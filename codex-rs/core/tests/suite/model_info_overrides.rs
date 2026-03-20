@@ -1,8 +1,9 @@
 use codex_core::CodexAuth;
-use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use codex_core::models_manager::manager::ModelsManager;
+use codex_models::CollaborationModesConfig;
+use codex_models::ModelsManager;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use core_test_support::load_default_config_for_test;
+use core_test_support::model_info_config_overrides;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
@@ -20,7 +21,9 @@ async fn offline_model_info_without_tool_output_override() {
         CollaborationModesConfig::default(),
     );
 
-    let model_info = manager.get_model_info("gpt-5.1", &config).await;
+    let model_info = manager
+        .get_model_info("gpt-5.1", &model_info_config_overrides(&config))
+        .await;
 
     assert_eq!(
         model_info.truncation_policy,
@@ -43,7 +46,9 @@ async fn offline_model_info_with_tool_output_override() {
         CollaborationModesConfig::default(),
     );
 
-    let model_info = manager.get_model_info("gpt-5.1-codex", &config).await;
+    let model_info = manager
+        .get_model_info("gpt-5.1-codex", &model_info_config_overrides(&config))
+        .await;
 
     assert_eq!(
         model_info.truncation_policy,

@@ -1,5 +1,5 @@
 use super::*;
-use crate::models_manager::model_info::model_info_from_slug;
+use codex_models::model_info_from_slug;
 
 #[test]
 fn build_stage_one_input_message_truncates_rollout_using_model_context_window() {

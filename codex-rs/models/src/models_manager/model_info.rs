@@ -1,4 +1,5 @@
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::models::BASE_INSTRUCTIONS_DEFAULT;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelInstructionsVariables;
@@ -8,32 +9,41 @@ use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::openai_models::default_input_modalities;
-
-use crate::config::Config;
-use crate::truncate::approx_bytes_for_tokens;
-use codex_features::Feature;
 use tracing::warn;
 
-pub const BASE_INSTRUCTIONS: &str = include_str!("../../prompt.md");
+const APPROX_BYTES_PER_TOKEN: usize = 4;
 const DEFAULT_PERSONALITY_HEADER: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
 const LOCAL_FRIENDLY_TEMPLATE: &str =
     "You optimize for team morale and being a supportive teammate as much as code quality.";
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 
-pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> ModelInfo {
-    if let Some(supports_reasoning_summaries) = config.model_supports_reasoning_summaries
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModelInfoConfigOverrides {
+    pub model_supports_reasoning_summaries: Option<bool>,
+    pub model_context_window: Option<i64>,
+    pub model_auto_compact_token_limit: Option<i64>,
+    pub tool_output_token_limit: Option<usize>,
+    pub base_instructions: Option<String>,
+    pub personality_enabled: bool,
+}
+
+pub fn with_config_overrides(
+    mut model: ModelInfo,
+    overrides: &ModelInfoConfigOverrides,
+) -> ModelInfo {
+    if let Some(supports_reasoning_summaries) = overrides.model_supports_reasoning_summaries
         && supports_reasoning_summaries
     {
         model.supports_reasoning_summaries = true;
     }
-    if let Some(context_window) = config.model_context_window {
+    if let Some(context_window) = overrides.model_context_window {
         model.context_window = Some(context_window);
     }
-    if let Some(auto_compact_token_limit) = config.model_auto_compact_token_limit {
+    if let Some(auto_compact_token_limit) = overrides.model_auto_compact_token_limit {
         model.auto_compact_token_limit = Some(auto_compact_token_limit);
     }
-    if let Some(token_limit) = config.tool_output_token_limit {
+    if let Some(token_limit) = overrides.tool_output_token_limit {
         model.truncation_policy = match model.truncation_policy.mode {
             TruncationMode::Bytes => {
                 let byte_limit =
@@ -47,10 +57,10 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
         };
     }
 
-    if let Some(base_instructions) = &config.base_instructions {
+    if let Some(base_instructions) = &overrides.base_instructions {
         model.base_instructions = base_instructions.clone();
         model.model_messages = None;
-    } else if !config.features.enabled(Feature::Personality) {
+    } else if !overrides.personality_enabled {
         model.model_messages = None;
     }
 
@@ -58,7 +68,7 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
 }
 
 /// Build a minimal fallback model descriptor for missing/unknown slugs.
-pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
+pub fn model_info_from_slug(slug: &str) -> ModelInfo {
     warn!("Unknown model {slug} is used. This will use fallback model metadata.");
     ModelInfo {
         slug: slug.to_string(),
@@ -72,7 +82,7 @@ pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
         priority: 99,
         availability_nux: None,
         upgrade: None,
-        base_instructions: BASE_INSTRUCTIONS.to_string(),
+        base_instructions: BASE_INSTRUCTIONS_DEFAULT.to_string(),
         model_messages: local_personality_messages_for_slug(slug),
         supports_reasoning_summaries: false,
         default_reasoning_summary: ReasoningSummary::Auto,
@@ -97,7 +107,7 @@ fn local_personality_messages_for_slug(slug: &str) -> Option<ModelMessages> {
     match slug {
         "gpt-5.2-codex" | "exp-codex-personality" => Some(ModelMessages {
             instructions_template: Some(format!(
-                "{DEFAULT_PERSONALITY_HEADER}\n\n{PERSONALITY_PLACEHOLDER}\n\n{BASE_INSTRUCTIONS}"
+                "{DEFAULT_PERSONALITY_HEADER}\n\n{PERSONALITY_PLACEHOLDER}\n\n{BASE_INSTRUCTIONS_DEFAULT}"
             )),
             instructions_variables: Some(ModelInstructionsVariables {
                 personality_default: Some(String::new()),
@@ -107,6 +117,10 @@ fn local_personality_messages_for_slug(slug: &str) -> Option<ModelMessages> {
         }),
         _ => None,
     }
+}
+
+fn approx_bytes_for_tokens(tokens: usize) -> usize {
+    tokens.saturating_mul(APPROX_BYTES_PER_TOKEN)
 }
 
 #[cfg(test)]

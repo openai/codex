@@ -1,8 +1,8 @@
 //! Verifies that the agent retries when the SSE stream terminates before
 //! delivering a `response.completed` event.
 
-use codex_core::ModelProviderInfo;
-use codex_core::WireApi;
+use codex_models::ModelProviderInfo;
+use codex_models::WireApi;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;

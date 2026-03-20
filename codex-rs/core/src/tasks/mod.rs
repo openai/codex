@@ -27,7 +27,6 @@ use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
-use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
 use crate::protocol::TokenUsage;
 use crate::protocol::TurnAbortReason;
@@ -48,6 +47,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 
 use codex_features::Feature;
+use codex_models::ModelsManager;
 pub(crate) use compact::CompactTask;
 pub(crate) use ghost_snapshot::GhostSnapshotTask;
 pub(crate) use regular::RegularTask;

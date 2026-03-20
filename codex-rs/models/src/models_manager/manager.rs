@@ -1,27 +1,27 @@
 use super::cache::ModelsCacheManager;
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
-use crate::auth::AuthManager;
-use crate::auth::AuthMode;
-use crate::auth::CodexAuth;
 use crate::auth_env_telemetry::AuthEnvTelemetry;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
-use crate::config::Config;
-use crate::default_client::build_reqwest_client;
-use crate::error::CodexErr;
-use crate::error::Result as CoreResult;
+use crate::collaboration_mode_presets::CollaborationModesConfig;
+use crate::collaboration_mode_presets::builtin_collaboration_mode_presets;
+use crate::error::ModelsError;
+use crate::error::Result as ModelsResult;
+use crate::feedback_tags::FeedbackRequestTags;
+use crate::feedback_tags::emit_feedback_request_tags_with_auth_env;
+use crate::model_info;
+use crate::model_info::ModelInfoConfigOverrides;
 use crate::model_provider_info::ModelProviderInfo;
-use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
-use crate::models_manager::model_info;
 use crate::response_debug_context::extract_response_debug_context;
 use crate::response_debug_context::telemetry_transport_error_message;
-use crate::util::FeedbackRequestTags;
-use crate::util::emit_feedback_request_tags_with_auth_env;
 use codex_api::ModelsClient;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::TransportError;
+use codex_login::AuthManager;
+use codex_login::AuthMode;
+use codex_login::CodexAuth;
+use codex_login::default_client::build_reqwest_client;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelInfo;
@@ -310,10 +310,14 @@ impl ModelsManager {
 
     // todo(aibrahim): look if we can tighten it to pub(crate)
     /// Look up model metadata, applying remote overrides and config adjustments.
-    #[instrument(level = "info", skip(self, config), fields(model = model))]
-    pub async fn get_model_info(&self, model: &str, config: &Config) -> ModelInfo {
+    #[instrument(level = "info", skip(self, overrides), fields(model = model))]
+    pub async fn get_model_info(
+        &self,
+        model: &str,
+        overrides: &ModelInfoConfigOverrides,
+    ) -> ModelInfo {
         let remote_models = self.get_remote_models().await;
-        Self::construct_model_info_from_candidates(model, &remote_models, config)
+        Self::construct_model_info_from_candidates(model, &remote_models, overrides)
     }
 
     fn find_model_by_longest_prefix(model: &str, candidates: &[ModelInfo]) -> Option<ModelInfo> {
@@ -355,7 +359,7 @@ impl ModelsManager {
     fn construct_model_info_from_candidates(
         model: &str,
         candidates: &[ModelInfo],
-        config: &Config,
+        overrides: &ModelInfoConfigOverrides,
     ) -> ModelInfo {
         // First use the normal longest-prefix match. If that misses, allow a narrowly scoped
         // retry for namespaced slugs like `custom/gpt-5.3-codex`.
@@ -370,13 +374,13 @@ impl ModelsManager {
         } else {
             model_info::model_info_from_slug(model)
         };
-        model_info::with_config_overrides(model_info, config)
+        model_info::with_config_overrides(model_info, overrides)
     }
 
     /// Refresh models if the provided ETag differs from the cached ETag.
     ///
     /// Uses `Online` strategy to fetch latest models when ETags differ.
-    pub(crate) async fn refresh_if_new_etag(&self, etag: String) {
+    pub async fn refresh_if_new_etag(&self, etag: String) {
         let current_etag = self.get_etag().await;
         if current_etag.clone().is_some() && current_etag.as_deref() == Some(etag.as_str()) {
             if let Err(err) = self.cache_manager.renew_cache_ttl().await {
@@ -390,7 +394,10 @@ impl ModelsManager {
     }
 
     /// Refresh available models according to the specified strategy.
-    async fn refresh_available_models(&self, refresh_strategy: RefreshStrategy) -> CoreResult<()> {
+    async fn refresh_available_models(
+        &self,
+        refresh_strategy: RefreshStrategy,
+    ) -> ModelsResult<()> {
         // don't override the custom model catalog if one was provided by the user
         if matches!(self.catalog_mode, CatalogMode::Custom) {
             return Ok(());
@@ -428,12 +435,12 @@ impl ModelsManager {
         }
     }
 
-    async fn fetch_and_update_models(&self) -> CoreResult<()> {
+    async fn fetch_and_update_models(&self) -> ModelsResult<()> {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
         let auth = self.auth_manager.auth().await;
         let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
-        let api_provider = self.provider.to_api_provider(auth_mode)?;
+        let api_provider = self.provider.to_api_provider(auth_mode);
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;
         let auth_env = collect_auth_env_telemetry(
             &self.provider,
@@ -449,13 +456,13 @@ impl ModelsManager {
         let client = ModelsClient::new(transport, api_provider, api_auth)
             .with_telemetry(Some(request_telemetry));
 
-        let client_version = crate::models_manager::client_version_to_whole();
+        let client_version = crate::client_version_to_whole();
         let (models, etag) = timeout(
             MODELS_REFRESH_TIMEOUT,
             client.list_models(&client_version, HeaderMap::new()),
         )
         .await
-        .map_err(|_| CodexErr::Timeout)?
+        .map_err(|_| ModelsError::Timeout)?
         .map_err(map_api_error)?;
 
         self.apply_remote_models(models.clone()).await;
@@ -496,7 +503,7 @@ impl ModelsManager {
     async fn try_load_cache(&self) -> bool {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.load_cache.duration_ms", &[]);
-        let client_version = crate::models_manager::client_version_to_whole();
+        let client_version = crate::client_version_to_whole();
         info!(client_version, "models cache: evaluating cache eligibility");
         let cache = match self.cache_manager.load_fresh(&client_version).await {
             Some(cache) => cache,
@@ -538,7 +545,7 @@ impl ModelsManager {
     }
 
     /// Construct a manager with a specific provider for testing.
-    pub(crate) fn with_provider_for_tests(
+    pub fn with_provider_for_tests(
         codex_home: PathBuf,
         auth_manager: Arc<AuthManager>,
         provider: ModelProviderInfo,
@@ -553,7 +560,7 @@ impl ModelsManager {
     }
 
     /// Get model identifier without consulting remote state or cache.
-    pub(crate) fn get_model_offline_for_tests(model: Option<&str>) -> String {
+    pub fn get_model_offline_for_tests(model: Option<&str>) -> String {
         if let Some(model) = model {
             return model.to_string();
         }
@@ -569,16 +576,17 @@ impl ModelsManager {
     }
 
     /// Build `ModelInfo` without consulting remote state or cache.
-    pub(crate) fn construct_model_info_offline_for_tests(
+    pub fn construct_model_info_offline_for_tests(
         model: &str,
-        config: &Config,
+        model_catalog: Option<&ModelsResponse>,
+        overrides: &ModelInfoConfigOverrides,
     ) -> ModelInfo {
-        let candidates: &[ModelInfo] = if let Some(model_catalog) = config.model_catalog.as_ref() {
+        let candidates: &[ModelInfo] = if let Some(model_catalog) = model_catalog {
             &model_catalog.models
         } else {
             &[]
         };
-        Self::construct_model_info_from_candidates(model, candidates, config)
+        Self::construct_model_info_from_candidates(model, candidates, overrides)
     }
 }
 

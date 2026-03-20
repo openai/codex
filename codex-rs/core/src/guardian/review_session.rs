@@ -34,10 +34,10 @@ use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::Permissions;
 use crate::config::types::McpServerConfig;
-use crate::model_provider_info::ModelProviderInfo;
 use crate::protocol::SandboxPolicy;
 use crate::rollout::recorder::RolloutRecorder;
 use codex_features::Feature;
+use codex_models::ModelProviderInfo;
 
 use super::GUARDIAN_REVIEW_TIMEOUT;
 use super::GUARDIAN_REVIEWER_NAME;

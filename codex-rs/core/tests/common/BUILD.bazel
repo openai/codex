@@ -5,6 +5,6 @@ codex_rust_crate(
     crate_name = "core_test_support",
     crate_srcs = glob(["*.rs"]),
     lib_data_extra = [
-        "//codex-rs/core:model_availability_nux_fixtures",
+        "//codex-rs/models:model_availability_nux_fixtures",
     ],
 )

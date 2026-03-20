@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use codex_models::RefreshStrategy;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -274,7 +275,7 @@ pub(super) async fn run_guardian_review_session(
     let available_models = session
         .services
         .models_manager
-        .list_models(crate::models_manager::manager::RefreshStrategy::Offline)
+        .list_models(RefreshStrategy::Offline)
         .await;
     let preferred_reasoning_effort = |supports_low: bool, fallback| {
         if supports_low {

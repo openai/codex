@@ -3,7 +3,7 @@ use codex_otel::AuthEnvTelemetryMetadata;
 use crate::auth::CODEX_API_KEY_ENV_VAR;
 use crate::auth::OPENAI_API_KEY_ENV_VAR;
 use crate::auth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
-use crate::model_provider_info::ModelProviderInfo;
+use codex_models::ModelProviderInfo;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AuthEnvTelemetry {
@@ -54,6 +54,7 @@ fn env_var_present(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_models::WireApi;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -64,7 +65,7 @@ mod tests {
             env_key: Some("sk-should-not-leak".to_string()),
             env_key_instructions: None,
             experimental_bearer_token: None,
-            wire_api: crate::model_provider_info::WireApi::Responses,
+            wire_api: WireApi::Responses,
             query_params: None,
             http_headers: None,
             env_http_headers: None,

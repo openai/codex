@@ -1,0 +1,41 @@
+[package]
+name = "codex-models"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
+name = "codex_models"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+codex-api = { workspace = true }
+codex-login = { workspace = true }
+codex-otel = { workspace = true }
+codex-protocol = { workspace = true }
+http = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "sync", "time"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+base64 = { workspace = true }
+chrono = { workspace = true }
+http = { workspace = true }
+maplit = { workspace = true }
+pretty_assertions = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+toml = { workspace = true }
+tracing-subscriber = { workspace = true }
+wiremock = { workspace = true }

@@ -1,8 +1,8 @@
 //! OSS provider utilities shared between TUI and exec.
 
-use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
-use codex_core::OLLAMA_OSS_PROVIDER_ID;
 use codex_core::config::Config;
+use codex_models::LMSTUDIO_OSS_PROVIDER_ID;
+use codex_models::OLLAMA_OSS_PROVIDER_ID;
 
 /// Returns the default model for a given OSS provider.
 pub fn get_default_model_for_oss_provider(provider_id: &str) -> Option<&'static str> {

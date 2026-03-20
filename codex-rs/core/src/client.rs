@@ -101,8 +101,6 @@ use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
-use crate::model_provider_info::ModelProviderInfo;
-use crate::model_provider_info::WireApi;
 use crate::response_debug_context::extract_response_debug_context;
 use crate::response_debug_context::extract_response_debug_context_from_api_error;
 use crate::response_debug_context::telemetry_api_error_message;
@@ -111,6 +109,10 @@ use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::util::FeedbackRequestTags;
 use crate::util::emit_feedback_auth_recovery_tags;
 use crate::util::emit_feedback_request_tags_with_auth_env;
+#[cfg(test)]
+use codex_models::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS;
+use codex_models::ModelProviderInfo;
+use codex_models::WireApi;
 
 pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
@@ -123,7 +125,7 @@ const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
-    Duration::from_millis(crate::model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
+    Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
 
 /// Session-scoped state shared by all [`ModelClient`] clones.
 ///
@@ -531,7 +533,7 @@ impl ModelClient {
         let api_provider = self
             .state
             .provider
-            .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
+            .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode));
         let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
         Ok(CurrentClientSetup {
             auth,

@@ -1,19 +1,8 @@
 load("//:defs.bzl", "codex_rust_crate")
 
-exports_files(
-    [
-        "templates/collaboration_mode/default.md",
-        "templates/collaboration_mode/plan.md",
-    ],
-    visibility = ["//visibility:public"],
-)
-
 filegroup(
-    name = "model_availability_nux_fixtures",
-    srcs = [
-        "models.json",
-        "tests/cli_responses_fixture.sse",
-    ],
+    name = "cli_responses_fixture_sse",
+    srcs = ["tests/cli_responses_fixture.sse"],
     visibility = ["//visibility:public"],
 )
 
@@ -30,6 +19,7 @@ codex_rust_crate(
         allow_empty = True,
     ) + [
         "//codex-rs:node-version.txt",
+        "//codex-rs/models:models.json",
     ],
     rustc_env = {
         # Askama resolves template paths relative to CARGO_MANIFEST_DIR. In
@@ -39,11 +29,12 @@ codex_rust_crate(
     },
     integration_compile_data_extra = [
         "//codex-rs/apply-patch:apply_patch_tool_instructions.md",
-        "models.json",
+        "//codex-rs/models:models.json",
         "prompt.md",
     ],
     test_data_extra = [
         "config.schema.json",
+        "//codex-rs/models:models.json",
     ] + glob([
         "src/**/snapshots/**",
     ]) + [
