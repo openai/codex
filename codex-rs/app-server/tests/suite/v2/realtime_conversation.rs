@@ -69,11 +69,11 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
                 }
             }),
             json!({
-                "type": "conversation.input_transcript.delta",
+                "type": "conversation.item.input_audio_transcription.delta",
                 "delta": "delegate now"
             }),
             json!({
-                "type": "conversation.output_transcript.delta",
+                "type": "response.output_text.delta",
                 "delta": "working"
             }),
             json!({
