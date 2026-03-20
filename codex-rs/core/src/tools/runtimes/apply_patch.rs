@@ -31,10 +31,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
-use std::io::Write as _;
-use std::path::Path;
 use std::path::PathBuf;
-use std::time::Instant;
 
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
@@ -73,23 +70,23 @@ impl ApplyPatchRuntime {
     fn build_command_spec(
         req: &ApplyPatchRequest,
         _codex_home: &std::path::Path,
-    ) -> Result<Option<CommandSpec>, ToolError> {
-        let exe = req
-            .codex_exe
-            .clone()
-            .filter(|path| is_codex_cli(path))
-            .or_else(|| {
-                req.codex_exe
-                    .as_ref()
-                    .and_then(|path| resolve_adjacent_codex_cli(path))
-                    .filter(|path| path.is_file())
-            })
-            .or_else(|| resolve_current_codex_cli(_codex_home).ok().flatten());
-        let Some(exe) = exe else {
-            return Ok(None);
+    ) -> Result<CommandSpec, ToolError> {
+        let exe = if let Some(path) = &req.codex_exe {
+            path.clone()
+        } else {
+            #[cfg(target_os = "windows")]
+            {
+                codex_windows_sandbox::resolve_current_exe_for_launch(_codex_home, "codex.exe")
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                std::env::current_exe().map_err(|e| {
+                    ToolError::Rejected(format!("failed to determine codex exe: {e}"))
+                })?
+            }
         };
         let program = exe.to_string_lossy().to_string();
-        Ok(Some(CommandSpec {
+        Ok(CommandSpec {
             program,
             args: vec![
                 CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
@@ -103,7 +100,7 @@ impl ApplyPatchRuntime {
             sandbox_permissions: req.sandbox_permissions,
             additional_permissions: req.additional_permissions.clone(),
             justification: None,
-        }))
+        })
     }
 
     fn stdout_stream(ctx: &ToolCtx) -> Option<crate::exec::StdoutStream> {
@@ -209,136 +206,15 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        if let Some(spec) = Self::build_command_spec(req, &ctx.turn.config.codex_home)? {
-            let env = attempt
-                .env_for(spec, /*network*/ None)
-                .map_err(|err| ToolError::Codex(err.into()))?;
-            let out = execute_env(env, Self::stdout_stream(ctx))
-                .await
-                .map_err(ToolError::Codex)?;
-            return Ok(out);
-        }
-
-        let started = Instant::now();
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let exit_code = match apply_patch_in_process(req, &mut stdout, &mut stderr) {
-            Ok(()) => 0,
-            Err(error) => {
-                let _ = writeln!(&mut stderr, "{error}");
-                1
-            }
-        };
-        let stdout = String::from_utf8_lossy(&stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&stderr).into_owned();
-        Ok(ExecToolCallOutput {
-            exit_code,
-            stdout: crate::exec::StreamOutput::new(stdout.clone()),
-            stderr: crate::exec::StreamOutput::new(stderr.clone()),
-            aggregated_output: crate::exec::StreamOutput::new(format!("{stdout}{stderr}")),
-            duration: started.elapsed(),
-            timed_out: false,
-        })
+        let spec = Self::build_command_spec(req, &ctx.turn.config.codex_home)?;
+        let env = attempt
+            .env_for(spec, /*network*/ None)
+            .map_err(|err| ToolError::Codex(err.into()))?;
+        let out = execute_env(env, Self::stdout_stream(ctx))
+            .await
+            .map_err(ToolError::Codex)?;
+        Ok(out)
     }
-}
-
-fn is_codex_cli(path: &Path) -> bool {
-    matches!(
-        path.file_name().and_then(|name| name.to_str()),
-        Some("codex") | Some("codex.exe")
-    )
-}
-
-fn resolve_adjacent_codex_cli(path: &Path) -> Option<PathBuf> {
-    let sibling = if cfg!(windows) {
-        path.with_file_name("codex.exe")
-    } else {
-        path.with_file_name("codex")
-    };
-    sibling.is_file().then_some(sibling)
-}
-
-fn resolve_current_codex_cli(codex_home: &std::path::Path) -> Result<Option<PathBuf>, ToolError> {
-    #[cfg(target_os = "windows")]
-    {
-        let exe = codex_windows_sandbox::resolve_current_exe_for_launch(codex_home, "codex.exe");
-        Ok(is_codex_cli(&exe).then_some(exe))
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let current_exe = std::env::current_exe()
-            .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))?;
-        if is_codex_cli(&current_exe) {
-            return Ok(Some(current_exe));
-        }
-        let _ = codex_home;
-        Ok(resolve_adjacent_codex_cli(&current_exe))
-    }
-}
-
-fn apply_patch_in_process(
-    req: &ApplyPatchRequest,
-    stdout: &mut impl std::io::Write,
-    _stderr: &mut impl std::io::Write,
-) -> anyhow::Result<()> {
-    let mut affected = codex_apply_patch::AffectedPaths {
-        added: Vec::new(),
-        modified: Vec::new(),
-        deleted: Vec::new(),
-    };
-
-    let mut changes = req.action.changes().iter().collect::<Vec<_>>();
-    changes.sort_by(|(left_path, _), (right_path, _)| left_path.cmp(right_path));
-
-    for (path, change) in changes {
-        match change {
-            codex_apply_patch::ApplyPatchFileChange::Add { content } => {
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                std::fs::write(path, content)?;
-                affected
-                    .added
-                    .push(display_path_relative_to_cwd(path, &req.action.cwd));
-            }
-            codex_apply_patch::ApplyPatchFileChange::Delete { .. } => {
-                std::fs::remove_file(path)?;
-                affected
-                    .deleted
-                    .push(display_path_relative_to_cwd(path, &req.action.cwd));
-            }
-            codex_apply_patch::ApplyPatchFileChange::Update {
-                move_path,
-                new_content,
-                ..
-            } => {
-                let destination = move_path.as_ref().unwrap_or(path);
-                if let Some(parent) = destination.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                std::fs::write(destination, new_content)?;
-                if let Some(move_path) = move_path
-                    && move_path != path
-                {
-                    std::fs::remove_file(path)?;
-                }
-                affected
-                    .modified
-                    .push(display_path_relative_to_cwd(destination, &req.action.cwd));
-            }
-        }
-    }
-
-    affected.added.sort();
-    affected.modified.sort();
-    affected.deleted.sort();
-    codex_apply_patch::print_summary(&affected, stdout)?;
-    Ok(())
-}
-
-fn display_path_relative_to_cwd(path: &std::path::Path, cwd: &std::path::Path) -> PathBuf {
-    path.strip_prefix(cwd).unwrap_or(path).to_path_buf()
 }
 
 #[cfg(test)]

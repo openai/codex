@@ -43,12 +43,27 @@ pub fn cargo_bin(name: &str) -> Result<PathBuf, CargoBinError> {
             return resolve_bin_from_env(key, value);
         }
     }
-    match resolve_bin_via_assert_cmd(name) {
-        Ok(path) => Ok(path),
-        Err(fallback) => Err(CargoBinError::NotFound {
+    match assert_cmd::Command::cargo_bin(name) {
+        Ok(cmd) => {
+            let mut path = PathBuf::from(cmd.get_program());
+            if !path.is_absolute() {
+                path = std::env::current_dir()
+                    .map_err(|source| CargoBinError::CurrentDir { source })?
+                    .join(path);
+            }
+            if path.exists() {
+                Ok(path)
+            } else {
+                Err(CargoBinError::ResolvedPathDoesNotExist {
+                    key: "assert_cmd::Command::cargo_bin".to_owned(),
+                    path,
+                })
+            }
+        }
+        Err(err) => Err(CargoBinError::NotFound {
             name: name.to_owned(),
             env_keys,
-            fallback,
+            fallback: format!("assert_cmd fallback failed: {err}"),
         }),
     }
 }
@@ -89,29 +104,6 @@ fn resolve_bin_from_env(key: &str, value: OsString) -> Result<PathBuf, CargoBinE
         key: key.to_owned(),
         path: raw,
     })
-}
-
-#[allow(deprecated)]
-fn resolve_bin_via_assert_cmd(name: &str) -> Result<PathBuf, String> {
-    match assert_cmd::Command::cargo_bin(name) {
-        Ok(cmd) => {
-            let mut path = PathBuf::from(cmd.get_program());
-            if !path.is_absolute() {
-                path = std::env::current_dir()
-                    .map_err(|err| format!("failed to read current directory: {err}"))?
-                    .join(path);
-            }
-            if path.exists() {
-                Ok(path)
-            } else {
-                Err(format!(
-                    "assert_cmd fallback resolved missing path: {}",
-                    path.display()
-                ))
-            }
-        }
-        Err(err) => Err(format!("assert_cmd fallback failed: {err}")),
-    }
 }
 
 /// Macro that derives the path to a test resource at runtime, the value of

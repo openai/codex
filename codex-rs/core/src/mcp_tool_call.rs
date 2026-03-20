@@ -986,11 +986,27 @@ async fn rewrite_single_argument_string(
     index: Option<usize>,
     path_or_file_ref: &str,
 ) -> Result<String, String> {
-    if let Some(file_id) = parse_openai_file_id(path_or_file_ref) {
+    if is_openai_file_uri(path_or_file_ref)
+        && let Some(file_id) = parse_openai_file_id(path_or_file_ref)
+    {
         return Ok(openai_file_uri(file_id));
     }
 
     let resolved_path = turn_context.resolve_path(Some(path_or_file_ref.to_string()));
+    if resolved_path.exists() {
+        let uploaded = upload_local_file(turn_context.config.as_ref(), auth, &resolved_path)
+            .await
+            .map_err(|error| match index {
+                Some(index) => format!(
+                    "failed to upload `{path_or_file_ref}` for `{field_name}[{index}]`: {error}"
+                ),
+                None => {
+                    format!("failed to upload `{path_or_file_ref}` for `{field_name}`: {error}")
+                }
+            })?;
+        return Ok(uploaded.uri);
+    }
+
     let uploaded = upload_local_file(turn_context.config.as_ref(), auth, &resolved_path)
         .await
         .map_err(|error| match index {

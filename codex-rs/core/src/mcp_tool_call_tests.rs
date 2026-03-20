@@ -297,6 +297,98 @@ async fn openai_file_result_rewrite_requires_feature_flag() {
     assert_eq!(rewritten, result);
 }
 
+#[tokio::test]
+async fn rewrite_single_argument_string_prefers_existing_local_file_over_bare_file_id() {
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::body_json;
+    use wiremock::matchers::header;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/backend-api/files"))
+        .and(header("chatgpt-account-id", "account_id"))
+        .and(body_json(serde_json::json!({
+            "file_name": "file_report.csv",
+            "file_size": 5,
+            "use_case": "codex",
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "file_id": "file_123",
+            "upload_url": format!("{}/upload/file_123", server.uri()),
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/upload/file_123"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/backend-api/files/file_123/uploaded"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "status": "success",
+            "download_url": format!("{}/download/file_123", server.uri()),
+            "file_name": "file_report.csv",
+            "mime_type": "text/csv",
+            "file_size_bytes": 5,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (_, mut turn_context) = make_session_and_context().await;
+    let auth = crate::CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let dir = tempdir().expect("temp dir");
+    let local_path = dir.path().join("file_report.csv");
+    tokio::fs::write(&local_path, b"hello")
+        .await
+        .expect("write local file");
+    turn_context.cwd = dir.path().to_path_buf();
+
+    let mut config = (*turn_context.config).clone();
+    config.chatgpt_base_url = format!("{}/backend-api", server.uri());
+    turn_context.config = Arc::new(config);
+
+    let rewritten = rewrite_single_argument_string(
+        &turn_context,
+        Some(&auth),
+        "file",
+        /*index*/ None,
+        "file_report.csv",
+    )
+    .await
+    .expect("rewrite should upload the local file");
+
+    assert_eq!(rewritten, "sediment://file_123");
+}
+
+#[tokio::test]
+async fn rewrite_single_argument_string_requires_sediment_uri_for_remote_handles() {
+    let (_, turn_context) = make_session_and_context().await;
+    let auth = crate::CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+    let error = rewrite_single_argument_string(
+        &turn_context,
+        Some(&auth),
+        "file",
+        /*index*/ None,
+        "file_123",
+    )
+    .await
+    .expect_err("bare OpenAI file ids should not be accepted in MCP file arguments");
+
+    assert!(
+        error.starts_with("failed to upload `file_123` for `file`:"),
+        "unexpected error: {error}"
+    );
+}
+
 #[test]
 fn codex_apps_tool_question_uses_fallback_app_label() {
     let question = build_mcp_tool_approval_question(

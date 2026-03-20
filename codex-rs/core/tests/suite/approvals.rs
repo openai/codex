@@ -179,7 +179,7 @@ impl ActionKind {
                 Ok((event, Some(command)))
             }
             ActionKind::RunCommand { command } => {
-                let event = shell_event(call_id, command, 5_000, sandbox_permissions)?;
+                let event = shell_event(call_id, command, 1_000, sandbox_permissions)?;
                 Ok((event, Some(command.to_string())))
             }
             ActionKind::RunUnifiedExecCommand {
@@ -1623,44 +1623,15 @@ fn scenarios() -> Vec<ScenarioSpec> {
     ]
 }
 
-async fn run_scenario_chunk(start: usize, len: usize) -> Result<()> {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn approval_matrix_covers_all_modes() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    for scenario in scenarios().into_iter().skip(start).take(len) {
+    for scenario in scenarios() {
         run_scenario(&scenario).await?;
     }
 
     Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn approval_matrix_covers_all_modes_chunk_1() -> Result<()> {
-    run_scenario_chunk(/*start*/ 0, /*len*/ 8).await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn approval_matrix_covers_all_modes_chunk_2() -> Result<()> {
-    run_scenario_chunk(/*start*/ 8, /*len*/ 8).await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn approval_matrix_covers_all_modes_chunk_3() -> Result<()> {
-    run_scenario_chunk(/*start*/ 16, /*len*/ 8).await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn approval_matrix_covers_all_modes_chunk_4() -> Result<()> {
-    run_scenario_chunk(/*start*/ 24, /*len*/ 8).await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn approval_matrix_covers_all_modes_chunk_5() -> Result<()> {
-    run_scenario_chunk(/*start*/ 32, /*len*/ 8).await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn approval_matrix_covers_all_modes_chunk_6() -> Result<()> {
-    run_scenario_chunk(/*start*/ 40, /*len*/ 8).await
 }
 
 async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
@@ -2287,7 +2258,7 @@ async fn matched_prefix_rule_runs_unsandboxed_under_zsh_fork() -> Result<()> {
     .await?;
 
     let call_id = "zsh-fork-prefix-rule-unsandboxed";
-    let event = shell_event(call_id, &command, 5_000, SandboxPermissions::UseDefault)?;
+    let event = shell_event(call_id, &command, 1_000, SandboxPermissions::UseDefault)?;
     let _ = mount_sse_once(
         &server,
         sse(vec![
