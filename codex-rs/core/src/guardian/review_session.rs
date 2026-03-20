@@ -70,6 +70,10 @@ pub(crate) struct GuardianReviewSessionManager {
 struct GuardianReviewSessionState {
     trunk: Option<Arc<GuardianReviewSession>>,
     ephemeral_reviews: Vec<Arc<GuardianReviewSession>>,
+    // Parent-session history index captured after the latest terminal guardian
+    // review. This remains authoritative even when no reusable trunk is
+    // currently cached.
+    parent_history_boundary: Option<usize>,
 }
 
 struct GuardianReviewSession {
@@ -78,9 +82,9 @@ struct GuardianReviewSession {
     reuse_key: GuardianReviewSessionReuseKey,
     review_lock: Mutex<()>,
     last_committed_rollout_items: Mutex<Option<Vec<RolloutItem>>>,
-    // Parent-session history index captured after the latest terminal guardian
-    // review. Future guardian prompts use it to slice parent transcript
-    // evidence without persisting extra rollout metadata.
+    // Mirror of the manager checkpoint while this reusable trunk is alive.
+    // Keeping it on the trunk preserves the boundary across config-driven trunk
+    // replacement without persisting extra rollout metadata.
     parent_history_boundary: Mutex<Option<usize>>,
 }
 
@@ -148,10 +152,6 @@ impl GuardianReviewSessionReuseKey {
 }
 
 impl GuardianReviewSession {
-    async fn parent_history_boundary(&self) -> Option<usize> {
-        *self.parent_history_boundary.lock().await
-    }
-
     async fn set_parent_history_boundary(&self, boundary: Option<usize>) {
         *self.parent_history_boundary.lock().await = boundary;
     }
@@ -230,15 +230,15 @@ impl Drop for EphemeralReviewCleanup {
 
 impl GuardianReviewSessionManager {
     pub(crate) async fn parent_history_boundary(&self) -> Option<usize> {
-        let trunk = self.state.lock().await.trunk.clone();
-        match trunk {
-            Some(trunk) => trunk.parent_history_boundary().await,
-            None => None,
-        }
+        self.state.lock().await.parent_history_boundary
     }
 
     pub(crate) async fn set_parent_history_boundary(&self, boundary: Option<usize>) {
-        let trunk = self.state.lock().await.trunk.clone();
+        let trunk = {
+            let mut state = self.state.lock().await;
+            state.parent_history_boundary = boundary;
+            state.trunk.clone()
+        };
         if let Some(trunk) = trunk {
             trunk.set_parent_history_boundary(boundary).await;
         }
@@ -267,7 +267,6 @@ impl GuardianReviewSessionManager {
         let deadline = tokio::time::Instant::now() + GUARDIAN_REVIEW_TIMEOUT;
         let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&params.spawn_config);
         let mut stale_trunk_to_shutdown = None;
-        let mut spawned_replacement_trunk = false;
         let trunk_candidate = match run_before_review_deadline(
             deadline,
             params.external_cancel.as_ref(),
@@ -284,6 +283,7 @@ impl GuardianReviewSessionManager {
                 }
 
                 if state.trunk.is_none() {
+                    let parent_history_boundary = state.parent_history_boundary;
                     let spawn_cancel_token = CancellationToken::new();
                     let review_session = match run_before_review_deadline_with_cancel(
                         deadline,
@@ -295,6 +295,7 @@ impl GuardianReviewSessionManager {
                             next_reuse_key.clone(),
                             spawn_cancel_token.clone(),
                             /*initial_history*/ None,
+                            parent_history_boundary,
                         )),
                     )
                     .await
@@ -305,7 +306,6 @@ impl GuardianReviewSessionManager {
                         }
                         Err(outcome) => return outcome,
                     };
-                    spawned_replacement_trunk = true;
                     state.trunk = Some(Arc::clone(&review_session));
                 }
 
@@ -313,14 +313,6 @@ impl GuardianReviewSessionManager {
             }
             Err(outcome) => return outcome,
         };
-
-        if spawned_replacement_trunk
-            && let (Some(stale_trunk), Some(trunk)) =
-                (stale_trunk_to_shutdown.as_ref(), trunk_candidate.as_ref())
-        {
-            let boundary = stale_trunk.parent_history_boundary().await;
-            trunk.set_parent_history_boundary(boundary).await;
-        }
 
         if let Some(review_session) = stale_trunk_to_shutdown {
             review_session.shutdown_in_background();
@@ -375,13 +367,14 @@ impl GuardianReviewSessionManager {
         let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
             codex.session.get_config().await.as_ref(),
         );
-        self.state.lock().await.trunk = Some(Arc::new(GuardianReviewSession {
+        let mut state = self.state.lock().await;
+        state.trunk = Some(Arc::new(GuardianReviewSession {
             reuse_key,
             codex,
             cancel_token: CancellationToken::new(),
             review_lock: Mutex::new(()),
             last_committed_rollout_items: Mutex::new(None),
-            parent_history_boundary: Mutex::new(None),
+            parent_history_boundary: Mutex::new(state.parent_history_boundary),
         }));
     }
 
@@ -460,6 +453,7 @@ impl GuardianReviewSessionManager {
                 reuse_key,
                 spawn_cancel_token.clone(),
                 initial_history,
+                /*parent_history_boundary*/ None,
             )),
         )
         .await
@@ -488,6 +482,7 @@ async fn spawn_guardian_review_session(
     reuse_key: GuardianReviewSessionReuseKey,
     cancel_token: CancellationToken,
     initial_history: Option<InitialHistory>,
+    parent_history_boundary: Option<usize>,
 ) -> anyhow::Result<GuardianReviewSession> {
     let codex = run_codex_thread_interactive(
         spawn_config,
@@ -507,7 +502,7 @@ async fn spawn_guardian_review_session(
         reuse_key,
         review_lock: Mutex::new(()),
         last_committed_rollout_items: Mutex::new(None),
-        parent_history_boundary: Mutex::new(None),
+        parent_history_boundary: Mutex::new(parent_history_boundary),
     })
 }
 
@@ -860,5 +855,28 @@ mod tests {
 
         assert_eq!(outcome.unwrap(), 42);
         assert!(!cancel_token.is_cancelled());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn parent_history_boundary_persists_without_cached_trunk() {
+        let manager = GuardianReviewSessionManager::default();
+
+        manager.set_parent_history_boundary(Some(7)).await;
+        assert_eq!(manager.parent_history_boundary().await, Some(7));
+
+        let state = manager.state.lock().await;
+        assert_eq!(state.parent_history_boundary, Some(7));
+        assert!(state.trunk.is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn clearing_parent_history_boundary_without_cached_trunk_updates_manager_state() {
+        let manager = GuardianReviewSessionManager::default();
+
+        manager.set_parent_history_boundary(Some(7)).await;
+        manager.set_parent_history_boundary(None).await;
+
+        assert_eq!(manager.parent_history_boundary().await, None);
+        assert_eq!(manager.state.lock().await.parent_history_boundary, None);
     }
 }

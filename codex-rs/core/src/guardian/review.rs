@@ -260,9 +260,10 @@ pub(crate) async fn review_approval_request_with_cancel(
 /// it is pinned to a read-only sandbox with `approval_policy = never` and
 /// nonessential agent features disabled. When the cached trunk session is idle,
 /// later approvals append onto that same guardian conversation to preserve a
-/// stable prompt-cache key. That cached trunk also carries the parent-history
-/// checkpoint used to slice future guardian transcript evidence. If the trunk
-/// is already busy, the review runs in an ephemeral fork from the last
+/// stable prompt-cache key. The guardian session manager retains the
+/// parent-history checkpoint used to slice future guardian transcript
+/// evidence, and mirrors it onto the cached trunk while one exists. If the
+/// trunk is already busy, the review runs in an ephemeral fork from the last
 /// committed trunk rollout so parallel approvals do not block each other or
 /// mutate the cached thread. The trunk is recreated when the effective
 /// review-session config changes, and any future compaction must continue to
