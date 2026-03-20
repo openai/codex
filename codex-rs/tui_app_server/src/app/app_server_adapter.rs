@@ -91,6 +91,10 @@ use codex_protocol::protocol::RealtimeConversationStartedEvent;
 #[cfg(test)]
 use codex_protocol::protocol::RealtimeEvent;
 #[cfg(test)]
+use codex_protocol::protocol::RealtimeHandoffRequested;
+#[cfg(test)]
+use codex_protocol::protocol::RealtimeTranscriptEntry;
+#[cfg(test)]
 use codex_protocol::protocol::ThreadNameUpdatedEvent;
 #[cfg(test)]
 use codex_protocol::protocol::TokenCountEvent;
@@ -482,6 +486,9 @@ fn server_notification_thread_target(
         ServerNotification::ThreadRealtimeItemAdded(notification) => {
             Some(notification.thread_id.as_str())
         }
+        ServerNotification::ThreadRealtimeTranscriptAdded(notification) => {
+            Some(notification.thread_id.as_str())
+        }
         ServerNotification::ThreadRealtimeOutputAudioDelta(notification) => {
             Some(notification.thread_id.as_str())
         }
@@ -769,6 +776,27 @@ fn server_notification_thread_events(
                 id: String::new(),
                 msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
                     payload: RealtimeEvent::ConversationItemAdded(notification.item),
+                }),
+            }],
+        )),
+        ServerNotification::ThreadRealtimeTranscriptAdded(notification) => Some((
+            ThreadId::from_string(&notification.thread_id).ok()?,
+            vec![Event {
+                id: String::new(),
+                msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                    payload: RealtimeEvent::HandoffRequested(RealtimeHandoffRequested {
+                        handoff_id: notification.handoff_id,
+                        item_id: notification.item_id,
+                        input_transcript: String::new(),
+                        active_transcript: notification
+                            .transcript
+                            .into_iter()
+                            .map(|entry| RealtimeTranscriptEntry {
+                                role: entry.role,
+                                text: entry.text,
+                            })
+                            .collect(),
+                    }),
                 }),
             }],
         )),

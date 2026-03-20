@@ -72,6 +72,7 @@ use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationVersion;
+use codex_protocol::protocol::RealtimeTranscriptEntry as CoreRealtimeTranscriptEntry;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
@@ -3785,6 +3786,35 @@ pub struct ThreadRealtimeStartedNotification {
 pub struct ThreadRealtimeItemAddedNotification {
     pub thread_id: String,
     pub item: JsonValue,
+}
+
+/// EXPERIMENTAL - flat transcript snapshot emitted when realtime hands off to
+/// the main agent.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeTranscriptAddedNotification {
+    pub thread_id: String,
+    pub handoff_id: String,
+    pub item_id: String,
+    pub transcript: Vec<ThreadRealtimeTranscriptEntry>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeTranscriptEntry {
+    pub role: String,
+    pub text: String,
+}
+
+impl From<CoreRealtimeTranscriptEntry> for ThreadRealtimeTranscriptEntry {
+    fn from(value: CoreRealtimeTranscriptEntry) -> Self {
+        Self {
+            role: value.role,
+            text: value.text,
+        }
+    }
 }
 
 /// EXPERIMENTAL - streamed output audio emitted by thread realtime.

@@ -86,6 +86,7 @@ use codex_app_server_protocol::ThreadRealtimeErrorNotification;
 use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
 use codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
+use codex_app_server_protocol::ThreadRealtimeTranscriptAddedNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
@@ -437,20 +438,20 @@ pub(crate) async fn apply_bespoke_event_handling(
                     }
                     RealtimeEvent::ConversationItemDone { .. } => {}
                     RealtimeEvent::HandoffRequested(handoff) => {
-                        let notification = ThreadRealtimeItemAddedNotification {
+                        let notification = ThreadRealtimeTranscriptAddedNotification {
                             thread_id: conversation_id.to_string(),
-                            item: serde_json::json!({
-                                "type": "handoff_request",
-                                "handoff_id": handoff.handoff_id,
-                                "item_id": handoff.item_id,
-                                "input_transcript": handoff.input_transcript,
-                                "active_transcript": handoff.active_transcript,
-                            }),
+                            handoff_id: handoff.handoff_id,
+                            item_id: handoff.item_id,
+                            transcript: handoff
+                                .active_transcript
+                                .into_iter()
+                                .map(Into::into)
+                                .collect(),
                         };
                         outgoing
-                            .send_server_notification(ServerNotification::ThreadRealtimeItemAdded(
-                                notification,
-                            ))
+                            .send_server_notification(
+                                ServerNotification::ThreadRealtimeTranscriptAdded(notification),
+                            )
                             .await;
                     }
                     RealtimeEvent::Error(message) => {

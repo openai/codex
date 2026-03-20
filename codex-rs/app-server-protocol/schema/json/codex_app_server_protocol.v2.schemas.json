@@ -8713,6 +8713,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/realtime/transcriptAdded"
+              ],
+              "title": "Thread/realtime/transcriptAddedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadRealtimeTranscriptAddedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/realtime/transcriptAddedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/realtime/outputAudio/delta"
               ],
               "title": "Thread/realtime/outputAudio/deltaNotificationMethod",
@@ -10800,6 +10820,50 @@
         "version"
       ],
       "title": "ThreadRealtimeStartedNotification",
+      "type": "object"
+    },
+    "ThreadRealtimeTranscriptAddedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "EXPERIMENTAL - flat transcript snapshot emitted when realtime hands off to the main agent.",
+      "properties": {
+        "handoffId": {
+          "type": "string"
+        },
+        "itemId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "transcript": {
+          "items": {
+            "$ref": "#/definitions/ThreadRealtimeTranscriptEntry"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "handoffId",
+        "itemId",
+        "threadId",
+        "transcript"
+      ],
+      "title": "ThreadRealtimeTranscriptAddedNotification",
+      "type": "object"
+    },
+    "ThreadRealtimeTranscriptEntry": {
+      "properties": {
+        "role": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "text"
+      ],
       "type": "object"
     },
     "ThreadResumeParams": {
