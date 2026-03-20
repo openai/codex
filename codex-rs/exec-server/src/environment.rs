@@ -24,12 +24,12 @@ pub struct Environment {
 impl Default for Environment {
     fn default() -> Self {
         let local_process = LocalProcess::default();
-        local_process
-            .initialize()
-            .expect("default local process initialization should succeed");
-        local_process
-            .initialized()
-            .expect("default local process should accept initialized notification");
+        if let Err(err) = local_process.initialize() {
+            panic!("default local process initialization should succeed: {err:?}");
+        }
+        if let Err(err) = local_process.initialized() {
+            panic!("default local process should accept initialized notification: {err}");
+        }
 
         Self {
             experimental_exec_server_url: None,
