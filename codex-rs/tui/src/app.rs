@@ -366,8 +366,7 @@ async fn request_plugin_install(
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
-    marketplace_path: AbsolutePathBuf,
-    plugin_name: String,
+    params: PluginInstallParams,
 ) -> Result<PluginInstallResponse> {
     let client = start_plugin_request_client(
         arg0_paths,
@@ -381,14 +380,7 @@ async fn request_plugin_install(
     let request_handle = client.request_handle();
     let request_id = RequestId::String(format!("plugin-install-{}", Uuid::new_v4()));
     let response = request_handle
-        .request_typed(ClientRequest::PluginInstall {
-            request_id,
-            params: PluginInstallParams {
-                marketplace_path,
-                plugin_name,
-                force_remote_sync: false,
-            },
-        })
+        .request_typed(ClientRequest::PluginInstall { request_id, params })
         .await
         .wrap_err("plugin/install failed in legacy TUI");
     if let Err(err) = client.shutdown().await {
@@ -1468,8 +1460,11 @@ impl App {
                 loader_overrides,
                 cloud_requirements,
                 feedback,
-                marketplace_path,
-                plugin_name,
+                PluginInstallParams {
+                    marketplace_path,
+                    plugin_name,
+                    force_remote_sync: false,
+                },
             )
             .await
             .map_err(|err| format!("Failed to install plugin: {err}"));
