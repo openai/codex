@@ -526,10 +526,8 @@ async fn maybe_request_mcp_tool_approval(
         }
     }
 
-    if approval_mode == AppToolApproval::Auto {
-        if !approval_required {
-            return None;
-        }
+    if approval_mode == AppToolApproval::Auto && !approval_required {
+        return None;
     }
 
     let session_approval_key = session_mcp_tool_approval_key(invocation, metadata, approval_mode);
