@@ -1293,6 +1293,8 @@ async fn full_access_auto_mode_blocks_when_arc_returns_interrupt_for_model() {
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
         codex_apps_meta: None,
+        openai_file_params: Vec::new(),
+        openai_file_outputs: Vec::new(),
     };
 
     let decision = maybe_request_mcp_tool_approval(
