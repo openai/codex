@@ -85,38 +85,34 @@ pub(crate) async fn build_guardian_prompt_items(
     let (transcript_entries, omission_note) =
         render_guardian_transcript_entries(transcript_entries.as_slice());
     let mut items = Vec::new();
-    push_guardian_text(&mut items, GUARDIAN_TRANSCRIPT_INTRO.to_string());
-    push_guardian_text(&mut items, GUARDIAN_TRANSCRIPT_START.to_string());
+    let mut push_text = |text: String| {
+        items.push(UserInput::Text {
+            text,
+            text_elements: Vec::new(),
+        });
+    };
+    push_text(GUARDIAN_TRANSCRIPT_INTRO.to_string());
+    push_text(GUARDIAN_TRANSCRIPT_START.to_string());
     for (index, entry) in transcript_entries.into_iter().enumerate() {
         let prefix = if index == 0 { "" } else { "\n" };
-        push_guardian_text(&mut items, format!("{prefix}{entry}\n"));
+        push_text(format!("{prefix}{entry}\n"));
     }
-    push_guardian_text(&mut items, GUARDIAN_TRANSCRIPT_END.to_string());
+    push_text(GUARDIAN_TRANSCRIPT_END.to_string());
     if let Some(note) = omission_note {
-        push_guardian_text(&mut items, format!("\n{note}\n"));
+        push_text(format!("\n{note}\n"));
     }
-    push_guardian_text(&mut items, GUARDIAN_ACTION_INTRO.to_string());
-    push_guardian_text(&mut items, GUARDIAN_APPROVAL_REQUEST_START.to_string());
+    push_text(GUARDIAN_ACTION_INTRO.to_string());
+    push_text(GUARDIAN_APPROVAL_REQUEST_START.to_string());
     if let Some(reason) = retry_reason {
-        push_guardian_text(&mut items, GUARDIAN_RETRY_REASON_LABEL.to_string());
-        push_guardian_text(&mut items, format!("{reason}\n\n"));
+        push_text(GUARDIAN_RETRY_REASON_LABEL.to_string());
+        push_text(format!("{reason}\n\n"));
     }
-    push_guardian_text(
-        &mut items,
-        GUARDIAN_ACTION_ASSESSMENT_INSTRUCTIONS.to_string(),
-    );
-    push_guardian_text(&mut items, GUARDIAN_PLANNED_ACTION_JSON_LABEL.to_string());
-    push_guardian_text(&mut items, format!("{planned_action_json}\n"));
-    push_guardian_text(&mut items, GUARDIAN_APPROVAL_REQUEST_END.to_string());
-    push_guardian_text(&mut items, GUARDIAN_OUTPUT_SCHEMA_INSTRUCTIONS.to_string());
+    push_text(GUARDIAN_ACTION_ASSESSMENT_INSTRUCTIONS.to_string());
+    push_text(GUARDIAN_PLANNED_ACTION_JSON_LABEL.to_string());
+    push_text(format!("{planned_action_json}\n"));
+    push_text(GUARDIAN_APPROVAL_REQUEST_END.to_string());
+    push_text(GUARDIAN_OUTPUT_SCHEMA_INSTRUCTIONS.to_string());
     Ok(items)
-}
-
-fn push_guardian_text(items: &mut Vec<UserInput>, text: String) {
-    items.push(UserInput::Text {
-        text,
-        text_elements: Vec::new(),
-    });
 }
 
 /// Keeps all user turns plus a bounded amount of recent assistant/tool context.
