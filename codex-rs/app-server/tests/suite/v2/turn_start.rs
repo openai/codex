@@ -1494,7 +1494,7 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
         create_apply_patch_sse_response(patch, "patch-call")?,
         create_final_assistant_message_sse_response("patch applied")?,
     ];
-    let server = create_mock_responses_server_sequence(responses).await;
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
     create_config_toml(
         &codex_home,
         &server.uri(),
@@ -2070,7 +2070,7 @@ async fn turn_start_file_change_approval_accept_for_session_persists_v2() -> Res
         create_apply_patch_sse_response(patch_2, "patch-call-2")?,
         create_final_assistant_message_sse_response("patch 2 applied")?,
     ];
-    let server = create_mock_responses_server_sequence(responses).await;
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
     create_config_toml(
         &codex_home,
         &server.uri(),
