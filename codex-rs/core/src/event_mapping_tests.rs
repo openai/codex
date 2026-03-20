@@ -323,6 +323,8 @@ fn parses_reasoning_summary_and_raw_content() {
             text: "raw details".to_string(),
         }]),
         encrypted_content: None,
+
+        metadata: None,
     };
 
     let turn_item = parse_turn_item(&item).expect("expected reasoning turn item");
@@ -355,6 +357,8 @@ fn parses_reasoning_including_raw_content() {
             },
         ]),
         encrypted_content: None,
+
+        metadata: None,
     };
 
     let turn_item = parse_turn_item(&item).expect("expected reasoning turn item");
@@ -380,6 +384,8 @@ fn parses_web_search_call() {
             query: Some("weather".to_string()),
             queries: None,
         }),
+
+        metadata: None,
     };
 
     let turn_item = parse_turn_item(&item).expect("expected web search turn item");
@@ -408,6 +414,8 @@ fn parses_web_search_open_page_call() {
         action: Some(WebSearchAction::OpenPage {
             url: Some("https://example.com".to_string()),
         }),
+
+        metadata: None,
     };
 
     let turn_item = parse_turn_item(&item).expect("expected web search turn item");
@@ -436,6 +444,8 @@ fn parses_web_search_find_in_page_call() {
             url: Some("https://example.com".to_string()),
             pattern: Some("needle".to_string()),
         }),
+
+        metadata: None,
     };
 
     let turn_item = parse_turn_item(&item).expect("expected web search turn item");
@@ -462,6 +472,8 @@ fn parses_partial_web_search_call_without_action_as_other() {
         id: Some("ws_partial".to_string()),
         status: Some("in_progress".to_string()),
         action: None,
+
+        metadata: None,
     };
 
     let turn_item = parse_turn_item(&item).expect("expected web search turn item");

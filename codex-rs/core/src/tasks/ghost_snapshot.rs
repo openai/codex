@@ -112,6 +112,7 @@ impl SessionTask for GhostSnapshotTask {
                                 .session
                                 .record_conversation_items(&ctx, &[ResponseItem::GhostSnapshot {
                                     ghost_commit: ghost_commit.clone(),
+                                    metadata: None,
                                 }])
                                 .await;
                             info!("ghost commit captured: {}", ghost_commit.id());

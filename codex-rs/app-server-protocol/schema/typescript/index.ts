@@ -67,6 +67,7 @@ export type { ServerNotification } from "./ServerNotification";
 export type { ServerRequest } from "./ServerRequest";
 export type { ServiceTier } from "./ServiceTier";
 export type { SessionSource } from "./SessionSource";
+export type { SessionSourceMetadata } from "./SessionSourceMetadata";
 export type { Settings } from "./Settings";
 export type { SubAgentSource } from "./SubAgentSource";
 export type { ThreadId } from "./ThreadId";

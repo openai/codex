@@ -1557,6 +1557,16 @@
                 "null"
               ]
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "summary": {
               "items": {
                 "$ref": "#/definitions/ReasoningItemReasoningSummary"
@@ -1697,6 +1707,16 @@
               ],
               "writeOnly": true
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "status": {
               "type": [
                 "string",
@@ -1723,6 +1743,16 @@
           "properties": {
             "call_id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "output": {
               "$ref": "#/definitions/FunctionCallOutputBody"
@@ -1799,6 +1829,16 @@
             "call_id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "name": {
               "type": [
                 "string",
@@ -1834,6 +1874,16 @@
             },
             "execution": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "status": {
               "type": "string"
@@ -1878,6 +1928,16 @@
               ],
               "writeOnly": true
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "status": {
               "type": [
                 "string",
@@ -1902,6 +1962,16 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "result": {
               "type": "string"
@@ -1937,6 +2007,16 @@
             "ghost_commit": {
               "$ref": "#/definitions/GhostCommit"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "type": {
               "enum": [
                 "ghost_snapshot"
@@ -1956,6 +2036,16 @@
           "properties": {
             "encrypted_content": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "type": {
               "enum": [
@@ -2012,6 +2102,16 @@
           "anyOf": [
             {
               "$ref": "#/definitions/SandboxPolicyMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "session_source": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SessionSourceMetadata"
             },
             {
               "type": "null"
@@ -2415,6 +2515,19 @@
       "enum": [
         "fast",
         "flex"
+      ],
+      "type": "string"
+    },
+    "SessionSourceMetadata": {
+      "enum": [
+        "user",
+        "agent_guardian",
+        "agent_review",
+        "agent_spawned",
+        "agent_compaction",
+        "agent_memory",
+        "agent_other",
+        "unknown"
       ],
       "type": "string"
     },

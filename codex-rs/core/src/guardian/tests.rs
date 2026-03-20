@@ -103,6 +103,7 @@ async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnCon
                     output: codex_protocol::models::FunctionCallOutputPayload::from_text(
                         "repo visibility: public".to_string(),
                     ),
+                    metadata: None,
                 },
                 ResponseItem::Message {
                     id: None,
@@ -219,6 +220,7 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
             output: codex_protocol::models::FunctionCallOutputPayload::from_text(
                 "repo is public".to_string(),
             ),
+            metadata: None,
         },
         ResponseItem::Message {
             id: None,

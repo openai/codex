@@ -87,6 +87,7 @@ impl CodeModeProcess {
                                 call_id: notify.call_id.clone(),
                                 name: Some(PUBLIC_TOOL_NAME.to_string()),
                                 output: FunctionCallOutputPayload::from_text(notify.text),
+                                metadata: None,
                             }])
                             .await
                             .is_err()

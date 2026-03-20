@@ -81,7 +81,7 @@ impl SessionTask for UndoTask {
                 .enumerate()
                 .rev()
                 .find_map(|(idx, item)| match item {
-                    ResponseItem::GhostSnapshot { ghost_commit } => {
+                    ResponseItem::GhostSnapshot { ghost_commit, .. } => {
                         Some((idx, ghost_commit.clone()))
                     }
                     _ => None,

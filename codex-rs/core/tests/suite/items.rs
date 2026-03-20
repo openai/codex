@@ -215,6 +215,13 @@ async fn user_message_type_metadata_is_emitted_when_feature_enabled() -> anyhow:
             .and_then(Value::as_str),
         Some("prompt")
     );
+    assert_eq!(
+        user_message
+            .get("metadata")
+            .and_then(|metadata| metadata.get("session_source"))
+            .and_then(Value::as_str),
+        Some("user")
+    );
     Ok(())
 }
 
@@ -343,6 +350,13 @@ async fn user_message_type_prompt_steering_metadata_is_emitted_when_feature_enab
             .and_then(|metadata| metadata.get("user_message_type"))
             .and_then(Value::as_str),
         Some("prompt_steering")
+    );
+    assert_eq!(
+        steered_message
+            .get("metadata")
+            .and_then(|metadata| metadata.get("session_source"))
+            .and_then(Value::as_str),
+        Some("user")
     );
 
     Ok(())

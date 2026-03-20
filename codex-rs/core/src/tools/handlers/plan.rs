@@ -41,6 +41,7 @@ impl ToolOutput for PlanToolOutput {
         ResponseInputItem::FunctionCallOutput {
             call_id: call_id.to_string(),
             output,
+            metadata: None,
         }
     }
 

@@ -78,6 +78,8 @@ fn custom_tool_call_output(call_id: &str, output: &str) -> ResponseItem {
         call_id: call_id.to_string(),
         name: None,
         output: FunctionCallOutputPayload::from_text(output.to_string()),
+
+        metadata: None,
     }
 }
 
@@ -91,6 +93,8 @@ fn reasoning_msg(text: &str) -> ResponseItem {
             text: text.to_string(),
         }]),
         encrypted_content: None,
+
+        metadata: None,
     }
 }
 
@@ -102,6 +106,8 @@ fn reasoning_with_encrypted_content(len: usize) -> ResponseItem {
         }],
         content: None,
         encrypted_content: Some("a".repeat(len)),
+
+        metadata: None,
     }
 }
 
@@ -149,6 +155,8 @@ fn filters_non_api_messages() {
                     text: "thinking...".to_string(),
                 }]),
                 encrypted_content: None,
+
+                metadata: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -295,6 +303,8 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                     detail: None,
                 },
             ]),
+
+            metadata: None,
         },
         ResponseItem::CustomToolCall {
             id: None,
@@ -316,6 +326,8 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                     detail: None,
                 },
             ]),
+
+            metadata: None,
         },
     ];
     let history = create_history_with_items(items);
@@ -361,6 +373,8 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                         .to_string(),
                 },
             ]),
+
+            metadata: None,
         },
         ResponseItem::CustomToolCall {
             id: None,
@@ -382,6 +396,8 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                         .to_string(),
                 },
             ]),
+
+            metadata: None,
         },
     ];
     assert_eq!(stripped, expected);
@@ -421,6 +437,8 @@ fn for_prompt_preserves_image_generation_calls_when_images_are_supported() {
             status: "generating".to_string(),
             revised_prompt: Some("lobster".to_string()),
             result: "Zm9v".to_string(),
+
+            metadata: None,
         },
         ResponseItem::Message {
             id: None,
@@ -442,6 +460,8 @@ fn for_prompt_preserves_image_generation_calls_when_images_are_supported() {
                 status: "generating".to_string(),
                 revised_prompt: Some("lobster".to_string()),
                 result: "Zm9v".to_string(),
+
+                metadata: None,
             },
             ResponseItem::Message {
                 id: None,
@@ -475,6 +495,8 @@ fn for_prompt_clears_image_generation_result_when_images_are_unsupported() {
             status: "completed".to_string(),
             revised_prompt: Some("lobster".to_string()),
             result: "Zm9v".to_string(),
+
+            metadata: None,
         },
     ]);
 
@@ -496,6 +518,8 @@ fn for_prompt_clears_image_generation_result_when_images_are_unsupported() {
                 status: "completed".to_string(),
                 revised_prompt: Some("lobster".to_string()),
                 result: String::new(),
+
+                metadata: None,
             },
         ]
     );
@@ -505,6 +529,8 @@ fn for_prompt_clears_image_generation_result_when_images_are_unsupported() {
 fn get_history_for_prompt_drops_ghost_commits() {
     let items = vec![ResponseItem::GhostSnapshot {
         ghost_commit: GhostCommit::new("ghost-1".to_string(), None, Vec::new(), Vec::new()),
+
+        metadata: None,
     }];
     let history = create_history_with_items(items);
     let modalities = default_input_modalities();
@@ -548,6 +574,8 @@ fn remove_first_item_removes_matching_output_for_function_call() {
         ResponseItem::FunctionCallOutput {
             call_id: "call-1".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
+
+            metadata: None,
         },
     ];
     let mut h = create_history_with_items(items);
@@ -561,6 +589,8 @@ fn remove_first_item_removes_matching_call_for_output() {
         ResponseItem::FunctionCallOutput {
             call_id: "call-2".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
+
+            metadata: None,
         },
         ResponseItem::FunctionCall {
             id: None,
@@ -591,6 +621,8 @@ fn remove_last_item_removes_matching_call_for_output() {
         ResponseItem::FunctionCallOutput {
             call_id: "call-delete-last".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
+
+            metadata: None,
         },
     ];
     let mut h = create_history_with_items(items);
@@ -614,6 +646,8 @@ fn replace_last_turn_images_replaces_tool_output_images() {
                 ]),
                 success: Some(true),
             },
+
+            metadata: None,
         },
     ];
     let mut history = create_history_with_items(items);
@@ -634,6 +668,8 @@ fn replace_last_turn_images_replaces_tool_output_images() {
                     ]),
                     success: Some(true),
                 },
+
+                metadata: None,
             },
         ]
     );
@@ -676,6 +712,8 @@ fn remove_first_item_handles_local_shell_pair() {
         ResponseItem::FunctionCallOutput {
             call_id: "call-3".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
+
+            metadata: None,
         },
     ];
     let mut h = create_history_with_items(items);
@@ -834,6 +872,8 @@ fn remove_first_item_handles_custom_tool_pair() {
             call_id: "tool-1".to_string(),
             name: None,
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
+
+            metadata: None,
         },
     ];
     let mut h = create_history_with_items(items);
@@ -860,6 +900,8 @@ fn normalization_retains_local_shell_outputs() {
         ResponseItem::FunctionCallOutput {
             call_id: "shell-1".to_string(),
             output: FunctionCallOutputPayload::from_text("Total output lines: 1\n\nok".to_string()),
+
+            metadata: None,
         },
     ];
 
@@ -883,6 +925,8 @@ fn record_items_truncates_function_call_output_content() {
             body: FunctionCallOutputBody::Text(long_output.clone()),
             success: Some(true),
         },
+
+        metadata: None,
     };
 
     history.record_items([&item], policy);
@@ -915,6 +959,8 @@ fn record_items_truncates_custom_tool_call_output_content() {
         call_id: "tool-200".to_string(),
         name: None,
         output: FunctionCallOutputPayload::from_text(long_output.clone()),
+
+        metadata: None,
     };
 
     history.record_items([&item], policy);
@@ -948,6 +994,8 @@ fn record_items_respects_custom_token_limit() {
             body: FunctionCallOutputBody::Text(long_output),
             success: Some(true),
         },
+
+        metadata: None,
     };
 
     history.record_items([&item], policy);
@@ -1087,6 +1135,8 @@ fn normalize_adds_missing_output_for_function_call() {
             ResponseItem::FunctionCallOutput {
                 call_id: "call-x".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+
+                metadata: None,
             },
         ]
     );
@@ -1122,6 +1172,8 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
                 call_id: "tool-x".to_string(),
                 name: None,
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+
+                metadata: None,
             },
         ]
     );
@@ -1166,6 +1218,8 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id() {
             ResponseItem::FunctionCallOutput {
                 call_id: "shell-1".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+
+                metadata: None,
             },
         ]
     );
@@ -1177,6 +1231,8 @@ fn normalize_removes_orphan_function_call_output() {
     let items = vec![ResponseItem::FunctionCallOutput {
         call_id: "orphan-1".to_string(),
         output: FunctionCallOutputPayload::from_text("ok".to_string()),
+
+        metadata: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -1192,6 +1248,8 @@ fn normalize_removes_orphan_custom_tool_call_output() {
         call_id: "orphan-2".to_string(),
         name: None,
         output: FunctionCallOutputPayload::from_text("ok".to_string()),
+
+        metadata: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -1217,6 +1275,8 @@ fn normalize_mixed_inserts_and_removals() {
         ResponseItem::FunctionCallOutput {
             call_id: "c2".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
+
+            metadata: None,
         },
         // Will get an inserted custom tool output
         ResponseItem::CustomToolCall {
@@ -1260,6 +1320,8 @@ fn normalize_mixed_inserts_and_removals() {
             ResponseItem::FunctionCallOutput {
                 call_id: "c1".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+
+                metadata: None,
             },
             ResponseItem::CustomToolCall {
                 id: None,
@@ -1273,6 +1335,8 @@ fn normalize_mixed_inserts_and_removals() {
                 call_id: "t1".to_string(),
                 name: None,
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+
+                metadata: None,
             },
             ResponseItem::LocalShellCall {
                 id: None,
@@ -1289,6 +1353,8 @@ fn normalize_mixed_inserts_and_removals() {
             ResponseItem::FunctionCallOutput {
                 call_id: "s1".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+
+                metadata: None,
             },
         ]
     );
@@ -1320,6 +1386,8 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
             ResponseItem::FunctionCallOutput {
                 call_id: "call-x".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+
+                metadata: None,
             },
         ]
     );
@@ -1333,6 +1401,8 @@ fn normalize_adds_missing_output_for_tool_search_call() {
         status: Some("completed".to_string()),
         execution: "client".to_string(),
         arguments: "{}".into(),
+
+        metadata: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -1347,12 +1417,16 @@ fn normalize_adds_missing_output_for_tool_search_call() {
                 status: Some("completed".to_string()),
                 execution: "client".to_string(),
                 arguments: "{}".into(),
+
+                metadata: None,
             },
             ResponseItem::ToolSearchOutput {
                 call_id: Some("search-call-x".to_string()),
                 status: "completed".to_string(),
                 execution: "client".to_string(),
                 tools: Vec::new(),
+
+                metadata: None,
             },
         ]
     );
@@ -1402,6 +1476,8 @@ fn normalize_removes_orphan_function_call_output_panics_in_debug() {
     let items = vec![ResponseItem::FunctionCallOutput {
         call_id: "orphan-1".to_string(),
         output: FunctionCallOutputPayload::from_text("ok".to_string()),
+
+        metadata: None,
     }];
     let mut h = create_history_with_items(items);
     h.normalize_history(&default_input_modalities());
@@ -1415,6 +1491,8 @@ fn normalize_removes_orphan_custom_tool_call_output_panics_in_debug() {
         call_id: "orphan-2".to_string(),
         name: None,
         output: FunctionCallOutputPayload::from_text("ok".to_string()),
+
+        metadata: None,
     }];
     let mut h = create_history_with_items(items);
     h.normalize_history(&default_input_modalities());
@@ -1428,6 +1506,8 @@ fn normalize_removes_orphan_client_tool_search_output() {
         status: "completed".to_string(),
         execution: "client".to_string(),
         tools: Vec::new(),
+
+        metadata: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -1445,6 +1525,8 @@ fn normalize_removes_orphan_client_tool_search_output_panics_in_debug() {
         status: "completed".to_string(),
         execution: "client".to_string(),
         tools: Vec::new(),
+
+        metadata: None,
     }];
     let mut h = create_history_with_items(items);
     h.normalize_history(&default_input_modalities());
@@ -1457,6 +1539,8 @@ fn normalize_keeps_server_tool_search_output_without_matching_call() {
         status: "completed".to_string(),
         execution: "server".to_string(),
         tools: Vec::new(),
+
+        metadata: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -1469,6 +1553,8 @@ fn normalize_keeps_server_tool_search_output_without_matching_call() {
             status: "completed".to_string(),
             execution: "server".to_string(),
             tools: Vec::new(),
+
+            metadata: None,
         }]
     );
 }
@@ -1489,6 +1575,8 @@ fn normalize_mixed_inserts_and_removals_panics_in_debug() {
         ResponseItem::FunctionCallOutput {
             call_id: "c2".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
+
+            metadata: None,
         },
         ResponseItem::CustomToolCall {
             id: None,
@@ -1569,6 +1657,8 @@ fn image_data_url_payload_does_not_dominate_function_call_output_estimate() {
                 detail: None,
             },
         ]),
+
+        metadata: None,
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
@@ -1595,6 +1685,8 @@ fn image_data_url_payload_does_not_dominate_custom_tool_call_output_estimate() {
                 detail: None,
             },
         ]),
+
+        metadata: None,
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
@@ -1625,6 +1717,8 @@ fn non_base64_image_urls_are_unchanged() {
                 detail: None,
             },
         ]),
+
+        metadata: None,
     };
 
     assert_eq!(
@@ -1668,6 +1762,8 @@ fn non_image_base64_data_url_is_unchanged() {
                 detail: None,
             },
         ]),
+
+        metadata: None,
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
@@ -1752,6 +1848,8 @@ fn original_detail_images_scale_with_dimensions() {
                 detail: Some(ImageDetail::Original),
             },
         ]),
+
+        metadata: None,
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
@@ -1783,6 +1881,8 @@ fn original_detail_webp_images_scale_with_dimensions() {
                 detail: Some(ImageDetail::Original),
             },
         ]),
+
+        metadata: None,
     };
 
     let raw_len = serde_json::to_string(&item).unwrap().len() as i64;

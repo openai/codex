@@ -563,6 +563,8 @@ fn insert_initial_context_before_last_real_user_or_summary_keeps_summary_last() 
 fn insert_initial_context_before_last_real_user_or_summary_keeps_compaction_last() {
     let compacted_history = vec![ResponseItem::Compaction {
         encrypted_content: "encrypted".to_string(),
+
+        metadata: None,
     }];
     let initial_context = vec![ResponseItem::Message {
         id: None,
@@ -590,6 +592,8 @@ fn insert_initial_context_before_last_real_user_or_summary_keeps_compaction_last
         },
         ResponseItem::Compaction {
             encrypted_content: "encrypted".to_string(),
+
+            metadata: None,
         },
     ];
     assert_eq!(refreshed, expected);

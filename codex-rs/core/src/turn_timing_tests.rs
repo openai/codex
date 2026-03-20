@@ -126,6 +126,8 @@ fn response_item_records_turn_ttft_ignores_empty_non_output_items() {
         &ResponseItem::FunctionCallOutput {
             call_id: "call-1".to_string(),
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
+
+            metadata: None,
         }
     ));
 }

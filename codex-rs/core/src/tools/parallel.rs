@@ -141,6 +141,7 @@ impl ToolCallRuntime {
                 status: "completed".to_string(),
                 execution: "client".to_string(),
                 tools: Vec::new(),
+                metadata: None,
             },
             ToolPayload::Custom { .. } => ResponseInputItem::CustomToolCallOutput {
                 call_id: call.call_id,
@@ -149,6 +150,7 @@ impl ToolCallRuntime {
                     body: codex_protocol::models::FunctionCallOutputBody::Text(message),
                     success: Some(false),
                 },
+                metadata: None,
             },
             _ => ResponseInputItem::FunctionCallOutput {
                 call_id: call.call_id,
@@ -156,6 +158,7 @@ impl ToolCallRuntime {
                     body: codex_protocol::models::FunctionCallOutputBody::Text(message),
                     success: Some(false),
                 },
+                metadata: None,
             },
         }
     }

@@ -104,6 +104,7 @@ impl ToolOutput for CallToolResult {
         ResponseInputItem::McpToolCallOutput {
             call_id: call_id.to_string(),
             output: self.clone(),
+            metadata: None,
         }
     }
 
@@ -151,6 +152,7 @@ impl ToolOutput for ToolSearchOutput {
                     })
                 })
                 .collect(),
+            metadata: None,
         }
     }
 }
@@ -254,10 +256,12 @@ impl ToolOutput for AbortedToolOutput {
                 status: "completed".to_string(),
                 execution: "client".to_string(),
                 tools: Vec::new(),
+                metadata: None,
             },
             ToolPayload::Mcp { .. } => ResponseInputItem::McpToolCallOutput {
                 call_id: call_id.to_string(),
                 output: CallToolResult::from_error_text(self.message.clone()),
+                metadata: None,
             },
             _ => function_tool_response(
                 call_id,
@@ -454,12 +458,14 @@ fn function_tool_response(
             call_id: call_id.to_string(),
             name: None,
             output: FunctionCallOutputPayload { body, success },
+            metadata: None,
         };
     }
 
     ResponseInputItem::FunctionCallOutput {
         call_id: call_id.to_string(),
         output: FunctionCallOutputPayload { body, success },
+        metadata: None,
     }
 }
 

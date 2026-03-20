@@ -17,6 +17,9 @@ use crate::tools::format_exec_output_str;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::LocalShellAction;
+use codex_protocol::models::LocalShellExecAction;
+use codex_protocol::models::LocalShellStatus;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -61,6 +64,7 @@ use codex_app_server_protocol::AppInfo;
 use codex_execpolicy::Decision;
 use codex_execpolicy::NetworkRuleProtocol;
 use codex_execpolicy::Policy;
+use codex_git::GhostCommit;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::models::BaseInstructions;
@@ -68,6 +72,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::WebSearchAction;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::RealtimeAudioFrame;
@@ -3679,6 +3684,7 @@ async fn build_initial_context_omits_default_image_save_location_with_image_hist
                 status: "completed".to_string(),
                 revised_prompt: Some("a tiny blue square".to_string()),
                 result: "Zm9v".to_string(),
+                metadata: None,
             }],
             None,
         )
@@ -3722,6 +3728,7 @@ async fn handle_output_item_done_records_image_save_history_message() {
         status: "completed".to_string(),
         revised_prompt: Some("a tiny blue square".to_string()),
         result: "Zm9v".to_string(),
+        metadata: None,
     };
 
     let mut ctx = HandleOutputCtx {
@@ -3762,6 +3769,7 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
         status: "completed".to_string(),
         revised_prompt: Some("broken payload".to_string()),
         result: "_-8".to_string(),
+        metadata: None,
     };
 
     let mut ctx = HandleOutputCtx {
@@ -4355,6 +4363,8 @@ async fn task_finish_emits_prompt_queued_metadata_for_injected_user_input_when_f
                     ..
                 } if metadata.user_message_type
                     == Some(codex_protocol::models::UserMessageType::PromptQueued)
+                    && metadata.session_source
+                        == Some(codex_protocol::models::SessionSourceMetadata::User)
             )
     ));
 
@@ -4387,6 +4397,208 @@ async fn task_finish_emits_prompt_queued_metadata_for_injected_user_input_when_f
             text_elements: Vec::new(),
         }]
     ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn record_response_item_stamps_session_source_on_all_supported_variants() {
+    let (mut sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let expected_sandbox_policy = sandbox_policy_to_metadata(tc.sandbox_policy.get());
+    Arc::get_mut(&mut sess)
+        .expect("session should be uniquely owned in this test")
+        .features
+        .enable(crate::features::Feature::ItemMetadata)
+        .expect("feature flag should be enabled for this test");
+
+    sess.spawn_task(
+        Arc::clone(&tc),
+        vec![UserInput::Text {
+            text: "start".to_string(),
+            text_elements: Vec::new(),
+        }],
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    let items = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "hello".to_string(),
+            }],
+            metadata: None,
+            end_turn: None,
+            phase: None,
+        },
+        ResponseItem::Reasoning {
+            id: "reasoning-1".to_string(),
+            summary: vec![],
+            content: None,
+            encrypted_content: None,
+            metadata: None,
+        },
+        ResponseItem::LocalShellCall {
+            id: None,
+            call_id: Some("shell-1".to_string()),
+            status: LocalShellStatus::Completed,
+            action: LocalShellAction::Exec(LocalShellExecAction {
+                command: vec!["echo".to_string(), "hello".to_string()],
+                timeout_ms: None,
+                working_directory: None,
+                env: None,
+                user: None,
+            }),
+            metadata: None,
+        },
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "shell".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-1".to_string(),
+            metadata: None,
+        },
+        ResponseItem::ToolSearchCall {
+            id: None,
+            call_id: Some("search-1".to_string()),
+            status: None,
+            execution: "client".to_string(),
+            arguments: serde_json::json!({"query": "calendar"}),
+            metadata: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "call-output-1".to_string(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("ok".to_string()),
+                success: None,
+            },
+            metadata: None,
+        },
+        ResponseItem::CustomToolCall {
+            id: None,
+            status: Some("completed".to_string()),
+            call_id: "custom-1".to_string(),
+            name: "custom".to_string(),
+            input: "payload".to_string(),
+            metadata: None,
+        },
+        ResponseItem::CustomToolCallOutput {
+            call_id: "custom-output-1".to_string(),
+            name: None,
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text("done".to_string()),
+                success: None,
+            },
+            metadata: None,
+        },
+        ResponseItem::ToolSearchOutput {
+            call_id: Some("search-out-1".to_string()),
+            status: "completed".to_string(),
+            execution: "client".to_string(),
+            tools: vec![],
+            metadata: None,
+        },
+        ResponseItem::WebSearchCall {
+            id: None,
+            status: Some("completed".to_string()),
+            action: Some(WebSearchAction::Search {
+                query: Some("weather".to_string()),
+                queries: None,
+            }),
+            metadata: None,
+        },
+        ResponseItem::ImageGenerationCall {
+            id: "image-1".to_string(),
+            status: "completed".to_string(),
+            revised_prompt: Some("cat".to_string()),
+            result: "image-result".to_string(),
+            metadata: None,
+        },
+        ResponseItem::GhostSnapshot {
+            ghost_commit: GhostCommit::new("deadbeef".to_string(), None, Vec::new(), Vec::new()),
+            metadata: None,
+        },
+        ResponseItem::Compaction {
+            encrypted_content: "blob".to_string(),
+            metadata: None,
+        },
+    ];
+
+    for item in items {
+        sess.record_response_item_and_emit_turn_item(tc.as_ref(), item)
+            .await;
+    }
+
+    let expected_session_source = codex_protocol::models::SessionSourceMetadata::User;
+    let stamped_count = sess
+        .clone_history()
+        .await
+        .raw_items()
+        .iter()
+        .filter(|item| match item {
+            ResponseItem::Message {
+                metadata: Some(metadata),
+                ..
+            }
+            | ResponseItem::Reasoning {
+                metadata: Some(metadata),
+                ..
+            }
+            | ResponseItem::LocalShellCall {
+                metadata: Some(metadata),
+                ..
+            }
+            | ResponseItem::FunctionCall {
+                metadata: Some(metadata),
+                ..
+            }
+            | ResponseItem::ToolSearchCall {
+                metadata: Some(metadata),
+                ..
+            }
+            | ResponseItem::FunctionCallOutput {
+                metadata: Some(metadata),
+                ..
+            }
+            | ResponseItem::CustomToolCall {
+                metadata: Some(metadata),
+                ..
+            }
+            | ResponseItem::CustomToolCallOutput {
+                metadata: Some(metadata),
+                ..
+            }
+            | ResponseItem::ToolSearchOutput {
+                metadata: Some(metadata),
+                ..
+            }
+            | ResponseItem::WebSearchCall {
+                metadata: Some(metadata),
+                ..
+            }
+            | ResponseItem::ImageGenerationCall {
+                metadata: Some(metadata),
+                ..
+            }
+            | ResponseItem::GhostSnapshot {
+                metadata: Some(metadata),
+                ..
+            }
+            | ResponseItem::Compaction {
+                metadata: Some(metadata),
+                ..
+            } => {
+                metadata.session_source == Some(expected_session_source.clone())
+                    && metadata.sandbox_policy == Some(expected_sandbox_policy.clone())
+            }
+            _ => false,
+        })
+        .count();
+
+    assert_eq!(stamped_count, 13);
 }
 
 #[test]
@@ -4451,6 +4663,65 @@ fn sandbox_policy_metadata_mapping_is_stable() {
     assert_eq!(
         sandbox_policy_to_metadata(&SandboxPolicy::new_workspace_write_policy()),
         codex_protocol::models::SandboxPolicyMetadata::Sandbox
+    );
+}
+
+#[test]
+fn session_source_metadata_mapping_is_stable() {
+    assert_eq!(
+        session_source_to_metadata(&SessionSource::Cli),
+        codex_protocol::models::SessionSourceMetadata::User
+    );
+    assert_eq!(
+        session_source_to_metadata(&SessionSource::VSCode),
+        codex_protocol::models::SessionSourceMetadata::User
+    );
+    assert_eq!(
+        session_source_to_metadata(&SessionSource::Exec),
+        codex_protocol::models::SessionSourceMetadata::User
+    );
+    assert_eq!(
+        session_source_to_metadata(&SessionSource::Mcp),
+        codex_protocol::models::SessionSourceMetadata::User
+    );
+    assert_eq!(
+        session_source_to_metadata(&SessionSource::SubAgent(SubAgentSource::Review)),
+        codex_protocol::models::SessionSourceMetadata::AgentReview
+    );
+    assert_eq!(
+        session_source_to_metadata(&SessionSource::SubAgent(SubAgentSource::Compact)),
+        codex_protocol::models::SessionSourceMetadata::AgentCompaction
+    );
+    assert_eq!(
+        session_source_to_metadata(&SessionSource::SubAgent(
+            SubAgentSource::MemoryConsolidation
+        )),
+        codex_protocol::models::SessionSourceMetadata::AgentMemory
+    );
+    assert_eq!(
+        session_source_to_metadata(&SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: ThreadId::default(),
+            depth: 2,
+            agent_nickname: Some("mini".to_string()),
+            agent_role: Some("reviewer".to_string()),
+        })),
+        codex_protocol::models::SessionSourceMetadata::AgentSpawned
+    );
+    assert_eq!(
+        session_source_to_metadata(&SessionSource::SubAgent(SubAgentSource::Other(
+            crate::guardian::GUARDIAN_REVIEWER_NAME.to_string()
+        ))),
+        codex_protocol::models::SessionSourceMetadata::AgentGuardian
+    );
+    assert_eq!(
+        session_source_to_metadata(&SessionSource::SubAgent(SubAgentSource::Other(
+            "custom".to_string()
+        ))),
+        codex_protocol::models::SessionSourceMetadata::AgentOther
+    );
+    assert_eq!(
+        session_source_to_metadata(&SessionSource::Unknown),
+        codex_protocol::models::SessionSourceMetadata::Unknown
     );
 }
 
@@ -4554,6 +4825,7 @@ async fn tool_call_metadata_stamps_non_escalated_false_when_feature_enabled() {
 async fn handle_output_item_done_stamps_tool_call_metadata_when_feature_enabled() {
     let (mut sess, tc, _rx) = make_session_and_context_with_rx().await;
     let expected_sandbox_policy = sandbox_policy_to_metadata(tc.sandbox_policy.get());
+    let expected_session_source = session_source_to_metadata(&tc.session_source);
     Arc::get_mut(&mut sess)
         .expect("session should be uniquely owned in this test")
         .features
@@ -4604,6 +4876,7 @@ async fn handle_output_item_done_stamps_tool_call_metadata_when_feature_enabled(
                 && metadata.is_tool_call_escalated == Some(false)
                 && metadata.review_decision.is_none()
                 && metadata.sandbox_policy == Some(expected_sandbox_policy.clone())
+                && metadata.session_source == Some(expected_session_source.clone())
         )
     }));
 }
@@ -4772,34 +5045,45 @@ async fn steer_input_returns_active_turn_id() {
 }
 
 #[tokio::test]
-async fn record_into_history_generates_message_metadata_uuid_when_item_metadata_enabled() {
+async fn record_into_history_generates_metadata_uuid_for_metadata_bearing_items_when_item_metadata_enabled()
+ {
     let (mut sess, tc) = make_session_and_context().await;
     let _ = sess.features.enable(crate::features::Feature::ItemMetadata);
 
-    let item = ResponseItem::Message {
-        id: Some("msg_123".to_string()),
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "hello".to_string(),
-        }],
-        metadata: None,
-        end_turn: None,
-        phase: None,
-    };
+    let items = [
+        ResponseItem::Message {
+            id: Some("msg_123".to_string()),
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "hello".to_string(),
+            }],
+            metadata: None,
+            end_turn: None,
+            phase: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "call_123".to_string(),
+            output: FunctionCallOutputPayload::from_text("ok".to_string()),
+            metadata: None,
+        },
+    ];
 
-    sess.record_into_history(std::slice::from_ref(&item), &tc)
-        .await;
+    sess.record_into_history(&items, &tc).await;
 
     let history = sess.state.lock().await.clone_history();
-    let [ResponseItem::Message { metadata, .. }] = history.raw_items() else {
-        panic!("expected a single message item in history");
-    };
+    for item in history.raw_items() {
+        let metadata = match item {
+            ResponseItem::Message { metadata, .. }
+            | ResponseItem::FunctionCallOutput { metadata, .. } => metadata,
+            other => panic!("unexpected item in history: {other:?}"),
+        };
 
-    let uuid = metadata
-        .as_ref()
-        .and_then(|metadata| metadata.uuid.as_deref())
-        .expect("uuid should be generated when item metadata is enabled");
-    uuid::Uuid::parse_str(uuid).expect("uuid should be valid");
+        let uuid = metadata
+            .as_ref()
+            .and_then(|metadata| metadata.uuid.as_deref())
+            .expect("uuid should be generated when item metadata is enabled");
+        uuid::Uuid::parse_str(uuid).expect("uuid should be valid");
+    }
 }
 
 #[tokio::test]

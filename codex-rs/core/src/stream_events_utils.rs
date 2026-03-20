@@ -251,6 +251,7 @@ pub(crate) async fn handle_output_item_done(
                     body: FunctionCallOutputBody::Text(msg.to_string()),
                     ..Default::default()
                 },
+                metadata: None,
             };
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
                 .await;
@@ -273,6 +274,7 @@ pub(crate) async fn handle_output_item_done(
                     body: FunctionCallOutputBody::Text(message),
                     ..Default::default()
                 },
+                metadata: None,
             };
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
                 .await;
@@ -382,26 +384,36 @@ pub(crate) fn last_assistant_message_from_item(
 
 pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Option<ResponseItem> {
     match input {
-        ResponseInputItem::FunctionCallOutput { call_id, output } => {
-            Some(ResponseItem::FunctionCallOutput {
-                call_id: call_id.clone(),
-                output: output.clone(),
-            })
-        }
+        ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output,
+            metadata,
+        } => Some(ResponseItem::FunctionCallOutput {
+            call_id: call_id.clone(),
+            output: output.clone(),
+            metadata: metadata.clone(),
+        }),
         ResponseInputItem::CustomToolCallOutput {
             call_id,
             name,
             output,
+            metadata,
         } => Some(ResponseItem::CustomToolCallOutput {
             call_id: call_id.clone(),
             name: name.clone(),
             output: output.clone(),
+            metadata: metadata.clone(),
         }),
-        ResponseInputItem::McpToolCallOutput { call_id, output } => {
+        ResponseInputItem::McpToolCallOutput {
+            call_id,
+            output,
+            metadata,
+        } => {
             let output = output.as_function_call_output_payload();
             Some(ResponseItem::FunctionCallOutput {
                 call_id: call_id.clone(),
                 output,
+                metadata: metadata.clone(),
             })
         }
         ResponseInputItem::ToolSearchOutput {
@@ -409,11 +421,13 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
             status,
             execution,
             tools,
+            metadata,
         } => Some(ResponseItem::ToolSearchOutput {
             call_id: Some(call_id.clone()),
             status: status.clone(),
             execution: execution.clone(),
             tools: tools.clone(),
+            metadata: metadata.clone(),
         }),
         _ => None,
     }

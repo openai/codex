@@ -155,6 +155,7 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
         ResponseItem::FunctionCallOutput {
             call_id: "call-1".to_string(),
             output: FunctionCallOutputPayload::from_text(raw_output.to_string()),
+            metadata: None,
         },
         ResponseItem::CustomToolCall {
             id: None,
@@ -168,6 +169,7 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
             call_id: "call-2".to_string(),
             name: None,
             output: FunctionCallOutputPayload::from_text(raw_output.to_string()),
+            metadata: None,
         },
     ];
 
@@ -187,6 +189,7 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
             ResponseItem::FunctionCallOutput {
                 call_id: "call-1".to_string(),
                 output: FunctionCallOutputPayload::from_text(expected_output.to_string()),
+                metadata: None,
             },
             ResponseItem::CustomToolCall {
                 id: None,
@@ -200,6 +203,7 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
                 call_id: "call-2".to_string(),
                 name: None,
                 output: FunctionCallOutputPayload::from_text(expected_output.to_string()),
+                metadata: None,
             },
         ]
     );

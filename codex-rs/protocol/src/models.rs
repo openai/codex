@@ -237,10 +237,16 @@ pub enum ResponseInputItem {
         #[ts(as = "FunctionCallOutputBody")]
         #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     McpToolCallOutput {
         call_id: String,
         output: CallToolResult,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     CustomToolCallOutput {
         call_id: String,
@@ -250,6 +256,9 @@ pub enum ResponseInputItem {
         #[ts(as = "FunctionCallOutputBody")]
         #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     ToolSearchOutput {
         call_id: String,
@@ -257,6 +266,9 @@ pub enum ResponseInputItem {
         execution: String,
         #[ts(type = "unknown[]")]
         tools: Vec<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
 }
 
@@ -291,6 +303,20 @@ pub enum SandboxPolicyMetadata {
     FullAccess,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SessionSourceMetadata {
+    User,
+    AgentGuardian,
+    AgentReview,
+    AgentSpawned,
+    AgentCompaction,
+    AgentMemory,
+    AgentOther,
+    Unknown,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct ResponseItemMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -309,6 +335,9 @@ pub struct ResponseItemMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub review_decision: Option<ReviewDecisionMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub session_source: Option<SessionSourceMetadata>,
 }
 
 impl ResponseItemMetadata {
@@ -318,6 +347,7 @@ impl ResponseItemMetadata {
             && self.sandbox_policy.is_none()
             && self.is_tool_call_escalated.is_none()
             && self.review_decision.is_none()
+            && self.session_source.is_none()
     }
 
     pub fn merge_from(&mut self, other: Self) {
@@ -336,11 +366,14 @@ impl ResponseItemMetadata {
         if other.review_decision.is_some() {
             self.review_decision = other.review_decision;
         }
+        if other.session_source.is_some() {
+            self.session_source = other.session_source;
+        }
     }
 }
 
 impl ResponseItem {
-    /// Ensures message metadata includes a generated UUID.
+    /// Ensures metadata includes a generated UUID for any item variant that carries metadata.
     pub fn with_generated_metadata_uuid(self) -> Self {
         match self {
             ResponseItem::Message {
@@ -361,6 +394,148 @@ impl ResponseItem {
                     phase,
                 }
             }
+            ResponseItem::Reasoning {
+                id,
+                summary,
+                content,
+                encrypted_content,
+                metadata,
+            } => ResponseItem::Reasoning {
+                id,
+                summary,
+                content,
+                encrypted_content,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::LocalShellCall {
+                id,
+                call_id,
+                status,
+                action,
+                metadata,
+            } => ResponseItem::LocalShellCall {
+                id,
+                call_id,
+                status,
+                action,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::FunctionCall {
+                id,
+                name,
+                namespace,
+                arguments,
+                call_id,
+                metadata,
+            } => ResponseItem::FunctionCall {
+                id,
+                name,
+                namespace,
+                arguments,
+                call_id,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::ToolSearchCall {
+                id,
+                call_id,
+                status,
+                execution,
+                arguments,
+                metadata,
+            } => ResponseItem::ToolSearchCall {
+                id,
+                call_id,
+                status,
+                execution,
+                arguments,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id,
+                output,
+                metadata,
+            } => ResponseItem::FunctionCallOutput {
+                call_id,
+                output,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::CustomToolCall {
+                id,
+                status,
+                call_id,
+                name,
+                input,
+                metadata,
+            } => ResponseItem::CustomToolCall {
+                id,
+                status,
+                call_id,
+                name,
+                input,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::CustomToolCallOutput {
+                call_id,
+                name,
+                output,
+                metadata,
+            } => ResponseItem::CustomToolCallOutput {
+                call_id,
+                name,
+                output,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::ToolSearchOutput {
+                call_id,
+                status,
+                execution,
+                tools,
+                metadata,
+            } => ResponseItem::ToolSearchOutput {
+                call_id,
+                status,
+                execution,
+                tools,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::WebSearchCall {
+                id,
+                status,
+                action,
+                metadata,
+            } => ResponseItem::WebSearchCall {
+                id,
+                status,
+                action,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::ImageGenerationCall {
+                id,
+                status,
+                revised_prompt,
+                result,
+                metadata,
+            } => ResponseItem::ImageGenerationCall {
+                id,
+                status,
+                revised_prompt,
+                result,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::GhostSnapshot {
+                ghost_commit,
+                metadata,
+            } => ResponseItem::GhostSnapshot {
+                ghost_commit,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::Compaction {
+                encrypted_content,
+                metadata,
+            } => ResponseItem::Compaction {
+                encrypted_content,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
             other => other,
         }
     }
@@ -442,6 +617,9 @@ pub enum ResponseItem {
         #[ts(optional)]
         content: Option<Vec<ReasoningItemContent>>,
         encrypted_content: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     LocalShellCall {
         /// Legacy id field retained for compatibility with older payloads.
@@ -484,6 +662,9 @@ pub enum ResponseItem {
         execution: String,
         #[ts(type = "unknown")]
         arguments: serde_json::Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     // NOTE: The `output` field for `function_call_output` uses a dedicated payload type with
     // custom serialization. On the wire it is either:
@@ -495,6 +676,9 @@ pub enum ResponseItem {
         #[ts(as = "FunctionCallOutputBody")]
         #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     CustomToolCall {
         #[serde(default, skip_serializing)]
@@ -522,6 +706,9 @@ pub enum ResponseItem {
         #[ts(as = "FunctionCallOutputBody")]
         #[schemars(with = "FunctionCallOutputBody")]
         output: FunctionCallOutputPayload,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     ToolSearchOutput {
         call_id: Option<String>,
@@ -529,6 +716,9 @@ pub enum ResponseItem {
         execution: String,
         #[ts(type = "unknown[]")]
         tools: Vec<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     // Emitted by the Responses API when the agent triggers a web search.
     // Example payload (from SSE `response.output_item.done`):
@@ -548,6 +738,9 @@ pub enum ResponseItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         action: Option<WebSearchAction>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     // Emitted by the Responses API when the agent triggers image generation.
     // Example payload:
@@ -565,14 +758,23 @@ pub enum ResponseItem {
         #[ts(optional)]
         revised_prompt: Option<String>,
         result: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     // Generated by the harness but considered exactly as a model response.
     GhostSnapshot {
         ghost_commit: GhostCommit,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     #[serde(alias = "compaction_summary")]
     Compaction {
         encrypted_content: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     #[serde(other)]
     Other,
@@ -1136,32 +1338,50 @@ impl From<ResponseInputItem> for ResponseItem {
                 end_turn: None,
                 phase: None,
             },
-            ResponseInputItem::FunctionCallOutput { call_id, output } => {
-                Self::FunctionCallOutput { call_id, output }
-            }
-            ResponseInputItem::McpToolCallOutput { call_id, output } => {
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output,
+                metadata,
+            } => Self::FunctionCallOutput {
+                call_id,
+                output,
+                metadata,
+            },
+            ResponseInputItem::McpToolCallOutput {
+                call_id,
+                output,
+                metadata,
+            } => {
                 let output = output.into_function_call_output_payload();
-                Self::FunctionCallOutput { call_id, output }
+                Self::FunctionCallOutput {
+                    call_id,
+                    output,
+                    metadata,
+                }
             }
             ResponseInputItem::CustomToolCallOutput {
                 call_id,
                 name,
                 output,
+                metadata,
             } => Self::CustomToolCallOutput {
                 call_id,
                 name,
                 output,
+                metadata,
             },
             ResponseInputItem::ToolSearchOutput {
                 call_id,
                 status,
                 execution,
                 tools,
+                metadata,
             } => Self::ToolSearchOutput {
                 call_id: Some(call_id),
                 status,
                 execution,
                 tools,
+                metadata,
             },
         }
     }
@@ -1729,6 +1949,7 @@ mod tests {
                 status: "completed".to_string(),
                 revised_prompt: Some("A small blue square".to_string()),
                 result: "Zm9v".to_string(),
+                metadata: None,
             }
         );
     }
@@ -1750,6 +1971,7 @@ mod tests {
                 status: "completed".to_string(),
                 revised_prompt: None,
                 result: "Zm9v".to_string(),
+                metadata: None,
             }
         );
     }
@@ -2459,6 +2681,7 @@ mod tests {
         let item = ResponseInputItem::FunctionCallOutput {
             call_id: "call1".into(),
             output: FunctionCallOutputPayload::from_text("ok".into()),
+            metadata: None,
         };
 
         let json = serde_json::to_string(&item)?;
@@ -2477,6 +2700,7 @@ mod tests {
                 body: FunctionCallOutputBody::Text("bad".into()),
                 success: Some(false),
             },
+            metadata: None,
         };
 
         let json = serde_json::to_string(&item)?;
@@ -2520,6 +2744,7 @@ mod tests {
         let item = ResponseInputItem::FunctionCallOutput {
             call_id: "call1".into(),
             output: payload,
+            metadata: None,
         };
 
         let json = serde_json::to_string(&item)?;
@@ -2542,6 +2767,7 @@ mod tests {
                     detail: None,
                 },
             ]),
+            metadata: None,
         };
 
         let json = serde_json::to_string(&item)?;
@@ -2549,6 +2775,117 @@ mod tests {
 
         let output = v.get("output").expect("output field");
         assert!(output.is_array(), "expected array output");
+
+        Ok(())
+    }
+
+    #[test]
+    fn function_call_output_roundtrips_metadata() -> Result<()> {
+        let input = ResponseInputItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text("ok".to_string()),
+            metadata: Some(ResponseItemMetadata {
+                uuid: Some("uuid-1".to_string()),
+                session_source: Some(SessionSourceMetadata::User),
+                ..ResponseItemMetadata::default()
+            }),
+        };
+
+        assert_eq!(
+            ResponseItem::from(input.clone()),
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: FunctionCallOutputPayload::from_text("ok".to_string()),
+                metadata: Some(ResponseItemMetadata {
+                    uuid: Some("uuid-1".to_string()),
+                    session_source: Some(SessionSourceMetadata::User),
+                    ..ResponseItemMetadata::default()
+                }),
+            }
+        );
+
+        assert_eq!(
+            serde_json::to_value(input)?,
+            serde_json::json!({
+                "type": "function_call_output",
+                "call_id": "call-1",
+                "output": "ok",
+                "metadata": {
+                    "uuid": "uuid-1",
+                    "session_source": "user"
+                },
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_tool_call_output_roundtrips_metadata() -> Result<()> {
+        let input = ResponseInputItem::McpToolCallOutput {
+            call_id: "call-1".to_string(),
+            output: CallToolResult {
+                content: vec![serde_json::json!({"type":"text","text":"ok"})],
+                structured_content: None,
+                is_error: Some(false),
+                meta: None,
+            },
+            metadata: Some(ResponseItemMetadata {
+                uuid: Some("uuid-1".to_string()),
+                sandbox_policy: Some(SandboxPolicyMetadata::ReadOnly),
+                ..ResponseItemMetadata::default()
+            }),
+        };
+
+        let expected_output = match &input {
+            ResponseInputItem::McpToolCallOutput { output, .. } => {
+                output.as_function_call_output_payload()
+            }
+            other => panic!("unexpected input variant: {other:?}"),
+        };
+
+        assert_eq!(
+            ResponseItem::from(input),
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: expected_output,
+                metadata: Some(ResponseItemMetadata {
+                    uuid: Some("uuid-1".to_string()),
+                    sandbox_policy: Some(SandboxPolicyMetadata::ReadOnly),
+                    ..ResponseItemMetadata::default()
+                }),
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn custom_tool_call_output_roundtrips_metadata() -> Result<()> {
+        let input = ResponseInputItem::CustomToolCallOutput {
+            call_id: "call-1".to_string(),
+            name: Some("custom_tool".to_string()),
+            output: FunctionCallOutputPayload::from_text("done".to_string()),
+            metadata: Some(ResponseItemMetadata {
+                uuid: Some("uuid-1".to_string()),
+                review_decision: Some(ReviewDecisionMetadata::Approved),
+                ..ResponseItemMetadata::default()
+            }),
+        };
+
+        assert_eq!(
+            ResponseItem::from(input),
+            ResponseItem::CustomToolCallOutput {
+                call_id: "call-1".to_string(),
+                name: Some("custom_tool".to_string()),
+                output: FunctionCallOutputPayload::from_text("done".to_string()),
+                metadata: Some(ResponseItemMetadata {
+                    uuid: Some("uuid-1".to_string()),
+                    review_decision: Some(ReviewDecisionMetadata::Approved),
+                    ..ResponseItemMetadata::default()
+                }),
+            }
+        );
 
         Ok(())
     }
@@ -2623,6 +2960,7 @@ mod tests {
             item,
             ResponseItem::Compaction {
                 encrypted_content: "abc".into(),
+                metadata: None,
             }
         );
         Ok(())
@@ -2703,6 +3041,7 @@ mod tests {
                 id: expected_id.clone(),
                 status: expected_status.clone(),
                 action: expected_action.clone(),
+                metadata: None,
             };
             assert_eq!(parsed, expected);
 
@@ -2793,6 +3132,7 @@ mod tests {
                     "query": "calendar create",
                     "limit": 1,
                 }),
+                metadata: None,
             }
         );
 
@@ -2832,6 +3172,12 @@ mod tests {
                     "additionalProperties": false,
                 }
             })],
+            metadata: Some(ResponseItemMetadata {
+                uuid: Some("uuid-1".to_string()),
+                sandbox_policy: Some(SandboxPolicyMetadata::ReadOnly),
+                session_source: Some(SessionSourceMetadata::User),
+                ..ResponseItemMetadata::default()
+            }),
         };
         assert_eq!(
             ResponseItem::from(input.clone()),
@@ -2853,6 +3199,12 @@ mod tests {
                         "additionalProperties": false,
                     }
                 })],
+                metadata: Some(ResponseItemMetadata {
+                    uuid: Some("uuid-1".to_string()),
+                    sandbox_policy: Some(SandboxPolicyMetadata::ReadOnly),
+                    session_source: Some(SessionSourceMetadata::User),
+                    ..ResponseItemMetadata::default()
+                }),
             }
         );
 
@@ -2877,6 +3229,12 @@ mod tests {
                         "additionalProperties": false,
                     }
                 }]
+                ,
+                "metadata": {
+                    "uuid": "uuid-1",
+                    "sandbox_policy": "read_only",
+                    "session_source": "user"
+                }
             })
         );
 
@@ -2906,6 +3264,7 @@ mod tests {
                 arguments: serde_json::json!({
                     "paths": ["crm"],
                 }),
+                metadata: None,
             }
         );
 
@@ -2925,6 +3284,7 @@ mod tests {
                 status: "completed".to_string(),
                 execution: "server".to_string(),
                 tools: vec![],
+                metadata: None,
             }
         );
 
@@ -3089,7 +3449,7 @@ mod tests {
     }
 
     #[test]
-    fn generates_metadata_uuid_for_message_items() -> Result<()> {
+    fn generates_metadata_uuid_for_metadata_bearing_items() -> Result<()> {
         let item = ResponseItem::Message {
             id: Some("msg_123".to_string()),
             role: "assistant".to_string(),
@@ -3133,6 +3493,70 @@ mod tests {
         );
         assert_ne!(uuid, "msg_123");
 
+        Ok(())
+    }
+
+    #[test]
+    fn generates_metadata_uuid_for_function_call_output_items() -> Result<()> {
+        let item = ResponseItem::FunctionCallOutput {
+            call_id: "call_123".to_string(),
+            output: FunctionCallOutputPayload::from_text("ok".to_string()),
+            metadata: None,
+        };
+
+        let surfaced = item.with_generated_metadata_uuid();
+        let serialized = serde_json::to_value(&surfaced)?;
+        let metadata = serialized
+            .get("metadata")
+            .and_then(serde_json::Value::as_object)
+            .expect("metadata should be present");
+        let uuid = metadata
+            .get("uuid")
+            .and_then(serde_json::Value::as_str)
+            .expect("uuid should be present");
+
+        uuid::Uuid::parse_str(uuid).expect("uuid should be valid");
+
+        assert_eq!(
+            serialized.get("type"),
+            Some(&serde_json::json!("function_call_output"))
+        );
+        assert_eq!(
+            serialized.get("call_id"),
+            Some(&serde_json::json!("call_123"))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn response_item_metadata_helpers_include_session_source() {
+        let mut metadata = ResponseItemMetadata::default();
+        assert!(metadata.is_empty());
+
+        metadata.merge_from(ResponseItemMetadata {
+            session_source: Some(SessionSourceMetadata::User),
+            ..Default::default()
+        });
+
+        assert_eq!(metadata.session_source, Some(SessionSourceMetadata::User));
+        assert!(!metadata.is_empty());
+    }
+
+    #[test]
+    fn session_source_metadata_serializes_snake_case() -> Result<()> {
+        assert_eq!(
+            serde_json::to_value(SessionSourceMetadata::User)?,
+            serde_json::Value::String("user".to_string())
+        );
+        assert_eq!(
+            serde_json::to_value(SessionSourceMetadata::AgentGuardian)?,
+            serde_json::Value::String("agent_guardian".to_string())
+        );
+        assert_eq!(
+            serde_json::to_value(SessionSourceMetadata::AgentSpawned)?,
+            serde_json::Value::String("agent_spawned".to_string())
+        );
         Ok(())
     }
 }

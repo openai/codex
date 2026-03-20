@@ -334,6 +334,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ResponseItemMetadata;
 use codex_protocol::models::SandboxPolicyMetadata;
+use codex_protocol::models::SessionSourceMetadata;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
@@ -1043,40 +1044,46 @@ fn user_message_metadata_patch(
     }
 }
 
-fn stamp_message_metadata_on_response_item(
-    item: ResponseItem,
-    patch: Option<ResponseItemMetadata>,
-) -> ResponseItem {
-    let Some(patch) = patch else {
-        return item;
-    };
-    if patch.is_empty() {
-        return item;
+fn session_source_to_metadata(session_source: &SessionSource) -> SessionSourceMetadata {
+    if crate::guardian::is_guardian_reviewer_source(session_source) {
+        return SessionSourceMetadata::AgentGuardian;
     }
 
-    match item {
-        ResponseItem::Message {
-            id,
-            role,
-            content,
-            metadata,
-            end_turn,
-            phase,
-        } if role == "user" => {
-            let mut metadata_value = metadata.unwrap_or_default();
-            metadata_value.merge_from(patch);
-            let metadata = (!metadata_value.is_empty()).then_some(metadata_value);
-            ResponseItem::Message {
-                id,
-                role,
-                content,
-                metadata,
-                end_turn,
-                phase,
-            }
+    match session_source {
+        SessionSource::Cli => SessionSourceMetadata::User,
+        SessionSource::VSCode => SessionSourceMetadata::User,
+        SessionSource::Exec => SessionSourceMetadata::User,
+        SessionSource::Mcp => SessionSourceMetadata::User,
+        SessionSource::Custom(_) => SessionSourceMetadata::Unknown,
+        SessionSource::SubAgent(SubAgentSource::Review) => SessionSourceMetadata::AgentReview,
+        SessionSource::SubAgent(SubAgentSource::Compact) => SessionSourceMetadata::AgentCompaction,
+        SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
+            SessionSourceMetadata::AgentMemory
         }
-        other => other,
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. }) => {
+            SessionSourceMetadata::AgentSpawned
+        }
+        SessionSource::SubAgent(SubAgentSource::Other(_)) => SessionSourceMetadata::AgentOther,
+        SessionSource::Unknown => SessionSourceMetadata::Unknown,
     }
+}
+
+fn session_source_metadata_patch(session_source: &SessionSource) -> ResponseItemMetadata {
+    ResponseItemMetadata {
+        session_source: Some(session_source_to_metadata(session_source)),
+        ..ResponseItemMetadata::default()
+    }
+}
+
+fn base_item_metadata_patch(turn_context: &TurnContext) -> ResponseItemMetadata {
+    let mut patch = ResponseItemMetadata {
+        sandbox_policy: Some(sandbox_policy_to_metadata(
+            turn_context.sandbox_policy.get(),
+        )),
+        ..ResponseItemMetadata::default()
+    };
+    patch.merge_from(session_source_metadata_patch(&turn_context.session_source));
+    patch
 }
 
 fn response_item_tool_call_id(item: &ResponseItem) -> Option<&str> {
@@ -1091,25 +1098,35 @@ fn response_item_tool_call_id(item: &ResponseItem) -> Option<&str> {
     }
 }
 
-fn tool_call_metadata_slot_mut(
+fn response_item_metadata_slot_mut(
     item: &mut ResponseItem,
 ) -> Option<&mut Option<ResponseItemMetadata>> {
     match item {
-        ResponseItem::LocalShellCall { metadata, .. }
+        ResponseItem::Message { metadata, .. }
+        | ResponseItem::Reasoning { metadata, .. }
+        | ResponseItem::LocalShellCall { metadata, .. }
         | ResponseItem::FunctionCall { metadata, .. }
-        | ResponseItem::CustomToolCall { metadata, .. } => Some(metadata),
+        | ResponseItem::ToolSearchCall { metadata, .. }
+        | ResponseItem::FunctionCallOutput { metadata, .. }
+        | ResponseItem::CustomToolCall { metadata, .. }
+        | ResponseItem::CustomToolCallOutput { metadata, .. }
+        | ResponseItem::ToolSearchOutput { metadata, .. }
+        | ResponseItem::WebSearchCall { metadata, .. }
+        | ResponseItem::ImageGenerationCall { metadata, .. }
+        | ResponseItem::GhostSnapshot { metadata, .. }
+        | ResponseItem::Compaction { metadata, .. } => Some(metadata),
         _ => None,
     }
 }
 
-fn stamp_tool_metadata_on_response_item(
+fn stamp_response_item_metadata_on_response_item(
     mut item: ResponseItem,
     patch: ResponseItemMetadata,
 ) -> ResponseItem {
     if patch.is_empty() {
         return item;
     }
-    let Some(metadata_slot) = tool_call_metadata_slot_mut(&mut item) else {
+    let Some(metadata_slot) = response_item_metadata_slot_mut(&mut item) else {
         return item;
     };
     let mut metadata = metadata_slot.take().unwrap_or_default();
@@ -1118,13 +1135,21 @@ fn stamp_tool_metadata_on_response_item(
     item
 }
 
-fn tool_call_metadata_or_default(item: &ResponseItem) -> Option<ResponseItemMetadata> {
+fn response_item_metadata_or_default(item: &ResponseItem) -> Option<ResponseItemMetadata> {
     match item {
-        ResponseItem::LocalShellCall { metadata, .. }
+        ResponseItem::Message { metadata, .. }
+        | ResponseItem::Reasoning { metadata, .. }
+        | ResponseItem::LocalShellCall { metadata, .. }
         | ResponseItem::FunctionCall { metadata, .. }
-        | ResponseItem::CustomToolCall { metadata, .. } => {
-            Some(metadata.clone().unwrap_or_default())
-        }
+        | ResponseItem::ToolSearchCall { metadata, .. }
+        | ResponseItem::FunctionCallOutput { metadata, .. }
+        | ResponseItem::CustomToolCall { metadata, .. }
+        | ResponseItem::CustomToolCallOutput { metadata, .. }
+        | ResponseItem::ToolSearchOutput { metadata, .. }
+        | ResponseItem::WebSearchCall { metadata, .. }
+        | ResponseItem::ImageGenerationCall { metadata, .. }
+        | ResponseItem::GhostSnapshot { metadata, .. }
+        | ResponseItem::Compaction { metadata, .. } => Some(metadata.clone().unwrap_or_default()),
         _ => None,
     }
 }
@@ -1136,7 +1161,6 @@ struct ToolApprovalMetadataSnapshot {
 }
 
 fn stamp_tool_approval_metadata_with_snapshot(
-    turn_context: &TurnContext,
     response_item: ResponseItem,
     snapshot: Option<&ToolApprovalMetadataSnapshot>,
 ) -> ResponseItem {
@@ -1150,13 +1174,10 @@ fn stamp_tool_approval_metadata_with_snapshot(
     let outcome = snapshot.approval_outcomes_by_call_id.get(call_id).cloned();
     let has_pending_approval = snapshot.pending_approval_call_ids.contains(call_id);
 
-    let mut metadata = match tool_call_metadata_or_default(&response_item) {
+    let mut metadata = match response_item_metadata_or_default(&response_item) {
         Some(metadata) => metadata,
         None => return response_item,
     };
-    metadata.sandbox_policy = Some(sandbox_policy_to_metadata(
-        turn_context.sandbox_policy.get(),
-    ));
 
     match outcome {
         Some(outcome) => {
@@ -1168,11 +1189,11 @@ fn stamp_tool_approval_metadata_with_snapshot(
             metadata.review_decision = None;
         }
         None => {
-            return stamp_tool_metadata_on_response_item(response_item, metadata);
+            return stamp_response_item_metadata_on_response_item(response_item, metadata);
         }
     }
 
-    stamp_tool_metadata_on_response_item(response_item, metadata)
+    stamp_response_item_metadata_on_response_item(response_item, metadata)
 }
 
 #[derive(Clone)]
@@ -3448,7 +3469,7 @@ impl Session {
 
     pub(crate) async fn stamp_tool_approval_metadata(
         &self,
-        turn_context: &TurnContext,
+        _turn_context: &TurnContext,
         response_item: ResponseItem,
     ) -> ResponseItem {
         if !self.enabled(Feature::ItemMetadata) {
@@ -3467,12 +3488,12 @@ impl Session {
                 pending_approval_call_ids,
             }
         };
-        stamp_tool_approval_metadata_with_snapshot(turn_context, response_item, Some(&snapshot))
+        stamp_tool_approval_metadata_with_snapshot(response_item, Some(&snapshot))
     }
 
     pub(crate) async fn stamp_tool_approval_metadata_on_items(
         &self,
-        turn_context: &TurnContext,
+        _turn_context: &TurnContext,
         response_items: Vec<ResponseItem>,
     ) -> Vec<ResponseItem> {
         if !self.enabled(Feature::ItemMetadata) {
@@ -3494,9 +3515,7 @@ impl Session {
 
         response_items
             .into_iter()
-            .map(|item| {
-                stamp_tool_approval_metadata_with_snapshot(turn_context, item, Some(&snapshot))
-            })
+            .map(|item| stamp_tool_approval_metadata_with_snapshot(item, Some(&snapshot)))
             .collect()
     }
 
@@ -3538,7 +3557,7 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
-        let items = self.prepare_history_items(items);
+        let items = self.prepare_history_items(items, turn_context);
         self.record_into_history_prepared(&items, turn_context)
             .await;
         self.persist_rollout_response_items(&items).await;
@@ -3551,17 +3570,25 @@ impl Session {
         items: &[ResponseItem],
         turn_context: &TurnContext,
     ) {
-        let items = self.prepare_history_items(items);
+        let items = self.prepare_history_items(items, turn_context);
         self.record_into_history_prepared(&items, turn_context)
             .await;
     }
 
-    fn prepare_history_items(&self, items: &[ResponseItem]) -> Vec<ResponseItem> {
+    fn prepare_history_items(
+        &self,
+        items: &[ResponseItem],
+        turn_context: &TurnContext,
+    ) -> Vec<ResponseItem> {
         if self.enabled(Feature::ItemMetadata) {
+            let metadata_patch = base_item_metadata_patch(turn_context);
             items
                 .iter()
                 .cloned()
                 .map(ResponseItem::with_generated_metadata_uuid)
+                .map(|item| {
+                    stamp_response_item_metadata_on_response_item(item, metadata_patch.clone())
+                })
                 .collect()
         } else {
             items.to_vec()
@@ -4056,15 +4083,14 @@ impl Session {
         message_metadata: Option<ResponseItemMetadata>,
     ) {
         let metadata_patch = if self.enabled(Feature::ItemMetadata) {
-            let mut patch = message_metadata.unwrap_or_default();
-            patch.sandbox_policy = Some(sandbox_policy_to_metadata(
-                turn_context.sandbox_policy.get(),
-            ));
-            Some(patch)
+            Some(message_metadata.unwrap_or_default())
         } else {
             None
         };
-        let response_item = stamp_message_metadata_on_response_item(response_item, metadata_patch);
+        let response_item = match metadata_patch {
+            Some(patch) => stamp_response_item_metadata_on_response_item(response_item, patch),
+            None => response_item,
+        };
 
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
@@ -4165,11 +4191,17 @@ impl Session {
         }
 
         let mut input_item: ResponseInputItem = input.into();
-        let metadata = Some(user_message_metadata_patch(
+        let mut metadata = user_message_metadata_patch(
             UserMessageType::PromptSteering,
             self.enabled(Feature::ItemMetadata)
                 .then(|| sandbox_policy_to_metadata(active_task.turn_context.sandbox_policy.get())),
-        ));
+        );
+        if self.enabled(Feature::ItemMetadata) {
+            metadata.merge_from(session_source_metadata_patch(
+                &active_task.turn_context.session_source,
+            ));
+        }
+        let metadata = Some(metadata);
         if self.enabled(Feature::ItemMetadata)
             && let Some(metadata_patch) = metadata.as_ref()
         {
@@ -4189,20 +4221,31 @@ impl Session {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
-                let sandbox_policy = at.tasks.first().map(|(_, turn_context)| {
-                    sandbox_policy_to_metadata(turn_context.turn_context.sandbox_policy.get())
+                let first_turn_context = at.tasks.first().map(|(_, task)| &task.turn_context);
+                let sandbox_policy = first_turn_context.map(|turn_context| {
+                    sandbox_policy_to_metadata(turn_context.sandbox_policy.get())
                 });
+                let session_source =
+                    first_turn_context.map(|turn_context| turn_context.session_source.clone());
                 let mut ts = at.turn_state.lock().await;
                 for mut item in input {
                     let metadata = match &item {
-                        ResponseInputItem::Message { .. } => Some(user_message_metadata_patch(
-                            UserMessageType::PromptQueued,
-                            if self.enabled(Feature::ItemMetadata) {
-                                sandbox_policy.clone()
-                            } else {
-                                None
-                            },
-                        )),
+                        ResponseInputItem::Message { .. } => {
+                            let mut metadata = user_message_metadata_patch(
+                                UserMessageType::PromptQueued,
+                                if self.enabled(Feature::ItemMetadata) {
+                                    sandbox_policy.clone()
+                                } else {
+                                    None
+                                },
+                            );
+                            if self.enabled(Feature::ItemMetadata)
+                                && let Some(session_source) = session_source.as_ref()
+                            {
+                                metadata.merge_from(session_source_metadata_patch(session_source));
+                            }
+                            Some(metadata)
+                        }
                         _ => None,
                     };
 
@@ -5920,11 +5963,16 @@ pub(crate) async fn run_turn(
         .await;
 
     let mut initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-    let initial_message_metadata = Some(user_message_metadata_patch(
+    let mut initial_message_metadata = user_message_metadata_patch(
         UserMessageType::Prompt,
         sess.enabled(Feature::ItemMetadata)
             .then(|| sandbox_policy_to_metadata(turn_context.sandbox_policy.get())),
-    ));
+    );
+    if sess.enabled(Feature::ItemMetadata) {
+        initial_message_metadata
+            .merge_from(session_source_metadata_patch(&turn_context.session_source));
+    }
+    let initial_message_metadata = Some(initial_message_metadata);
     if sess.enabled(Feature::ItemMetadata)
         && let Some(metadata_patch) = initial_message_metadata.as_ref()
     {

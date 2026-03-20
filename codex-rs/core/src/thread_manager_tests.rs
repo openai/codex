@@ -54,6 +54,8 @@ fn drops_from_last_user_only() {
             }],
             content: None,
             encrypted_content: None,
+
+            metadata: None,
         },
         ResponseItem::FunctionCall {
             id: None,

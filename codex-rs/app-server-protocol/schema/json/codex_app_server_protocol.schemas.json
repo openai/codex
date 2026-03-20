@@ -10224,6 +10224,16 @@
                   "null"
                 ]
               },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "summary": {
                 "items": {
                   "$ref": "#/definitions/v2/ReasoningItemReasoningSummary"
@@ -10364,6 +10374,16 @@
                 ],
                 "writeOnly": true
               },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "status": {
                 "type": [
                   "string",
@@ -10390,6 +10410,16 @@
             "properties": {
               "call_id": {
                 "type": "string"
+              },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "output": {
                 "$ref": "#/definitions/v2/FunctionCallOutputBody"
@@ -10466,6 +10496,16 @@
               "call_id": {
                 "type": "string"
               },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "name": {
                 "type": [
                   "string",
@@ -10501,6 +10541,16 @@
               },
               "execution": {
                 "type": "string"
+              },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "status": {
                 "type": "string"
@@ -10545,6 +10595,16 @@
                 ],
                 "writeOnly": true
               },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "status": {
                 "type": [
                   "string",
@@ -10569,6 +10629,16 @@
             "properties": {
               "id": {
                 "type": "string"
+              },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "result": {
                 "type": "string"
@@ -10604,6 +10674,16 @@
               "ghost_commit": {
                 "$ref": "#/definitions/v2/GhostCommit"
               },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "type": {
                 "enum": [
                   "ghost_snapshot"
@@ -10623,6 +10703,16 @@
             "properties": {
               "encrypted_content": {
                 "type": "string"
+              },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "type": {
                 "enum": [
@@ -10679,6 +10769,16 @@
             "anyOf": [
               {
                 "$ref": "#/definitions/v2/SandboxPolicyMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session_source": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SessionSourceMetadata"
               },
               {
                 "type": "null"
@@ -11185,6 +11285,19 @@
             "type": "object"
           }
         ]
+      },
+      "SessionSourceMetadata": {
+        "enum": [
+          "user",
+          "agent_guardian",
+          "agent_review",
+          "agent_spawned",
+          "agent_compaction",
+          "agent_memory",
+          "agent_other",
+          "unknown"
+        ],
+        "type": "string"
       },
       "Settings": {
         "description": "Settings for a collaboration mode.",

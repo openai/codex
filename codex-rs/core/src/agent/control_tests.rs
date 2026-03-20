@@ -551,11 +551,9 @@ async fn spawn_agent_fork_injects_output_for_parent_spawn_call() {
         .expect("child thread should be registered");
     let history = child_thread.codex.session.clone_history().await;
     let injected_output = history.raw_items().iter().find_map(|item| match item {
-        ResponseItem::FunctionCallOutput { call_id, output }
-            if call_id == &parent_spawn_call_id =>
-        {
-            Some(output)
-        }
+        ResponseItem::FunctionCallOutput {
+            call_id, output, ..
+        } if call_id == &parent_spawn_call_id => Some(output),
         _ => None,
     });
     let injected_output =

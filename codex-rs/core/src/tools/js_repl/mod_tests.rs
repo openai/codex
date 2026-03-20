@@ -249,6 +249,7 @@ fn summarize_tool_call_response_for_multimodal_function_output() {
                 detail: None,
             },
         ]),
+        metadata: None,
     };
 
     let actual = JsReplManager::summarize_tool_call_response(&response);
@@ -383,6 +384,7 @@ fn summarize_tool_call_response_for_multimodal_custom_output() {
                 detail: None,
             },
         ]),
+        metadata: None,
     };
 
     let actual = JsReplManager::summarize_tool_call_response(&response);

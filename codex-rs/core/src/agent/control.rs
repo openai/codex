@@ -187,6 +187,7 @@ impl AgentControl {
                         ResponseItem::FunctionCallOutput {
                             call_id: call_id.clone(),
                             output,
+                            metadata: None,
                         },
                     ));
                     let initial_history = InitialHistory::Forked(forked_rollout_items);
