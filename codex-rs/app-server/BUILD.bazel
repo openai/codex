@@ -3,5 +3,8 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "app-server",
     crate_name = "codex_app_server",
+    extra_binaries = [
+        "//codex-rs/rmcp-client:test_stdio_server",
+    ],
     test_tags = ["no-sandbox"],
 )
