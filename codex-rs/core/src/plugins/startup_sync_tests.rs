@@ -154,6 +154,81 @@ async fn sync_openai_plugins_repo_falls_back_to_http_when_git_is_unavailable() {
     assert_eq!(read_curated_plugins_sha(tmp.path()).as_deref(), Some(sha));
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn sync_openai_plugins_repo_falls_back_to_http_when_git_sync_fails() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempdir().expect("tempdir");
+    let bin_dir = tempfile::Builder::new()
+        .prefix("fake-git-fail-")
+        .tempdir()
+        .expect("tempdir");
+    let git_path = bin_dir.path().join("git");
+    let sha = "0123456789abcdef0123456789abcdef01234567";
+
+    std::fs::write(
+        &git_path,
+        r#"#!/bin/sh
+echo "simulated git failure" >&2
+exit 1
+"#,
+    )
+    .expect("write fake git");
+    let mut permissions = std::fs::metadata(&git_path)
+        .expect("metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&git_path, permissions).expect("chmod");
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/openai/plugins"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"default_branch":"main"}"#))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/openai/plugins/git/ref/heads/main"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(format!(r#"{{"object":{{"sha":"{sha}"}}}}"#)),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/repos/openai/plugins/zipball/{sha}")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/zip")
+                .set_body_bytes(curated_repo_zipball_bytes(sha)),
+        )
+        .mount(&server)
+        .await;
+
+    let server_uri = server.uri();
+    let tmp_path = tmp.path().to_path_buf();
+    let synced_sha = tokio::task::spawn_blocking(move || {
+        sync_openai_plugins_repo_with_transport_overrides(
+            tmp_path.as_path(),
+            git_path.to_str().expect("utf8 path"),
+            &server_uri,
+        )
+    })
+    .await
+    .expect("sync task should join")
+    .expect("fallback sync should succeed");
+
+    let repo_path = curated_plugins_repo_path(tmp.path());
+    assert_eq!(synced_sha, sha);
+    assert!(repo_path.join(".agents/plugins/marketplace.json").is_file());
+    assert!(
+        repo_path
+            .join("plugins/gmail/.codex-plugin/plugin.json")
+            .is_file()
+    );
+    assert_eq!(read_curated_plugins_sha(tmp.path()).as_deref(), Some(sha));
+}
+
 #[tokio::test]
 async fn sync_openai_plugins_repo_skips_archive_download_when_sha_matches() {
     let tmp = tempdir().expect("tempdir");

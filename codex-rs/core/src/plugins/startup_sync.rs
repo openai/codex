@@ -45,11 +45,6 @@ struct GitHubGitRefObject {
     sha: String,
 }
 
-enum GitCuratedRepoSyncError {
-    GitUnavailable(String),
-    SyncFailed(String),
-}
-
 pub(crate) fn curated_plugins_repo_path(codex_home: &Path) -> PathBuf {
     codex_home.join(CURATED_PLUGINS_RELATIVE_DIR)
 }
@@ -69,22 +64,18 @@ fn sync_openai_plugins_repo_with_transport_overrides(
 ) -> Result<String, String> {
     match sync_openai_plugins_repo_via_git(codex_home, git_binary) {
         Ok(remote_sha) => Ok(remote_sha),
-        Err(GitCuratedRepoSyncError::GitUnavailable(err)) => {
+        Err(err) => {
             warn!(
                 error = %err,
                 git_binary,
-                "git unavailable for curated plugin sync; falling back to GitHub HTTP"
+                "git sync failed for curated plugin sync; falling back to GitHub HTTP"
             );
             sync_openai_plugins_repo_via_http(codex_home, api_base_url)
         }
-        Err(GitCuratedRepoSyncError::SyncFailed(err)) => Err(err),
     }
 }
 
-fn sync_openai_plugins_repo_via_git(
-    codex_home: &Path,
-    git_binary: &str,
-) -> Result<String, GitCuratedRepoSyncError> {
+fn sync_openai_plugins_repo_via_git(codex_home: &Path, git_binary: &str) -> Result<String, String> {
     let repo_path = curated_plugins_repo_path(codex_home);
     let sha_path = codex_home.join(CURATED_PLUGINS_SHA_FILE);
     let remote_sha = git_ls_remote_head_sha(git_binary)?;
@@ -94,8 +85,7 @@ fn sync_openai_plugins_repo_via_git(
         return Ok(remote_sha);
     }
 
-    let cloned_repo_path = prepare_curated_repo_parent_and_temp_dir(&repo_path)
-        .map_err(GitCuratedRepoSyncError::SyncFailed)?;
+    let cloned_repo_path = prepare_curated_repo_parent_and_temp_dir(&repo_path)?;
     let clone_output = run_git_command_with_timeout(
         Command::new(git_binary)
             .env("GIT_OPTIONAL_LOCKS", "0")
@@ -107,22 +97,18 @@ fn sync_openai_plugins_repo_via_git(
         "git clone curated plugins repo",
         CURATED_PLUGINS_GIT_TIMEOUT,
     )?;
-    ensure_git_success(&clone_output, "git clone curated plugins repo")
-        .map_err(GitCuratedRepoSyncError::SyncFailed)?;
+    ensure_git_success(&clone_output, "git clone curated plugins repo")?;
 
     let cloned_sha = git_head_sha(&cloned_repo_path, git_binary)?;
     if cloned_sha != remote_sha {
-        return Err(GitCuratedRepoSyncError::SyncFailed(format!(
+        return Err(format!(
             "curated plugins clone HEAD mismatch: expected {remote_sha}, got {cloned_sha}"
-        )));
+        ));
     }
 
-    ensure_marketplace_manifest_exists(&cloned_repo_path)
-        .map_err(GitCuratedRepoSyncError::SyncFailed)?;
-    activate_curated_repo(&repo_path, &cloned_repo_path)
-        .map_err(GitCuratedRepoSyncError::SyncFailed)?;
-    write_curated_plugins_sha(&sha_path, &remote_sha)
-        .map_err(GitCuratedRepoSyncError::SyncFailed)?;
+    ensure_marketplace_manifest_exists(&cloned_repo_path)?;
+    activate_curated_repo(&repo_path, &cloned_repo_path)?;
+    write_curated_plugins_sha(&sha_path, &remote_sha)?;
     Ok(remote_sha)
 }
 
@@ -363,7 +349,7 @@ fn read_local_git_or_sha_file(
     read_sha_file(sha_path)
 }
 
-fn git_ls_remote_head_sha(git_binary: &str) -> Result<String, GitCuratedRepoSyncError> {
+fn git_ls_remote_head_sha(git_binary: &str) -> Result<String, String> {
     let output = run_git_command_with_timeout(
         Command::new(git_binary)
             .env("GIT_OPTIONAL_LOCKS", "0")
@@ -373,29 +359,24 @@ fn git_ls_remote_head_sha(git_binary: &str) -> Result<String, GitCuratedRepoSync
         "git ls-remote curated plugins repo",
         CURATED_PLUGINS_GIT_TIMEOUT,
     )?;
-    ensure_git_success(&output, "git ls-remote curated plugins repo")
-        .map_err(GitCuratedRepoSyncError::SyncFailed)?;
+    ensure_git_success(&output, "git ls-remote curated plugins repo")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let Some(first_line) = stdout.lines().next() else {
-        return Err(GitCuratedRepoSyncError::SyncFailed(
-            "git ls-remote returned empty output for curated plugins repo".to_string(),
-        ));
+        return Err("git ls-remote returned empty output for curated plugins repo".to_string());
     };
     let Some((sha, _)) = first_line.split_once('\t') else {
-        return Err(GitCuratedRepoSyncError::SyncFailed(format!(
+        return Err(format!(
             "unexpected git ls-remote output for curated plugins repo: {first_line}"
-        )));
+        ));
     };
     if sha.is_empty() {
-        return Err(GitCuratedRepoSyncError::SyncFailed(
-            "git ls-remote returned empty sha for curated plugins repo".to_string(),
-        ));
+        return Err("git ls-remote returned empty sha for curated plugins repo".to_string());
     }
     Ok(sha.to_string())
 }
 
-fn git_head_sha(repo_path: &Path, git_binary: &str) -> Result<String, GitCuratedRepoSyncError> {
+fn git_head_sha(repo_path: &Path, git_binary: &str) -> Result<String, String> {
     let output = Command::new(git_binary)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .arg("-C")
@@ -403,25 +384,20 @@ fn git_head_sha(repo_path: &Path, git_binary: &str) -> Result<String, GitCurated
         .arg("rev-parse")
         .arg("HEAD")
         .output()
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => GitCuratedRepoSyncError::GitUnavailable(format!(
+        .map_err(|err| {
+            format!(
                 "failed to run git rev-parse HEAD in {}: {err}",
                 repo_path.display()
-            )),
-            _ => GitCuratedRepoSyncError::SyncFailed(format!(
-                "failed to run git rev-parse HEAD in {}: {err}",
-                repo_path.display()
-            )),
+            )
         })?;
-    ensure_git_success(&output, "git rev-parse HEAD")
-        .map_err(GitCuratedRepoSyncError::SyncFailed)?;
+    ensure_git_success(&output, "git rev-parse HEAD")?;
 
     let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if sha.is_empty() {
-        return Err(GitCuratedRepoSyncError::SyncFailed(format!(
+        return Err(format!(
             "git rev-parse HEAD returned empty output in {}",
             repo_path.display()
-        )));
+        ));
     }
     Ok(sha)
 }
@@ -430,71 +406,49 @@ fn run_git_command_with_timeout(
     command: &mut Command,
     context: &str,
     timeout: Duration,
-) -> Result<Output, GitCuratedRepoSyncError> {
+) -> Result<Output, String> {
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => {
-                GitCuratedRepoSyncError::GitUnavailable(format!("failed to run {context}: {err}"))
-            }
-            _ => GitCuratedRepoSyncError::SyncFailed(format!("failed to run {context}: {err}")),
-        })?;
+        .map_err(|err| format!("failed to run {context}: {err}"))?;
 
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(_)) => {
-                return child.wait_with_output().map_err(|err| {
-                    GitCuratedRepoSyncError::SyncFailed(format!(
-                        "failed to wait for {context}: {err}"
-                    ))
-                });
+                return child
+                    .wait_with_output()
+                    .map_err(|err| format!("failed to wait for {context}: {err}"));
             }
             Ok(None) => {}
-            Err(err) => {
-                return Err(GitCuratedRepoSyncError::SyncFailed(format!(
-                    "failed to poll {context}: {err}"
-                )));
-            }
+            Err(err) => return Err(format!("failed to poll {context}: {err}")),
         }
 
         if start.elapsed() >= timeout {
             match child.try_wait() {
                 Ok(Some(_)) => {
-                    return child.wait_with_output().map_err(|err| {
-                        GitCuratedRepoSyncError::SyncFailed(format!(
-                            "failed to wait for {context}: {err}"
-                        ))
-                    });
+                    return child
+                        .wait_with_output()
+                        .map_err(|err| format!("failed to wait for {context}: {err}"));
                 }
                 Ok(None) => {}
-                Err(err) => {
-                    return Err(GitCuratedRepoSyncError::SyncFailed(format!(
-                        "failed to poll {context}: {err}"
-                    )));
-                }
+                Err(err) => return Err(format!("failed to poll {context}: {err}")),
             }
 
             let _ = child.kill();
-            let output = child.wait_with_output().map_err(|err| {
-                GitCuratedRepoSyncError::SyncFailed(format!(
-                    "failed to wait for {context} after timeout: {err}"
-                ))
-            })?;
+            let output = child
+                .wait_with_output()
+                .map_err(|err| format!("failed to wait for {context} after timeout: {err}"))?;
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             return if stderr.is_empty() {
-                Err(GitCuratedRepoSyncError::SyncFailed(format!(
-                    "{context} timed out after {}s",
-                    timeout.as_secs()
-                )))
+                Err(format!("{context} timed out after {}s", timeout.as_secs()))
             } else {
-                Err(GitCuratedRepoSyncError::SyncFailed(format!(
+                Err(format!(
                     "{context} timed out after {}s: {stderr}",
                     timeout.as_secs()
-                )))
+                ))
             };
         }
 
