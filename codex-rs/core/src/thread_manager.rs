@@ -125,6 +125,15 @@ pub struct NewThread {
     pub session_configured: SessionConfiguredEvent,
 }
 
+// TODO(ccunningham): Add an explicit non-interrupting live-turn snapshot once
+// core can represent sampling boundaries directly instead of relying on
+// whichever items happened to be persisted mid-turn.
+//
+// Two likely future variants:
+// - `TruncateToLastSamplingBoundary` for callers that want a coherent fork from
+//   the last stable model boundary without synthesizing an interrupt.
+// - `WaitUntilNextSamplingBoundary` (or similar) for callers that prefer to
+//   fork after the next sampling boundary rather than interrupting immediately.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ForkSnapshot {
     /// Fork a committed prefix ending strictly before the nth user message.
