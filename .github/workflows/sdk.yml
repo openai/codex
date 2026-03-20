@@ -6,11 +6,56 @@ on:
   pull_request: {}
 
 jobs:
-  sdks:
+  changed:
+    name: Detect changed areas
+    runs-on: ubuntu-24.04
+    outputs:
+      python: ${{ steps.detect.outputs.python }}
+      typescript: ${{ steps.detect.outputs.typescript }}
+      workflows: ${{ steps.detect.outputs.workflows }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed paths (no external action)
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA='${{ github.event.pull_request.base.sha }}'
+            HEAD_SHA='${{ github.event.pull_request.head.sha }}'
+            echo "Base SHA: $BASE_SHA"
+            echo "Head SHA: $HEAD_SHA"
+            mapfile -t files < <(git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA")
+          else
+            files=("sdk/force" "codex-rs/force" ".github/force" "package.json")
+          fi
+
+          python=false
+          typescript=false
+          workflows=false
+
+          for f in "${files[@]}"; do
+            [[ $f == sdk/python/* || $f == sdk/python-runtime/* ]] && python=true
+            [[ $f == sdk/typescript/* || $f == codex-rs/* || $f == package.json || $f == pnpm-lock.yaml || $f == pnpm-workspace.yaml ]] && typescript=true
+            [[ $f == .github/* ]] && workflows=true
+          done
+
+          echo "python=$python" >> "$GITHUB_OUTPUT"
+          echo "typescript=$typescript" >> "$GITHUB_OUTPUT"
+          echo "workflows=$workflows" >> "$GITHUB_OUTPUT"
+
+  typescript_sdk:
+    name: TypeScript SDK
     runs-on:
       group: codex-runners
       labels: codex-linux-x64
     timeout-minutes: 10
+    needs: changed
+    if: ${{ needs.changed.outputs.typescript == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -50,3 +95,190 @@ jobs:
 
       - name: Test SDK packages
         run: pnpm -r --filter ./sdk/typescript run test
+
+  python_generated:
+    name: Python Pinned Generated
+    runs-on:
+      group: codex-runners
+      labels: codex-linux-x64
+    timeout-minutes: 10
+    needs: changed
+    if: ${{ needs.changed.outputs.python == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: sdk/python/pyproject.toml
+
+      - name: Install Python SDK dependencies
+        run: python -m pip install -e "sdk/python[dev]"
+
+      - name: Regenerate Python SDK artifacts from pinned runtime
+        run: python sdk/python/scripts/update_sdk_artifacts.py generate-types-for-pinned-runtime
+
+      - name: Check for generated drift
+        run: git diff --exit-code -- sdk/python
+
+  python_quality:
+    name: Python Quality (${{ matrix.python-version }})
+    runs-on:
+      group: codex-runners
+      labels: codex-linux-x64
+    timeout-minutes: 15
+    needs: changed
+    if: ${{ needs.changed.outputs.python == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: sdk/python/pyproject.toml
+
+      - name: Install Python SDK dependencies
+        run: python -m pip install -e "sdk/python[dev]" build twine mypy
+
+      - name: Ruff lint
+        run: >
+          python -m ruff check
+          sdk/python/src
+          sdk/python/tests
+          sdk/python/scripts
+          --exclude sdk/python/tests/test_real_app_server_integration.py
+
+      - name: Mypy
+        run: python -m mypy --config-file sdk/python/mypy.ini sdk/python/src/codex_app_server
+
+      - name: Pytest
+        run: >
+          python -m pytest
+          sdk/python/tests/test_artifact_workflow_and_binaries.py
+          sdk/python/tests/test_async_client_behavior.py
+          sdk/python/tests/test_client_rpc_methods.py
+          sdk/python/tests/test_public_api_runtime_behavior.py
+          sdk/python/tests/test_public_api_signatures.py
+
+      - name: Build Python SDK
+        run: python -m build sdk/python --outdir sdk/python/dist-ci
+
+      - name: Twine check
+        run: python -m twine check sdk/python/dist-ci/*
+
+  python_platform_smoke:
+    name: Python Platform Smoke (${{ matrix.name }})
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
+    timeout-minutes: 15
+    needs: changed
+    if: ${{ needs.changed.outputs.python == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            runner: macos-15-xlarge
+          - name: Windows
+            runner: windows-x64
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-x64
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: sdk/python/pyproject.toml
+
+      - name: Install Python SDK dependencies
+        run: python -m pip install -e "sdk/python[dev]" build
+
+      - name: Pytest
+        run: >
+          python -m pytest
+          sdk/python/tests/test_async_client_behavior.py
+          sdk/python/tests/test_client_rpc_methods.py
+          sdk/python/tests/test_public_api_runtime_behavior.py
+          sdk/python/tests/test_public_api_signatures.py
+
+      - name: Build Python SDK wheel
+        run: python -m build sdk/python --outdir sdk/python/dist-ci
+
+      - name: Install built wheel and smoke imports
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv-wheel-smoke
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            VENV_PYTHON=".venv-wheel-smoke/Scripts/python.exe"
+          else
+            VENV_PYTHON=".venv-wheel-smoke/bin/python"
+          fi
+          "$VENV_PYTHON" -m pip install --upgrade pip
+          "$VENV_PYTHON" -m pip install sdk/python/dist-ci/*.whl
+          "$VENV_PYTHON" -c "import codex_app_server; from codex_app_server import AsyncCodex, AsyncThread, Codex, RunResult, Thread; assert codex_app_server.__name__ == 'codex_app_server'; assert Codex.__name__ == 'Codex'; assert AsyncCodex.__name__ == 'AsyncCodex'; assert Thread.__name__ == 'Thread'; assert AsyncThread.__name__ == 'AsyncThread'; assert RunResult.__name__ == 'RunResult'"
+
+  sdks:
+    name: sdks
+    runs-on: ubuntu-24.04
+    if: ${{ always() }}
+    needs:
+      - changed
+      - typescript_sdk
+      - python_generated
+      - python_quality
+      - python_platform_smoke
+    steps:
+      - name: Check SDK results
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          should_run_typescript=false
+          should_run_python=false
+
+          if [[ "${{ github.event_name }}" == "push" || "${{ needs.changed.outputs.workflows }}" == "true" || "${{ needs.changed.outputs.typescript }}" == "true" ]]; then
+            should_run_typescript=true
+          fi
+
+          if [[ "${{ github.event_name }}" == "push" || "${{ needs.changed.outputs.workflows }}" == "true" || "${{ needs.changed.outputs.python }}" == "true" ]]; then
+            should_run_python=true
+          fi
+
+          if [[ "$should_run_typescript" == "false" && "$should_run_python" == "false" ]]; then
+            echo "No SDK-relevant changes detected."
+            exit 0
+          fi
+
+          if [[ "$should_run_typescript" == "true" && "${{ needs.typescript_sdk.result }}" != "success" ]]; then
+            echo "TypeScript job result: ${{ needs.typescript_sdk.result }}"
+            exit 1
+          fi
+
+          if [[ "$should_run_python" == "true" && "${{ needs.python_generated.result }}" != "success" ]]; then
+            echo "Python generated job result: ${{ needs.python_generated.result }}"
+            exit 1
+          fi
+
+          if [[ "$should_run_python" == "true" && "${{ needs.python_quality.result }}" != "success" ]]; then
+            echo "Python quality job result: ${{ needs.python_quality.result }}"
+            exit 1
+          fi
+
+          if [[ "$should_run_python" == "true" && "${{ needs.python_platform_smoke.result }}" != "success" ]]; then
+            echo "Python platform smoke job result: ${{ needs.python_platform_smoke.result }}"
+            exit 1
+          fi
+
+          echo "SDK checks passed."
