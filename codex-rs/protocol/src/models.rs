@@ -291,6 +291,16 @@ pub enum SandboxPolicyMetadata {
     FullAccess,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum ApprovalSourceMetadata {
+    Guardian,
+    User,
+    Policy,
+    Unknown,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct ResponseItemMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -309,6 +319,9 @@ pub struct ResponseItemMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub review_decision: Option<ReviewDecisionMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub approval_source: Option<ApprovalSourceMetadata>,
 }
 
 impl ResponseItemMetadata {
@@ -318,6 +331,7 @@ impl ResponseItemMetadata {
             && self.sandbox_policy.is_none()
             && self.is_tool_call_escalated.is_none()
             && self.review_decision.is_none()
+            && self.approval_source.is_none()
     }
 
     pub fn merge_from(&mut self, other: Self) {
@@ -335,6 +349,9 @@ impl ResponseItemMetadata {
         }
         if other.review_decision.is_some() {
             self.review_decision = other.review_decision;
+        }
+        if other.approval_source.is_some() {
+            self.approval_source = other.approval_source;
         }
     }
 }

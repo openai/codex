@@ -263,15 +263,9 @@ impl Session {
         drop(active);
         if !pending_input.is_empty() {
             for pending_input_item in pending_input {
-                match inspect_pending_input(self, &turn_context, pending_input_item.input).await {
+                match inspect_pending_input(self, &turn_context, pending_input_item).await {
                     PendingInputHookDisposition::Accepted(pending_input) => {
-                        record_pending_input(
-                            self,
-                            &turn_context,
-                            *pending_input,
-                            pending_input_item.metadata,
-                        )
-                        .await;
+                        record_pending_input(self, &turn_context, *pending_input).await;
                     }
                     PendingInputHookDisposition::Blocked {
                         additional_contexts,

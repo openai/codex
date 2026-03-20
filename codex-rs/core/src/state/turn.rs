@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::dynamic_tools::DynamicToolResponse;
+use codex_protocol::models::ApprovalSourceMetadata;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItemMetadata;
 use codex_protocol::models::ReviewDecisionMetadata;
@@ -68,15 +69,20 @@ pub(crate) struct PendingInputItem {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PendingApprovalMetadata {
     pub(crate) call_id: String,
+    pub(crate) approval_source: ApprovalSourceMetadata,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ApprovalOutcomeMetadata {
     pub(crate) review_decision: Option<ReviewDecisionMetadata>,
+    pub(crate) approval_source: ApprovalSourceMetadata,
 }
 
 impl ApprovalOutcomeMetadata {
-    pub(crate) fn reviewed(decision: &ReviewDecision) -> Self {
+    pub(crate) fn reviewed(
+        decision: &ReviewDecision,
+        approval_source: ApprovalSourceMetadata,
+    ) -> Self {
         let review_decision = match decision {
             ReviewDecision::Approved => ReviewDecisionMetadata::Approved,
             ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
@@ -98,6 +104,7 @@ impl ApprovalOutcomeMetadata {
         };
         Self {
             review_decision: Some(review_decision),
+            approval_source,
         }
     }
 }
@@ -270,6 +277,15 @@ impl TurnState {
             .push(PendingInputItem { input, metadata });
     }
 
+    pub(crate) fn prepend_pending_input_with_metadata(&mut self, mut input: Vec<PendingInputItem>) {
+        if input.is_empty() {
+            return;
+        }
+
+        input.append(&mut self.pending_input);
+        self.pending_input = input;
+    }
+
     pub(crate) fn take_pending_input_with_metadata(&mut self) -> Vec<PendingInputItem> {
         if self.pending_input.is_empty() {
             Vec::with_capacity(0)
@@ -278,15 +294,6 @@ impl TurnState {
             std::mem::swap(&mut ret, &mut self.pending_input);
             ret
         }
-    }
-
-    pub(crate) fn prepend_pending_input(&mut self, mut input: Vec<PendingInputItem>) {
-        if input.is_empty() {
-            return;
-        }
-
-        input.append(&mut self.pending_input);
-        self.pending_input = input;
     }
 
     pub(crate) fn has_pending_input(&self) -> bool {

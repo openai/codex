@@ -4392,49 +4392,97 @@ async fn task_finish_emits_prompt_queued_metadata_for_injected_user_input_when_f
 #[test]
 fn review_decision_metadata_mapping_is_stable() {
     assert_eq!(
-        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::Approved).review_decision,
+        ApprovalOutcomeMetadata::reviewed(
+            &ReviewDecision::Approved,
+            codex_protocol::models::ApprovalSourceMetadata::User,
+        )
+        .review_decision,
         Some(codex_protocol::models::ReviewDecisionMetadata::Approved)
     );
     assert_eq!(
-        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::Denied).review_decision,
+        ApprovalOutcomeMetadata::reviewed(
+            &ReviewDecision::Denied,
+            codex_protocol::models::ApprovalSourceMetadata::User,
+        )
+        .review_decision,
         Some(codex_protocol::models::ReviewDecisionMetadata::Denied)
     );
     assert_eq!(
-        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::Abort).review_decision,
+        ApprovalOutcomeMetadata::reviewed(
+            &ReviewDecision::Abort,
+            codex_protocol::models::ApprovalSourceMetadata::User,
+        )
+        .review_decision,
         Some(codex_protocol::models::ReviewDecisionMetadata::Abort)
     );
     assert_eq!(
-        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::ApprovedForSession).review_decision,
+        ApprovalOutcomeMetadata::reviewed(
+            &ReviewDecision::ApprovedForSession,
+            codex_protocol::models::ApprovalSourceMetadata::User,
+        )
+        .review_decision,
         Some(codex_protocol::models::ReviewDecisionMetadata::ApprovedForSession)
     );
     assert_eq!(
-        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::ApprovedExecpolicyAmendment {
-            proposed_execpolicy_amendment: codex_protocol::approvals::ExecPolicyAmendment::new(
-                vec!["echo".to_string(), "hi".to_string()],
-            ),
-        })
+        ApprovalOutcomeMetadata::reviewed(
+            &ReviewDecision::ApprovedExecpolicyAmendment {
+                proposed_execpolicy_amendment: codex_protocol::approvals::ExecPolicyAmendment::new(
+                    vec!["echo".to_string(), "hi".to_string()],
+                ),
+            },
+            codex_protocol::models::ApprovalSourceMetadata::User,
+        )
         .review_decision,
         Some(codex_protocol::models::ReviewDecisionMetadata::ApprovedWithAmendment)
     );
     assert_eq!(
-        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::NetworkPolicyAmendment {
-            network_policy_amendment: codex_protocol::approvals::NetworkPolicyAmendment {
-                host: "example.com".to_string(),
-                action: codex_protocol::protocol::NetworkPolicyRuleAction::Allow,
+        ApprovalOutcomeMetadata::reviewed(
+            &ReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment: codex_protocol::approvals::NetworkPolicyAmendment {
+                    host: "example.com".to_string(),
+                    action: NetworkPolicyRuleAction::Allow,
+                },
             },
-        })
+            codex_protocol::models::ApprovalSourceMetadata::User,
+        )
         .review_decision,
         Some(codex_protocol::models::ReviewDecisionMetadata::ApprovedWithNetworkPolicyAllow)
     );
     assert_eq!(
-        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::NetworkPolicyAmendment {
-            network_policy_amendment: codex_protocol::approvals::NetworkPolicyAmendment {
-                host: "example.com".to_string(),
-                action: codex_protocol::protocol::NetworkPolicyRuleAction::Deny,
+        ApprovalOutcomeMetadata::reviewed(
+            &ReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment: codex_protocol::approvals::NetworkPolicyAmendment {
+                    host: "example.com".to_string(),
+                    action: NetworkPolicyRuleAction::Deny,
+                },
             },
-        })
+            codex_protocol::models::ApprovalSourceMetadata::User,
+        )
         .review_decision,
         Some(codex_protocol::models::ReviewDecisionMetadata::DeniedWithNetworkPolicyDeny)
+    );
+}
+
+#[tokio::test]
+async fn approval_source_metadata_mapping_is_stable() {
+    let (_session, mut turn_context) = make_session_and_context().await;
+
+    assert_eq!(
+        approval_source_for_turn(&turn_context),
+        codex_protocol::models::ApprovalSourceMetadata::User
+    );
+
+    turn_context
+        .approval_policy
+        .set(crate::protocol::AskForApproval::OnRequest)
+        .expect("test setup should allow updating approval policy");
+    Arc::get_mut(&mut turn_context.config)
+        .expect("single turn config ref")
+        .approvals_reviewer = codex_protocol::config_types::ApprovalsReviewer::GuardianSubagent;
+
+    assert_eq!(
+        approval_source_for_turn(&turn_context),
+        codex_protocol::models::ApprovalSourceMetadata::Guardian
     );
 }
 
@@ -4501,6 +4549,7 @@ async fn assert_next_emitted_function_call_metadata(
     expected_sandbox_policy: codex_protocol::models::SandboxPolicyMetadata,
     expected_escalated: bool,
     expected_review_decision: Option<codex_protocol::models::ReviewDecisionMetadata>,
+    expected_approval_source: Option<codex_protocol::models::ApprovalSourceMetadata>,
 ) {
     let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
         .await
@@ -4516,6 +4565,7 @@ async fn assert_next_emitted_function_call_metadata(
                     ..
                 } if metadata.is_tool_call_escalated == Some(expected_escalated)
                     && metadata.review_decision == expected_review_decision
+                    && metadata.approval_source == expected_approval_source
                     && metadata.sandbox_policy == Some(expected_sandbox_policy)
             )
     ));
@@ -4527,7 +4577,10 @@ async fn tool_call_metadata_stamps_escalated_review_decision_when_feature_enable
 
     sess.record_call_approval_outcome(
         "call-1".to_string(),
-        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::Denied),
+        ApprovalOutcomeMetadata::reviewed(
+            &ReviewDecision::Denied,
+            codex_protocol::models::ApprovalSourceMetadata::User,
+        ),
     )
     .await;
     sess.record_response_item_and_emit_turn_item(tc.as_ref(), function_call_item("call-1"))
@@ -4537,6 +4590,7 @@ async fn tool_call_metadata_stamps_escalated_review_decision_when_feature_enable
         expected_sandbox_policy,
         true,
         Some(codex_protocol::models::ReviewDecisionMetadata::Denied),
+        Some(codex_protocol::models::ApprovalSourceMetadata::User),
     )
     .await;
 }
@@ -4547,7 +4601,62 @@ async fn tool_call_metadata_stamps_non_escalated_false_when_feature_enabled() {
 
     sess.record_response_item_and_emit_turn_item(tc.as_ref(), function_call_item("call-2"))
         .await;
-    assert_next_emitted_function_call_metadata(&rx, expected_sandbox_policy, false, None).await;
+    assert_next_emitted_function_call_metadata(&rx, expected_sandbox_policy, false, None, None)
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_call_metadata_stamps_guardian_direct_review_when_feature_enabled() {
+    let (sess, tc, rx, expected_sandbox_policy) = setup_tool_call_metadata_runtime_test().await;
+
+    sess.record_call_approval_outcome(
+        "call-guardian-runtime-1".to_string(),
+        ApprovalOutcomeMetadata::reviewed(
+            &ReviewDecision::Denied,
+            codex_protocol::models::ApprovalSourceMetadata::Guardian,
+        ),
+    )
+    .await;
+    sess.record_response_item_and_emit_turn_item(
+        tc.as_ref(),
+        function_call_item("call-guardian-runtime-1"),
+    )
+    .await;
+    assert_next_emitted_function_call_metadata(
+        &rx,
+        expected_sandbox_policy,
+        true,
+        Some(codex_protocol::models::ReviewDecisionMetadata::Denied),
+        Some(codex_protocol::models::ApprovalSourceMetadata::Guardian),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_call_metadata_stamps_policy_source_without_review_decision_when_feature_enabled() {
+    let (sess, tc, rx, expected_sandbox_policy) = setup_tool_call_metadata_runtime_test().await;
+
+    sess.record_call_approval_outcome(
+        "call-policy-runtime-1".to_string(),
+        ApprovalOutcomeMetadata {
+            review_decision: None,
+            approval_source: codex_protocol::models::ApprovalSourceMetadata::Policy,
+        },
+    )
+    .await;
+    sess.record_response_item_and_emit_turn_item(
+        tc.as_ref(),
+        function_call_item("call-policy-runtime-1"),
+    )
+    .await;
+    assert_next_emitted_function_call_metadata(
+        &rx,
+        expected_sandbox_policy,
+        true,
+        None,
+        Some(codex_protocol::models::ApprovalSourceMetadata::Policy),
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -4603,6 +4712,7 @@ async fn handle_output_item_done_stamps_tool_call_metadata_when_feature_enabled(
             } if call_id == "call-stream-1"
                 && metadata.is_tool_call_escalated == Some(false)
                 && metadata.review_decision.is_none()
+                && metadata.approval_source.is_none()
                 && metadata.sandbox_policy == Some(expected_sandbox_policy.clone())
         )
     }));
@@ -4645,7 +4755,10 @@ async fn tool_call_metadata_can_be_restamped_after_approval_outcome() {
     .await;
     sess.record_call_approval_outcome(
         "call-restamp-1".to_string(),
-        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::Denied),
+        ApprovalOutcomeMetadata::reviewed(
+            &ReviewDecision::Denied,
+            codex_protocol::models::ApprovalSourceMetadata::User,
+        ),
     )
     .await;
 
@@ -4675,6 +4788,89 @@ async fn tool_call_metadata_can_be_restamped_after_approval_outcome() {
         } if metadata.is_tool_call_escalated == Some(true)
             && metadata.review_decision
                 == Some(codex_protocol::models::ReviewDecisionMetadata::Denied)
+            && metadata.approval_source
+                == Some(codex_protocol::models::ApprovalSourceMetadata::User)
+            && metadata.sandbox_policy == Some(expected_sandbox_policy)
+    ));
+}
+
+#[tokio::test]
+async fn tool_call_metadata_snapshot_stamps_guardian_approval_source() {
+    let (_session, turn_context_raw) = make_session_and_context().await;
+    let turn_context = Arc::new(turn_context_raw);
+    let expected_sandbox_policy = sandbox_policy_to_metadata(turn_context.sandbox_policy.get());
+    let item = ResponseItem::FunctionCall {
+        id: None,
+        name: "shell".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: "call-guardian-1".to_string(),
+        metadata: None,
+    };
+    let snapshot = ToolApprovalMetadataSnapshot {
+        approval_outcomes_by_call_id: HashMap::from([(
+            "call-guardian-1".to_string(),
+            ApprovalOutcomeMetadata {
+                review_decision: Some(codex_protocol::models::ReviewDecisionMetadata::Denied),
+                approval_source: codex_protocol::models::ApprovalSourceMetadata::Guardian,
+            },
+        )]),
+        pending_approval_call_ids: HashSet::new(),
+    };
+
+    let stamped =
+        stamp_tool_approval_metadata_with_snapshot(turn_context.as_ref(), item, Some(&snapshot));
+
+    assert!(matches!(
+        stamped,
+        ResponseItem::FunctionCall {
+            metadata: Some(metadata),
+            ..
+        } if metadata.is_tool_call_escalated == Some(true)
+            && metadata.review_decision
+                == Some(codex_protocol::models::ReviewDecisionMetadata::Denied)
+            && metadata.approval_source
+                == Some(codex_protocol::models::ApprovalSourceMetadata::Guardian)
+            && metadata.sandbox_policy == Some(expected_sandbox_policy)
+    ));
+}
+
+#[tokio::test]
+async fn tool_call_metadata_snapshot_stamps_policy_approval_source_without_review_decision() {
+    let (_session, turn_context_raw) = make_session_and_context().await;
+    let turn_context = Arc::new(turn_context_raw);
+    let expected_sandbox_policy = sandbox_policy_to_metadata(turn_context.sandbox_policy.get());
+    let item = ResponseItem::FunctionCall {
+        id: None,
+        name: "shell".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: "call-policy-1".to_string(),
+        metadata: None,
+    };
+    let snapshot = ToolApprovalMetadataSnapshot {
+        approval_outcomes_by_call_id: HashMap::from([(
+            "call-policy-1".to_string(),
+            ApprovalOutcomeMetadata {
+                review_decision: None,
+                approval_source: codex_protocol::models::ApprovalSourceMetadata::Policy,
+            },
+        )]),
+        pending_approval_call_ids: HashSet::new(),
+    };
+
+    let stamped =
+        stamp_tool_approval_metadata_with_snapshot(turn_context.as_ref(), item, Some(&snapshot));
+
+    assert!(matches!(
+        stamped,
+        ResponseItem::FunctionCall {
+            metadata: Some(metadata),
+            ..
+        } if metadata.is_tool_call_escalated == Some(true)
+            && metadata.review_decision.is_none()
+            && metadata.approval_source
+                == Some(codex_protocol::models::ApprovalSourceMetadata::Policy)
             && metadata.sandbox_policy == Some(expected_sandbox_policy)
     ));
 }
@@ -4872,9 +5068,13 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
 
     let mut drained_iter = drained.into_iter();
     let _blocked = drained_iter.next().expect("blocked prompt should exist");
-    sess.prepend_pending_input_with_metadata(drained_iter.collect())
-        .await
-        .expect("requeue later pending input at the front of the queue");
+    sess.prepend_pending_input_with_metadata(
+        drained_iter
+            .map(|(input, metadata)| crate::state::PendingInputItem { input, metadata })
+            .collect(),
+    )
+    .await
+    .expect("requeue later pending input at the front of the queue");
 
     assert_eq!(
         sess.get_pending_input_with_metadata().await,

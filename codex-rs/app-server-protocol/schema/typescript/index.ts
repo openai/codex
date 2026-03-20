@@ -3,6 +3,7 @@
 export type { AbsolutePathBuf } from "./AbsolutePathBuf";
 export type { ApplyPatchApprovalParams } from "./ApplyPatchApprovalParams";
 export type { ApplyPatchApprovalResponse } from "./ApplyPatchApprovalResponse";
+export type { ApprovalSourceMetadata } from "./ApprovalSourceMetadata";
 export type { AuthMode } from "./AuthMode";
 export type { ClientInfo } from "./ClientInfo";
 export type { ClientNotification } from "./ClientNotification";

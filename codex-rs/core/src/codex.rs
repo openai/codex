@@ -88,6 +88,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::models::ApprovalSourceMetadata;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::UserMessageType;
@@ -207,6 +208,7 @@ use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
 use crate::git_info::get_git_repo_root;
 use crate::guardian::GuardianReviewSessionManager;
+use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
@@ -1079,6 +1081,13 @@ fn stamp_message_metadata_on_response_item(
     }
 }
 
+fn approval_source_for_turn(turn_context: &TurnContext) -> ApprovalSourceMetadata {
+    if routes_approval_to_guardian(turn_context) {
+        ApprovalSourceMetadata::Guardian
+    } else {
+        ApprovalSourceMetadata::User
+    }
+}
 fn response_item_tool_call_id(item: &ResponseItem) -> Option<&str> {
     match item {
         ResponseItem::LocalShellCall {
@@ -1162,10 +1171,12 @@ fn stamp_tool_approval_metadata_with_snapshot(
         Some(outcome) => {
             metadata.is_tool_call_escalated = Some(true);
             metadata.review_decision = outcome.review_decision;
+            metadata.approval_source = Some(outcome.approval_source);
         }
         None if !has_pending_approval => {
             metadata.is_tool_call_escalated = Some(false);
             metadata.review_decision = None;
+            metadata.approval_source = None;
         }
         None => {
             return stamp_tool_metadata_on_response_item(response_item, metadata);
@@ -3030,6 +3041,7 @@ impl Session {
                         effective_approval_id.clone(),
                         PendingApprovalMetadata {
                             call_id: call_id.clone(),
+                            approval_source: approval_source_for_turn(turn_context),
                         },
                     );
                     ts.insert_pending_approval(effective_approval_id.clone(), tx_approve)
@@ -3101,6 +3113,7 @@ impl Session {
                         approval_id.clone(),
                         PendingApprovalMetadata {
                             call_id: call_id.clone(),
+                            approval_source: approval_source_for_turn(turn_context),
                         },
                     );
                     ts.insert_pending_approval(approval_id.clone(), tx_approve)
@@ -3398,16 +3411,16 @@ impl Session {
             .remove_pending_approval_call_id(approval_id)
             .unwrap_or_else(|| PendingApprovalMetadata {
                 call_id: approval_id.to_string(),
+                approval_source: ApprovalSourceMetadata::Unknown,
             });
         drop(ts);
         drop(active);
         self.record_call_approval_outcome(
             pending_approval.call_id,
-            ApprovalOutcomeMetadata::reviewed(decision),
+            ApprovalOutcomeMetadata::reviewed(decision, pending_approval.approval_source),
         )
         .await;
     }
-
     pub(crate) async fn record_call_approval_outcome(
         &self,
         call_id: String,
@@ -4219,6 +4232,21 @@ impl Session {
         }
     }
 
+    pub async fn prepend_pending_input_with_metadata(
+        &self,
+        input: Vec<crate::state::PendingInputItem>,
+    ) -> Result<(), ()> {
+        let mut active = self.active_turn.lock().await;
+        match active.as_mut() {
+            Some(at) => {
+                let mut ts = at.turn_state.lock().await;
+                ts.prepend_pending_input_with_metadata(input);
+                Ok(())
+            }
+            None => Err(()),
+        }
+    }
+
     pub async fn get_pending_input_with_metadata(
         &self,
     ) -> Vec<(ResponseInputItem, Option<ResponseItemMetadata>)> {
@@ -4232,26 +4260,6 @@ impl Session {
                     .collect()
             }
             None => Vec::with_capacity(0),
-        }
-    }
-
-    pub(crate) async fn prepend_pending_input_with_metadata(
-        &self,
-        input: Vec<(ResponseInputItem, Option<ResponseItemMetadata>)>,
-    ) -> Result<(), ()> {
-        let mut active = self.active_turn.lock().await;
-        match active.as_mut() {
-            Some(at) => {
-                let mut ts = at.turn_state.lock().await;
-                ts.prepend_pending_input(
-                    input
-                        .into_iter()
-                        .map(|(input, metadata)| crate::state::PendingInputItem { input, metadata })
-                        .collect(),
-                );
-                Ok(())
-            }
-            None => Err(()),
         }
     }
 
@@ -5984,11 +5992,13 @@ pub(crate) async fn run_turn(
         let mut requeued_pending_input = false;
         let mut accepted_pending_input = Vec::new();
         if !pending_response_items.is_empty() {
-            let mut pending_input_iter = pending_response_items.into_iter();
-            while let Some((pending_input_item, message_metadata)) = pending_input_iter.next() {
+            let mut pending_input_iter = pending_response_items
+                .into_iter()
+                .map(|(input, metadata)| crate::state::PendingInputItem { input, metadata });
+            while let Some(pending_input_item) = pending_input_iter.next() {
                 match inspect_pending_input(&sess, &turn_context, pending_input_item).await {
                     PendingInputHookDisposition::Accepted(pending_input) => {
-                        accepted_pending_input.push((*pending_input, message_metadata));
+                        accepted_pending_input.push(*pending_input);
                     }
                     PendingInputHookDisposition::Blocked {
                         additional_contexts,
@@ -6009,8 +6019,8 @@ pub(crate) async fn run_turn(
         }
 
         let has_accepted_pending_input = !accepted_pending_input.is_empty();
-        for (pending_input, message_metadata) in accepted_pending_input {
-            record_pending_input(&sess, &turn_context, pending_input, message_metadata).await;
+        for pending_input in accepted_pending_input {
+            record_pending_input(&sess, &turn_context, pending_input).await;
         }
         record_additional_contexts(&sess, &turn_context, blocked_pending_input_contexts).await;
 

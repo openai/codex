@@ -1,6 +1,15 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "ApprovalSourceMetadata": {
+      "enum": [
+        "guardian",
+        "user",
+        "policy",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "ContentItem": {
       "oneOf": [
         {
@@ -840,6 +849,16 @@
     },
     "ResponseItemMetadata": {
       "properties": {
+        "approval_source": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalSourceMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "is_tool_call_escalated": {
           "type": [
             "boolean",
