@@ -1152,7 +1152,9 @@ impl ChatWidget {
         if let Some(mut controller) = self.stream_controller.take()
             && let Some(cell) = controller.finalize()
         {
-            self.add_boxed_history(cell);
+            self.active_cell = Some(cell);
+            self.bump_active_cell_revision();
+            self.flush_active_cell();
         }
         self.adaptive_chunking.reset();
     }
@@ -1579,7 +1581,35 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn finalize_completed_assistant_message(&mut self, message: Option<&str>) {
+    fn completed_agent_message_cell(&self, message: &str) -> Option<Box<dyn HistoryCell>> {
+        let mut controller = StreamController::new(
+            self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
+            &self.config.cwd,
+        );
+        let _ = controller.push(message);
+        controller.finalize()
+    }
+
+    fn finalize_completed_assistant_message(
+        &mut self,
+        message: Option<&str>,
+        prefer_completed_message: bool,
+    ) {
+        if prefer_completed_message
+            && let Some(message) = message
+            && !message.is_empty()
+        {
+            self.stream_controller = None;
+            self.adaptive_chunking.reset();
+            self.app_event_tx.send(AppEvent::StopCommitAnimation);
+            if let Some(cell) = self.completed_agent_message_cell(message) {
+                self.add_boxed_history(cell);
+            }
+            self.handle_stream_finished();
+            self.request_redraw();
+            return;
+        }
+
         // If we have a stream_controller, the finalized message payload is redundant because the
         // visible content has already been accumulated through deltas.
         if self.stream_controller.is_none()
@@ -1594,7 +1624,7 @@ impl ChatWidget {
     }
 
     fn on_agent_message(&mut self, message: String) {
-        self.finalize_completed_assistant_message(Some(&message));
+        self.finalize_completed_assistant_message(Some(&message), false);
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
@@ -1610,11 +1640,10 @@ impl ChatWidget {
             self.plan_delta_buffer.clear();
         }
         self.plan_delta_buffer.push_str(&delta);
-        // Before streaming plan content, flush any active exec cell group.
-        self.flush_unified_exec_wait_streak();
-        self.flush_active_cell();
-
         if self.plan_stream_controller.is_none() {
+            // Before streaming plan content, flush any active exec cell group.
+            self.flush_unified_exec_wait_streak();
+            self.flush_active_cell();
             self.plan_stream_controller = Some(PlanStreamController::new(
                 self.last_rendered_width.get().map(|w| w.saturating_sub(4)),
                 &self.config.cwd,
@@ -1652,7 +1681,9 @@ impl ChatWidget {
                 None
             };
         if let Some(cell) = finalized_streamed_cell {
-            self.add_boxed_history(cell);
+            self.active_cell = Some(cell);
+            self.bump_active_cell_revision();
+            self.flush_active_cell();
             // TODO: Replace streamed output with the final plan item text if plan streaming is
             // removed or if we need to reconcile mismatches between streamed and final content.
         } else if !plan_text.is_empty() {
@@ -1750,7 +1781,9 @@ impl ChatWidget {
         if let Some(mut controller) = self.plan_stream_controller.take()
             && let Some(cell) = controller.finalize()
         {
-            self.add_boxed_history(cell);
+            self.active_cell = Some(cell);
+            self.bump_active_cell_revision();
+            self.flush_active_cell();
         }
         self.flush_unified_exec_wait_streak();
         if !from_replay {
@@ -3052,7 +3085,7 @@ impl ChatWidget {
     /// Commentary completion sets a deferred restore flag so the status row
     /// returns once stream queues are idle. Final-answer completion (or absent
     /// phase for legacy models) clears the flag to preserve historical behavior.
-    fn on_agent_message_item_completed(&mut self, item: AgentMessageItem) {
+    fn on_agent_message_item_completed(&mut self, item: AgentMessageItem, from_replay: bool) {
         let mut message = String::new();
         for content in &item.content {
             match content {
@@ -3061,6 +3094,7 @@ impl ChatWidget {
         }
         self.finalize_completed_assistant_message(
             (!message.is_empty()).then_some(message.as_str()),
+            from_replay,
         );
         self.pending_status_indicator_restore = match item.phase {
             // Models that don't support preambles only output AgentMessageItems on turn completion.
@@ -3101,9 +3135,10 @@ impl ChatWidget {
             scope,
             now,
         );
-        for cell in outcome.cells {
+        if let Some(cell) = outcome.active_cell {
             self.bottom_pane.hide_status_indicator();
-            self.add_boxed_history(cell);
+            self.active_cell = Some(cell);
+            self.bump_active_cell_revision();
         }
 
         if outcome.has_controller && outcome.all_idle {
@@ -3149,11 +3184,10 @@ impl ChatWidget {
 
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
-        // Before streaming agent content, flush any active exec cell group.
-        self.flush_unified_exec_wait_streak();
-        self.flush_active_cell();
-
         if self.stream_controller.is_none() {
+            // Before streaming agent content, flush any active exec cell group.
+            self.flush_unified_exec_wait_streak();
+            self.flush_active_cell();
             // If the previous turn inserted non-stream history (exec output, patch status, MCP
             // calls), render a separator before starting the next streamed assistant message.
             if self.needs_final_message_separator && self.had_work_activity {
@@ -5330,9 +5364,12 @@ impl ChatWidget {
                 self.on_agent_message(message)
             }
             EventMsg::AgentMessage(AgentMessageEvent { .. }) => {}
-            EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
+            EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta })
+                if !matches!(replay_kind, Some(ReplayKind::ThreadSnapshot)) =>
+            {
                 self.on_agent_message_delta(delta)
             }
+            EventMsg::AgentMessageDelta(_) => {}
             EventMsg::PlanDelta(event) => self.on_plan_delta(event.delta),
             EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta })
             | EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
@@ -5569,7 +5606,7 @@ impl ChatWidget {
                     self.on_plan_item_completed(plan_item.text.clone());
                 }
                 if let codex_protocol::items::TurnItem::AgentMessage(item) = item {
-                    self.on_agent_message_item_completed(item);
+                    self.on_agent_message_item_completed(item, from_replay);
                 }
             }
         }

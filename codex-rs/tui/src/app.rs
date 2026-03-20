@@ -4306,11 +4306,16 @@ mod tests {
     use codex_protocol::config_types::CollaborationModeMask;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
+    use codex_protocol::items::AgentMessageContent;
+    use codex_protocol::items::AgentMessageItem;
+    use codex_protocol::items::TurnItem;
+    use codex_protocol::models::MessagePhase;
     use codex_protocol::openai_models::ModelAvailabilityNux;
     use codex_protocol::protocol::AgentMessageDeltaEvent;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::ItemCompletedEvent;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionConfiguredEvent;
     use codex_protocol::protocol::SessionSource;
@@ -4841,6 +4846,112 @@ mod tests {
             ),
             other => panic!("expected queued follow-up submission, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn replay_thread_snapshot_prefers_completed_agent_message_item_over_deltas() {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        let turn_id = "turn-1".to_string();
+        let completed_message =
+            "clean completed agent message with intact file references".to_string();
+
+        app.replay_thread_snapshot(
+            ThreadEventSnapshot {
+                session_configured: Some(Event {
+                    id: "session-configured".to_string(),
+                    msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                        session_id: thread_id,
+                        forked_from_id: None,
+                        thread_name: None,
+                        model: "gpt-test".to_string(),
+                        model_provider_id: "test-provider".to_string(),
+                        service_tier: None,
+                        approval_policy: AskForApproval::Never,
+                        approvals_reviewer: ApprovalsReviewer::User,
+                        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                        cwd: PathBuf::from("/tmp/project"),
+                        reasoning_effort: None,
+                        history_log_id: 0,
+                        history_entry_count: 0,
+                        initial_messages: None,
+                        network_proxy: None,
+                        rollout_path: Some(PathBuf::new()),
+                    }),
+                }),
+                events: vec![
+                    Event {
+                        id: "turn-started".to_string(),
+                        msg: EventMsg::TurnStarted(TurnStartedEvent {
+                            turn_id: turn_id.clone(),
+                            model_context_window: None,
+                            collaboration_mode_kind: Default::default(),
+                        }),
+                    },
+                    Event {
+                        id: "agent-delta-1".to_string(),
+                        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                            delta: "corrupted streamed ".to_string(),
+                        }),
+                    },
+                    Event {
+                        id: "agent-delta-2".to_string(),
+                        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                            delta: "text".to_string(),
+                        }),
+                    },
+                    Event {
+                        id: "item-completed".to_string(),
+                        msg: EventMsg::ItemCompleted(ItemCompletedEvent {
+                            thread_id,
+                            turn_id,
+                            item: TurnItem::AgentMessage(AgentMessageItem {
+                                id: "msg-1".to_string(),
+                                content: vec![AgentMessageContent::Text {
+                                    text: completed_message.clone(),
+                                }],
+                                phase: Some(MessagePhase::Commentary),
+                                memory_citation: None,
+                            }),
+                        }),
+                    },
+                ],
+                input_state: None,
+            },
+            false,
+        );
+
+        let mut transcript_texts = Vec::new();
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event
+                && cell.as_any().is::<crate::history_cell::AgentMessageCell>()
+            {
+                let text = cell
+                    .transcript_lines(u16::MAX)
+                    .iter()
+                    .map(|line| {
+                        line.spans
+                            .iter()
+                            .map(|span| span.content.as_ref())
+                            .collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let text = text.strip_prefix("• ").map_or(text.clone(), str::to_string);
+                transcript_texts.push(text);
+            }
+        }
+
+        assert_eq!(
+            transcript_texts.len(),
+            1,
+            "thread-snapshot replay should insert a single completed agent message cell"
+        );
+        assert_eq!(
+            transcript_texts,
+            vec![completed_message],
+            "replayed agent message should use the clean completed item"
+        );
     }
 
     #[tokio::test]
