@@ -78,9 +78,9 @@ fn agent_nickname_candidates(
 /// Control-plane handle for multi-agent operations.
 /// `AgentControl` is held by each session (via `SessionServices`). It provides capability to
 /// spawn new agents and the inter-agent communication layer.
-/// An `AgentControl` instance is shared per "user session" which means the same `AgentControl`
-/// is used for every sub-agent spawned by Codex. By doing so, we make sure the guards are
-/// scoped to a user session.
+/// An `AgentControl` instance is intended to be created at most once per root thread/session
+/// tree. That same `AgentControl` is then shared with every sub-agent spawned from that root,
+/// which keeps the guards scoped to that root thread rather than the entire `ThreadManager`.
 #[derive(Clone, Default)]
 pub(crate) struct AgentControl {
     /// Weak handle back to the global thread registry/state.
