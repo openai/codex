@@ -8,15 +8,11 @@ license.workspace = true
 name = "codex_v8_poc"
 path = "src/lib.rs"
 
-[features]
-default = []
-rusty_v8 = ["dep:v8"]
-
 [lints]
 workspace = true
 
 [dependencies]
-v8 = { workspace = true, optional = true }
+v8 = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

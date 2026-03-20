@@ -6,8 +6,7 @@ pub fn bazel_target() -> &'static str {
     "//codex-rs/v8-poc:v8-poc"
 }
 
-/// Returns the embedded V8 version when the optional `rusty_v8` feature is enabled.
-#[cfg(feature = "rusty_v8")]
+/// Returns the embedded V8 version.
 #[must_use]
 pub fn embedded_v8_version() -> &'static str {
     v8::V8::get_version()
@@ -16,12 +15,10 @@ pub fn embedded_v8_version() -> &'static str {
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
-
-    use super::bazel_target;
-    #[cfg(feature = "rusty_v8")]
     use std::sync::Once;
 
-    #[cfg(feature = "rusty_v8")]
+    use super::bazel_target;
+
     fn initialize_v8() {
         static INIT: Once = Once::new();
 
@@ -31,7 +28,6 @@ mod tests {
         });
     }
 
-    #[cfg(feature = "rusty_v8")]
     fn evaluate_expression(expression: &str) -> String {
         initialize_v8();
 
@@ -52,19 +48,16 @@ mod tests {
         assert_eq!(bazel_target(), "//codex-rs/v8-poc:v8-poc");
     }
 
-    #[cfg(feature = "rusty_v8")]
     #[test]
     fn exposes_embedded_v8_version() {
         assert!(!super::embedded_v8_version().is_empty());
     }
 
-    #[cfg(feature = "rusty_v8")]
     #[test]
     fn evaluates_integer_addition() {
         assert_eq!(evaluate_expression("1 + 2"), "3");
     }
 
-    #[cfg(feature = "rusty_v8")]
     #[test]
     fn evaluates_string_concatenation() {
         assert_eq!(evaluate_expression("'hello ' + 'world'"), "hello world");
