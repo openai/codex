@@ -3,11 +3,12 @@ use std::path::Path;
 
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
-use regex::Regex;
 
 use super::ConfiguredHandler;
 use super::config::HookHandlerConfig;
 use super::config::HooksFile;
+use crate::events::common::matcher_pattern_for_event;
+use crate::events::common::validate_matcher_pattern;
 
 pub(crate) struct DiscoveryResult {
     pub handlers: Vec<ConfiguredHandler>,
@@ -76,7 +77,7 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
                 &mut display_order,
                 source_path.as_path(),
                 codex_protocol::protocol::HookEventName::PreToolUse,
-                effective_matcher(
+                matcher_pattern_for_event(
                     codex_protocol::protocol::HookEventName::PreToolUse,
                     group.matcher.as_deref(),
                 ),
@@ -91,7 +92,7 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
                 &mut display_order,
                 source_path.as_path(),
                 codex_protocol::protocol::HookEventName::SessionStart,
-                effective_matcher(
+                matcher_pattern_for_event(
                     codex_protocol::protocol::HookEventName::SessionStart,
                     group.matcher.as_deref(),
                 ),
@@ -106,7 +107,7 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
                 &mut display_order,
                 source_path.as_path(),
                 codex_protocol::protocol::HookEventName::UserPromptSubmit,
-                effective_matcher(
+                matcher_pattern_for_event(
                     codex_protocol::protocol::HookEventName::UserPromptSubmit,
                     group.matcher.as_deref(),
                 ),
@@ -121,7 +122,7 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
                 &mut display_order,
                 source_path.as_path(),
                 codex_protocol::protocol::HookEventName::Stop,
-                effective_matcher(
+                matcher_pattern_for_event(
                     codex_protocol::protocol::HookEventName::Stop,
                     group.matcher.as_deref(),
                 ),
@@ -131,18 +132,6 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
     }
 
     DiscoveryResult { handlers, warnings }
-}
-
-fn effective_matcher(
-    event_name: codex_protocol::protocol::HookEventName,
-    matcher: Option<&str>,
-) -> Option<&str> {
-    match event_name {
-        codex_protocol::protocol::HookEventName::PreToolUse
-        | codex_protocol::protocol::HookEventName::SessionStart => matcher,
-        codex_protocol::protocol::HookEventName::UserPromptSubmit
-        | codex_protocol::protocol::HookEventName::Stop => None,
-    }
 }
 
 fn append_group_handlers(
@@ -155,7 +144,7 @@ fn append_group_handlers(
     group_handlers: Vec<HookHandlerConfig>,
 ) {
     if let Some(matcher) = matcher
-        && let Err(err) = Regex::new(matcher)
+        && let Err(err) = validate_matcher_pattern(matcher)
     {
         warnings.push(format!(
             "invalid matcher {matcher:?} in {}: {err}",
@@ -221,7 +210,7 @@ mod tests {
     use super::ConfiguredHandler;
     use super::HookHandlerConfig;
     use super::append_group_handlers;
-    use super::effective_matcher;
+    use crate::events::common::matcher_pattern_for_event;
 
     #[test]
     fn user_prompt_submit_ignores_invalid_matcher_during_discovery() {
@@ -235,7 +224,7 @@ mod tests {
             &mut display_order,
             Path::new("/tmp/hooks.json"),
             HookEventName::UserPromptSubmit,
-            effective_matcher(HookEventName::UserPromptSubmit, Some("[")),
+            matcher_pattern_for_event(HookEventName::UserPromptSubmit, Some("[")),
             vec![HookHandlerConfig::Command {
                 command: "echo hello".to_string(),
                 timeout_sec: None,
@@ -271,7 +260,7 @@ mod tests {
             &mut display_order,
             Path::new("/tmp/hooks.json"),
             HookEventName::PreToolUse,
-            effective_matcher(HookEventName::PreToolUse, Some("^Bash$")),
+            matcher_pattern_for_event(HookEventName::PreToolUse, Some("^Bash$")),
             vec![HookHandlerConfig::Command {
                 command: "echo hello".to_string(),
                 timeout_sec: None,
@@ -293,5 +282,31 @@ mod tests {
                 display_order: 0,
             }]
         );
+    }
+
+    #[test]
+    fn pre_tool_use_treats_star_matcher_as_match_all() {
+        let mut handlers = Vec::new();
+        let mut warnings = Vec::new();
+        let mut display_order = 0;
+
+        append_group_handlers(
+            &mut handlers,
+            &mut warnings,
+            &mut display_order,
+            Path::new("/tmp/hooks.json"),
+            HookEventName::PreToolUse,
+            matcher_pattern_for_event(HookEventName::PreToolUse, Some("*")),
+            vec![HookHandlerConfig::Command {
+                command: "echo hello".to_string(),
+                timeout_sec: None,
+                r#async: false,
+                status_message: None,
+            }],
+        );
+
+        assert_eq!(warnings, Vec::<String>::new());
+        assert_eq!(handlers.len(), 1);
+        assert_eq!(handlers[0].matcher.as_deref(), Some("*"));
     }
 }

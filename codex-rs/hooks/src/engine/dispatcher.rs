@@ -14,6 +14,7 @@ use super::CommandShell;
 use super::ConfiguredHandler;
 use super::command_runner::CommandRunResult;
 use super::command_runner::run_command;
+use crate::events::common::matches_matcher;
 
 #[derive(Debug)]
 pub(crate) struct ParsedHandler<T> {
@@ -31,13 +32,7 @@ pub(crate) fn select_handlers(
         .filter(|handler| handler.event_name == event_name)
         .filter(|handler| match event_name {
             HookEventName::PreToolUse | HookEventName::SessionStart => {
-                match (&handler.matcher, matcher_input) {
-                    (Some(matcher), Some(input)) => regex::Regex::new(matcher)
-                        .map(|regex| regex.is_match(input))
-                        .unwrap_or(false),
-                    (None, _) => true,
-                    _ => false,
-                }
+                matches_matcher(handler.matcher.as_deref(), matcher_input)
             }
             HookEventName::UserPromptSubmit | HookEventName::Stop => true,
         })
@@ -187,6 +182,37 @@ mod tests {
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].display_order, 0);
+    }
+
+    #[test]
+    fn pre_tool_use_star_matcher_matches_all_tools() {
+        let handlers = vec![
+            make_handler(HookEventName::PreToolUse, Some("*"), "echo same", 0),
+            make_handler(HookEventName::PreToolUse, Some("^Edit$"), "echo same", 1),
+        ];
+
+        let selected = select_handlers(&handlers, HookEventName::PreToolUse, Some("Bash"));
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].display_order, 0);
+    }
+
+    #[test]
+    fn pre_tool_use_regex_alternation_matches_each_tool_name() {
+        let handlers = vec![make_handler(
+            HookEventName::PreToolUse,
+            Some("Edit|Write"),
+            "echo same",
+            0,
+        )];
+
+        let selected_edit = select_handlers(&handlers, HookEventName::PreToolUse, Some("Edit"));
+        let selected_write = select_handlers(&handlers, HookEventName::PreToolUse, Some("Write"));
+        let selected_bash = select_handlers(&handlers, HookEventName::PreToolUse, Some("Bash"));
+
+        assert_eq!(selected_edit.len(), 1);
+        assert_eq!(selected_write.len(), 1);
+        assert_eq!(selected_bash.len(), 0);
     }
 
     #[test]
