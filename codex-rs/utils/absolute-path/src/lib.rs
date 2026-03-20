@@ -315,7 +315,7 @@ mod tests {
         let temp_dir = tempdir().expect("base dir");
         let abs_path_buf = {
             let _guard = AbsolutePathBufGuard::home_expansion_only(temp_dir.path());
-            serde_json::from_str::<AbsolutePathBuf>("\"~/code\"").expect("failed to deserialize")
+            serde_json::from_str::<AbsolutePathBuf>("\"~/code\"").expect("should deserialize")
         };
         assert_eq!(abs_path_buf.as_path(), home.join("code").as_path());
     }
