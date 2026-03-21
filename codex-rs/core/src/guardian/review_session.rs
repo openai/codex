@@ -103,6 +103,11 @@ struct GuardianReviewSession {
     last_committed_rollout_items: Mutex<Option<Vec<RolloutItem>>>,
 }
 
+struct ForkReviewCleanup {
+    state: Arc<Mutex<GuardianReviewSessionState>>,
+    review_session: Option<Arc<GuardianReviewSession>>,
+}
+
 pub(super) struct GuardianResolvedReviewConfig {
     pub(super) spawn_config: Config,
     pub(super) model: String,
@@ -203,6 +208,44 @@ impl GuardianReviewSession {
 fn shutdown_stale_trunk_in_background(stale_trunk_to_shutdown: Option<Arc<GuardianReviewSession>>) {
     if let Some(review_session) = stale_trunk_to_shutdown {
         review_session.shutdown_in_background();
+    }
+}
+
+impl ForkReviewCleanup {
+    fn new(
+        state: Arc<Mutex<GuardianReviewSessionState>>,
+        review_session: Arc<GuardianReviewSession>,
+    ) -> Self {
+        Self {
+            state,
+            review_session: Some(review_session),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.review_session = None;
+    }
+}
+
+impl Drop for ForkReviewCleanup {
+    fn drop(&mut self) {
+        let Some(review_session) = self.review_session.take() else {
+            return;
+        };
+        let state = Arc::clone(&self.state);
+        drop(tokio::spawn(async move {
+            let review_session = {
+                let mut state = state.lock().await;
+                let fork_index = state
+                    .active_forks
+                    .iter()
+                    .position(|active_review| Arc::ptr_eq(active_review, &review_session));
+                fork_index.map(|fork_index| state.active_forks.swap_remove(fork_index))
+            };
+            if let Some(review_session) = review_session {
+                review_session.shutdown().await;
+            }
+        }));
     }
 }
 
@@ -623,6 +666,8 @@ impl GuardianReviewSessionManager {
             }
             state.active_forks.push(Arc::clone(&review_session));
         }
+        let mut cleanup =
+            ForkReviewCleanup::new(Arc::clone(&self.state), Arc::clone(&review_session));
 
         let execution_result =
             run_review_on_session(review_session.as_ref(), &params, deadline).await;
@@ -635,6 +680,7 @@ impl GuardianReviewSessionManager {
             fork_index.map(|fork_index| state.active_forks.swap_remove(fork_index))
         };
         if let Some(review_session) = review_session {
+            cleanup.disarm();
             review_session.shutdown_in_background();
         }
         execution_result.outcome
@@ -1000,6 +1046,50 @@ mod tests {
     use codex_protocol::protocol::Submission;
     use tokio::sync::watch;
 
+    async fn guardian_review_session_with_shutdown_signal() -> (
+        Arc<GuardianReviewSession>,
+        tokio::sync::oneshot::Receiver<()>,
+    ) {
+        let (child_session, _child_turn_context) =
+            crate::codex_tests::make_session_and_context().await;
+        let child_session = Arc::new(child_session);
+        let child_config = child_session.get_config().await;
+        let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(child_config.as_ref());
+        let (child_tx_sub, child_rx_sub) = async_channel::bounded(4);
+        let (_child_tx_event, child_rx_event) = async_channel::unbounded();
+        let (_child_status_tx, child_agent_status) = watch::channel(AgentStatus::PendingInit);
+        let (child_shutdown_tx, child_shutdown_rx) = tokio::sync::oneshot::channel();
+        let child_session_loop_handle = tokio::spawn(async move {
+            let shutdown: Submission = child_rx_sub
+                .recv()
+                .await
+                .expect("child shutdown submission");
+            assert_eq!(shutdown.op, Op::Shutdown);
+            child_shutdown_tx
+                .send(())
+                .expect("child shutdown signal should be delivered");
+        });
+        let child_codex = Codex {
+            tx_sub: child_tx_sub,
+            rx_event: child_rx_event,
+            agent_status: child_agent_status,
+            session: child_session,
+            session_loop_termination: session_loop_termination_from_handle(
+                child_session_loop_handle,
+            ),
+        };
+        let review_session = Arc::new(GuardianReviewSession {
+            codex: child_codex,
+            cancel_token: CancellationToken::new(),
+            reuse_key,
+            has_prior_review: AtomicBool::new(false),
+            review_lock: Mutex::new(()),
+            last_committed_rollout_items: Mutex::new(None),
+        });
+
+        (review_session, child_shutdown_rx)
+    }
+
     #[test]
     fn guardian_review_session_config_change_invalidates_cached_session() {
         let parent_config = crate::config::test_config();
@@ -1050,42 +1140,8 @@ mod tests {
         let manager = GuardianReviewSessionManager::default();
         manager.state.lock().await.shutdown_started = true;
 
-        let (child_session, _child_turn_context) =
-            crate::codex_tests::make_session_and_context().await;
-        let child_session = Arc::new(child_session);
-        let child_config = child_session.get_config().await;
-        let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(child_config.as_ref());
-        let (child_tx_sub, child_rx_sub) = async_channel::bounded(4);
-        let (_child_tx_event, child_rx_event) = async_channel::unbounded();
-        let (_child_status_tx, child_agent_status) = watch::channel(AgentStatus::PendingInit);
-        let (child_shutdown_tx, child_shutdown_rx) = tokio::sync::oneshot::channel();
-        let child_session_loop_handle = tokio::spawn(async move {
-            let shutdown: Submission = child_rx_sub
-                .recv()
-                .await
-                .expect("child shutdown submission");
-            assert_eq!(shutdown.op, Op::Shutdown);
-            child_shutdown_tx
-                .send(())
-                .expect("child shutdown signal should be delivered");
-        });
-        let child_codex = Codex {
-            tx_sub: child_tx_sub,
-            rx_event: child_rx_event,
-            agent_status: child_agent_status,
-            session: child_session,
-            session_loop_termination: session_loop_termination_from_handle(
-                child_session_loop_handle,
-            ),
-        };
-        let review_session = Arc::new(GuardianReviewSession {
-            codex: child_codex,
-            cancel_token: CancellationToken::new(),
-            reuse_key,
-            has_prior_review: AtomicBool::new(false),
-            review_lock: Mutex::new(()),
-            last_committed_rollout_items: Mutex::new(None),
-        });
+        let (review_session, child_shutdown_rx) =
+            guardian_review_session_with_shutdown_signal().await;
 
         let trunk_state = manager.install_spawned_trunk(review_session).await;
 
@@ -1093,6 +1149,29 @@ mod tests {
         tokio::time::timeout(Duration::from_millis(10), child_shutdown_rx)
             .await
             .expect("install_spawned_trunk should wait for guardian shutdown")
+            .expect("guardian shutdown signal");
+    }
+
+    #[tokio::test]
+    async fn fork_review_cleanup_shuts_down_guardian_session_on_drop() {
+        let manager = GuardianReviewSessionManager::default();
+        let (review_session, child_shutdown_rx) =
+            guardian_review_session_with_shutdown_signal().await;
+        manager
+            .state
+            .lock()
+            .await
+            .active_forks
+            .push(Arc::clone(&review_session));
+
+        drop(ForkReviewCleanup::new(
+            Arc::clone(&manager.state),
+            Arc::clone(&review_session),
+        ));
+
+        tokio::time::timeout(Duration::from_secs(1), child_shutdown_rx)
+            .await
+            .expect("dropped fork cleanup should shut down guardian session")
             .expect("guardian shutdown signal");
     }
 
