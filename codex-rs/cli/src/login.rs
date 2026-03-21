@@ -372,7 +372,12 @@ async fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config
         }
     };
 
-    match Config::load_with_cli_overrides(cli_overrides).await {
+    match Config::load_with_cli_overrides(
+        cli_overrides,
+        codex_exec_server::Environment::default().get_filesystem(),
+    )
+    .await
+    {
         Ok(config) => config,
         Err(e) => {
             eprintln!("Error loading configuration: {e}");

@@ -1,9 +1,9 @@
 use crate::config::types::McpServerConfig;
 use crate::config::types::Notice;
 use crate::path_utils::resolve_symlink_write_paths;
-use crate::path_utils::write_atomically;
 use anyhow::Context;
 use codex_config::CONFIG_TOML_FILE;
+use codex_exec_server::ExecutorFileSystem;
 use codex_features::FEATURES;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
@@ -11,9 +11,10 @@ use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
-use tokio::task;
+use std::sync::Arc;
 use toml_edit::ArrayOfTables;
 use toml_edit::DocumentMut;
 use toml_edit::Item as TomlItem;
@@ -699,11 +700,11 @@ fn normalize_skill_config_path(path: &Path) -> String {
         .to_string()
 }
 
-/// Persist edits using a blocking strategy.
-pub fn apply_blocking(
+async fn apply_with_file_system(
     codex_home: &Path,
     profile: Option<&str>,
     edits: &[ConfigEdit],
+    file_system: &dyn ExecutorFileSystem,
 ) -> anyhow::Result<()> {
     if edits.is_empty() {
         return Ok(());
@@ -712,9 +713,9 @@ pub fn apply_blocking(
     let config_path = codex_home.join(CONFIG_TOML_FILE);
     let write_paths = resolve_symlink_write_paths(&config_path)?;
     let serialized = match write_paths.read_path {
-        Some(path) => match std::fs::read_to_string(&path) {
+        Some(path) => match super::read_text_file(path.as_path(), file_system).await {
             Ok(contents) => contents,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(err) if err.kind() == ErrorKind::NotFound => String::new(),
             Err(err) => return Err(err.into()),
         },
         None => String::new(),
@@ -743,27 +744,33 @@ pub fn apply_blocking(
         return Ok(());
     }
 
-    write_atomically(&write_paths.write_path, &document.doc.to_string()).with_context(|| {
-        format!(
-            "failed to persist config.toml at {}",
-            write_paths.write_path.display()
-        )
-    })?;
+    let write_path = super::absolute_path_for_filesystem_read(write_paths.write_path.as_path())?;
+    file_system
+        .write_file(&write_path, document.doc.to_string().into_bytes())
+        .await
+        .with_context(|| format!("failed to persist config.toml at {}", write_path.display()))?;
 
     Ok(())
 }
 
-/// Persist edits asynchronously by offloading the blocking writer.
+/// Persist edits asynchronously.
 pub async fn apply(
     codex_home: &Path,
     profile: Option<&str>,
     edits: Vec<ConfigEdit>,
+    file_system: Arc<dyn ExecutorFileSystem>,
 ) -> anyhow::Result<()> {
-    let codex_home = codex_home.to_path_buf();
-    let profile = profile.map(ToOwned::to_owned);
-    task::spawn_blocking(move || apply_blocking(&codex_home, profile.as_deref(), &edits))
-        .await
-        .context("config persistence task panicked")?
+    apply_with_file_system(codex_home, profile, &edits, &*file_system).await
+}
+
+/// Persist edits using a blocking strategy.
+#[cfg(test)]
+pub fn apply_blocking(
+    codex_home: &Path,
+    profile: Option<&str>,
+    edits: &[ConfigEdit],
+) -> anyhow::Result<()> {
+    tests::apply_blocking_for_tests(codex_home, profile, edits)
 }
 
 /// Fluent builder to batch config edits and apply them atomically.
@@ -976,17 +983,20 @@ impl ConfigEditsBuilder {
     }
 
     /// Apply edits on a blocking thread.
+    #[cfg(test)]
     pub fn apply_blocking(self) -> anyhow::Result<()> {
         apply_blocking(&self.codex_home, self.profile.as_deref(), &self.edits)
     }
 
-    /// Apply edits asynchronously via a blocking offload.
-    pub async fn apply(self) -> anyhow::Result<()> {
-        task::spawn_blocking(move || {
-            apply_blocking(&self.codex_home, self.profile.as_deref(), &self.edits)
-        })
+    /// Apply edits asynchronously.
+    pub async fn apply(self, file_system: Arc<dyn ExecutorFileSystem>) -> anyhow::Result<()> {
+        apply(
+            &self.codex_home,
+            self.profile.as_deref(),
+            self.edits,
+            file_system,
+        )
         .await
-        .context("config persistence task panicked")?
     }
 }
 

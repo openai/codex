@@ -15,7 +15,6 @@ use crate::config_loader::merge_toml_values;
 use crate::path_utils;
 use crate::path_utils::SymlinkWritePaths;
 use crate::path_utils::resolve_symlink_write_paths;
-use crate::path_utils::write_atomically;
 use codex_app_server_protocol::Config as ApiConfig;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigLayerMetadata;
@@ -29,13 +28,14 @@ use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::OverriddenMetadata;
 use codex_app_server_protocol::WriteStatus;
 use codex_config::CONFIG_TOML_FILE;
+use codex_exec_server::ExecutorFileSystem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
 use std::borrow::Cow;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use thiserror::Error;
-use tokio::task;
 use toml::Value as TomlValue;
 use toml_edit::Item as TomlItem;
 
@@ -114,6 +114,7 @@ pub struct ConfigService {
     cli_overrides: Vec<(String, TomlValue)>,
     loader_overrides: LoaderOverrides,
     cloud_requirements: CloudRequirementsLoader,
+    file_system: Arc<dyn ExecutorFileSystem>,
 }
 
 impl ConfigService {
@@ -122,21 +123,27 @@ impl ConfigService {
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
         cloud_requirements: CloudRequirementsLoader,
+        file_system: Arc<dyn ExecutorFileSystem>,
     ) -> Self {
         Self {
             codex_home,
             cli_overrides,
             loader_overrides,
             cloud_requirements,
+            file_system,
         }
     }
 
-    pub fn new_with_defaults(codex_home: PathBuf) -> Self {
+    pub fn new_with_defaults(
+        codex_home: PathBuf,
+        file_system: Arc<dyn ExecutorFileSystem>,
+    ) -> Self {
         Self {
             codex_home,
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
+            file_system,
         }
     }
 
@@ -155,7 +162,7 @@ impl ConfigService {
                     .loader_overrides(self.loader_overrides.clone())
                     .fallback_cwd(Some(cwd.to_path_buf()))
                     .cloud_requirements(self.cloud_requirements.clone())
-                    .build()
+                    .build(self.file_system.clone())
                     .await
                     .map_err(|err| {
                         ConfigServiceError::io("failed to read configuration layers", err)
@@ -276,7 +283,7 @@ impl ConfigService {
             .map_err(|err| ConfigServiceError::io("failed to load configuration", err))?;
         let user_layer = match layers.get_user_layer() {
             Some(layer) => Cow::Borrowed(layer),
-            None => Cow::Owned(create_empty_user_layer(&allowed_path).await?),
+            None => Cow::Owned(create_empty_user_layer(&allowed_path, &*self.file_system).await?),
         };
 
         if let Some(expected) = expected_version.as_deref()
@@ -381,7 +388,7 @@ impl ConfigService {
         if !config_edits.is_empty() {
             ConfigEditsBuilder::new(&self.codex_home)
                 .with_edits(config_edits)
-                .apply()
+                .apply(self.file_system.clone())
                 .await
                 .map_err(|err| ConfigServiceError::anyhow("failed to persist config.toml", err))?;
         }
@@ -427,6 +434,7 @@ impl ConfigService {
 
 async fn create_empty_user_layer(
     config_toml: &AbsolutePathBuf,
+    file_system: &dyn ExecutorFileSystem,
 ) -> Result<ConfigLayerEntry, ConfigServiceError> {
     let SymlinkWritePaths {
         read_path,
@@ -434,12 +442,12 @@ async fn create_empty_user_layer(
     } = resolve_symlink_write_paths(config_toml.as_path())
         .map_err(|err| ConfigServiceError::io("failed to resolve user config path", err))?;
     let toml_value = match read_path {
-        Some(path) => match tokio::fs::read_to_string(&path).await {
+        Some(path) => match super::read_text_file(path.as_path(), file_system).await {
             Ok(contents) => toml::from_str(&contents).map_err(|e| {
                 ConfigServiceError::toml("failed to parse existing user config.toml", e)
             })?,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                write_empty_user_config(write_path.clone()).await?;
+                write_empty_user_config(write_path.clone(), file_system).await?;
                 TomlValue::Table(toml::map::Map::new())
             }
             Err(err) => {
@@ -450,7 +458,7 @@ async fn create_empty_user_layer(
             }
         },
         None => {
-            write_empty_user_config(write_path).await?;
+            write_empty_user_config(write_path, file_system).await?;
             TomlValue::Table(toml::map::Map::new())
         }
     };
@@ -462,10 +470,15 @@ async fn create_empty_user_layer(
     ))
 }
 
-async fn write_empty_user_config(write_path: PathBuf) -> Result<(), ConfigServiceError> {
-    task::spawn_blocking(move || write_atomically(&write_path, ""))
+async fn write_empty_user_config(
+    write_path: PathBuf,
+    file_system: &dyn ExecutorFileSystem,
+) -> Result<(), ConfigServiceError> {
+    let absolute_path = super::absolute_path_for_filesystem_read(write_path.as_path())
+        .map_err(|err| ConfigServiceError::io("failed to resolve user config path", err))?;
+    file_system
+        .write_file(&absolute_path, Vec::new())
         .await
-        .map_err(|err| ConfigServiceError::anyhow("config persistence task panicked", err.into()))?
         .map_err(|err| ConfigServiceError::io("failed to create empty user config.toml", err))
 }
 

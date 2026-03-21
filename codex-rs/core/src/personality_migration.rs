@@ -53,7 +53,7 @@ pub async fn maybe_migrate_personality(
 
     ConfigEditsBuilder::new(codex_home)
         .set_personality(Some(Personality::Pragmatic))
-        .apply()
+        .apply(codex_exec_server::Environment::default().get_filesystem())
         .await
         .map_err(|err| {
             io::Error::other(format!("failed to persist personality migration: {err}"))

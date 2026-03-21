@@ -1295,7 +1295,7 @@ async fn persist_codex_app_tool_approval(
             ],
             value: value("approve"),
         }])
-        .apply()
+        .apply(codex_exec_server::Environment::default().get_filesystem())
         .await
 }
 

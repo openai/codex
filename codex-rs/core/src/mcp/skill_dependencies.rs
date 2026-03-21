@@ -213,7 +213,7 @@ pub(crate) async fn maybe_install_mcp_dependencies(
 
     if let Err(err) = ConfigEditsBuilder::new(&codex_home)
         .replace_mcp_servers(&servers)
-        .apply()
+        .apply(codex_exec_server::Environment::default().get_filesystem())
         .await
     {
         warn!("failed to persist MCP dependencies for mentioned skills: {err}");

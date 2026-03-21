@@ -33,8 +33,39 @@ use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 use tempfile::TempDir;
+
+pub(super) fn load_from_base_config_with_overrides_for_tests(
+    cfg: ConfigToml,
+    overrides: ConfigOverrides,
+    codex_home: PathBuf,
+) -> std::io::Result<Config> {
+    // Note this ignores requirements.toml enforcement for tests.
+    let config_layer_stack = crate::config_loader::ConfigLayerStack::default();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .map_err(|err| std::io::Error::other(format!("failed to build tokio runtime: {err}")))?;
+    let file_system = codex_exec_server::Environment::default().get_filesystem();
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    runtime.spawn(async move {
+        let result = Config::load_config_with_layer_stack(
+            cfg,
+            overrides,
+            codex_home,
+            config_layer_stack,
+            file_system,
+        )
+        .await;
+        let _ = tx.send(result);
+    });
+    rx.recv().map_err(|err| {
+        std::io::Error::other(format!("failed to receive config from runtime: {err}"))
+    })?
+}
 
 fn stdio_mcp(command: &str) -> McpServerConfig {
     McpServerConfig {
@@ -2997,8 +3028,8 @@ fn loads_compact_prompt_from_file() -> std::io::Result<()> {
     Ok(())
 }
 
-#[test]
-fn load_config_uses_requirements_guardian_developer_instructions() -> std::io::Result<()> {
+#[tokio::test]
+async fn load_config_uses_requirements_guardian_developer_instructions() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config_layer_stack = ConfigLayerStack::new(
         Vec::new(),
@@ -3012,6 +3043,7 @@ fn load_config_uses_requirements_guardian_developer_instructions() -> std::io::R
     )
     .map_err(std::io::Error::other)?;
 
+    let file_system = codex_exec_server::Environment::default().get_filesystem();
     let config = Config::load_config_with_layer_stack(
         ConfigToml::default(),
         ConfigOverrides {
@@ -3020,7 +3052,9 @@ fn load_config_uses_requirements_guardian_developer_instructions() -> std::io::R
         },
         codex_home.path().to_path_buf(),
         config_layer_stack,
-    )?;
+        file_system,
+    )
+    .await?;
 
     assert_eq!(
         config.guardian_developer_instructions.as_deref(),
@@ -3030,8 +3064,9 @@ fn load_config_uses_requirements_guardian_developer_instructions() -> std::io::R
     Ok(())
 }
 
-#[test]
-fn load_config_ignores_empty_requirements_guardian_developer_instructions() -> std::io::Result<()> {
+#[tokio::test]
+async fn load_config_ignores_empty_requirements_guardian_developer_instructions()
+-> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config_layer_stack = ConfigLayerStack::new(
         Vec::new(),
@@ -3043,6 +3078,7 @@ fn load_config_ignores_empty_requirements_guardian_developer_instructions() -> s
     )
     .map_err(std::io::Error::other)?;
 
+    let file_system = codex_exec_server::Environment::default().get_filesystem();
     let config = Config::load_config_with_layer_stack(
         ConfigToml::default(),
         ConfigOverrides {
@@ -3051,7 +3087,9 @@ fn load_config_ignores_empty_requirements_guardian_developer_instructions() -> s
         },
         codex_home.path().to_path_buf(),
         config_layer_stack,
-    )?;
+        file_system,
+    )
+    .await?;
 
     assert_eq!(config.guardian_developer_instructions, None);
 
@@ -4773,8 +4811,9 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
     Ok(())
 }
 
-#[test]
-fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() -> anyhow::Result<()> {
+#[tokio::test]
+async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() -> anyhow::Result<()>
+{
     let fixture = create_test_fixture()?;
 
     let requirements_toml = crate::config_loader::ConfigRequirementsToml {
@@ -4817,6 +4856,7 @@ fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() -> any
         crate::config_loader::ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)
             .expect("config layer stack");
 
+    let file_system = codex_exec_server::Environment::default().get_filesystem();
     let config = Config::load_config_with_layer_stack(
         fixture.cfg.clone(),
         ConfigOverrides {
@@ -4825,7 +4865,9 @@ fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() -> any
         },
         fixture.codex_home(),
         config_layer_stack,
-    )?;
+        file_system,
+    )
+    .await?;
 
     assert!(
         !config

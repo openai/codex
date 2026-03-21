@@ -190,8 +190,12 @@ impl CodexToolCallParam {
             .map(|(k, v)| (k, json_to_toml(v)))
             .collect();
 
-        let cfg =
-            Config::load_with_cli_overrides_and_harness_overrides(cli_overrides, overrides).await?;
+        let cfg = Config::load_with_cli_overrides_and_harness_overrides(
+            cli_overrides,
+            overrides,
+            codex_exec_server::Environment::default().get_filesystem(),
+        )
+        .await?;
 
         Ok((prompt, cfg))
     }

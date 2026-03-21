@@ -71,7 +71,8 @@ async fn apply_role_to_config_inner(
         role_layer_toml,
         preserve_current_profile,
         preserve_current_provider,
-    )?;
+    )
+    .await?;
     Ok(())
 }
 
@@ -143,7 +144,7 @@ fn preservation_policy(config: &Config, role_layer_toml: &TomlValue) -> (bool, b
 mod reload {
     use super::*;
 
-    pub(super) fn build_next_config(
+    pub(super) async fn build_next_config(
         config: &Config,
         role_layer_toml: TomlValue,
         preserve_current_profile: bool,
@@ -159,12 +160,15 @@ mod reload {
             merged_config.profile = None;
         }
 
+        let file_system = codex_exec_server::Environment::default().get_filesystem();
         let mut next_config = Config::load_config_with_layer_stack(
             merged_config,
             reload_overrides(config, preserve_current_provider),
             config.codex_home.clone(),
             config_layer_stack,
-        )?;
+            file_system,
+        )
+        .await?;
         if preserve_current_profile {
             next_config.active_profile = config.active_profile.clone();
         }

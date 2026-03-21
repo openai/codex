@@ -144,9 +144,34 @@ impl TrustDirectoryWidget {
     fn handle_trust(&mut self) {
         let target =
             resolve_root_git_project_for_trust(&self.cwd).unwrap_or_else(|| self.cwd.clone());
-        if let Err(e) = set_project_trust_level(&self.codex_home, &target, TrustLevel::Trusted) {
-            tracing::error!("Failed to set project trusted: {e:?}");
-            self.error = Some(format!("Failed to set trust for {}: {e}", target.display()));
+        let codex_home = self.codex_home.clone();
+        let target_for_task = target.clone();
+        let target_display = target.display().to_string();
+        let handle = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => handle,
+            Err(err) => {
+                self.error = Some(format!("Failed to set trust for {target_display}: {err}"));
+                return;
+            }
+        };
+        handle.spawn(async move {
+            if let Err(err) = set_project_trust_level(
+                &codex_home,
+                &target_for_task,
+                TrustLevel::Trusted,
+                codex_exec_server::Environment::default().get_filesystem(),
+            )
+            .await
+            {
+                tracing::error!(
+                    target = %target_for_task.display(),
+                    "Failed to set project trusted: {err:?}"
+                );
+            }
+        });
+
+        if self.error.is_some() {
+            self.error = None;
         }
 
         self.selection = Some(TrustDirectorySelection::Trust);

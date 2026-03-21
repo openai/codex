@@ -511,7 +511,7 @@ impl CodexMessageProcessor {
             .cli_overrides(self.cli_overrides.clone())
             .fallback_cwd(fallback_cwd)
             .cloud_requirements(cloud_requirements)
-            .build()
+            .build(codex_exec_server::Environment::default().get_filesystem())
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
@@ -5689,7 +5689,7 @@ impl CodexMessageProcessor {
         let edits = vec![ConfigEdit::SetSkillConfig { path, enabled }];
         let result = ConfigEditsBuilder::new(&self.config.codex_home)
             .with_edits(edits)
-            .apply()
+            .apply(codex_exec_server::Environment::default().get_filesystem())
             .await;
 
         match result {
@@ -7785,7 +7785,7 @@ async fn sync_default_client_residency_requirement(
     match codex_core::config::ConfigBuilder::default()
         .cli_overrides(cli_overrides.to_vec())
         .cloud_requirements(loader)
-        .build()
+        .build(codex_exec_server::Environment::default().get_filesystem())
         .await
     {
         Ok(config) => set_default_client_residency_requirement(config.enforce_residency.value()),
@@ -7829,7 +7829,7 @@ async fn derive_config_from_params(
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
         .cloud_requirements(cloud_requirements.clone())
-        .build()
+        .build(codex_exec_server::Environment::default().get_filesystem())
         .await
 }
 
@@ -7858,7 +7858,7 @@ async fn derive_config_for_cwd(
         .harness_overrides(typesafe_overrides)
         .fallback_cwd(cwd)
         .cloud_requirements(cloud_requirements.clone())
-        .build()
+        .build(codex_exec_server::Environment::default().get_filesystem())
         .await
 }
 

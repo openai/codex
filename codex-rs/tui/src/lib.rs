@@ -328,6 +328,7 @@ pub async fn run_main(
         &codex_home,
         &config_cwd,
         cli_kv_overrides.clone(),
+        codex_exec_server::Environment::default().get_filesystem(),
     )
     .await
     {
@@ -1209,7 +1210,7 @@ async fn load_config_or_exit_with_fallback_cwd(
         .harness_overrides(overrides)
         .cloud_requirements(cloud_requirements)
         .fallback_cwd(fallback_cwd)
-        .build()
+        .build(codex_exec_server::Environment::default().get_filesystem())
         .await
     {
         Ok(config) => config,
@@ -1268,7 +1269,7 @@ mod tests {
     async fn build_config(temp_dir: &TempDir) -> std::io::Result<Config> {
         ConfigBuilder::default()
             .codex_home(temp_dir.path().to_path_buf())
-            .build()
+            .build(codex_exec_server::Environment::default().get_filesystem())
             .await
     }
 
@@ -1462,7 +1463,7 @@ trust_level = "untrusted"
         let trusted_config = ConfigBuilder::default()
             .codex_home(codex_home.clone())
             .harness_overrides(trusted_overrides.clone())
-            .build()
+            .build(codex_exec_server::Environment::default().get_filesystem())
             .await?;
         assert_eq!(
             trusted_config.permissions.approval_policy.value(),
@@ -1476,7 +1477,7 @@ trust_level = "untrusted"
         let untrusted_config = ConfigBuilder::default()
             .codex_home(codex_home)
             .harness_overrides(untrusted_overrides)
-            .build()
+            .build(codex_exec_server::Environment::default().get_filesystem())
             .await?;
         assert_eq!(
             untrusted_config.permissions.approval_policy.value(),

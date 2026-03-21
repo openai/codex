@@ -74,7 +74,10 @@ unified_exec = true
 "#;
     std::fs::write(tmp.path().join(CONFIG_TOML_FILE), original)?;
 
-    let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
+    let service = ConfigService::new_with_defaults(
+        tmp.path().to_path_buf(),
+        codex_exec_server::Environment::default().get_filesystem(),
+    );
     service
         .write_value(ConfigValueWriteParams {
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
@@ -108,7 +111,10 @@ async fn write_value_supports_nested_app_paths() -> Result<()> {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "")?;
 
-    let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
+    let service = ConfigService::new_with_defaults(
+        tmp.path().to_path_buf(),
+        codex_exec_server::Environment::default().get_filesystem(),
+    );
     service
         .write_value(ConfigValueWriteParams {
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
@@ -304,7 +310,10 @@ async fn version_conflict_rejected() {
     let user_path = tmp.path().join(CONFIG_TOML_FILE);
     std::fs::write(&user_path, "model = \"user\"").unwrap();
 
-    let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
+    let service = ConfigService::new_with_defaults(
+        tmp.path().to_path_buf(),
+        codex_exec_server::Environment::default().get_filesystem(),
+    );
     let error = service
         .write_value(ConfigValueWriteParams {
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
@@ -327,7 +336,10 @@ async fn write_value_defaults_to_user_config_path() {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "").unwrap();
 
-    let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
+    let service = ConfigService::new_with_defaults(
+        tmp.path().to_path_buf(),
+        codex_exec_server::Environment::default().get_filesystem(),
+    );
     service
         .write_value(ConfigValueWriteParams {
             file_path: None,
@@ -391,7 +403,10 @@ async fn reserved_builtin_provider_override_rejected() {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "model = \"user\"\n").unwrap();
 
-    let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
+    let service = ConfigService::new_with_defaults(
+        tmp.path().to_path_buf(),
+        codex_exec_server::Environment::default().get_filesystem(),
+    );
     let error = service
         .write_value(ConfigValueWriteParams {
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
@@ -650,7 +665,10 @@ alpha = "a"
 
     std::fs::write(&path, base)?;
 
-    let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
+    let service = ConfigService::new_with_defaults(
+        tmp.path().to_path_buf(),
+        codex_exec_server::Environment::default().get_filesystem(),
+    );
     service
         .write_value(ConfigValueWriteParams {
             file_path: Some(path.display().to_string()),

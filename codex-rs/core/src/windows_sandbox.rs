@@ -350,7 +350,7 @@ async fn run_windows_sandbox_setup_and_persist(
         .with_profile(active_profile.as_deref())
         .set_windows_sandbox_mode(windows_sandbox_setup_mode_tag(mode))
         .clear_legacy_windows_sandbox_keys()
-        .apply()
+        .apply(codex_exec_server::Environment::default().get_filesystem())
         .await
         .map_err(|err| anyhow::anyhow!("failed to persist windows sandbox mode: {err}"))
 }

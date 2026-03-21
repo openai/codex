@@ -27,6 +27,7 @@ pub async fn run_apply_command(
             .config_overrides
             .parse_overrides()
             .map_err(anyhow::Error::msg)?,
+        codex_exec_server::Environment::default().get_filesystem(),
     )
     .await?;
 

@@ -12,6 +12,7 @@ anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
 codex-app-server-protocol = { workspace = true }
 codex-core = { workspace = true }
+codex-exec-server = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-cli = { workspace = true }

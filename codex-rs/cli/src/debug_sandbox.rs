@@ -436,7 +436,9 @@ async fn build_debug_sandbox_config(
             .codex_home(codex_home.clone())
             .fallback_cwd(Some(codex_home));
     }
-    builder.build().await
+    builder
+        .build(codex_exec_server::Environment::default().get_filesystem())
+        .await
 }
 
 fn config_uses_permission_profiles(config: &Config) -> bool {

@@ -266,6 +266,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         &codex_home,
         &config_cwd,
         cli_kv_overrides.clone(),
+        codex_exec_server::Environment::default().get_filesystem(),
     )
     .await
     {
@@ -365,7 +366,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .cli_overrides(cli_kv_overrides)
         .harness_overrides(overrides)
         .cloud_requirements(cloud_requirements)
-        .build()
+        .build(codex_exec_server::Environment::default().get_filesystem())
         .await?;
 
     #[allow(clippy::print_stderr)]
@@ -1632,7 +1633,8 @@ mod tests {
     use tracing_opentelemetry::OpenTelemetrySpanExt;
 
     fn test_tracing_subscriber() -> impl tracing::Subscriber + Send + Sync {
-        let provider = SdkTracerProvider::builder().build();
+        let provider = SdkTracerProvider::builder()
+            .build(codex_exec_server::Environment::default().get_filesystem());
         let tracer = provider.tracer("codex-exec-tests");
         tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer))
     }
@@ -1853,7 +1855,7 @@ mod tests {
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .fallback_cwd(Some(cwd.path().to_path_buf()))
-            .build()
+            .build(codex_exec_server::Environment::default().get_filesystem())
             .await
             .expect("build default config");
 
@@ -1877,7 +1879,7 @@ mod tests {
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .fallback_cwd(Some(cwd.path().to_path_buf()))
-            .build()
+            .build(codex_exec_server::Environment::default().get_filesystem())
             .await
             .expect("build auto-review config");
 

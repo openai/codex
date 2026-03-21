@@ -689,19 +689,22 @@ impl PluginsManager {
         .await
         .map_err(PluginInstallError::join)??;
 
-        ConfigService::new_with_defaults(self.codex_home.clone())
-            .write_value(ConfigValueWriteParams {
-                key_path: format!("plugins.{}", result.plugin_id.as_key()),
-                value: json!({
-                    "enabled": true,
-                }),
-                merge_strategy: MergeStrategy::Replace,
-                file_path: None,
-                expected_version: None,
-            })
-            .await
-            .map(|_| ())
-            .map_err(PluginInstallError::from)?;
+        ConfigService::new_with_defaults(
+            self.codex_home.clone(),
+            codex_exec_server::Environment::default().get_filesystem(),
+        )
+        .write_value(ConfigValueWriteParams {
+            key_path: format!("plugins.{}", result.plugin_id.as_key()),
+            value: json!({
+                "enabled": true,
+            }),
+            merge_strategy: MergeStrategy::Replace,
+            file_path: None,
+            expected_version: None,
+        })
+        .await
+        .map(|_| ())
+        .map_err(PluginInstallError::from)?;
 
         let analytics_events_client = match self.analytics_events_client.read() {
             Ok(client) => client.clone(),
@@ -759,7 +762,7 @@ impl PluginsManager {
             .with_edits([ConfigEdit::ClearPath {
                 segments: vec!["plugins".to_string(), plugin_id.as_key()],
             }])
-            .apply()
+            .apply(codex_exec_server::Environment::default().get_filesystem())
             .await?;
 
         let analytics_events_client = match self.analytics_events_client.read() {
@@ -958,7 +961,7 @@ impl PluginsManager {
         } else {
             ConfigEditsBuilder::new(&self.codex_home)
                 .with_edits(config_edits)
-                .apply()
+                .apply(codex_exec_server::Environment::default().get_filesystem())
                 .await
         };
         self.clear_cache();

@@ -41,5 +41,12 @@ where
 }
 
 pub async fn should_use_app_server_tui(cli: &Cli) -> std::io::Result<bool> {
-    should_use_app_server_tui_with(cli, Config::load_with_cli_overrides_and_harness_overrides).await
+    should_use_app_server_tui_with(cli, |cli_kv_overrides, config_overrides| {
+        Config::load_with_cli_overrides_and_harness_overrides(
+            cli_kv_overrides,
+            config_overrides,
+            codex_exec_server::Environment::default().get_filesystem(),
+        )
+    })
+    .await
 }

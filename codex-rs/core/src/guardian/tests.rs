@@ -1002,8 +1002,8 @@ fn guardian_review_session_config_uses_parent_active_model_instead_of_hardcoded_
     assert_eq!(guardian_config.model, Some("active-model".to_string()));
 }
 
-#[test]
-fn guardian_review_session_config_uses_requirements_guardian_override() {
+#[tokio::test]
+async fn guardian_review_session_config_uses_requirements_guardian_override() {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let workspace = tempfile::tempdir().expect("create temp dir");
     let config_layer_stack = ConfigLayerStack::new(
@@ -1017,6 +1017,7 @@ fn guardian_review_session_config_uses_requirements_guardian_override() {
         },
     )
     .expect("config layer stack");
+    let file_system = codex_exec_server::Environment::default().get_filesystem();
     let parent_config = Config::load_config_with_layer_stack(
         ConfigToml::default(),
         ConfigOverrides {
@@ -1025,7 +1026,9 @@ fn guardian_review_session_config_uses_requirements_guardian_override() {
         },
         codex_home.path().to_path_buf(),
         config_layer_stack,
+        file_system,
     )
+    .await
     .expect("load config");
 
     let guardian_config =
@@ -1038,13 +1041,15 @@ fn guardian_review_session_config_uses_requirements_guardian_override() {
     );
 }
 
-#[test]
-fn guardian_review_session_config_uses_default_guardian_policy_without_requirements_override() {
+#[tokio::test]
+async fn guardian_review_session_config_uses_default_guardian_policy_without_requirements_override()
+{
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let workspace = tempfile::tempdir().expect("create temp dir");
     let config_layer_stack =
         ConfigLayerStack::new(Vec::new(), Default::default(), Default::default())
             .expect("config layer stack");
+    let file_system = codex_exec_server::Environment::default().get_filesystem();
     let parent_config = Config::load_config_with_layer_stack(
         ConfigToml::default(),
         ConfigOverrides {
@@ -1053,7 +1058,9 @@ fn guardian_review_session_config_uses_default_guardian_policy_without_requireme
         },
         codex_home.path().to_path_buf(),
         config_layer_stack,
+        file_system,
     )
+    .await
     .expect("load config");
 
     let guardian_config =

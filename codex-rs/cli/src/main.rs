@@ -884,6 +884,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 let config = Config::load_with_cli_overrides_and_harness_overrides(
                     cli_kv_overrides,
                     overrides,
+                    codex_exec_server::Environment::default().get_filesystem(),
                 )
                 .await?;
                 let mut rows = Vec::with_capacity(FEATURES.len());
@@ -923,7 +924,7 @@ async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow
     ConfigEditsBuilder::new(&codex_home)
         .with_profile(interactive.config_profile.as_deref())
         .set_feature_enabled(feature, /*enabled*/ true)
-        .apply()
+        .apply(codex_exec_server::Environment::default().get_filesystem())
         .await?;
     println!("Enabled feature `{feature}` in config.toml.");
     maybe_print_under_development_feature_warning(&codex_home, interactive, feature);
@@ -936,7 +937,7 @@ async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyho
     ConfigEditsBuilder::new(&codex_home)
         .with_profile(interactive.config_profile.as_deref())
         .set_feature_enabled(feature, /*enabled*/ false)
-        .apply()
+        .apply(codex_exec_server::Environment::default().get_filesystem())
         .await?;
     println!("Disabled feature `{feature}` in config.toml.");
     Ok(())
@@ -976,8 +977,12 @@ async fn run_debug_clear_memories_command(
         config_profile: interactive.config_profile.clone(),
         ..Default::default()
     };
-    let config =
-        Config::load_with_cli_overrides_and_harness_overrides(cli_kv_overrides, overrides).await?;
+    let config = Config::load_with_cli_overrides_and_harness_overrides(
+        cli_kv_overrides,
+        overrides,
+        codex_exec_server::Environment::default().get_filesystem(),
+    )
+    .await?;
 
     let state_path = state_db_path(config.sqlite_home.as_path());
     let mut cleared_state_db = false;

@@ -155,7 +155,7 @@ pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
     ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(default_test_overrides())
-        .build()
+        .build(codex_exec_server::Environment::default().get_filesystem())
         .await
         .expect("defaults for test should always succeed")
 }

@@ -2097,9 +2097,12 @@ impl TestClientTracing {
         }
         .parse_overrides()
         .map_err(|e| anyhow::anyhow!("error parsing -c overrides: {e}"))?;
-        let config = Config::load_with_cli_overrides(cli_kv_overrides)
-            .await
-            .context("error loading config")?;
+        let config = Config::load_with_cli_overrides(
+            cli_kv_overrides,
+            codex_exec_server::Environment::default().get_filesystem(),
+        )
+        .await
+        .context("error loading config")?;
         let otel_provider = codex_core::otel_init::build_provider(
             &config,
             env!("CARGO_PKG_VERSION"),

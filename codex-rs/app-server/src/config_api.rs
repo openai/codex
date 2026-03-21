@@ -93,6 +93,7 @@ impl ConfigApi {
             self.cli_overrides.clone(),
             self.loader_overrides.clone(),
             cloud_requirements,
+            codex_exec_server::Environment::default().get_filesystem(),
         )
     }
 

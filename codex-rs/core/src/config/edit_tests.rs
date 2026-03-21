@@ -7,6 +7,55 @@ use std::os::unix::fs::symlink;
 use tempfile::tempdir;
 use toml::Value as TomlValue;
 
+pub(super) fn apply_blocking_for_tests(
+    codex_home: &Path,
+    profile: Option<&str>,
+    edits: &[ConfigEdit],
+) -> anyhow::Result<()> {
+    if edits.is_empty() {
+        return Ok(());
+    }
+
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let write_paths = crate::path_utils::resolve_symlink_write_paths(&config_path)?;
+    let serialized = match write_paths.read_path {
+        Some(path) => match std::fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(err) => return Err(err.into()),
+        },
+        None => String::new(),
+    };
+
+    let doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>()?
+    };
+
+    let profile = profile.map(ToOwned::to_owned).or_else(|| {
+        doc.get("profile")
+            .and_then(|item| item.as_str())
+            .map(ToOwned::to_owned)
+    });
+
+    let mut document = ConfigDocument::new(doc, profile);
+    let mut mutated = false;
+
+    for edit in edits {
+        mutated |= document.apply(edit)?;
+    }
+
+    if !mutated {
+        return Ok(());
+    }
+
+    crate::path_utils::write_atomically(&write_paths.write_path, &document.doc.to_string())
+        .map_err(anyhow::Error::from)?;
+
+    Ok(())
+}
+
 #[test]
 fn blocking_set_model_top_level() {
     let tmp = tempdir().expect("tmpdir");

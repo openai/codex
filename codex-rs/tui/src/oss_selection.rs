@@ -334,7 +334,12 @@ pub async fn select_oss_provider(codex_home: &std::path::Path) -> io::Result<Str
     // If the user manually selected an OSS provider, we save it as the
     // default one to use later.
     if let Ok(ref provider) = result
-        && let Err(e) = set_default_oss_provider(codex_home, provider)
+        && let Err(e) = set_default_oss_provider(
+            codex_home,
+            provider,
+            codex_exec_server::Environment::default().get_filesystem(),
+        )
+        .await
     {
         tracing::warn!("Failed to save OSS provider preference: {e}");
     }

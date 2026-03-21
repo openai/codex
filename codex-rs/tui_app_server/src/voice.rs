@@ -773,9 +773,12 @@ async fn resolve_auth() -> Result<TranscriptionAuthContext, String> {
     let token = auth
         .get_token()
         .map_err(|e| format!("failed to get auth token: {e}"))?;
-    let config = Config::load_with_cli_overrides(Vec::new())
-        .await
-        .map_err(|e| format!("failed to load config: {e}"))?;
+    let config = Config::load_with_cli_overrides(
+        Vec::new(),
+        codex_exec_server::Environment::default().get_filesystem(),
+    )
+    .await
+    .map_err(|e| format!("failed to load config: {e}"))?;
     Ok(TranscriptionAuthContext {
         mode: auth.api_auth_mode(),
         bearer_token: token,

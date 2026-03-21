@@ -240,9 +240,12 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
     let overrides = config_overrides
         .parse_overrides()
         .map_err(anyhow::Error::msg)?;
-    let config = Config::load_with_cli_overrides(overrides)
-        .await
-        .context("failed to load configuration")?;
+    let config = Config::load_with_cli_overrides(
+        overrides,
+        codex_exec_server::Environment::default().get_filesystem(),
+    )
+    .await
+    .context("failed to load configuration")?;
 
     let AddArgs {
         name,
@@ -312,7 +315,7 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
 
     ConfigEditsBuilder::new(&codex_home)
         .replace_mcp_servers(&servers)
-        .apply()
+        .apply(codex_exec_server::Environment::default().get_filesystem())
         .await
         .with_context(|| format!("failed to write MCP servers to {}", codex_home.display()))?;
 
@@ -368,7 +371,7 @@ async fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveAr
     if removed {
         ConfigEditsBuilder::new(&codex_home)
             .replace_mcp_servers(&servers)
-            .apply()
+            .apply(codex_exec_server::Environment::default().get_filesystem())
             .await
             .with_context(|| format!("failed to write MCP servers to {}", codex_home.display()))?;
     }
@@ -386,9 +389,12 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
     let overrides = config_overrides
         .parse_overrides()
         .map_err(anyhow::Error::msg)?;
-    let config = Config::load_with_cli_overrides(overrides)
-        .await
-        .context("failed to load configuration")?;
+    let config = Config::load_with_cli_overrides(
+        overrides,
+        codex_exec_server::Environment::default().get_filesystem(),
+    )
+    .await
+    .context("failed to load configuration")?;
     let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
     let mcp_servers = mcp_manager.effective_servers(&config, /*auth*/ None);
 
@@ -437,9 +443,12 @@ async fn run_logout(config_overrides: &CliConfigOverrides, logout_args: LogoutAr
     let overrides = config_overrides
         .parse_overrides()
         .map_err(anyhow::Error::msg)?;
-    let config = Config::load_with_cli_overrides(overrides)
-        .await
-        .context("failed to load configuration")?;
+    let config = Config::load_with_cli_overrides(
+        overrides,
+        codex_exec_server::Environment::default().get_filesystem(),
+    )
+    .await
+    .context("failed to load configuration")?;
     let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
     let mcp_servers = mcp_manager.effective_servers(&config, /*auth*/ None);
 
@@ -467,9 +476,12 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
     let overrides = config_overrides
         .parse_overrides()
         .map_err(anyhow::Error::msg)?;
-    let config = Config::load_with_cli_overrides(overrides)
-        .await
-        .context("failed to load configuration")?;
+    let config = Config::load_with_cli_overrides(
+        overrides,
+        codex_exec_server::Environment::default().get_filesystem(),
+    )
+    .await
+    .context("failed to load configuration")?;
     let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
     let mcp_servers = mcp_manager.effective_servers(&config, /*auth*/ None);
 
@@ -716,9 +728,12 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
     let overrides = config_overrides
         .parse_overrides()
         .map_err(anyhow::Error::msg)?;
-    let config = Config::load_with_cli_overrides(overrides)
-        .await
-        .context("failed to load configuration")?;
+    let config = Config::load_with_cli_overrides(
+        overrides,
+        codex_exec_server::Environment::default().get_filesystem(),
+    )
+    .await
+    .context("failed to load configuration")?;
     let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
     let mcp_servers = mcp_manager.effective_servers(&config, /*auth*/ None);
 
