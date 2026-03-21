@@ -316,6 +316,8 @@ use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
 use crate::slash_command::SlashCommand;
+use crate::slash_command_invocation::FastSlashCommandArgs;
+use crate::slash_command_invocation::SlashCommandInvocation;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
@@ -4879,16 +4881,29 @@ impl ChatWidget {
         }
     }
 
+    fn prepare_inline_command_invocation(
+        &mut self,
+        cmd: SlashCommand,
+        record_history: bool,
+    ) -> Option<SlashCommandInvocation> {
+        let (prepared_args, prepared_elements) = self
+            .bottom_pane
+            .prepare_inline_args_submission(record_history)?;
+        match cmd.parse_invocation(&prepared_args, &prepared_elements) {
+            Ok(invocation) => Some(invocation),
+            Err(err) => {
+                self.add_error_message(err.message());
+                None
+            }
+        }
+    }
+
     fn dispatch_command_with_args(
         &mut self,
         cmd: SlashCommand,
         args: String,
-        _text_elements: Vec<TextElement>,
+        text_elements: Vec<TextElement>,
     ) {
-        if !cmd.supports_inline_args() {
-            self.dispatch_command(cmd);
-            return;
-        }
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
@@ -4899,43 +4914,34 @@ impl ChatWidget {
             return;
         }
 
-        let trimmed = args.trim();
-        match cmd {
-            SlashCommand::Fast => {
-                if trimmed.is_empty() {
-                    self.dispatch_command(cmd);
-                    return;
-                }
-                match trimmed.to_ascii_lowercase().as_str() {
-                    "on" => self.set_service_tier_selection(Some(ServiceTier::Fast)),
-                    "off" => self.set_service_tier_selection(/*service_tier*/ None),
-                    "status" => {
-                        let status = if matches!(self.config.service_tier, Some(ServiceTier::Fast))
-                        {
-                            "on"
-                        } else {
-                            "off"
-                        };
-                        self.add_info_message(
-                            format!("Fast mode is {status}."),
-                            /*hint*/ None,
-                        );
-                    }
-                    _ => {
-                        self.add_error_message("Usage: /fast [on|off|status]".to_string());
-                    }
-                }
+        match cmd.parse_invocation(&args, &text_elements) {
+            Ok(SlashCommandInvocation::Bare(_)) => {
+                self.dispatch_command(cmd);
             }
-            SlashCommand::Rename if !trimmed.is_empty() => {
+            Ok(SlashCommandInvocation::Fast(FastSlashCommandArgs::On)) => {
+                self.set_service_tier_selection(Some(ServiceTier::Fast));
+            }
+            Ok(SlashCommandInvocation::Fast(FastSlashCommandArgs::Off)) => {
+                self.set_service_tier_selection(/*service_tier*/ None);
+            }
+            Ok(SlashCommandInvocation::Fast(FastSlashCommandArgs::Status)) => {
+                let status = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
+                    "on"
+                } else {
+                    "off"
+                };
+                self.add_info_message(format!("Fast mode is {status}."), /*hint*/ None);
+            }
+            Ok(SlashCommandInvocation::Rename(_)) => {
                 self.session_telemetry
                     .counter("codex.thread.rename", /*inc*/ 1, &[]);
-                let Some((prepared_args, _prepared_elements)) = self
-                    .bottom_pane
-                    .prepare_inline_args_submission(/*record_history*/ false)
+                let Some(SlashCommandInvocation::Rename(prepared_args)) =
+                    self.prepare_inline_command_invocation(cmd, /*record_history*/ false)
                 else {
                     return;
                 };
-                let Some(name) = codex_core::util::normalize_thread_name(&prepared_args) else {
+                let Some(name) = codex_core::util::normalize_thread_name(&prepared_args.text)
+                else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
                     return;
                 };
@@ -4945,14 +4951,13 @@ impl ChatWidget {
                 self.app_event_tx.set_thread_name(name);
                 self.bottom_pane.drain_pending_submission_state();
             }
-            SlashCommand::Plan if !trimmed.is_empty() => {
+            Ok(SlashCommandInvocation::Plan(_)) => {
                 self.dispatch_command(cmd);
                 if self.active_mode_kind() != ModeKind::Plan {
                     return;
                 }
-                let Some((prepared_args, prepared_elements)) = self
-                    .bottom_pane
-                    .prepare_inline_args_submission(/*record_history*/ true)
+                let Some(SlashCommandInvocation::Plan(prepared_args)) =
+                    self.prepare_inline_command_invocation(cmd, /*record_history*/ true)
                 else {
                     return;
                 };
@@ -4960,11 +4965,15 @@ impl ChatWidget {
                     .bottom_pane
                     .take_recent_submission_images_with_placeholders();
                 let remote_image_urls = self.take_remote_image_urls();
+                let crate::slash_command_invocation::SlashCommandTextArg {
+                    text,
+                    text_elements,
+                } = prepared_args;
                 let user_message = UserMessage {
-                    text: prepared_args,
+                    text,
                     local_images,
                     remote_image_urls,
-                    text_elements: prepared_elements,
+                    text_elements,
                     mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
                 };
                 if self.is_session_configured() {
@@ -4976,35 +4985,35 @@ impl ChatWidget {
                     self.queue_user_message(user_message);
                 }
             }
-            SlashCommand::Review if !trimmed.is_empty() => {
-                let Some((prepared_args, _prepared_elements)) = self
-                    .bottom_pane
-                    .prepare_inline_args_submission(/*record_history*/ false)
+            Ok(SlashCommandInvocation::Review(_)) => {
+                let Some(SlashCommandInvocation::Review(prepared_args)) =
+                    self.prepare_inline_command_invocation(cmd, /*record_history*/ false)
                 else {
                     return;
                 };
                 self.submit_op(AppCommand::review(ReviewRequest {
                     target: ReviewTarget::Custom {
-                        instructions: prepared_args,
+                        instructions: prepared_args.text,
                     },
                     user_facing_hint: None,
                 }));
                 self.bottom_pane.drain_pending_submission_state();
             }
-            SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
-                let Some((prepared_args, _prepared_elements)) = self
-                    .bottom_pane
-                    .prepare_inline_args_submission(/*record_history*/ false)
+            Ok(SlashCommandInvocation::SandboxReadRoot(_)) => {
+                let Some(SlashCommandInvocation::SandboxReadRoot(prepared_args)) =
+                    self.prepare_inline_command_invocation(cmd, /*record_history*/ false)
                 else {
                     return;
                 };
                 self.app_event_tx
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot {
-                        path: prepared_args,
+                        path: prepared_args.text,
                     });
                 self.bottom_pane.drain_pending_submission_state();
             }
-            _ => self.dispatch_command(cmd),
+            Err(err) => {
+                self.add_error_message(err.message());
+            }
         }
     }
 
