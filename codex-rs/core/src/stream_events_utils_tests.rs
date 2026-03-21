@@ -16,6 +16,7 @@ fn assistant_output_text(text: &str) -> ResponseItem {
         content: vec![ContentItem::OutputText {
             text: text.to_string(),
         }],
+        metadata: None,
         end_turn: Some(true),
         phase: None,
     }

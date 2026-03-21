@@ -2795,6 +2795,7 @@ mod tests {
                 content: vec![codex_protocol::models::ContentItem::InputText {
                     text: "plain text".into(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             }),

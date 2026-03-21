@@ -63,6 +63,7 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
                 content: vec![ContentItem::InputText {
                     text: "first request".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             }],
@@ -87,6 +88,7 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
                 content: vec![ContentItem::OutputText {
                     text: "commentary".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: Some(MessagePhase::Commentary),
             }],
@@ -101,6 +103,7 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
                 content: vec![ContentItem::OutputText {
                     text: "final response".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: Some(MessagePhase::FinalAnswer),
             }],
@@ -115,6 +118,7 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
                 content: vec![ContentItem::InputText {
                     text: "latest request".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             }],
@@ -270,6 +274,7 @@ async fn monitor_action_posts_expected_arc_request() {
                 content: vec![ContentItem::InputText {
                     text: "please run the tool".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             }],
@@ -351,6 +356,7 @@ async fn monitor_action_uses_env_url_and_token_overrides() {
                 content: vec![ContentItem::InputText {
                     text: "please run the tool".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             }],
@@ -421,6 +427,7 @@ async fn monitor_action_rejects_legacy_response_fields() {
                 content: vec![ContentItem::InputText {
                     text: "please run the tool".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             }],

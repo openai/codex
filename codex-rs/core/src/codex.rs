@@ -330,6 +330,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ResponseItemMessageMetadata;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
@@ -2724,6 +2725,7 @@ impl Session {
             .inject_response_items(vec![ResponseInputItem::Message {
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText { text }],
+                metadata: None,
             }])
             .await
             .is_err()
@@ -2821,6 +2823,7 @@ impl Session {
             .inject_response_items(vec![ResponseInputItem::Message {
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText { text }],
+                metadata: None,
             }])
             .await
             .is_err()
@@ -3273,13 +3276,56 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
-        self.record_into_history(items, turn_context).await;
-        self.persist_rollout_response_items(items).await;
-        self.send_raw_response_items(turn_context, items).await;
+        let items = self.prepare_history_items(items);
+        self.record_into_history_prepared(&items, turn_context)
+            .await;
+        self.persist_rollout_response_items(&items).await;
+        self.send_raw_response_items(turn_context, &items).await;
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
     pub(crate) async fn record_into_history(
+        &self,
+        items: &[ResponseItem],
+        turn_context: &TurnContext,
+    ) {
+        let items = self.prepare_history_items(items);
+        self.record_into_history_prepared(&items, turn_context)
+            .await;
+    }
+
+    fn prepare_history_items(&self, items: &[ResponseItem]) -> Vec<ResponseItem> {
+        if self.enabled(Feature::ItemMetadata) {
+            items
+                .iter()
+                .cloned()
+                .map(|item| match item {
+                    ResponseItem::Message {
+                        id,
+                        role,
+                        content,
+                        metadata,
+                        end_turn,
+                        phase,
+                    } => ResponseItem::Message {
+                        id,
+                        role,
+                        content,
+                        metadata: Some(metadata.unwrap_or_else(|| {
+                            ResponseItemMessageMetadata::new(/*user_message_type*/ None)
+                        })),
+                        end_turn,
+                        phase,
+                    },
+                    other => other,
+                })
+                .collect()
+        } else {
+            items.to_vec()
+        }
+    }
+
+    async fn record_into_history_prepared(
         &self,
         items: &[ResponseItem],
         turn_context: &TurnContext,
@@ -3298,6 +3344,7 @@ impl Session {
             content: vec![ContentItem::InputText {
                 text: format!("Warning: {}", message.into()),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         };

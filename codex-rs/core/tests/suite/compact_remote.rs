@@ -1124,6 +1124,7 @@ async fn remote_compact_persists_replacement_history_in_rollout() -> Result<()> 
             content: vec![ContentItem::OutputText {
                 text: "COMPACTED_ASSISTANT_NOTE".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         },
@@ -1261,6 +1262,7 @@ async fn remote_compact_and_resume_refresh_stale_developer_instructions() -> Res
             content: vec![ContentItem::InputText {
                 text: stale_developer_message.to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         },
@@ -1393,6 +1395,7 @@ async fn remote_compact_refreshes_stale_developer_instructions_without_resume() 
             content: vec![ContentItem::InputText {
                 text: stale_developer_message.to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         },

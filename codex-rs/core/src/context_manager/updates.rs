@@ -180,6 +180,7 @@ fn build_text_message(role: &str, text_sections: Vec<String>) -> Option<Response
         id: None,
         role: role.to_string(),
         content,
+        metadata: None,
         end_turn: None,
         phase: None,
     })

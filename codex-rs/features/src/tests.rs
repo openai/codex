@@ -148,6 +148,12 @@ fn image_detail_original_feature_is_under_development() {
 }
 
 #[test]
+fn item_metadata_is_under_development_and_disabled_by_default() {
+    assert_eq!(Feature::ItemMetadata.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::ItemMetadata.default_enabled(), false);
+}
+
+#[test]
 fn collab_is_legacy_alias_for_multi_agent() {
     assert_eq!(feature_for_key("multi_agent"), Some(Feature::Collab));
     assert_eq!(feature_for_key("collab"), Some(Feature::Collab));

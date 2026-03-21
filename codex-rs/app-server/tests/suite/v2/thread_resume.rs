@@ -768,6 +768,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
                 content: vec![ContentItem::InputText {
                     text: "history override".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             }]),
@@ -1596,6 +1597,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
         content: vec![ContentItem::InputText {
             text: history_text.to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     }];
