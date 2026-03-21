@@ -199,6 +199,54 @@ fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyhow::Re
 }
 
 #[test]
+fn skill_roots_from_layer_stack_can_override_defaults_with_explicit_roots() -> anyhow::Result<()> {
+    let tmp = tempfile::tempdir()?;
+
+    let system_folder = tmp.path().join("etc/codex");
+    let home_folder = tmp.path().join("home");
+    let user_folder = home_folder.join("codex");
+    let explicit_root = tmp.path().join("custom-skills");
+    fs::create_dir_all(&system_folder)?;
+    fs::create_dir_all(&user_folder)?;
+    fs::create_dir_all(&explicit_root)?;
+
+    let system_file = AbsolutePathBuf::from_absolute_path(system_folder.join("config.toml"))?;
+    let user_file = AbsolutePathBuf::from_absolute_path(user_folder.join("config.toml"))?;
+
+    let mut skills_table = toml::map::Map::new();
+    skills_table.insert(
+        "roots".to_string(),
+        TomlValue::Array(vec![TomlValue::String(
+            explicit_root.to_string_lossy().to_string(),
+        )]),
+    );
+    let mut user_table = toml::map::Map::new();
+    user_table.insert("skills".to_string(), TomlValue::Table(skills_table));
+    let user_config = TomlValue::Table(user_table);
+
+    let layers = vec![
+        ConfigLayerEntry::new(
+            ConfigLayerSource::System { file: system_file },
+            TomlValue::Table(toml::map::Map::new()),
+        ),
+        ConfigLayerEntry::new(ConfigLayerSource::User { file: user_file }, user_config),
+    ];
+    let stack = ConfigLayerStack::new(
+        layers,
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )?;
+
+    let got = skill_roots_from_layer_stack(&stack, Some(&home_folder))
+        .into_iter()
+        .map(|root| (root.scope, root.path))
+        .collect::<Vec<_>>();
+
+    assert_eq!(got, vec![(SkillScope::User, explicit_root)]);
+    Ok(())
+}
+
+#[test]
 fn loads_skills_from_home_agents_dir_for_user_scope() -> anyhow::Result<()> {
     let tmp = tempfile::tempdir()?;
 

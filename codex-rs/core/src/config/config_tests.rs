@@ -176,6 +176,7 @@ enabled = false
         cfg.skills,
         Some(SkillsConfig {
             bundled: Some(BundledSkillsConfig { enabled: false }),
+            roots: Vec::new(),
             config: Vec::new(),
         })
     );

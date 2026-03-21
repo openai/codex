@@ -3,6 +3,7 @@ use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::default_project_root_markers;
 use crate::config_loader::merge_toml_values;
 use crate::config_loader::project_root_markers_from_config;
+use crate::config::types::SkillsConfig;
 use crate::plugins::plugin_namespace_for_skill_path;
 use crate::skills::model::SkillDependencies;
 use crate::skills::model::SkillError;
@@ -34,6 +35,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
 use tracing::error;
+use tracing::warn;
 
 #[cfg(test)]
 use crate::config::Config;
@@ -234,14 +236,47 @@ fn skill_roots_with_home_dir(
     home_dir: Option<&Path>,
     plugin_skill_roots: Vec<PathBuf>,
 ) -> Vec<SkillRoot> {
-    let mut roots = skill_roots_from_layer_stack_inner(config_layer_stack, home_dir);
+    let configured_roots = configured_skill_roots_from_stack(config_layer_stack);
+    let mut roots = if configured_roots.is_empty() {
+        let mut defaults = skill_roots_from_layer_stack_inner(config_layer_stack, home_dir);
+        defaults.extend(repo_agents_skill_roots(config_layer_stack, cwd));
+        defaults
+    } else {
+        configured_roots
+    };
     roots.extend(plugin_skill_roots.into_iter().map(|path| SkillRoot {
         path,
         scope: SkillScope::User,
     }));
-    roots.extend(repo_agents_skill_roots(config_layer_stack, cwd));
     dedupe_skill_roots_by_path(&mut roots);
     roots
+}
+
+fn configured_skill_roots_from_stack(config_layer_stack: &ConfigLayerStack) -> Vec<SkillRoot> {
+    let effective_config = config_layer_stack.effective_config();
+    let Some(skills_value) = effective_config
+        .as_table()
+        .and_then(|table| table.get("skills"))
+    else {
+        return Vec::new();
+    };
+
+    let skills: SkillsConfig = match skills_value.clone().try_into() {
+        Ok(skills) => skills,
+        Err(err) => {
+            warn!("invalid skills config: {err}");
+            return Vec::new();
+        }
+    };
+
+    skills
+        .roots
+        .into_iter()
+        .map(|path| SkillRoot {
+            path: path.as_path().to_path_buf(),
+            scope: SkillScope::User,
+        })
+        .collect()
 }
 
 fn skill_roots_from_layer_stack_inner(
