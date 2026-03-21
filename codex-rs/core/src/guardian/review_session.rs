@@ -290,8 +290,7 @@ impl GuardianReviewSessionManager {
             reasoning_effort: resolved.reasoning_effort,
             external_cancel: None,
         };
-        self.maybe_prepare_trunk_eagerly(&params, &next_reuse_key)
-            .await;
+        self.maybe_prepare_trunk_eagerly(&params).await;
     }
 
     pub(crate) async fn shutdown(&self) {
@@ -394,14 +393,11 @@ impl GuardianReviewSessionManager {
         }
     }
 
-    async fn maybe_prepare_trunk_eagerly(
-        &self,
-        params: &GuardianReviewSessionParams,
-        next_reuse_key: &GuardianReviewSessionReuseKey,
-    ) {
+    async fn maybe_prepare_trunk_eagerly(&self, params: &GuardianReviewSessionParams) {
+        let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&params.spawn_config);
         let GuardianTrunkState::NeedsSpawn {
             stale_trunk_to_shutdown,
-        } = self.prepare_trunk(next_reuse_key).await
+        } = self.prepare_trunk_for_eager_init().await
         else {
             return;
         };
@@ -413,7 +409,7 @@ impl GuardianReviewSessionManager {
 
         let GuardianTrunkState::NeedsSpawn {
             stale_trunk_to_shutdown,
-        } = self.prepare_trunk(next_reuse_key).await
+        } = self.prepare_trunk_for_eager_init().await
         else {
             drop(spawn_guard);
             return;
@@ -565,6 +561,20 @@ impl GuardianReviewSessionManager {
             return GuardianTrunkState::NeedsSpawn {
                 stale_trunk_to_shutdown: state.trunk.take(),
             };
+        }
+        if let Some(trunk) = state.trunk.as_ref() {
+            GuardianTrunkState::Ready(Arc::clone(trunk))
+        } else {
+            GuardianTrunkState::NeedsSpawn {
+                stale_trunk_to_shutdown: None,
+            }
+        }
+    }
+
+    async fn prepare_trunk_for_eager_init(&self) -> GuardianTrunkState {
+        let state = self.state.lock().await;
+        if state.shutdown_started {
+            return GuardianTrunkState::ShutdownStarted;
         }
         if let Some(trunk) = state.trunk.as_ref() {
             GuardianTrunkState::Ready(Arc::clone(trunk))
@@ -1051,7 +1061,7 @@ mod tests {
         tokio::sync::oneshot::Receiver<()>,
     ) {
         let (child_session, _child_turn_context) =
-            crate::codex_tests::make_session_and_context().await;
+            crate::codex::make_session_and_context().await;
         let child_session = Arc::new(child_session);
         let child_config = child_session.get_config().await;
         let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(child_config.as_ref());
@@ -1150,6 +1160,40 @@ mod tests {
             .await
             .expect("install_spawned_trunk should wait for guardian shutdown")
             .expect("guardian shutdown signal");
+    }
+
+    #[tokio::test]
+    async fn eager_trunk_init_does_not_replace_existing_mismatched_trunk() {
+        let manager = GuardianReviewSessionManager::default();
+        let (trunk_session, _child_shutdown_rx) =
+            guardian_review_session_with_shutdown_signal().await;
+        manager.state.lock().await.trunk = Some(Arc::clone(&trunk_session));
+
+        let (parent_session, parent_turn) = crate::codex::make_session_and_context().await;
+        let parent_session = Arc::new(parent_session);
+        let mut spawn_config = crate::config::test_config();
+        spawn_config.model_provider.base_url = Some("https://guardian.example.invalid/v2".into());
+        let params = GuardianReviewSessionParams {
+            parent_session,
+            parent_turn,
+            prompt_items: Vec::new(),
+            schema: Value::Null,
+            model: "active-model".to_string(),
+            reasoning_effort: None,
+            external_cancel: None,
+            spawn_config: spawn_config.clone(),
+        };
+
+        manager.maybe_prepare_trunk_eagerly(&params).await;
+
+        let trunk = manager
+            .state
+            .lock()
+            .await
+            .trunk
+            .clone()
+            .expect("existing trunk should be preserved");
+        assert!(Arc::ptr_eq(&trunk, &trunk_session));
     }
 
     #[tokio::test]
