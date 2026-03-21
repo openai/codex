@@ -4820,6 +4820,21 @@ async fn ctrl_d_with_modal_open_does_not_quit() {
 }
 
 #[tokio::test]
+async fn ctrl_x_clears_composer_without_emitting_ops() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.bottom_pane
+        .set_composer_text("clear me\nentirely".to_string(), Vec::new(), Vec::new());
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
+
+    assert!(chat.composer_is_empty());
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
+}
+
+#[tokio::test]
 async fn ctrl_c_cleared_prompt_is_recoverable_via_history() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
 

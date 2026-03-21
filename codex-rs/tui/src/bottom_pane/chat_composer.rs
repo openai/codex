@@ -1093,6 +1093,13 @@ impl ChatComposer {
         Some(previous)
     }
 
+    pub(crate) fn clear(&mut self) {
+        self.set_text_content(String::new(), Vec::new(), Vec::new());
+        self.remote_image_urls.clear();
+        self.selected_remote_image_index = None;
+        self.history.reset_navigation();
+    }
+
     /// Get the current composer text.
     pub(crate) fn current_text(&self) -> String {
         self.textarea.text().to_string()

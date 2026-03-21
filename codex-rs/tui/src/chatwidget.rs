@@ -4184,6 +4184,20 @@ impl ChatWidget {
                 modifiers,
                 kind: KeyEventKind::Press,
                 ..
+            } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'x') => {
+                self.bottom_pane.clear_quit_shortcut_hint();
+                self.quit_shortcut_expires_at = None;
+                self.quit_shortcut_key = None;
+                if !self.bottom_pane.composer_is_empty() {
+                    self.bottom_pane.clear_composer();
+                }
+                return;
+            }
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                kind: KeyEventKind::Press,
+                ..
             } if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
                 && c.eq_ignore_ascii_case(&'v') =>
             {
