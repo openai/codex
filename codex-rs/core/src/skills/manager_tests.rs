@@ -5,6 +5,10 @@ use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirementsToml;
 use crate::plugins::PluginsManager;
+use crate::skills::SkillMetadata;
+use crate::skills::config_rules::resolve_disabled_skill_paths;
+use crate::skills::config_rules::skill_config_rules_from_stack;
+use codex_app_server_protocol::ConfigLayerSource;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::PathBuf;
@@ -15,6 +19,49 @@ fn write_user_skill(codex_home: &TempDir, dir: &str, name: &str, description: &s
     fs::create_dir_all(&skill_dir).unwrap();
     let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
     fs::write(skill_dir.join("SKILL.md"), content).unwrap();
+}
+
+fn write_plugin_skill(
+    codex_home: &TempDir,
+    marketplace: &str,
+    plugin_name: &str,
+    dir: &str,
+    name: &str,
+    description: &str,
+) -> PathBuf {
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join(marketplace)
+        .join(plugin_name)
+        .join("local");
+    let skill_dir = plugin_root.join("skills").join(dir);
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        format!(r#"{{"name":"{plugin_name}"}}"#),
+    )
+    .unwrap();
+    let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
+    let skill_path = skill_dir.join("SKILL.md");
+    fs::write(&skill_path, content).unwrap();
+    skill_path
+}
+
+fn test_skill(name: &str, path: PathBuf) -> SkillMetadata {
+    SkillMetadata {
+        name: name.to_string(),
+        description: "test".to_string(),
+        short_description: None,
+        interface: None,
+        dependencies: None,
+        policy: None,
+        permission_profile: None,
+        managed_network_override: None,
+        path_to_skills_md: path,
+        scope: SkillScope::User,
+    }
 }
 
 #[test]
@@ -66,6 +113,68 @@ async fn skills_for_config_reuses_cache_for_same_effective_config() {
     let outcome2 = skills_manager.skills_for_config(&cfg);
     assert_eq!(outcome2.errors, outcome1.errors);
     assert_eq!(outcome2.skills, outcome1.skills);
+}
+
+#[tokio::test]
+async fn skills_for_config_disables_plugin_skills_by_name() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let skill_path = write_plugin_skill(
+        &codex_home,
+        "test",
+        "sample",
+        "sample-search",
+        "sample-search",
+        "search sample data",
+    );
+    fs::write(
+        codex_home.path().join(crate::config::CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[[skills.config]]
+name = "sample:sample-search"
+enabled = false
+
+[plugins."sample@test"]
+enabled = true
+"#,
+    )
+    .expect("write config");
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        })
+        .build()
+        .await
+        .expect("load config");
+
+    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
+    let skills_manager = SkillsManager::new(
+        codex_home.path().to_path_buf(),
+        plugins_manager,
+        config.bundled_skills_enabled(),
+    );
+
+    let outcome = skills_manager.skills_for_config(&config);
+    let skill = outcome
+        .skills
+        .iter()
+        .find(|skill| skill.name == "sample:sample-search")
+        .expect("plugin skill should load");
+    let skill_path = dunce::canonicalize(skill_path).expect("skill path should canonicalize");
+
+    assert_eq!(skill.path_to_skills_md, skill_path);
+    assert!(outcome.disabled_paths.contains(&skill.path_to_skills_md));
+    assert!(
+        !outcome
+            .allowed_skills_for_implicit_invocation()
+            .iter()
+            .any(|allowed_skill| allowed_skill.path_to_skills_md == skill.path_to_skills_md)
+    );
 }
 
 #[tokio::test]
@@ -282,9 +391,10 @@ fn normalize_extra_user_roots_is_stable_for_equivalent_inputs() {
 
 #[cfg_attr(windows, ignore)]
 #[test]
-fn disabled_paths_from_stack_allows_session_flags_to_override_user_layer() {
+fn disabled_paths_for_skills_allows_session_flags_to_override_user_layer() {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let skill_path = tempdir.path().join("skills").join("demo").join("SKILL.md");
+    let skill = test_skill("demo-skill", skill_path.clone());
     let user_file = AbsolutePathBuf::try_from(tempdir.path().join("config.toml"))
         .expect("user config path should be absolute");
     let user_layer = ConfigLayerEntry::new(
@@ -316,14 +426,19 @@ enabled = true
     )
     .expect("valid config layer stack");
 
-    assert_eq!(disabled_paths_from_stack(&stack), HashSet::new());
+    let skill_config_rules = skill_config_rules_from_stack(&stack);
+    assert_eq!(
+        resolve_disabled_skill_paths(&[skill], &skill_config_rules),
+        HashSet::new()
+    );
 }
 
 #[cfg_attr(windows, ignore)]
 #[test]
-fn disabled_paths_from_stack_allows_session_flags_to_disable_user_enabled_skill() {
+fn disabled_paths_for_skills_allows_session_flags_to_disable_user_enabled_skill() {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let skill_path = tempdir.path().join("skills").join("demo").join("SKILL.md");
+    let skill = test_skill("demo-skill", skill_path.clone());
     let user_file = AbsolutePathBuf::try_from(tempdir.path().join("config.toml"))
         .expect("user config path should be absolute");
     let user_layer = ConfigLayerEntry::new(
@@ -355,9 +470,85 @@ enabled = false
     )
     .expect("valid config layer stack");
 
+    let skill_config_rules = skill_config_rules_from_stack(&stack);
     assert_eq!(
-        disabled_paths_from_stack(&stack),
+        resolve_disabled_skill_paths(&[skill], &skill_config_rules),
         HashSet::from([skill_path])
+    );
+}
+
+#[cfg_attr(windows, ignore)]
+#[test]
+fn disabled_paths_for_skills_disables_matching_name_selectors() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let skill_path = tempdir.path().join("skills").join("demo").join("SKILL.md");
+    let skill = test_skill("github:yeet", skill_path.clone());
+    let user_file = AbsolutePathBuf::try_from(tempdir.path().join("config.toml"))
+        .expect("user config path should be absolute");
+    let user_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::User { file: user_file },
+        toml::from_str(
+            r#"[[skills.config]]
+name = "github:yeet"
+enabled = false
+"#,
+        )
+        .expect("user layer toml"),
+    );
+    let stack = ConfigLayerStack::new(
+        vec![user_layer],
+        Default::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid config layer stack");
+
+    let skill_config_rules = skill_config_rules_from_stack(&stack);
+    assert_eq!(
+        resolve_disabled_skill_paths(&[skill], &skill_config_rules),
+        HashSet::from([skill_path])
+    );
+}
+
+#[cfg_attr(windows, ignore)]
+#[test]
+fn disabled_paths_for_skills_allows_name_selector_to_override_path_selector() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let skill_path = tempdir.path().join("skills").join("demo").join("SKILL.md");
+    let skill = test_skill("github:yeet", skill_path.clone());
+    let user_file = AbsolutePathBuf::try_from(tempdir.path().join("config.toml"))
+        .expect("user config path should be absolute");
+    let user_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::User { file: user_file },
+        toml::from_str(&format!(
+            r#"[[skills.config]]
+path = "{}"
+enabled = false
+"#,
+            skill_path.display()
+        ))
+        .expect("user layer toml"),
+    );
+    let session_layer = ConfigLayerEntry::new(
+        ConfigLayerSource::SessionFlags,
+        toml::from_str(
+            r#"[[skills.config]]
+name = "github:yeet"
+enabled = true
+"#,
+        )
+        .expect("session layer toml"),
+    );
+    let stack = ConfigLayerStack::new(
+        vec![user_layer, session_layer],
+        Default::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid config layer stack");
+
+    let skill_config_rules = skill_config_rules_from_stack(&stack);
+    assert_eq!(
+        resolve_disabled_skill_paths(&[skill], &skill_config_rules),
+        HashSet::new()
     );
 }
 
