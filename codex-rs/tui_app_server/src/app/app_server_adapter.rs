@@ -16,12 +16,9 @@ use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::app_server_rate_limit_snapshot_to_core;
 use crate::app_server_session::status_account_display_from_auth_mode;
-use crate::local_chatgpt_auth::load_local_chatgpt_auth;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AuthMode;
-use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 #[cfg(test)]
@@ -125,19 +122,7 @@ impl App {
                 self.handle_server_notification_event(app_server_client, notification)
                     .await;
             }
-            AppServerEvent::LegacyNotification(_) => {
-                tracing::debug!("ignoring legacy app-server notification in tui_app_server");
-            }
             AppServerEvent::ServerRequest(request) => {
-                if let ServerRequest::ChatgptAuthTokensRefresh { request_id, params } = request {
-                    self.handle_chatgpt_auth_tokens_refresh_request(
-                        app_server_client,
-                        request_id,
-                        params,
-                    )
-                    .await;
-                    return;
-                }
                 self.handle_server_request_event(app_server_client, request)
                     .await;
             }
@@ -256,71 +241,6 @@ impl App {
             tracing::warn!("failed to enqueue app-server request: {err}");
         }
     }
-
-    async fn handle_chatgpt_auth_tokens_refresh_request(
-        &mut self,
-        app_server_client: &AppServerSession,
-        request_id: RequestId,
-        params: ChatgptAuthTokensRefreshParams,
-    ) {
-        let config = self.config.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            resolve_chatgpt_auth_tokens_refresh_response(
-                &config.codex_home,
-                config.cli_auth_credentials_store_mode,
-                config.forced_chatgpt_workspace_id.as_deref(),
-                &params,
-            )
-        })
-        .await;
-
-        match result {
-            Ok(Ok(response)) => {
-                let response = serde_json::to_value(response).map_err(|err| {
-                    format!("failed to serialize chatgpt auth refresh response: {err}")
-                });
-                match response {
-                    Ok(response) => {
-                        if let Err(err) = app_server_client
-                            .resolve_server_request(request_id, response)
-                            .await
-                        {
-                            tracing::warn!("failed to resolve chatgpt auth refresh request: {err}");
-                        }
-                    }
-                    Err(err) => {
-                        self.chat_widget.add_error_message(err.clone());
-                        if let Err(reject_err) = self
-                            .reject_app_server_request(app_server_client, request_id, err)
-                            .await
-                        {
-                            tracing::warn!("{reject_err}");
-                        }
-                    }
-                }
-            }
-            Ok(Err(err)) => {
-                self.chat_widget.add_error_message(err.clone());
-                if let Err(reject_err) = self
-                    .reject_app_server_request(app_server_client, request_id, err)
-                    .await
-                {
-                    tracing::warn!("{reject_err}");
-                }
-            }
-            Err(err) => {
-                let message = format!("chatgpt auth refresh task failed: {err}");
-                self.chat_widget.add_error_message(message.clone());
-                if let Err(reject_err) = self
-                    .reject_app_server_request(app_server_client, request_id, message)
-                    .await
-                {
-                    tracing::warn!("{reject_err}");
-                }
-            }
-        }
-    }
-
     async fn reject_app_server_request(
         &self,
         app_server_client: &AppServerSession,
@@ -480,28 +400,6 @@ fn server_notification_thread_target(
         },
         None => ServerNotificationThreadTarget::Global,
     }
-}
-
-fn resolve_chatgpt_auth_tokens_refresh_response(
-    codex_home: &std::path::Path,
-    auth_credentials_store_mode: codex_core::auth::AuthCredentialsStoreMode,
-    forced_chatgpt_workspace_id: Option<&str>,
-    params: &ChatgptAuthTokensRefreshParams,
-) -> Result<codex_app_server_protocol::ChatgptAuthTokensRefreshResponse, String> {
-    let auth = load_local_chatgpt_auth(
-        codex_home,
-        auth_credentials_store_mode,
-        forced_chatgpt_workspace_id,
-    )?;
-    if let Some(previous_account_id) = params.previous_account_id.as_deref()
-        && previous_account_id != auth.chatgpt_account_id
-    {
-        return Err(format!(
-            "local ChatGPT auth refresh account mismatch: expected `{previous_account_id}`, got `{}`",
-            auth.chatgpt_account_id
-        ));
-    }
-    Ok(auth.to_refresh_response())
 }
 
 #[cfg(test)]
@@ -1071,113 +969,6 @@ fn split_command_string(command: &str) -> Vec<String> {
             parts
         }
         _ => vec![command.to_string()],
-    }
-}
-
-#[cfg(test)]
-mod refresh_tests {
-    use super::*;
-
-    use base64::Engine;
-    use chrono::Utc;
-    use codex_app_server_protocol::AuthMode;
-    use codex_core::auth::AuthCredentialsStoreMode;
-    use codex_core::auth::AuthDotJson;
-    use codex_core::auth::save_auth;
-    use codex_core::token_data::TokenData;
-    use pretty_assertions::assert_eq;
-    use serde::Serialize;
-    use serde_json::json;
-    use tempfile::TempDir;
-
-    fn fake_jwt(account_id: &str, plan_type: &str) -> String {
-        #[derive(Serialize)]
-        struct Header {
-            alg: &'static str,
-            typ: &'static str,
-        }
-
-        let header = Header {
-            alg: "none",
-            typ: "JWT",
-        };
-        let payload = json!({
-            "email": "user@example.com",
-            "https://api.openai.com/auth": {
-                "chatgpt_account_id": account_id,
-                "chatgpt_plan_type": plan_type,
-            },
-        });
-        let encode = |bytes: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
-        let header_b64 = encode(&serde_json::to_vec(&header).expect("serialize header"));
-        let payload_b64 = encode(&serde_json::to_vec(&payload).expect("serialize payload"));
-        let signature_b64 = encode(b"sig");
-        format!("{header_b64}.{payload_b64}.{signature_b64}")
-    }
-
-    fn write_chatgpt_auth(codex_home: &std::path::Path) {
-        let id_token = fake_jwt("workspace-1", "business");
-        let access_token = fake_jwt("workspace-1", "business");
-        save_auth(
-            codex_home,
-            &AuthDotJson {
-                auth_mode: Some(AuthMode::Chatgpt),
-                openai_api_key: None,
-                tokens: Some(TokenData {
-                    id_token: codex_core::token_data::parse_chatgpt_jwt_claims(&id_token)
-                        .expect("id token should parse"),
-                    access_token,
-                    refresh_token: "refresh-token".to_string(),
-                    account_id: Some("workspace-1".to_string()),
-                }),
-                last_refresh: Some(Utc::now()),
-            },
-            AuthCredentialsStoreMode::File,
-        )
-        .expect("chatgpt auth should save");
-    }
-
-    #[test]
-    fn refresh_request_uses_local_chatgpt_auth() {
-        let codex_home = TempDir::new().expect("tempdir");
-        write_chatgpt_auth(codex_home.path());
-
-        let response = resolve_chatgpt_auth_tokens_refresh_response(
-            codex_home.path(),
-            AuthCredentialsStoreMode::File,
-            Some("workspace-1"),
-            &ChatgptAuthTokensRefreshParams {
-                reason: codex_app_server_protocol::ChatgptAuthTokensRefreshReason::Unauthorized,
-                previous_account_id: Some("workspace-1".to_string()),
-            },
-        )
-        .expect("refresh response should resolve");
-
-        assert_eq!(response.chatgpt_account_id, "workspace-1");
-        assert_eq!(response.chatgpt_plan_type.as_deref(), Some("business"));
-        assert!(!response.access_token.is_empty());
-    }
-
-    #[test]
-    fn refresh_request_rejects_account_mismatch() {
-        let codex_home = TempDir::new().expect("tempdir");
-        write_chatgpt_auth(codex_home.path());
-
-        let err = resolve_chatgpt_auth_tokens_refresh_response(
-            codex_home.path(),
-            AuthCredentialsStoreMode::File,
-            Some("workspace-1"),
-            &ChatgptAuthTokensRefreshParams {
-                reason: codex_app_server_protocol::ChatgptAuthTokensRefreshReason::Unauthorized,
-                previous_account_id: Some("workspace-2".to_string()),
-            },
-        )
-        .expect_err("mismatched account should fail");
-
-        assert_eq!(
-            err,
-            "local ChatGPT auth refresh account mismatch: expected `workspace-2`, got `workspace-1`"
-        );
     }
 }
 
