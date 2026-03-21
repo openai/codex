@@ -1992,7 +1992,6 @@ async fn make_chatwidget_manual(
         task_complete_pending: false,
         unified_exec_processes: Vec::new(),
         agent_turn_running: false,
-        manual_compact_turn_state: ManualCompactTurnState::Idle,
         mcp_startup_status: None,
         connectors_cache: ConnectorsCacheState::default(),
         connectors_partial_snapshot: None,
@@ -3800,7 +3799,6 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         agent_turn_running: true,
-        manual_compact_turn_state: ManualCompactTurnState::Idle,
     }));
 
     assert!(chat.agent_turn_running);
@@ -3832,82 +3830,12 @@ async fn restore_thread_input_state_keeps_rejected_follow_ups_ahead_of_pending_s
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
         agent_turn_running: false,
-        manual_compact_turn_state: ManualCompactTurnState::Idle,
     }));
 
     assert_eq!(
         chat.queued_user_message_texts(),
         vec!["already rejected", "pending steer", "queued draft"]
     );
-}
-
-#[tokio::test]
-async fn replayed_turn_complete_for_other_turn_keeps_manual_compact_queue_gate() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
-    chat.thread_id = Some(ThreadId::new());
-
-    chat.restore_thread_input_state(Some(ThreadInputState {
-        composer: None,
-        pending_steers: VecDeque::new(),
-        steer_rejected_user_messages: VecDeque::new(),
-        queued_user_messages: VecDeque::new(),
-        current_collaboration_mode: chat.current_collaboration_mode.clone(),
-        active_collaboration_mask: chat.active_collaboration_mask.clone(),
-        agent_turn_running: true,
-        manual_compact_turn_state: ManualCompactTurnState::Running {
-            turn_id: "turn-1".to_string(),
-        },
-    }));
-
-    chat.replay_thread_turns(
-        vec![AppServerTurn {
-            id: "turn-0".to_string(),
-            items: Vec::new(),
-            status: AppServerTurnStatus::Completed,
-            error: None,
-        }],
-        ReplayKind::ThreadSnapshot,
-    );
-
-    assert_eq!(
-        chat.manual_compact_turn_state,
-        ManualCompactTurnState::Running {
-            turn_id: "turn-1".to_string()
-        }
-    );
-
-    chat.submit_user_message(UserMessage::from("queued after replayed completion"));
-
-    assert!(chat.pending_steers.is_empty());
-    assert_eq!(
-        chat.queued_user_message_texts(),
-        vec!["queued after replayed completion"]
-    );
-    assert_no_submit_op(&mut op_rx);
-
-    chat.handle_server_notification(
-        ServerNotification::TurnCompleted(TurnCompletedNotification {
-            thread_id: chat.thread_id.expect("thread id").to_string(),
-            turn: AppServerTurn {
-                id: "turn-1".to_string(),
-                items: Vec::new(),
-                status: AppServerTurnStatus::Completed,
-                error: None,
-            },
-        }),
-        None,
-    );
-
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn { items, .. } => assert_eq!(
-            items,
-            vec![UserInput::Text {
-                text: "queued after replayed completion".to_string(),
-                text_elements: Vec::new(),
-            }]
-        ),
-        other => panic!("expected queued compact follow-up Op::UserTurn, got {other:?}"),
-    }
 }
 
 #[tokio::test]
@@ -4260,18 +4188,36 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
         }),
         None,
     );
-    chat.manual_compact_turn_state = ManualCompactTurnState::Running {
-        turn_id: "turn-1".to_string(),
-    };
 
     chat.submit_user_message(UserMessage::from("queued while compacting"));
+
+    assert_eq!(chat.pending_steers.len(), 1);
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "queued while compacting".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected running-turn compact steer submit, got {other:?}"),
+    }
+
+    chat.handle_codex_event(Event {
+        id: "steer-rejected".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "cannot steer a compact turn".to_string(),
+            codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
+                turn_kind: NonSteerableTurnKind::Compact,
+            }),
+        }),
+    });
 
     assert!(chat.pending_steers.is_empty());
     assert_eq!(
         chat.queued_user_message_texts(),
         vec!["queued while compacting"]
     );
-    assert_no_submit_op(&mut op_rx);
 
     chat.handle_server_notification(
         ServerNotification::TurnCompleted(TurnCompletedNotification {
@@ -4296,36 +4242,6 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
         ),
         other => panic!("expected queued compact follow-up Op::UserTurn, got {other:?}"),
     }
-}
-
-#[tokio::test]
-async fn submit_user_message_queues_after_compact_is_submitted() {
-    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
-    chat.manual_compact_turn_state = ManualCompactTurnState::Submitted;
-
-    chat.submit_user_message(UserMessage::from("queued before compact starts"));
-
-    assert!(chat.pending_steers.is_empty());
-    assert_eq!(
-        chat.queued_user_message_texts(),
-        vec!["queued before compact starts"]
-    );
-    assert_no_submit_op(&mut op_rx);
-}
-
-#[tokio::test]
-async fn submitted_manual_compact_gate_is_not_persisted_in_thread_input_state() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.manual_compact_turn_state = ManualCompactTurnState::Submitted;
-
-    let input_state = chat
-        .capture_thread_input_state()
-        .expect("thread input state should exist");
-
-    assert_eq!(
-        input_state.manual_compact_turn_state,
-        ManualCompactTurnState::Idle
-    );
 }
 
 #[tokio::test]
@@ -12240,6 +12156,15 @@ async fn review_queues_user_messages_snapshot() {
     chat.submit_user_message(UserMessage::from(
         "Queued while /review is running.".to_string(),
     ));
+    chat.handle_codex_event(Event {
+        id: "steer-rejected".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "cannot steer a review turn".to_string(),
+            codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
+                turn_kind: NonSteerableTurnKind::Review,
+            }),
+        }),
+    });
 
     let width: u16 = 80;
     let height: u16 = 18;
