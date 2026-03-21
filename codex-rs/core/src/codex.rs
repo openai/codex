@@ -83,6 +83,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::item_metadata::stamp_user_message_type_on_input_item;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
@@ -90,6 +91,8 @@ use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::ResponseItemMessageMetadata;
+use codex_protocol::models::UserMessageType;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -330,7 +333,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::ResponseItemMessageMetadata;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
@@ -3905,8 +3907,13 @@ impl Session {
             });
         }
 
+        let mut input_item: ResponseInputItem = input.into();
+        if self.enabled(Feature::ItemMetadata) {
+            stamp_user_message_type_on_input_item(&mut input_item, UserMessageType::PromptSteering);
+        }
+
         let mut turn_state = active_turn.turn_state.lock().await;
-        turn_state.push_pending_input(input.into());
+        turn_state.push_pending_input(input_item);
         Ok(active_turn_id.clone())
     }
 
@@ -3919,24 +3926,20 @@ impl Session {
         match active.as_mut() {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
-                for item in input {
+                for mut item in input {
+                    if self.enabled(Feature::ItemMetadata)
+                        && matches!(&item, ResponseInputItem::Message { .. })
+                    {
+                        stamp_user_message_type_on_input_item(
+                            &mut item,
+                            UserMessageType::PromptQueued,
+                        );
+                    }
                     ts.push_pending_input(item);
                 }
                 Ok(())
             }
             None => Err(input),
-        }
-    }
-
-    pub async fn prepend_pending_input(&self, input: Vec<ResponseInputItem>) -> Result<(), ()> {
-        let mut active = self.active_turn.lock().await;
-        match active.as_mut() {
-            Some(at) => {
-                let mut ts = at.turn_state.lock().await;
-                ts.prepend_pending_input(input);
-                Ok(())
-            }
-            None => Err(()),
         }
     }
 
@@ -3948,6 +3951,21 @@ impl Session {
                 ts.take_pending_input()
             }
             None => Vec::with_capacity(0),
+        }
+    }
+
+    pub(crate) async fn prepend_pending_input(
+        &self,
+        input: Vec<ResponseInputItem>,
+    ) -> Result<(), ()> {
+        let mut active = self.active_turn.lock().await;
+        match active.as_mut() {
+            Some(at) => {
+                let mut ts = at.turn_state.lock().await;
+                ts.prepend_pending_input(input);
+                Ok(())
+            }
+            None => Err(()),
         }
     }
 
@@ -5586,8 +5604,6 @@ pub(crate) async fn run_turn(
         })
         .collect::<Vec<_>>();
 
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-    let response_item: ResponseItem = initial_input_for_turn.clone().into();
     let mut last_agent_message: Option<String> = None;
     if run_pending_session_start_hooks(&sess, &turn_context).await {
         return last_agent_message;
@@ -5615,6 +5631,12 @@ pub(crate) async fn run_turn(
     }
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
+
+    let mut initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
+    if sess.enabled(Feature::ItemMetadata) {
+        stamp_user_message_type_on_input_item(&mut initial_input_for_turn, UserMessageType::Prompt);
+    }
+    let response_item: ResponseItem = initial_input_for_turn.clone().into();
     sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
         .await;
     record_additional_contexts(&sess, &turn_context, additional_contexts).await;
@@ -5657,14 +5679,13 @@ pub(crate) async fn run_turn(
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
-        let pending_input = sess.get_pending_input().await;
-
+        let pending_response_items = sess.get_pending_input().await;
         let mut blocked_pending_input = false;
         let mut blocked_pending_input_contexts = Vec::new();
         let mut requeued_pending_input = false;
         let mut accepted_pending_input = Vec::new();
-        if !pending_input.is_empty() {
-            let mut pending_input_iter = pending_input.into_iter();
+        if !pending_response_items.is_empty() {
+            let mut pending_input_iter = pending_response_items.into_iter();
             while let Some(pending_input_item) = pending_input_iter.next() {
                 match inspect_pending_input(&sess, &turn_context, pending_input_item).await {
                     PendingInputHookDisposition::Accepted(pending_input) => {

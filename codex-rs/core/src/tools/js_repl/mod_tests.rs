@@ -1831,7 +1831,7 @@ await codex.emitImage({ bytes: png, mimeType: "image/png", detail: null });
                 detail: None,
             }]
             .as_slice()
-        );
+    );
     assert!(session.get_pending_input().await.is_empty());
 
     Ok(())

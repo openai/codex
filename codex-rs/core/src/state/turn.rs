@@ -179,15 +179,6 @@ impl TurnState {
         self.pending_input.push(input);
     }
 
-    pub(crate) fn prepend_pending_input(&mut self, mut input: Vec<ResponseInputItem>) {
-        if input.is_empty() {
-            return;
-        }
-
-        input.append(&mut self.pending_input);
-        self.pending_input = input;
-    }
-
     pub(crate) fn take_pending_input(&mut self) -> Vec<ResponseInputItem> {
         if self.pending_input.is_empty() {
             Vec::with_capacity(0)
@@ -196,6 +187,15 @@ impl TurnState {
             std::mem::swap(&mut ret, &mut self.pending_input);
             ret
         }
+    }
+
+    pub(crate) fn prepend_pending_input(&mut self, mut input: Vec<ResponseInputItem>) {
+        if input.is_empty() {
+            return;
+        }
+
+        input.append(&mut self.pending_input);
+        self.pending_input = input;
     }
 
     pub(crate) fn has_pending_input(&self) -> bool {
