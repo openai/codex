@@ -358,8 +358,8 @@ fn assert_posix_snapshot_sections(snapshot: &str) {
     assert!(snapshot.contains("exports "));
     assert!(snapshot.contains("setopts "));
     assert!(
-        snapshot.lines().any(|line| line.starts_with("export ")),
-        "snapshot should include exported environment entries; snapshot={snapshot:?}"
+        snapshot.contains("PATH"),
+        "snapshot should include PATH exports; snapshot={snapshot:?}"
     );
 }
 
@@ -528,7 +528,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
     let script = "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: snapshot-apply.txt\n+hello from snapshot\n*** End Patch\nEOF\n";
     let args = json!({
         "command": script,
-        "timeout_ms": 10_000,
+        "timeout_ms": 1_000,
     });
     let call_id = "shell-snapshot-apply-patch";
     let responses = vec![

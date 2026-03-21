@@ -202,11 +202,7 @@ fn run_runtime(
     let pending_promise = match module_loader::evaluate_main_module(scope, &config.source) {
         Ok(pending_promise) => pending_promise,
         Err(error_text) => {
-            let stored_values = scope
-                .get_slot::<RuntimeState>()
-                .map(|state| state.stored_values.clone())
-                .unwrap_or_default();
-            send_result(&event_tx, stored_values, Some(error_text));
+            capture_scope_send_error(scope, &event_tx, Some(error_text));
             return;
         }
     };
@@ -233,11 +229,7 @@ fn run_runtime(
                 if let Err(error_text) =
                     module_loader::resolve_tool_response(scope, &id, Ok(result))
                 {
-                    let stored_values = scope
-                        .get_slot::<RuntimeState>()
-                        .map(|state| state.stored_values.clone())
-                        .unwrap_or_default();
-                    send_result(&event_tx, stored_values, Some(error_text));
+                    capture_scope_send_error(scope, &event_tx, Some(error_text));
                     return;
                 }
             }
@@ -245,11 +237,7 @@ fn run_runtime(
                 if let Err(runtime_error) =
                     module_loader::resolve_tool_response(scope, &id, Err(error_text))
                 {
-                    let stored_values = scope
-                        .get_slot::<RuntimeState>()
-                        .map(|state| state.stored_values.clone())
-                        .unwrap_or_default();
-                    send_result(&event_tx, stored_values, Some(runtime_error));
+                    capture_scope_send_error(scope, &event_tx, Some(runtime_error));
                     return;
                 }
             }
@@ -275,6 +263,20 @@ fn run_runtime(
         }
     }
 }
+
+fn capture_scope_send_error(
+    scope: &mut v8::PinScope<'_, '_>,
+    event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
+    error_text: Option<String>
+) {
+    let stored_values = scope
+        .get_slot::<RuntimeState>()
+        .map(|state| state.stored_values.clone())
+        .unwrap_or_default();
+
+    send_result(&event_tx, stored_values, error_text);
+}
+    
 
 fn send_result(
     event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
