@@ -5168,6 +5168,7 @@ impl ChatWidget {
             items,
             cwd: self.config.cwd.clone(),
             approval_policy: self.config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
             sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
             model: effective_mode.model().to_string(),
             effort: effective_mode.reasoning_effort(),

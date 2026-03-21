@@ -254,6 +254,11 @@ pub enum Op {
         /// Policy to use for command approval.
         approval_policy: AskForApproval,
 
+        /// Reviewer to use for approval requests raised during this turn.
+        ///
+        /// When omitted, the session keeps the current setting
+        approvals_reviewer: Option<ApprovalsReviewer>,
+
         /// Policy to use for tool calls such as `local_shell`.
         sandbox_policy: SandboxPolicy,
 

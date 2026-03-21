@@ -514,6 +514,7 @@ async fn run_review_on_session(
                     items: params.prompt_items.clone(),
                     cwd: params.parent_turn.cwd.clone(),
                     approval_policy: AskForApproval::Never,
+                    approvals_reviewer: None,
                     sandbox_policy: SandboxPolicy::new_read_only_policy(),
                     model: params.model.clone(),
                     effort: params.reasoning_effort,

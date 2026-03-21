@@ -1940,6 +1940,7 @@ impl App {
                 items,
                 cwd,
                 approval_policy,
+                approvals_reviewer,
                 sandbox_policy,
                 model,
                 effort,
@@ -1960,7 +1961,8 @@ impl App {
                             items.to_vec(),
                             cwd.clone(),
                             approval_policy,
-                            self.chat_widget.config_ref().approvals_reviewer,
+                            approvals_reviewer
+                                .unwrap_or(self.chat_widget.config_ref().approvals_reviewer),
                             sandbox_policy.clone(),
                             model.to_string(),
                             effort,
