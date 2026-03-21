@@ -19,6 +19,7 @@ use crate::model_catalog::ModelCatalog;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
+use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::CollabAgentState as AppServerCollabAgentState;
 use codex_app_server_protocol::CollabAgentStatus as AppServerCollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool as AppServerCollabAgentTool;
@@ -32,9 +33,20 @@ use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemGuardianApprovalReviewCompletedNotification;
 use codex_app_server_protocol::ItemGuardianApprovalReviewStartedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::MarketplaceInterface;
 use codex_app_server_protocol::PatchApplyStatus as AppServerPatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
+use codex_app_server_protocol::PluginAuthPolicy;
+use codex_app_server_protocol::PluginDetail;
+use codex_app_server_protocol::PluginInstallPolicy;
+use codex_app_server_protocol::PluginInterface;
+use codex_app_server_protocol::PluginListResponse;
+use codex_app_server_protocol::PluginMarketplaceEntry;
+use codex_app_server_protocol::PluginReadResponse;
+use codex_app_server_protocol::PluginSource;
+use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::SkillSummary;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadItem as AppServerThreadItem;
 use codex_app_server_protocol::Turn as AppServerTurn;
@@ -58,6 +70,7 @@ use codex_core::config_loader::ConfigRequirements;
 use codex_core::config_loader::ConfigRequirementsToml;
 use codex_core::config_loader::RequirementSource;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core::skills::model::SkillMetadata;
 use codex_features::FEATURES;
 use codex_features::Feature;
@@ -1914,6 +1927,8 @@ async fn make_chatwidget_manual(
         mcp_startup_status: None,
         connectors_cache: ConnectorsCacheState::default(),
         connectors_partial_snapshot: None,
+        plugin_install_apps_needing_auth: Vec::new(),
+        plugin_install_auth_flow: None,
         connectors_prefetch_in_flight: false,
         connectors_force_refetch_pending: false,
         plugins_cache: PluginsCacheState::default(),
@@ -7333,6 +7348,512 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     }
 
     lines.join("\n")
+}
+
+fn plugins_test_absolute_path(path: &str) -> AbsolutePathBuf {
+    AbsolutePathBuf::try_from(
+        std::env::temp_dir()
+            .join("codex-plugin-menu-tests")
+            .join(path),
+    )
+    .expect("expected absolute test path")
+}
+
+fn plugins_test_interface(
+    display_name: Option<&str>,
+    short_description: Option<&str>,
+    long_description: Option<&str>,
+) -> PluginInterface {
+    PluginInterface {
+        display_name: display_name.map(str::to_string),
+        short_description: short_description.map(str::to_string),
+        long_description: long_description.map(str::to_string),
+        developer_name: None,
+        category: None,
+        capabilities: Vec::new(),
+        website_url: None,
+        privacy_policy_url: None,
+        terms_of_service_url: None,
+        default_prompt: None,
+        brand_color: None,
+        composer_icon: None,
+        logo: None,
+        screenshots: Vec::new(),
+    }
+}
+
+fn plugins_test_summary(
+    id: &str,
+    name: &str,
+    display_name: Option<&str>,
+    description: Option<&str>,
+    installed: bool,
+    enabled: bool,
+    install_policy: PluginInstallPolicy,
+) -> PluginSummary {
+    PluginSummary {
+        id: id.to_string(),
+        name: name.to_string(),
+        source: PluginSource::Local {
+            path: plugins_test_absolute_path(&format!("plugins/{name}")),
+        },
+        installed,
+        enabled,
+        install_policy,
+        auth_policy: PluginAuthPolicy::OnInstall,
+        interface: Some(plugins_test_interface(display_name, description, None)),
+    }
+}
+
+fn plugins_test_curated_marketplace(plugins: Vec<PluginSummary>) -> PluginMarketplaceEntry {
+    PluginMarketplaceEntry {
+        name: OPENAI_CURATED_MARKETPLACE_NAME.to_string(),
+        path: plugins_test_absolute_path("marketplaces/chatgpt"),
+        interface: Some(MarketplaceInterface {
+            display_name: Some("ChatGPT Marketplace".to_string()),
+        }),
+        plugins,
+    }
+}
+
+fn plugins_test_repo_marketplace(plugins: Vec<PluginSummary>) -> PluginMarketplaceEntry {
+    PluginMarketplaceEntry {
+        name: "repo".to_string(),
+        path: plugins_test_absolute_path("marketplaces/repo"),
+        interface: Some(MarketplaceInterface {
+            display_name: Some("Repo Marketplace".to_string()),
+        }),
+        plugins,
+    }
+}
+
+fn plugins_test_response(marketplaces: Vec<PluginMarketplaceEntry>) -> PluginListResponse {
+    PluginListResponse {
+        marketplaces,
+        remote_sync_error: None,
+        featured_plugin_ids: Vec::new(),
+    }
+}
+
+fn render_loaded_plugins_popup(chat: &mut ChatWidget, response: PluginListResponse) -> String {
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd, Ok(response));
+    chat.add_plugins_output();
+    render_bottom_popup(chat, 100)
+}
+
+fn plugins_test_detail(
+    summary: PluginSummary,
+    description: Option<&str>,
+    skills: &[&str],
+    apps: &[(&str, bool)],
+    mcp_servers: &[&str],
+) -> PluginDetail {
+    PluginDetail {
+        marketplace_name: "ChatGPT Marketplace".to_string(),
+        marketplace_path: plugins_test_absolute_path("marketplaces/chatgpt"),
+        summary,
+        description: description.map(str::to_string),
+        skills: skills
+            .iter()
+            .map(|name| SkillSummary {
+                name: (*name).to_string(),
+                description: format!("{name} description"),
+                short_description: None,
+                interface: None,
+                path: PathBuf::from(format!("/skills/{name}/SKILL.md")),
+            })
+            .collect(),
+        apps: apps
+            .iter()
+            .map(|(name, needs_auth)| AppSummary {
+                id: format!("{name}-id"),
+                name: (*name).to_string(),
+                description: Some(format!("{name} app")),
+                install_url: Some(format!("https://example.test/{name}")),
+                needs_auth: *needs_auth,
+            })
+            .collect(),
+        mcp_servers: mcp_servers.iter().map(|name| (*name).to_string()).collect(),
+    }
+}
+
+fn plugins_test_popup_row_position(popup: &str, needle: &str) -> usize {
+    popup
+        .find(needle)
+        .unwrap_or_else(|| panic!("expected popup to contain {needle}: {popup}"))
+}
+
+fn type_plugins_search_query(chat: &mut ChatWidget, query: &str) {
+    for ch in query.chars() {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Char(ch)));
+    }
+}
+
+#[tokio::test]
+async fn plugins_popup_loading_state_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Plugins, true);
+
+    chat.add_plugins_output();
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(
+        popup.contains("Loading available plugins..."),
+        "expected /plugins to open in a loading state before the marketplace arrives, got:\n{popup}"
+    );
+    assert_snapshot!("plugins_popup_loading_state", popup);
+}
+
+#[tokio::test]
+async fn plugins_popup_snapshot_filters_to_curated_marketplace_and_preserves_response_order() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Plugins, true);
+
+    let mut response = plugins_test_response(vec![
+        plugins_test_curated_marketplace(vec![
+            plugins_test_summary(
+                "plugin-bravo",
+                "bravo",
+                Some("Bravo Search"),
+                Some("Search docs and tickets."),
+                false,
+                true,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-alpha",
+                "alpha",
+                Some("Alpha Sync"),
+                Some("Already installed but disabled."),
+                true,
+                false,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-starter",
+                "starter",
+                Some("Starter"),
+                Some("Included by default."),
+                false,
+                true,
+                PluginInstallPolicy::InstalledByDefault,
+            ),
+        ]),
+        plugins_test_repo_marketplace(vec![plugins_test_summary(
+            "plugin-hidden",
+            "hidden",
+            Some("Hidden Repo Plugin"),
+            Some("Should not be shown in /plugins."),
+            false,
+            true,
+            PluginInstallPolicy::Available,
+        )]),
+    ]);
+    response.remote_sync_error = Some("remote sync timed out".to_string());
+
+    let popup = render_loaded_plugins_popup(&mut chat, response);
+    assert_snapshot!("plugins_popup_curated_marketplace", popup);
+    assert!(
+        !popup.contains("Hidden Repo Plugin"),
+        "expected /plugins to hide non-ChatGPT marketplaces, got:\n{popup}"
+    );
+    assert!(
+        plugins_test_popup_row_position(&popup, "Bravo Search")
+            < plugins_test_popup_row_position(&popup, "Alpha Sync")
+            && plugins_test_popup_row_position(&popup, "Alpha Sync")
+                < plugins_test_popup_row_position(&popup, "Starter"),
+        "expected /plugins rows to keep response order, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugin_detail_popup_snapshot_shows_install_actions_and_capability_summaries() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Plugins, true);
+
+    let summary = plugins_test_summary(
+        "plugin-figma",
+        "figma",
+        Some("Figma"),
+        Some("Design handoff."),
+        false,
+        true,
+        PluginInstallPolicy::Available,
+    );
+    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        summary.clone(),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.clone(), Ok(response));
+    chat.add_plugins_output();
+    chat.on_plugin_detail_loaded(
+        cwd,
+        Ok(PluginReadResponse {
+            plugin: plugins_test_detail(
+                summary,
+                Some("Turn Figma files into implementation context."),
+                &["design-review", "extract-copy"],
+                &[("Figma", true), ("Slack", false)],
+                &["figma-mcp", "docs-mcp"],
+            ),
+        }),
+    );
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert_snapshot!("plugin_detail_popup_installable", popup);
+}
+
+#[tokio::test]
+async fn plugins_popup_refresh_replaces_selection_with_first_row() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Plugins, true);
+
+    let initial = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        plugins_test_summary(
+            "plugin-notion",
+            "notion",
+            Some("Notion"),
+            Some("Workspace docs."),
+            false,
+            true,
+            PluginInstallPolicy::Available,
+        ),
+        plugins_test_summary(
+            "plugin-slack",
+            "slack",
+            Some("Slack"),
+            Some("Team chat."),
+            false,
+            true,
+            PluginInstallPolicy::Available,
+        ),
+    ])]);
+    render_loaded_plugins_popup(&mut chat, initial);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+
+    let before = render_bottom_popup(&chat, 100);
+    assert!(
+        before.contains("› Slack"),
+        "expected Slack to be selected before refresh, got:\n{before}"
+    );
+
+    let refreshed = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        plugins_test_summary(
+            "plugin-airtable",
+            "airtable",
+            Some("Airtable"),
+            Some("Structured records."),
+            false,
+            true,
+            PluginInstallPolicy::Available,
+        ),
+        plugins_test_summary(
+            "plugin-notion",
+            "notion",
+            Some("Notion"),
+            Some("Workspace docs."),
+            false,
+            true,
+            PluginInstallPolicy::Available,
+        ),
+        plugins_test_summary(
+            "plugin-slack",
+            "slack",
+            Some("Slack"),
+            Some("Team chat."),
+            false,
+            true,
+            PluginInstallPolicy::Available,
+        ),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd, Ok(refreshed));
+
+    let after = render_bottom_popup(&chat, 100);
+    assert!(
+        after.contains("› Airtable"),
+        "expected refresh to rebuild the popup from the new first row, got:\n{after}"
+    );
+    assert!(
+        after.contains("Slack · ChatGPT Marketplace"),
+        "expected refreshed popup to include the updated plugin list, got:\n{after}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_refreshes_installed_counts_after_install() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Plugins, true);
+
+    let initial = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        plugins_test_summary(
+            "plugin-calendar",
+            "calendar",
+            Some("Calendar"),
+            Some("Schedule management."),
+            false,
+            true,
+            PluginInstallPolicy::Available,
+        ),
+        plugins_test_summary(
+            "plugin-drive",
+            "drive",
+            Some("Drive"),
+            Some("Document access."),
+            true,
+            true,
+            PluginInstallPolicy::Available,
+        ),
+    ])]);
+    let before = render_loaded_plugins_popup(&mut chat, initial);
+    assert!(
+        before.contains("Installed 1 of 2 available plugins."),
+        "expected initial installed count before refresh, got:\n{before}"
+    );
+    assert!(
+        before.contains("Can be installed"),
+        "expected pre-install popup copy before refresh, got:\n{before}"
+    );
+
+    let refreshed = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        plugins_test_summary(
+            "plugin-calendar",
+            "calendar",
+            Some("Calendar"),
+            Some("Schedule management."),
+            true,
+            true,
+            PluginInstallPolicy::Available,
+        ),
+        plugins_test_summary(
+            "plugin-drive",
+            "drive",
+            Some("Drive"),
+            Some("Document access."),
+            true,
+            true,
+            PluginInstallPolicy::Available,
+        ),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd, Ok(refreshed));
+
+    let after = render_bottom_popup(&chat, 100);
+    assert!(
+        after.contains("Installed 2 of 2 available plugins."),
+        "expected /plugins to refresh installed counts after install, got:\n{after}"
+    );
+    assert!(
+        after.contains("Installed. Press Enter to view plugin details."),
+        "expected refreshed selected row copy to reflect the installed plugin state, got:\n{after}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_search_filters_visible_rows_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Plugins, true);
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+            plugins_test_summary(
+                "plugin-calendar",
+                "calendar",
+                Some("Calendar"),
+                Some("Schedule management."),
+                false,
+                true,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-slack",
+                "slack",
+                Some("Slack"),
+                Some("Team chat."),
+                false,
+                true,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-drive",
+                "drive",
+                Some("Drive"),
+                Some("Document access."),
+                false,
+                true,
+                PluginInstallPolicy::Available,
+            ),
+        ])]),
+    );
+
+    type_plugins_search_query(&mut chat, "sla");
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert_snapshot!("plugins_popup_search_filtered", popup);
+    assert!(
+        !popup.contains("Calendar · ChatGPT Marketplace")
+            && !popup.contains("Drive · ChatGPT Marketplace"),
+        "expected search to leave only matching rows visible, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
+async fn plugins_popup_search_no_matches_and_backspace_restores_results() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Plugins, true);
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+            plugins_test_summary(
+                "plugin-calendar",
+                "calendar",
+                Some("Calendar"),
+                Some("Schedule management."),
+                false,
+                true,
+                PluginInstallPolicy::Available,
+            ),
+            plugins_test_summary(
+                "plugin-slack",
+                "slack",
+                Some("Slack"),
+                Some("Team chat."),
+                false,
+                true,
+                PluginInstallPolicy::Available,
+            ),
+        ])]),
+    );
+
+    type_plugins_search_query(&mut chat, "zzz");
+
+    let no_matches = render_bottom_popup(&chat, 100);
+    assert!(
+        no_matches.contains("zzz"),
+        "expected popup to show the typed search query, got:\n{no_matches}"
+    );
+    assert!(
+        no_matches.contains("no matches"),
+        "expected popup to render the no-matches UX, got:\n{no_matches}"
+    );
+
+    for _ in 0..3 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Backspace));
+    }
+
+    let restored = render_bottom_popup(&chat, 100);
+    assert!(
+        restored.contains("Calendar · ChatGPT Marketplace")
+            && restored.contains("Slack · ChatGPT Marketplace"),
+        "expected clearing the query to restore the plugin rows, got:\n{restored}"
+    );
+    assert!(
+        !restored.contains("no matches"),
+        "did not expect the no-matches state after clearing the query, got:\n{restored}"
+    );
 }
 
 #[tokio::test]

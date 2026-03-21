@@ -3599,9 +3599,41 @@ impl ChatComposer {
 
     fn mention_items(&self) -> Vec<MentionItem> {
         let mut mentions = Vec::new();
+        let plugin_namespaces: HashSet<String> =
+            self.plugins.as_ref().map_or_else(HashSet::new, |plugins| {
+                plugins
+                    .iter()
+                    .filter_map(|plugin| {
+                        let (plugin_name, _) = plugin
+                            .config_name
+                            .split_once('@')
+                            .unwrap_or((plugin.config_name.as_str(), ""));
+                        let plugin_name = plugin_name.trim();
+                        if plugin_name.is_empty() {
+                            None
+                        } else {
+                            Some(plugin_name.to_ascii_lowercase())
+                        }
+                    })
+                    .collect()
+            });
+        let plugin_display_names: HashSet<String> =
+            self.plugins.as_ref().map_or_else(HashSet::new, |plugins| {
+                plugins
+                    .iter()
+                    .map(|plugin| plugin.display_name.to_ascii_lowercase())
+                    .collect()
+            });
 
         if let Some(skills) = self.skills.as_ref() {
             for skill in skills {
+                let is_plugin_namespaced_skill =
+                    skill.name.split_once(':').is_some_and(|(namespace, _)| {
+                        plugin_namespaces.contains(&namespace.to_ascii_lowercase())
+                    });
+                if is_plugin_namespaced_skill {
+                    continue;
+                }
                 let display_name = skill_display_name(skill).to_string();
                 let description = skill_description(skill);
                 let skill_name = skill.name.clone();
@@ -3681,18 +3713,30 @@ impl ChatComposer {
                 if !connector.is_accessible || !connector.is_enabled {
                     continue;
                 }
+                let plugin_backed_connector = connector
+                    .plugin_display_names
+                    .iter()
+                    .any(|name| plugin_display_names.contains(&name.to_ascii_lowercase()));
+                if plugin_backed_connector {
+                    continue;
+                }
                 let display_name = connectors::connector_display_label(connector);
                 let description = Some(Self::connector_brief_description(connector));
                 let slug = codex_core::connectors::connector_mention_slug(connector);
                 let search_terms = vec![display_name.clone(), connector.id.clone(), slug.clone()];
                 let connector_id = connector.id.as_str();
+                let category_tag = if connector.plugin_display_names.is_empty() {
+                    "[App]".to_string()
+                } else {
+                    "[Plugin]".to_string()
+                };
                 mentions.push(MentionItem {
                     display_name: display_name.clone(),
                     description,
                     insert_text: format!("${slug}"),
                     search_terms,
                     path: Some(format!("app://{connector_id}")),
-                    category_tag: Some("[App]".to_string()),
+                    category_tag: Some(category_tag),
                     sort_rank: 1,
                 });
             }
