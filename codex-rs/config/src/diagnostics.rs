@@ -9,11 +9,13 @@ use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::de::DeserializeOwned;
 use serde_path_to_error::Path as SerdePath;
 use serde_path_to_error::Segment as SerdeSegment;
+use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Write;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use toml::Value as TomlValue;
 use toml_edit::Document;
 use toml_edit::Item;
 use toml_edit::Table;
@@ -130,6 +132,70 @@ pub fn config_error_from_typed_toml<T: DeserializeOwned>(
                 range,
                 toml_err.message(),
             ))
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SanitizedTomlValue {
+    pub value: TomlValue,
+    pub dropped_entries: Vec<String>,
+}
+
+pub fn sanitize_toml_value<T: DeserializeOwned>(
+    mut value: TomlValue,
+) -> io::Result<SanitizedTomlValue> {
+    let mut dropped_entries = Vec::new();
+    let mut seen_paths = HashSet::new();
+
+    loop {
+        let contents = toml::to_string(&value).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("failed to serialize TOML while sanitizing: {err}"),
+            )
+        })?;
+        let deserializer = toml::de::Deserializer::parse(&contents).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("failed to parse TOML while sanitizing: {err}"),
+            )
+        })?;
+
+        let result: Result<T, _> = serde_path_to_error::deserialize(deserializer);
+        match result {
+            Ok(_) => {
+                return Ok(SanitizedTomlValue {
+                    value,
+                    dropped_entries,
+                });
+            }
+            Err(err) => {
+                let path_hint = err.path().clone();
+                let toml_err: toml::de::Error = err.into_inner();
+                let Some(recovery_path) = recovery_path_for_error(&path_hint) else {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, toml_err));
+                };
+                let recovery_path_display = display_recovery_path(&recovery_path);
+                if !seen_paths.insert(recovery_path_display.clone()) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "unable to recover from repeated invalid TOML path {recovery_path_display}: {toml_err}",
+                        ),
+                    ));
+                }
+                if !remove_value_at_recovery_path(&mut value, &recovery_path) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "unable to remove invalid TOML path {recovery_path_display}: {toml_err}",
+                        ),
+                    ));
+                }
+                prune_empty_containers(&mut value);
+                dropped_entries.push(format!("{recovery_path_display}: {}", toml_err.message()));
+            }
         }
     }
 }
@@ -321,6 +387,125 @@ fn span_for_config_path(contents: &str, path: &SerdePath) -> Option<std::ops::Ra
         return Some(span);
     }
     span_for_path(contents, path)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RecoveryPathSegment {
+    Key(String),
+    Index(usize),
+}
+
+fn recovery_path_for_error(path: &SerdePath) -> Option<Vec<RecoveryPathSegment>> {
+    let mut recovery_path = Vec::new();
+    let mut last_seq_recovery_len = None;
+
+    for segment in path.iter() {
+        match segment {
+            SerdeSegment::Map { key } => {
+                recovery_path.push(RecoveryPathSegment::Key(key.to_string()));
+            }
+            SerdeSegment::Enum { variant } => {
+                recovery_path.push(RecoveryPathSegment::Key(variant.to_string()));
+            }
+            SerdeSegment::Seq { index } => {
+                recovery_path.push(RecoveryPathSegment::Index(*index));
+                last_seq_recovery_len = Some(recovery_path.len());
+            }
+            SerdeSegment::Unknown => {}
+        }
+    }
+
+    if recovery_path.is_empty() {
+        return None;
+    }
+
+    if let Some(len) = last_seq_recovery_len {
+        recovery_path.truncate(len);
+    }
+
+    Some(recovery_path)
+}
+
+fn display_recovery_path(path: &[RecoveryPathSegment]) -> String {
+    let mut rendered = String::new();
+
+    for segment in path {
+        match segment {
+            RecoveryPathSegment::Key(key) => {
+                if !rendered.is_empty() {
+                    rendered.push('.');
+                }
+                rendered.push_str(key);
+            }
+            RecoveryPathSegment::Index(index) => {
+                let _ = write!(rendered, "[{index}]");
+            }
+        }
+    }
+
+    rendered
+}
+
+fn remove_value_at_recovery_path(value: &mut TomlValue, path: &[RecoveryPathSegment]) -> bool {
+    remove_value_at_recovery_path_inner(value, path, 0)
+}
+
+fn prune_empty_containers(value: &mut TomlValue) {
+    let _ = prune_empty_containers_inner(value);
+}
+
+fn remove_value_at_recovery_path_inner(
+    value: &mut TomlValue,
+    path: &[RecoveryPathSegment],
+    index: usize,
+) -> bool {
+    let Some(segment) = path.get(index) else {
+        return false;
+    };
+    let is_leaf = index + 1 == path.len();
+
+    match segment {
+        RecoveryPathSegment::Key(key) => {
+            let Some(table) = value.as_table_mut() else {
+                return false;
+            };
+            if is_leaf {
+                table.remove(key).is_some()
+            } else {
+                table.get_mut(key).is_some_and(|child| {
+                    remove_value_at_recovery_path_inner(child, path, index + 1)
+                })
+            }
+        }
+        RecoveryPathSegment::Index(seq_index) => {
+            let Some(array) = value.as_array_mut() else {
+                return false;
+            };
+            if *seq_index >= array.len() {
+                return false;
+            }
+            if is_leaf {
+                array.remove(*seq_index);
+                true
+            } else {
+                remove_value_at_recovery_path_inner(&mut array[*seq_index], path, index + 1)
+            }
+        }
+    }
+}
+
+fn prune_empty_containers_inner(value: &mut TomlValue) -> bool {
+    match value {
+        TomlValue::Table(table) => {
+            table.retain(|_, child| !prune_empty_containers_inner(child));
+            table.is_empty()
+        }
+        TomlValue::Array(array) => {
+            array.retain_mut(|child| !prune_empty_containers_inner(child));
+            array.is_empty()
+        }
+        _ => false,
+    }
 }
 
 fn is_features_table_path(path: &SerdePath) -> bool {

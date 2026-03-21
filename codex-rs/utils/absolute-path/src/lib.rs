@@ -179,12 +179,16 @@ impl<'de> Deserialize<'de> for AbsolutePathBuf {
             Some(base) => {
                 Ok(Self::resolve_path_against_base(path, base).map_err(SerdeError::custom)?)
             }
-            None if path.is_absolute() => {
-                Self::from_absolute_path(path).map_err(SerdeError::custom)
+            None => {
+                let expanded = Self::maybe_expand_home_directory(&path);
+                if expanded.is_absolute() {
+                    Self::from_absolute_path(expanded).map_err(SerdeError::custom)
+                } else {
+                    Err(SerdeError::custom(
+                        "AbsolutePathBuf deserialized without a base path",
+                    ))
+                }
             }
-            None => Err(SerdeError::custom(
-                "AbsolutePathBuf deserialized without a base path",
-            )),
         })
     }
 }
@@ -248,6 +252,17 @@ mod tests {
 
     #[cfg(not(target_os = "windows"))]
     #[test]
+    fn home_directory_root_on_non_windows_is_expanded_without_base_path() {
+        let Some(home) = home_dir() else {
+            return;
+        };
+        let abs_path_buf =
+            serde_json::from_str::<AbsolutePathBuf>("\"~\"").expect("failed to deserialize");
+        assert_eq!(abs_path_buf.as_path(), home.as_path());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
     fn home_directory_subpath_on_non_windows_is_expanded_in_deserialization() {
         let Some(home) = home_dir() else {
             return;
@@ -257,6 +272,17 @@ mod tests {
             let _guard = AbsolutePathBufGuard::new(temp_dir.path());
             serde_json::from_str::<AbsolutePathBuf>("\"~/code\"").expect("failed to deserialize")
         };
+        assert_eq!(abs_path_buf.as_path(), home.join("code").as_path());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn home_directory_subpath_on_non_windows_is_expanded_without_base_path() {
+        let Some(home) = home_dir() else {
+            return;
+        };
+        let abs_path_buf =
+            serde_json::from_str::<AbsolutePathBuf>("\"~/code\"").expect("failed to deserialize");
         assert_eq!(abs_path_buf.as_path(), home.join("code").as_path());
     }
 
@@ -286,6 +312,17 @@ mod tests {
         assert_eq!(
             abs_path_buf.as_path(),
             base_dir.join("~").join("code").as_path()
+        );
+    }
+
+    #[test]
+    fn relative_path_without_base_path_fails_in_deserialization() {
+        let err = serde_json::from_str::<AbsolutePathBuf>("\"subdir/file.txt\"")
+            .expect_err("relative path without a base path should fail");
+        assert!(
+            err.to_string()
+                .contains("AbsolutePathBuf deserialized without a base path"),
+            "unexpected error: {err}",
         );
     }
 }

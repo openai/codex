@@ -657,6 +657,17 @@ impl ConfigBuilder {
         }
         let cli_overrides = cli_overrides.unwrap_or_default();
         let mut harness_overrides = harness_overrides.unwrap_or_default();
+        #[cfg(all(test, target_os = "macos"))]
+        let loader_overrides = {
+            let loader_overrides_provided = loader_overrides.is_some();
+            let mut loader_overrides = loader_overrides.unwrap_or_default();
+            if !loader_overrides_provided {
+                loader_overrides.managed_preferences_base64 = Some(String::new());
+                loader_overrides.macos_managed_config_requirements_base64 = Some(String::new());
+            }
+            loader_overrides
+        };
+        #[cfg(not(all(test, target_os = "macos")))]
         let loader_overrides = loader_overrides.unwrap_or_default();
         let cwd_override = harness_overrides.cwd.as_deref().or(fallback_cwd.as_deref());
         let cwd = match cwd_override {
