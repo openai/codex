@@ -140,12 +140,7 @@ trust_level = "trusted"
     let writer_tx = session.writer_sender();
     let interrupt_writer = writer_tx.clone();
     let interrupt_task = tokio::spawn(async move {
-        let initial_interrupt_delay = if cfg!(target_os = "macos") {
-            Duration::from_secs(4)
-        } else {
-            Duration::from_secs(2)
-        };
-        sleep(initial_interrupt_delay).await;
+        sleep(Duration::from_secs(2)).await;
         for _ in 0..4 {
             let _ = interrupt_writer.send(vec![3]).await;
             sleep(Duration::from_millis(500)).await;
@@ -181,9 +176,8 @@ trust_level = "trusted"
             anyhow::bail!("timed out waiting for codex resume to exit");
         }
     };
-    let interrupted_cleanly = String::from_utf8_lossy(&output).trim() == "^C";
     anyhow::ensure!(
-        exit_code == 0 || exit_code == 130 || (exit_code == 1 && interrupted_cleanly),
+        exit_code == 0 || exit_code == 130,
         "unexpected exit code from codex resume: {exit_code}; output: {}",
         String::from_utf8_lossy(&output)
     );
