@@ -9083,6 +9083,9 @@
         "description": {
           "type": "string"
         },
+        "enabled": {
+          "type": "boolean"
+        },
         "interface": {
           "anyOf": [
             {
@@ -9108,6 +9111,7 @@
       },
       "required": [
         "description",
+        "enabled",
         "name",
         "path"
       ],
@@ -9164,13 +9168,27 @@
         "enabled": {
           "type": "boolean"
         },
+        "name": {
+          "description": "Name-based selector.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "path": {
-          "type": "string"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Path-based selector."
         }
       },
       "required": [
-        "enabled",
-        "path"
+        "enabled"
       ],
       "title": "SkillsConfigWriteParams",
       "type": "object"

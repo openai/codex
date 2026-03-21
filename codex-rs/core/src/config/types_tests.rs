@@ -1,5 +1,6 @@
 use super::*;
 use pretty_assertions::assert_eq;
+use std::path::Path;
 
 #[test]
 fn deserialize_stdio_command_server_config() {
@@ -241,6 +242,39 @@ fn deserialize_server_config_with_tool_filters() {
 
     assert_eq!(cfg.enabled_tools, Some(vec!["allowed".to_string()]));
     assert_eq!(cfg.disabled_tools, Some(vec!["blocked".to_string()]));
+}
+
+#[test]
+fn deserialize_skill_config_with_name_selector() {
+    let cfg: SkillConfig = toml::from_str(
+        r#"
+            name = "github:yeet"
+            enabled = false
+        "#,
+    )
+    .expect("should deserialize skill config with name selector");
+
+    assert_eq!(cfg.name.as_deref(), Some("github:yeet"));
+    assert_eq!(cfg.path, None);
+    assert!(!cfg.enabled);
+}
+
+#[test]
+fn deserialize_skill_config_with_path_selector() {
+    let cfg: SkillConfig = toml::from_str(
+        r#"
+            path = "/tmp/skills/demo/SKILL.md"
+            enabled = false
+        "#,
+    )
+    .expect("should deserialize skill config with path selector");
+
+    assert_eq!(
+        cfg.path.as_ref().map(|path| path.as_path()),
+        Some(Path::new("/tmp/skills/demo/SKILL.md"))
+    );
+    assert_eq!(cfg.name, None);
+    assert!(!cfg.enabled);
 }
 
 #[test]

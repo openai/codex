@@ -5670,7 +5670,7 @@ impl CodexMessageProcessor {
                 interface: outcome.plugin.interface.map(plugin_interface_to_info),
             },
             description: outcome.plugin.description,
-            skills: plugin_skills_to_info(&visible_skills),
+            skills: plugin_skills_to_info(&visible_skills, &outcome.plugin.disabled_skill_paths),
             apps: app_summaries,
             mcp_servers: outcome.plugin.mcp_server_names,
         };
@@ -5685,8 +5685,30 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: SkillsConfigWriteParams,
     ) {
-        let SkillsConfigWriteParams { path, enabled } = params;
-        let edits = vec![ConfigEdit::SetSkillConfig { path, enabled }];
+        let SkillsConfigWriteParams {
+            path,
+            name,
+            enabled,
+        } = params;
+        let edit = match (path, name) {
+            (Some(path), None) => ConfigEdit::SetSkillConfig {
+                path: path.into_path_buf(),
+                enabled,
+            },
+            (None, Some(name)) if !name.trim().is_empty() => {
+                ConfigEdit::SetSkillConfigByName { name, enabled }
+            }
+            _ => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_PARAMS_ERROR_CODE,
+                    message: "skills/config/write requires exactly one of path or name".to_string(),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let edits = vec![edit];
         let result = ConfigEditsBuilder::new(&self.config.codex_home)
             .with_edits(edits)
             .apply()
@@ -5694,6 +5716,7 @@ impl CodexMessageProcessor {
 
         match result {
             Ok(()) => {
+                self.thread_manager.plugins_manager().clear_cache();
                 self.thread_manager.skills_manager().clear_cache();
                 self.outgoing
                     .send_response(
@@ -7634,7 +7657,10 @@ fn skills_to_info(
         .collect()
 }
 
-fn plugin_skills_to_info(skills: &[codex_core::skills::SkillMetadata]) -> Vec<SkillSummary> {
+fn plugin_skills_to_info(
+    skills: &[codex_core::skills::SkillMetadata],
+    disabled_skill_paths: &std::collections::HashSet<PathBuf>,
+) -> Vec<SkillSummary> {
     skills
         .iter()
         .map(|skill| SkillSummary {
@@ -7652,6 +7678,7 @@ fn plugin_skills_to_info(skills: &[codex_core::skills::SkillMetadata]) -> Vec<Sk
                 }
             }),
             path: skill.path_to_skills_md.clone(),
+            enabled: !disabled_skill_paths.contains(&skill.path_to_skills_md),
         })
         .collect()
 }
