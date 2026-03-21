@@ -176,6 +176,9 @@ where
     }
     if wrapped_lines > 0 {
         terminal.note_history_rows_inserted(wrapped_lines);
+        // History insertion mutates the terminal outside the diffed viewport buffer.
+        // Force the next draw to repaint the live viewport instead of diffing against stale state.
+        terminal.invalidate_viewport();
     }
 
     Ok(())
@@ -334,8 +337,114 @@ mod tests {
     use super::*;
     use crate::markdown_render::render_markdown_text;
     use crate::test_backend::VT100Backend;
+    use ratatui::backend::Backend;
+    use ratatui::backend::ClearType as BackendClearType;
+    use ratatui::backend::WindowSize;
+    use ratatui::buffer::Cell;
     use ratatui::layout::Rect;
+    use ratatui::layout::Size;
     use ratatui::style::Color;
+    use ratatui::widgets::Paragraph;
+    use ratatui::widgets::Widget;
+    use std::io;
+    use std::io::Write;
+
+    struct RecordingBackend {
+        inner: VT100Backend,
+        writes: Vec<u8>,
+    }
+
+    impl RecordingBackend {
+        fn new(width: u16, height: u16) -> Self {
+            Self {
+                inner: VT100Backend::new(width, height),
+                writes: Vec::new(),
+            }
+        }
+
+        fn clear_writes(&mut self) {
+            self.writes.clear();
+        }
+    }
+
+    impl Write for RecordingBackend {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.writes.extend_from_slice(buf);
+            self.inner.write(buf)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            std::io::Write::flush(&mut self.inner)
+        }
+    }
+
+    impl Backend for RecordingBackend {
+        fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
+        where
+            I: Iterator<Item = (u16, u16, &'a Cell)>,
+        {
+            self.inner.draw(content)
+        }
+
+        fn hide_cursor(&mut self) -> io::Result<()> {
+            self.inner.hide_cursor()
+        }
+
+        fn show_cursor(&mut self) -> io::Result<()> {
+            self.inner.show_cursor()
+        }
+
+        fn get_cursor_position(&mut self) -> io::Result<ratatui::layout::Position> {
+            self.inner.get_cursor_position()
+        }
+
+        fn set_cursor_position<P: Into<ratatui::layout::Position>>(
+            &mut self,
+            position: P,
+        ) -> io::Result<()> {
+            self.inner.set_cursor_position(position)
+        }
+
+        fn clear(&mut self) -> io::Result<()> {
+            self.inner.clear()
+        }
+
+        fn clear_region(&mut self, clear_type: BackendClearType) -> io::Result<()> {
+            self.inner.clear_region(clear_type)
+        }
+
+        fn append_lines(&mut self, line_count: u16) -> io::Result<()> {
+            self.inner.append_lines(line_count)
+        }
+
+        fn size(&self) -> io::Result<Size> {
+            self.inner.size()
+        }
+
+        fn window_size(&mut self) -> io::Result<WindowSize> {
+            self.inner.window_size()
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            ratatui::backend::Backend::flush(&mut self.inner)
+        }
+
+        fn scroll_region_up(
+            &mut self,
+            region: std::ops::Range<u16>,
+            scroll_by: u16,
+        ) -> io::Result<()> {
+            self.inner.scroll_region_up(region, scroll_by)
+        }
+
+        fn scroll_region_down(
+            &mut self,
+            region: std::ops::Range<u16>,
+            scroll_by: u16,
+        ) -> io::Result<()> {
+            self.inner.scroll_region_down(region, scroll_by)
+        }
+    }
 
     #[test]
     fn writes_bold_then_regular_spans() {
@@ -732,5 +841,61 @@ mod tests {
             url_row <= prompt_row + 2,
             "expected URL content to appear immediately after prompt (allowing at most one spacer row), got prompt_row={prompt_row}, url_row={url_row}, rows={rows:?}",
         );
+    }
+
+    #[test]
+    fn vt100_wrapped_history_insert_redraws_clobbered_viewport_rows() {
+        let width: u16 = 24;
+        let height: u16 = 8;
+        let backend = RecordingBackend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        let viewport = Rect::new(0, 3, width, 4);
+        term.set_viewport_area(viewport);
+
+        let render_viewport = |term: &mut crate::custom_terminal::Terminal<RecordingBackend>| {
+            term.draw(|frame| {
+                let lines = vec![
+                    Line::from("Working 14s"),
+                    Line::from("esc to interrupt"),
+                    Line::from("summarize diffs"),
+                    Line::from("composer >"),
+                ];
+                Paragraph::new(lines).render(frame.area(), frame.buffer_mut());
+            })
+            .expect("draw viewport");
+        };
+
+        render_viewport(&mut term);
+        term.backend_mut().clear_writes();
+
+        let long_url = format!(
+            "https://example.test/api/v1/projects/alpha/{}",
+            "very-long-segment-".repeat(6),
+        );
+        insert_history_lines(
+            &mut term,
+            vec![Line::from(vec!["• ".into(), long_url.into()])],
+        )
+        .expect("insert wrapped history line");
+
+        term.backend_mut().clear_writes();
+        render_viewport(&mut term);
+
+        let redraw = String::from_utf8_lossy(&term.backend().writes).into_owned();
+        let rows: Vec<String> = term
+            .backend()
+            .inner
+            .vt100()
+            .screen()
+            .rows(0, width)
+            .collect();
+        assert!(
+            redraw.contains("Working") && redraw.contains("composer"),
+            "expected redraw to repaint the live viewport after out-of-band history insertion, got {redraw:?}"
+        );
+        assert_eq!(rows[4].trim_end(), "Working 14s");
+        assert_eq!(rows[5].trim_end(), "esc to interrupt");
+        assert_eq!(rows[6].trim_end(), "summarize diffs");
+        assert_eq!(rows[7].trim_end(), "composer >");
     }
 }

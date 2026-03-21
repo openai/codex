@@ -478,6 +478,16 @@ where
         self.visible_history_rows
     }
 
+    pub(crate) fn invalidate_viewport(&mut self) {
+        let previous = self.previous_buffer_mut();
+        previous.reset();
+        // Mark every previous cell as skipped so the next diff treats the viewport as unknown.
+        // This forces interior spaces to be repainted too, not just non-space glyphs.
+        for cell in &mut previous.content {
+            cell.skip = true;
+        }
+    }
+
     pub(crate) fn note_history_rows_inserted(&mut self, inserted_rows: u16) {
         self.visible_history_rows = self
             .visible_history_rows
@@ -510,7 +520,7 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
     let next_buffer = &b.content;
 
     let mut updates = vec![];
-    let mut last_nonblank_columns = vec![0; a.area.height as usize];
+    let mut clear_start_columns = vec![0; a.area.height as usize];
     for y in 0..a.area.height {
         let row_start = y as usize * a.area.width as usize;
         let row_end = row_start + a.area.width as usize;
@@ -522,23 +532,25 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
         // Multi-width glyphs extend that region through their full displayed width.
         // After that point the rest of the row can be cleared with a single ClearToEnd, a perf win
         // versus emitting multiple space Put commands.
-        let mut last_nonblank_column = 0usize;
+        let mut last_nonblank_column = None;
         let mut column = 0usize;
         while column < row.len() {
             let cell = &row[column];
             let width = display_width(cell.symbol());
             if cell.symbol() != " " || cell.bg != bg || cell.modifier != Modifier::empty() {
-                last_nonblank_column = column + (width.saturating_sub(1));
+                last_nonblank_column = Some(column + width.saturating_sub(1));
             }
             column += width.max(1); // treat zero-width symbols as width 1
         }
 
-        if last_nonblank_column + 1 < row.len() {
-            let (x, y) = a.pos_of(row_start + last_nonblank_column + 1);
+        let clear_start_column = last_nonblank_column.map_or(0, |column| column + 1);
+        if clear_start_column < row.len() {
+            let (x, y) = a.pos_of(row_start + clear_start_column);
             updates.push(DrawCommand::ClearToEnd { x, y, bg });
         }
 
-        last_nonblank_columns[y as usize] = last_nonblank_column as u16;
+        clear_start_columns[y as usize] = u16::try_from(clear_start_column)
+            .expect("row clear start should fit in terminal width");
     }
 
     // Cells invalidated by drawing/replacing preceding multi-width characters:
@@ -550,7 +562,7 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
         if !current.skip && (current != previous || invalidated > 0) && to_skip == 0 {
             let (x, y) = a.pos_of(i);
             let row = i / a.area.width as usize;
-            if x <= last_nonblank_columns[row] {
+            if x < clear_start_columns[row] {
                 updates.push(DrawCommand::Put {
                     x,
                     y,
@@ -702,6 +714,10 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::layout::Rect;
     use ratatui::style::Style;
+    use ratatui::widgets::Paragraph;
+    use ratatui::widgets::Widget;
+
+    use crate::test_backend::VT100Backend;
 
     #[test]
     fn diff_buffers_does_not_emit_clear_to_end_for_full_width_row() {
@@ -747,5 +763,56 @@ mod tests {
                 .any(|command| matches!(command, DrawCommand::ClearToEnd { x: 2, y: 0, .. })),
             "expected clear-to-end to start after the remaining wide char; commands: {commands:?}"
         );
+    }
+
+    #[test]
+    fn diff_buffers_clear_to_end_starts_at_column_zero_for_blank_rows() {
+        let area = Rect::new(0, 0, 4, 1);
+        let mut previous = Buffer::empty(area);
+        let next = Buffer::empty(area);
+
+        previous
+            .cell_mut((0, 0))
+            .expect("cell should exist")
+            .set_symbol("X");
+
+        let commands = diff_buffers(&previous, &next);
+
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, DrawCommand::ClearToEnd { x: 0, y: 0, .. })),
+            "expected blank row clear-to-end to start at column 0; commands: {commands:?}"
+        );
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, DrawCommand::Put { x: 0, y: 0, .. })),
+            "expected blank row not to emit a redundant leading-space put; commands: {commands:?}"
+        );
+    }
+
+    #[test]
+    fn invalidate_viewport_repaints_interior_spaces() {
+        let width: u16 = 12;
+        let height: u16 = 1;
+        let mut term =
+            Terminal::with_options(VT100Backend::new(width, height)).expect("create terminal");
+        let area = Rect::new(0, 0, width, height);
+        term.set_viewport_area(area);
+
+        term.draw(|frame| {
+            Paragraph::new("•XWorkingX(").render(frame.area(), frame.buffer_mut());
+        })
+        .expect("draw dirty row");
+
+        term.invalidate_viewport();
+
+        term.draw(|frame| {
+            Paragraph::new("• Working (").render(frame.area(), frame.buffer_mut());
+        })
+        .expect("draw row with spaces");
+
+        assert_eq!(term.backend().vt100().screen().contents(), "• Working (");
     }
 }
