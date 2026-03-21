@@ -379,6 +379,7 @@ pub(crate) async fn download_file_to_managed_temp(
     config: &Config,
     auth: Option<&CodexAuth>,
     reference: &str,
+    session_id: &str,
     scope: &str,
     max_bytes: u64,
 ) -> Result<DownloadedOpenAiFile, OpenAiFileError> {
@@ -393,7 +394,7 @@ pub(crate) async fn download_file_to_managed_temp(
         });
     }
 
-    let download_dir = managed_download_dir(scope)?;
+    let download_dir = managed_download_dir(session_id, scope)?;
 
     let file_name = sanitize_download_file_name(
         resolved
@@ -483,8 +484,17 @@ pub(crate) async fn download_file_to_managed_temp(
     })
 }
 
-pub(crate) fn managed_download_dir(scope: &str) -> Result<PathBuf, OpenAiFileError> {
-    let parent = std::env::temp_dir().join("codex-openai-files").join(scope);
+pub(crate) fn managed_download_root_for_session(session_id: &str) -> PathBuf {
+    std::env::temp_dir()
+        .join("codex-openai-files")
+        .join(sanitize_download_file_name(session_id))
+}
+
+pub(crate) fn managed_download_dir(
+    session_id: &str,
+    scope: &str,
+) -> Result<PathBuf, OpenAiFileError> {
+    let parent = managed_download_root_for_session(session_id).join(scope);
     std::fs::create_dir_all(&parent).map_err(|source| OpenAiFileError::CreateDirectory {
         path: parent.clone(),
         source,
@@ -658,6 +668,7 @@ mod tests {
             &test_config_for(&server),
             Some(&chatgpt_auth()),
             "sediment://file_123",
+            "session-1",
             "call-1",
             OPENAI_FILE_DOWNLOAD_LIMIT_BYTES,
         )
@@ -670,7 +681,7 @@ mod tests {
         assert!(
             downloaded
                 .destination_path
-                .starts_with(std::env::temp_dir().join("codex-openai-files/call-1"))
+                .starts_with(std::env::temp_dir().join("codex-openai-files/session-1/call-1"))
         );
         assert_eq!(
             tokio::fs::read_to_string(&downloaded.destination_path)
@@ -699,6 +710,7 @@ mod tests {
             &test_config_for(&server),
             Some(&chatgpt_auth()),
             "file_123",
+            "session-2",
             "call-2",
             128,
         )
@@ -739,6 +751,7 @@ mod tests {
             &test_config_for(&server),
             Some(&auth),
             "sediment://file_123",
+            "session-3",
             "call-3",
             OPENAI_FILE_DOWNLOAD_LIMIT_BYTES,
         )

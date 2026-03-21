@@ -230,6 +230,7 @@ use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
+use crate::openai_files::managed_download_root_for_session;
 use crate::plugins::PluginsManager;
 use crate::plugins::build_plugin_injections;
 use crate::plugins::render_plugins_section;
@@ -1153,6 +1154,41 @@ pub(crate) struct SessionSettingsUpdate {
 }
 
 impl Session {
+    fn add_session_openai_file_root_to_sandbox(
+        session_configuration: &mut SessionConfiguration,
+        conversation_id: ThreadId,
+    ) -> anyhow::Result<()> {
+        let session_openai_file_root =
+            managed_download_root_for_session(&conversation_id.to_string());
+        let session_openai_file_root =
+            AbsolutePathBuf::from_absolute_path(&session_openai_file_root).map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to resolve session OpenAI file root `{}`: {error}",
+                    session_openai_file_root.display()
+                )
+            })?;
+        session_configuration.file_system_sandbox_policy = session_configuration
+            .file_system_sandbox_policy
+            .clone()
+            .with_additional_readable_roots(
+                &session_configuration.cwd,
+                std::slice::from_ref(&session_openai_file_root),
+            );
+        if matches!(
+            session_configuration.sandbox_policy.get(),
+            SandboxPolicy::WorkspaceWrite { .. }
+        ) {
+            session_configuration.file_system_sandbox_policy = session_configuration
+                .file_system_sandbox_policy
+                .clone()
+                .with_additional_writable_roots(
+                    &session_configuration.cwd,
+                    std::slice::from_ref(&session_openai_file_root),
+                );
+        }
+        Ok(())
+    }
+
     /// Builds the `x-codex-beta-features` header value for this session.
     ///
     /// `ModelClient` is session-scoped and intentionally does not depend on the full `Config`, so
@@ -1462,6 +1498,7 @@ impl Session {
             ),
             InitialHistory::New | InitialHistory::Forked(_) => None,
         };
+        Self::add_session_openai_file_root_to_sandbox(&mut session_configuration, conversation_id)?;
 
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //

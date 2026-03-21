@@ -60,6 +60,7 @@ impl ToolHandler for DownloadOpenAiFileHandler {
             turn.config.as_ref(),
             auth.as_ref(),
             &args.file_id,
+            &session.conversation_id.to_string(),
             &unique_manual_download_scope(),
             OPENAI_FILE_DOWNLOAD_LIMIT_BYTES,
         )

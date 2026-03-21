@@ -1089,6 +1089,7 @@ async fn rewrite_mcp_tool_result_for_openai_files(
             continue;
         };
         rewrite_output_value_for_openai_files(
+            sess,
             turn_context,
             auth.as_ref(),
             call_id,
@@ -1102,6 +1103,7 @@ async fn rewrite_mcp_tool_result_for_openai_files(
 }
 
 async fn rewrite_output_value_for_openai_files(
+    sess: &Session,
     turn_context: &TurnContext,
     auth: Option<&crate::CodexAuth>,
     call_id: &str,
@@ -1111,6 +1113,7 @@ async fn rewrite_output_value_for_openai_files(
     match value {
         serde_json::Value::String(file_ref) => {
             if let Some(downloaded_path) = auto_download_openai_file_value(
+                sess,
                 turn_context,
                 auth,
                 call_id,
@@ -1128,6 +1131,7 @@ async fn rewrite_output_value_for_openai_files(
                     continue;
                 };
                 if let Some(downloaded_path) = auto_download_openai_file_value(
+                    sess,
                     turn_context,
                     auth,
                     call_id,
@@ -1145,6 +1149,7 @@ async fn rewrite_output_value_for_openai_files(
 }
 
 async fn auto_download_openai_file_value(
+    sess: &Session,
     turn_context: &TurnContext,
     auth: Option<&crate::CodexAuth>,
     call_id: &str,
@@ -1160,6 +1165,7 @@ async fn auto_download_openai_file_value(
         turn_context.config.as_ref(),
         auth,
         file_ref,
+        &sess.conversation_id.to_string(),
         call_id,
         max_bytes,
     )
