@@ -324,7 +324,11 @@ impl PluginLoadOutcome {
 
     pub fn effective_mcp_servers(&self) -> HashMap<String, McpServerConfig> {
         let mut mcp_servers = HashMap::new();
-        for plugin in self.plugins.iter().filter(|plugin| plugin.is_active()) {
+        for plugin in self
+            .plugins
+            .iter()
+            .filter(|plugin| plugin.is_active() && plugin.apps.is_empty())
+        {
             for (name, config) in &plugin.mcp_servers {
                 mcp_servers
                     .entry(name.clone())

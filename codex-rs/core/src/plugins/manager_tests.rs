@@ -178,10 +178,60 @@ fn load_plugins_loads_default_skills_and_mcp_servers() {
         outcome.effective_skill_roots(),
         vec![plugin_root.join("skills")]
     );
-    assert_eq!(outcome.effective_mcp_servers().len(), 1);
+    assert!(outcome.effective_mcp_servers().is_empty());
     assert_eq!(
         outcome.effective_apps(),
         vec![AppConnectorId("connector_example".to_string())]
+    );
+}
+
+#[test]
+fn effective_mcp_servers_skip_plugins_with_connectors_defined() {
+    let codex_home = TempDir::new().unwrap();
+    let http_server = |url: &str| McpServerConfig {
+        transport: McpServerTransportConfig::StreamableHttp {
+            url: url.to_string(),
+            bearer_token_env_var: None,
+            http_headers: None,
+            env_http_headers: None,
+        },
+        enabled: true,
+        required: false,
+        disabled_reason: None,
+        startup_timeout_sec: None,
+        tool_timeout_sec: None,
+        enabled_tools: None,
+        disabled_tools: None,
+        scopes: None,
+        oauth_resource: None,
+    };
+    let plugin = |config_name: &str| LoadedPlugin {
+        config_name: config_name.to_string(),
+        manifest_name: Some(config_name.to_string()),
+        manifest_description: None,
+        root: AbsolutePathBuf::try_from(codex_home.path().join(config_name)).unwrap(),
+        enabled: true,
+        skill_roots: Vec::new(),
+        mcp_servers: HashMap::new(),
+        apps: Vec::new(),
+        error: None,
+    };
+
+    let outcome = PluginLoadOutcome::from_plugins(vec![
+        LoadedPlugin {
+            mcp_servers: HashMap::from([("alpha".to_string(), http_server("https://alpha"))]),
+            apps: vec![AppConnectorId("connector_example".to_string())],
+            ..plugin("alpha@test")
+        },
+        LoadedPlugin {
+            mcp_servers: HashMap::from([("beta".to_string(), http_server("https://beta"))]),
+            ..plugin("beta@test")
+        },
+    ]);
+
+    assert_eq!(
+        outcome.effective_mcp_servers(),
+        HashMap::from([("beta".to_string(), http_server("https://beta"))])
     );
 }
 
