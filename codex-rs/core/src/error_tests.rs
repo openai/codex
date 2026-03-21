@@ -71,6 +71,30 @@ fn server_overloaded_maps_to_protocol() {
 }
 
 #[test]
+fn inline_image_request_limit_maps_to_bad_request() {
+    let err = CodexErr::InlineImageRequestLimitExceeded(
+        InlineImageRequestLimitExceededError::local_preflight_bytes(123, 45),
+    );
+    assert_eq!(err.to_codex_protocol_error(), CodexErrorInfo::BadRequest);
+    assert_eq!(
+        err.to_string(),
+        "Total inline image data in this request is 123 bytes, which exceeds the 45 byte limit for a single Responses API request. Use fewer images, smaller images, lower detail, or JPEG compression and try again."
+    );
+}
+
+#[test]
+fn inline_image_request_count_limit_maps_to_bad_request() {
+    let err = CodexErr::InlineImageRequestLimitExceeded(
+        InlineImageRequestLimitExceededError::local_preflight_images(1_501, 1_500),
+    );
+    assert_eq!(err.to_codex_protocol_error(), CodexErrorInfo::BadRequest);
+    assert_eq!(
+        err.to_string(),
+        "This request contains 1501 images, which exceeds the 1500 image limit for a single Responses API request. Use fewer images, smaller images, lower detail, or JPEG compression and try again."
+    );
+}
+
+#[test]
 fn sandbox_denied_uses_aggregated_output_when_stderr_empty() {
     let output = ExecToolCallOutput {
         exit_code: 77,
