@@ -11,11 +11,11 @@ expression: term.backend().vt100().screen().contents()
 
 
 
+
 • Working (0s • esc to interrupt)
 
-• Queued follow-up messages
-  ↳ Queued while /review is running.
-    ⌥ + ↑ edit last queued message
+• Messages to be submitted at end of turn
+  ↳ Steer submitted while /review was running.
 
 › Ask Codex to do anything
 

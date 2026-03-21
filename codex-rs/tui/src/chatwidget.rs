@@ -5789,18 +5789,25 @@ impl ChatWidget {
     /// Rebuild and update the bottom-pane pending-input preview.
     fn refresh_pending_input_preview(&mut self) {
         let queued_messages: Vec<String> = self
-            .rejected_steers_queue
+            .queued_user_messages
             .iter()
             .map(|m| m.text.clone())
-            .chain(self.queued_user_messages.iter().map(|m| m.text.clone()))
             .collect();
         let pending_steers: Vec<String> = self
             .pending_steers
             .iter()
             .map(|steer| steer.user_message.text.clone())
             .collect();
-        self.bottom_pane
-            .set_pending_input_preview(queued_messages, pending_steers);
+        let rejected_steers: Vec<String> = self
+            .rejected_steers_queue
+            .iter()
+            .map(|message| message.text.clone())
+            .collect();
+        self.bottom_pane.set_pending_input_preview(
+            queued_messages,
+            pending_steers,
+            rejected_steers,
+        );
     }
 
     pub(crate) fn set_pending_thread_approvals(&mut self, threads: Vec<String>) {

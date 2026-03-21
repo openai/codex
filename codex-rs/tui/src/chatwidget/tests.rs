@@ -11740,7 +11740,7 @@ async fn enter_submits_steer_while_review_is_running() {
     let _ = drain_insert_history(&mut rx);
 
     chat.bottom_pane.set_composer_text(
-        "Queued while /review is running.".to_string(),
+        "Steer submitted while /review was running.".to_string(),
         Vec::new(),
         Vec::new(),
     );
@@ -11750,13 +11750,13 @@ async fn enter_submits_steer_while_review_is_running() {
     assert_eq!(chat.pending_steers.len(), 1);
     assert_eq!(
         chat.pending_steers.front().unwrap().user_message.text,
-        "Queued while /review is running."
+        "Steer submitted while /review was running."
     );
     match next_submit_op(&mut op_rx) {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
             vec![UserInput::Text {
-                text: "Queued while /review is running.".to_string(),
+                text: "Steer submitted while /review was running.".to_string(),
                 text_elements: Vec::new(),
             }]
         ),
@@ -11788,7 +11788,7 @@ async fn review_queues_user_messages_snapshot() {
     let _ = drain_insert_history(&mut rx);
 
     chat.submit_user_message(UserMessage::from(
-        "Queued while /review is running.".to_string(),
+        "Steer submitted while /review was running.".to_string(),
     ));
     chat.handle_codex_event(Event {
         id: "steer-rejected".into(),
@@ -11796,6 +11796,45 @@ async fn review_queues_user_messages_snapshot() {
             message: "cannot steer a review turn".to_string(),
             codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
                 turn_kind: NonSteerableTurnKind::Review,
+            }),
+        }),
+    });
+
+    let width: u16 = 80;
+    let height: u16 = 18;
+    let backend = VT100Backend::new(width, height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    let desired_height = chat.desired_height(width).min(height);
+    term.set_viewport_area(Rect::new(0, height - desired_height, width, desired_height));
+    term.draw(|f| {
+        chat.render(f.area(), f.buffer_mut());
+    })
+    .unwrap();
+    assert_snapshot!(term.backend().vt100().screen().contents());
+}
+
+#[tokio::test]
+async fn compact_queues_user_messages_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.handle_codex_event(Event {
+        id: "turn-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    chat.submit_user_message(UserMessage::from(
+        "Steer submitted while /compact was running.".to_string(),
+    ));
+    chat.handle_codex_event(Event {
+        id: "steer-rejected".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "cannot steer a compact turn".to_string(),
+            codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
+                turn_kind: NonSteerableTurnKind::Compact,
             }),
         }),
     });

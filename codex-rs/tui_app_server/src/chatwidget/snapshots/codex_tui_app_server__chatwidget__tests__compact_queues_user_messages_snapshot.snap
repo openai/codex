@@ -11,11 +11,10 @@ expression: term.backend().vt100().screen().contents()
 
 
 
-
 • Working (0s • esc to interrupt)
 
 • Messages to be submitted at end of turn
-  ↳ Steer submitted while /review was running.
+  ↳ Steer submitted while /compact was running.
 
 › Ask Codex to do anything
 
