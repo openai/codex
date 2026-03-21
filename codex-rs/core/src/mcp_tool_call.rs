@@ -1,12 +1,16 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::time::Duration;
 use std::time::Instant;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_app_server_protocol::McpElicitationObjectType;
 use codex_app_server_protocol::McpElicitationSchema;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use tracing::error;
+use uuid::Uuid;
 
 use crate::analytics_client::AppInvocation;
 use crate::analytics_client::InvocationType;
@@ -47,9 +51,10 @@ use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use rmcp::model::ToolAnnotations;
 use serde::Serialize;
-use std::path::Path;
 use std::sync::Arc;
 use toml_edit::value;
+
+const MCP_TOOL_IMAGE_DIR_NAME: &str = "codex-mcp-tool-images";
 
 /// Handles the specified tool call dispatches the appropriate
 /// `McpToolCallBegin` and `McpToolCallEnd` events to the `Session`.
@@ -80,6 +85,7 @@ pub(crate) async fn handle_mcp_tool_call(
         tool: tool_name.clone(),
         arguments: arguments_value.clone(),
     };
+    let image_dir = std::env::temp_dir().join(MCP_TOOL_IMAGE_DIR_NAME);
 
     let metadata =
         lookup_mcp_tool_metadata(sess.as_ref(), turn_context.as_ref(), &server, &tool_name).await;
@@ -155,6 +161,8 @@ pub(crate) async fn handle_mcp_tool_call(
                     .await
                     .map_err(|e| format!("tool call error: {e:?}"));
                 let result = sanitize_mcp_tool_result_for_model(
+                    &image_dir,
+                    &call_id,
                     turn_context
                         .model_info
                         .input_modalities
@@ -241,6 +249,8 @@ pub(crate) async fn handle_mcp_tool_call(
         .await
         .map_err(|e| format!("tool call error: {e:?}"));
     let result = sanitize_mcp_tool_result_for_model(
+        &image_dir,
+        &call_id,
         turn_context
             .model_info
             .input_modalities
@@ -290,34 +300,173 @@ async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &T
 }
 
 fn sanitize_mcp_tool_result_for_model(
+    image_dir: &Path,
+    call_id: &str,
     supports_image_input: bool,
     result: Result<CallToolResult, String>,
 ) -> Result<CallToolResult, String> {
-    if supports_image_input {
-        return result;
-    }
-
     result.map(|call_tool_result| CallToolResult {
-        content: call_tool_result
-            .content
-            .iter()
-            .map(|block| {
-                if let Some(content_type) = block.get("type").and_then(serde_json::Value::as_str)
-                    && content_type == "image"
-                {
-                    return serde_json::json!({
-                        "type": "text",
-                        "text": "<image content omitted because you do not support image input>",
-                    });
-                }
+        content: if supports_image_input {
+            call_tool_result
+                .content
+                .iter()
+                .enumerate()
+                .map(|(index, block)| {
+                    materialize_mcp_image_block(image_dir, call_id, index, block)
+                        .unwrap_or_else(|| block.clone())
+                })
+                .collect()
+        } else {
+            call_tool_result
+                .content
+                .iter()
+                .map(|block| {
+                    if let Some(content_type) = block.get("type").and_then(serde_json::Value::as_str)
+                        && content_type == "image"
+                    {
+                        return serde_json::json!({
+                            "type": "text",
+                            "text": "<image content omitted because you do not support image input>",
+                        });
+                    }
 
-                block.clone()
-            })
-            .collect::<Vec<_>>(),
+                    block.clone()
+                })
+                .collect()
+        },
         structured_content: call_tool_result.structured_content,
         is_error: call_tool_result.is_error,
         meta: call_tool_result.meta,
     })
+}
+
+fn materialize_mcp_image_block(
+    image_dir: &Path,
+    call_id: &str,
+    index: usize,
+    block: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    let content_type = block.get("type").and_then(serde_json::Value::as_str)?;
+    if content_type != "image" {
+        return None;
+    }
+
+    let data = block.get("data").and_then(serde_json::Value::as_str)?;
+    let mime_type = block
+        .get("mimeType")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| block.get("mime_type").and_then(serde_json::Value::as_str));
+
+    let (bytes, resolved_mime_type) = match decode_mcp_image_payload(data, mime_type) {
+        Ok(decoded) => decoded,
+        Err(err) => {
+            tracing::warn!(
+                call_id,
+                index,
+                "failed to decode MCP image payload for local materialization: {err}"
+            );
+            return None;
+        }
+    };
+
+    if let Err(err) = std::fs::create_dir_all(image_dir) {
+        tracing::warn!(
+            call_id,
+            index,
+            image_dir = %image_dir.display(),
+            "failed to create MCP image directory: {err}"
+        );
+        return None;
+    }
+
+    let sanitized_call_id = call_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let file_stem = if sanitized_call_id.is_empty() {
+        "mcp_tool_image".to_string()
+    } else {
+        sanitized_call_id
+    };
+    let extension = image_extension_for_mime(&resolved_mime_type);
+    let path = image_dir.join(format!(
+        "{file_stem}-{}-{}.{}",
+        index + 1,
+        Uuid::new_v4(),
+        extension
+    ));
+
+    if let Err(err) = std::fs::write(&path, bytes) {
+        tracing::warn!(
+            call_id,
+            index,
+            path = %path.display(),
+            "failed to persist MCP image payload: {err}"
+        );
+        return None;
+    }
+
+    Some(serde_json::json!({
+        "type": "local_image",
+        "path": path.to_string_lossy(),
+    }))
+}
+
+fn decode_mcp_image_payload(
+    data: &str,
+    mime_type: Option<&str>,
+) -> Result<(Vec<u8>, String), String> {
+    if let Some(comma_index) = data.find(',')
+        && data
+            .get(..5)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
+    {
+        let metadata = &data[5..comma_index];
+        let payload = &data[comma_index + 1..];
+        let mut metadata_parts = metadata.split(';');
+        let data_mime_type = metadata_parts.next().unwrap_or_default();
+        let has_base64_marker = metadata_parts.any(|part| part.eq_ignore_ascii_case("base64"));
+        if !has_base64_marker {
+            return Err("non-base64 data URLs are not supported".to_string());
+        }
+
+        let bytes = BASE64_STANDARD
+            .decode(payload.trim().as_bytes())
+            .map_err(|err| format!("invalid base64 image data: {err}"))?;
+        let resolved_mime_type = if data_mime_type.is_empty() {
+            mime_type.unwrap_or("application/octet-stream").to_string()
+        } else {
+            data_mime_type.to_string()
+        };
+        return Ok((bytes, resolved_mime_type));
+    }
+
+    let bytes = BASE64_STANDARD
+        .decode(data.trim().as_bytes())
+        .map_err(|err| format!("invalid base64 image data: {err}"))?;
+    Ok((
+        bytes,
+        mime_type.unwrap_or("application/octet-stream").to_string(),
+    ))
+}
+
+fn image_extension_for_mime(mime_type: &str) -> &'static str {
+    match mime_type {
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/png" => "png",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        "image/svg+xml" => "svg",
+        "image/bmp" => "bmp",
+        "image/tiff" => "tiff",
+        _ => "bin",
+    }
 }
 
 async fn notify_mcp_tool_call_event(sess: &Session, turn_context: &TurnContext, event: EventMsg) {

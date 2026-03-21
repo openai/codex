@@ -1457,6 +1457,8 @@ fn convert_mcp_content_to_items(
             #[serde(rename = "mimeType", alias = "mime_type")]
             mime_type: Option<String>,
         },
+        #[serde(rename = "local_image", alias = "localImage")]
+        LocalImage { path: String },
         #[serde(other)]
         Unknown,
     }
@@ -1465,8 +1467,10 @@ fn convert_mcp_content_to_items(
     let mut items = Vec::with_capacity(contents.len());
 
     for content in contents {
-        let item = match serde_json::from_value::<McpContent>(content.clone()) {
-            Ok(McpContent::Text { text }) => FunctionCallOutputContentItem::InputText { text },
+        let content_items = match serde_json::from_value::<McpContent>(content.clone()) {
+            Ok(McpContent::Text { text }) => {
+                vec![FunctionCallOutputContentItem::InputText { text }]
+            }
             Ok(McpContent::Image { data, mime_type }) => {
                 saw_image = true;
                 let image_url = if data.starts_with("data:") {
@@ -1475,16 +1479,22 @@ fn convert_mcp_content_to_items(
                     let mime_type = mime_type.unwrap_or_else(|| "application/octet-stream".into());
                     format!("data:{mime_type};base64,{data}")
                 };
-                FunctionCallOutputContentItem::InputImage {
+                vec![FunctionCallOutputContentItem::InputImage {
                     image_url,
                     detail: None,
-                }
+                }]
             }
-            Ok(McpContent::Unknown) | Err(_) => FunctionCallOutputContentItem::InputText {
+            Ok(McpContent::LocalImage { path }) => {
+                saw_image = true;
+                vec![FunctionCallOutputContentItem::InputText {
+                    text: format!("Image available at local path `{path}`."),
+                }]
+            }
+            Ok(McpContent::Unknown) | Err(_) => vec![FunctionCallOutputContentItem::InputText {
                 text: serde_json::to_string(content).unwrap_or_else(|_| "<content>".to_string()),
-            },
+            }],
         };
-        items.push(item);
+        items.extend(content_items);
     }
 
     if saw_image { Some(items) } else { None }
@@ -2439,6 +2449,67 @@ mod tests {
                 detail: None,
             }]
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn serializes_local_image_outputs_as_array() -> Result<()> {
+        let dir = tempdir()?;
+        let local_path = dir.path().join("local.png");
+        const TINY_PNG_BYTES: &[u8] = &[
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+            8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2,
+            0, 0, 5, 0, 1, 122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+        ];
+        std::fs::write(&local_path, TINY_PNG_BYTES)?;
+
+        let call_tool_result = CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "local_image",
+                "path": local_path,
+            })],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        };
+
+        let payload = call_tool_result.into_function_call_output_payload();
+        let Some(items) = payload.content_items() else {
+            panic!("expected content items");
+        };
+        assert!(matches!(
+            items,
+            [FunctionCallOutputContentItem::InputText { text }]
+                if text.contains("Image available at local path")
+                    && text.contains("local.png")
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn local_image_output_preserves_local_path_reference() -> Result<()> {
+        let call_tool_result = CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "local_image",
+                "path": "/tmp/does-not-exist.png",
+            })],
+            structured_content: None,
+            is_error: Some(false),
+            meta: None,
+        };
+
+        let payload = call_tool_result.into_function_call_output_payload();
+        let Some(items) = payload.content_items() else {
+            panic!("expected content items");
+        };
+        assert!(matches!(
+            items,
+            [FunctionCallOutputContentItem::InputText { text }]
+                if text.contains("Image available at local path")
+                    && text.contains("/tmp/does-not-exist.png")
+        ));
 
         Ok(())
     }
