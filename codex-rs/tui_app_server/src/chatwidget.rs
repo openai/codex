@@ -4657,6 +4657,9 @@ impl ChatWidget {
             }
             SlashCommand::Compact => {
                 self.clear_token_usage();
+                if !self.bottom_pane.is_task_running() {
+                    self.bottom_pane.set_task_running(/*running*/ true);
+                }
                 self.app_event_tx.compact();
             }
             SlashCommand::Review => {
@@ -5908,7 +5911,7 @@ impl ChatWidget {
                     }
                 }
             }
-            ServerNotification::TurnStarted(notification) => {
+            ServerNotification::TurnStarted(_) => {
                 self.last_non_retry_error = None;
                 if !matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages)) {
                     self.on_task_started();

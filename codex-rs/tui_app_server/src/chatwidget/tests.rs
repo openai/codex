@@ -4293,6 +4293,34 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
 }
 
 #[tokio::test]
+async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Compact);
+
+    assert!(chat.bottom_pane.is_task_running());
+    match rx.try_recv() {
+        Ok(AppEvent::CodexOp(Op::Compact)) => {}
+        other => panic!("expected compact op to be submitted, got {other:?}"),
+    }
+
+    chat.bottom_pane.set_composer_text(
+        "queued before compact turn start".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(chat.pending_steers.is_empty());
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "queued before compact turn start"
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
 async fn steer_enter_uses_pending_steers_while_turn_is_running_without_streaming() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
