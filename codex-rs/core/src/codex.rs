@@ -4400,6 +4400,7 @@ mod handlers {
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
+    use crate::guardian::routes_approval_to_guardian;
 
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
@@ -4530,6 +4531,10 @@ mod handlers {
             // new_turn_with_sub_id already emits the error event.
             return;
         };
+        if routes_approval_to_guardian(current_context.as_ref()) {
+            sess.guardian_review_session
+                .spawn_initialize_trunk_if_needed(Arc::clone(sess), Arc::clone(&current_context));
+        }
         sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
             .await;
         current_context.session_telemetry.user_prompt(&items);
