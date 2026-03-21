@@ -188,7 +188,6 @@ pub(crate) enum TransportEvent {
     ConnectionOpened {
         connection_id: ConnectionId,
         writer: mpsc::Sender<OutgoingMessage>,
-        allow_legacy_notifications: bool,
         disconnect_sender: Option<CancellationToken>,
     },
     ConnectionClosed {
@@ -226,7 +225,6 @@ pub(crate) struct OutboundConnectionState {
     pub(crate) initialized: Arc<AtomicBool>,
     pub(crate) experimental_api_enabled: Arc<AtomicBool>,
     pub(crate) opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
-    pub(crate) allow_legacy_notifications: bool,
     pub(crate) writer: mpsc::Sender<OutgoingMessage>,
     disconnect_sender: Option<CancellationToken>,
 }
@@ -237,14 +235,12 @@ impl OutboundConnectionState {
         initialized: Arc<AtomicBool>,
         experimental_api_enabled: Arc<AtomicBool>,
         opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
-        allow_legacy_notifications: bool,
         disconnect_sender: Option<CancellationToken>,
     ) -> Self {
         Self {
             initialized,
             experimental_api_enabled,
             opted_out_notification_methods,
-            allow_legacy_notifications,
             writer,
             disconnect_sender,
         }
@@ -272,7 +268,6 @@ pub(crate) async fn start_stdio_connection(
         .send(TransportEvent::ConnectionOpened {
             connection_id,
             writer: writer_tx,
-            allow_legacy_notifications: false,
             disconnect_sender: None,
         })
         .await
@@ -376,7 +371,6 @@ async fn run_websocket_connection(
         .send(TransportEvent::ConnectionOpened {
             connection_id,
             writer: writer_tx,
-            allow_legacy_notifications: false,
             disconnect_sender: Some(disconnect_token.clone()),
         })
         .await
@@ -584,13 +578,10 @@ fn should_skip_notification_for_connection(
     connection_state: &OutboundConnectionState,
     message: &OutgoingMessage,
 ) -> bool {
-    if !connection_state.allow_legacy_notifications
-        && matches!(message, OutgoingMessage::Notification(_))
-    {
+    if matches!(message, OutgoingMessage::Notification(_)) {
         // Raw legacy `codex/event/*` notifications are still emitted upstream
-        // for in-process compatibility, but they are no longer part of the
-        // external app-server contract. Keep dropping them here until the
-        // producer path can be deleted entirely.
+        // for compatibility, but they are no longer part of the app-server
+        // client contract. Drop them until the producer path can be deleted.
         return true;
     }
 
@@ -970,7 +961,6 @@ mod tests {
                 initialized,
                 Arc::new(AtomicBool::new(true)),
                 opted_out_notification_methods,
-                false,
                 None,
             ),
         );
@@ -1008,7 +998,6 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::new())),
-                false,
                 None,
             ),
         );
@@ -1034,7 +1023,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn to_connection_legacy_notifications_are_preserved_for_in_process_clients() {
+    async fn to_connection_legacy_notifications_are_dropped_for_in_process_clients() {
         let connection_id = ConnectionId(11);
         let (writer_tx, mut writer_rx) = mpsc::channel(1);
 
@@ -1046,7 +1035,6 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::new())),
-                true,
                 None,
             ),
         );
@@ -1065,17 +1053,10 @@ mod tests {
         )
         .await;
 
-        let message = writer_rx
-            .recv()
-            .await
-            .expect("legacy notification should reach in-process clients");
-        assert!(matches!(
-            message,
-            OutgoingMessage::Notification(crate::outgoing_message::OutgoingNotification {
-                method,
-                params: None,
-            }) if method == "codex/event/task_started"
-        ));
+        assert!(
+            writer_rx.try_recv().is_err(),
+            "legacy notifications should not reach in-process clients"
+        );
     }
 
     #[tokio::test]
@@ -1091,7 +1072,6 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(false)),
                 Arc::new(RwLock::new(HashSet::new())),
-                false,
                 None,
             ),
         );
@@ -1158,7 +1138,6 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::new())),
-                false,
                 None,
             ),
         );
@@ -1246,7 +1225,6 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::new())),
-                false,
                 Some(fast_disconnect_token.clone()),
             ),
         );
@@ -1257,7 +1235,6 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::new())),
-                false,
                 Some(slow_disconnect_token.clone()),
             ),
         );
@@ -1329,7 +1306,6 @@ mod tests {
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(AtomicBool::new(true)),
                 Arc::new(RwLock::new(HashSet::new())),
-                false,
                 None,
             ),
         );
