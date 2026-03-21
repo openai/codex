@@ -261,7 +261,7 @@ fn deferred_responses_api_tool_serializes_with_defer_loading() {
 fn tool_name(tool: &ToolSpec) -> &str {
     match tool {
         ToolSpec::Function(ResponsesApiTool { name, .. }) => name,
-        ToolSpec::ToolSearch { .. } => "tool_search",
+        ToolSpec::ToolSearch { .. } => "tool_search_tool",
         ToolSpec::LocalShell {} => "local_shell",
         ToolSpec::ImageGeneration { .. } => "image_generation",
         ToolSpec::WebSearch { .. } => "web_search",
@@ -1894,7 +1894,7 @@ fn search_tool_description_lists_each_codex_apps_connector_once() {
 
     let search_tool = find_tool(&tools, TOOL_SEARCH_TOOL_NAME);
     let ToolSpec::ToolSearch { description, .. } = &search_tool.spec else {
-        panic!("expected tool_search tool");
+        panic!("expected tool_search_tool tool");
     };
     let description = description.as_str();
     assert!(description.contains("- Calendar: Plan events and manage your calendar."));
@@ -2013,7 +2013,7 @@ fn search_tool_description_handles_no_enabled_apps() {
     let (tools, _) = build_specs(&tools_config, None, Some(HashMap::new()), &[]).build();
     let search_tool = find_tool(&tools, TOOL_SEARCH_TOOL_NAME);
     let ToolSpec::ToolSearch { description, .. } = &search_tool.spec else {
-        panic!("expected tool_search tool");
+        panic!("expected tool_search_tool tool");
     };
 
     assert!(description.contains("None currently enabled."));
@@ -2061,7 +2061,7 @@ fn search_tool_description_falls_back_to_connector_name_without_description() {
     .build();
     let search_tool = find_tool(&tools, TOOL_SEARCH_TOOL_NAME);
     let ToolSpec::ToolSearch { description, .. } = &search_tool.spec else {
-        panic!("expected tool_search tool");
+        panic!("expected tool_search_tool tool");
     };
 
     assert!(description.contains("- Calendar"));

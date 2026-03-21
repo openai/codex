@@ -4,7 +4,7 @@ Suggests a discoverable connector or plugin when the user clearly wants a capabi
 
 Use this ONLY when:
 - There's no available tool to handle the user's request
-- And tool_search fails to find a good match
+- And tool_search_tool fails to find a good match, if tool_search_tool is available
 - AND the user's request strongly matches one of the discoverable tools listed below.
 
 Tool suggestions should only use the discoverable tools listed here. DO NOT explore or recommend tools that are not on this list.

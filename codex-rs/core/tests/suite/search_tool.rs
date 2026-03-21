@@ -35,7 +35,7 @@ const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 2] = [
     "You have access to all the tools of the following apps/connectors",
     "- Calendar: Plan events and manage your calendar.",
 ];
-const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
+const TOOL_SEARCH_TOOL_TYPE: &str = "tool_search";
 const CALENDAR_CREATE_TOOL: &str = "mcp__codex_apps__calendar_create_event";
 const CALENDAR_LIST_TOOL: &str = "mcp__codex_apps__calendar_list_events";
 const SEARCH_CALENDAR_NAMESPACE: &str = "mcp__codex_apps__calendar";
@@ -63,7 +63,7 @@ fn tool_search_description(body: &Value) -> Option<String> {
         .and_then(Value::as_array)
         .and_then(|tools| {
             tools.iter().find_map(|tool| {
-                if tool.get("type").and_then(Value::as_str) == Some(TOOL_SEARCH_TOOL_NAME) {
+                if tool.get("type").and_then(Value::as_str) == Some(TOOL_SEARCH_TOOL_TYPE) {
                     tool.get("description")
                         .and_then(Value::as_str)
                         .map(str::to_string)
@@ -144,7 +144,7 @@ async fn search_tool_flag_adds_tool_search() -> Result<()> {
         .expect("tools array should exist");
     let tool_search = tools
         .iter()
-        .find(|tool| tool.get("type").and_then(Value::as_str) == Some(TOOL_SEARCH_TOOL_NAME))
+        .find(|tool| tool.get("type").and_then(Value::as_str) == Some(TOOL_SEARCH_TOOL_TYPE))
         .cloned()
         .expect("tool_search should be present");
 
@@ -200,8 +200,8 @@ async fn search_tool_is_hidden_for_api_key_auth() -> Result<()> {
     let body = mock.single_request().body_json();
     let tools = tool_names(&body);
     assert!(
-        !tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME),
-        "tools list should not include {TOOL_SEARCH_TOOL_NAME} for API key auth: {tools:?}"
+        !tools.iter().any(|name| name == TOOL_SEARCH_TOOL_TYPE),
+        "tools list should not include {TOOL_SEARCH_TOOL_TYPE} for API key auth: {tools:?}"
     );
 
     Ok(())
@@ -242,6 +242,14 @@ async fn search_tool_adds_discovery_instructions_to_tool_description() -> Result
         "tool_search description should include the updated workflow: {description:?}"
     );
     assert!(
+        description.contains("`tool_search_tool`"),
+        "tool_search description should mention the callable tool name: {description:?}"
+    );
+    assert!(
+        !description.contains("`tool_search`"),
+        "tool_search description should not mention the legacy callable tool name: {description:?}"
+    );
+    assert!(
         !description.contains("remainder of the current session/thread"),
         "tool_search description should not mention legacy client-side persistence: {description:?}"
     );
@@ -277,7 +285,7 @@ async fn search_tool_hides_apps_tools_without_search() -> Result<()> {
 
     let body = mock.single_request().body_json();
     let tools = tool_names(&body);
-    assert!(tools.iter().any(|name| name == TOOL_SEARCH_TOOL_NAME));
+    assert!(tools.iter().any(|name| name == TOOL_SEARCH_TOOL_TYPE));
     assert!(!tools.iter().any(|name| name == CALENDAR_CREATE_TOOL));
     assert!(!tools.iter().any(|name| name == CALENDAR_LIST_TOOL));
 
@@ -461,7 +469,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
     assert!(
         first_request_tools
             .iter()
-            .any(|name| name == TOOL_SEARCH_TOOL_NAME),
+            .any(|name| name == TOOL_SEARCH_TOOL_TYPE),
         "first request should advertise tool_search: {first_request_tools:?}"
     );
     assert!(

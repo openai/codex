@@ -23,7 +23,7 @@ pub struct ToolSearchHandler {
     tools: HashMap<String, ToolInfo>,
 }
 
-pub(crate) const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
+pub(crate) const TOOL_SEARCH_TOOL_NAME: &str = "tool_search_tool";
 pub(crate) const DEFAULT_LIMIT: usize = 8;
 
 impl ToolSearchHandler {

@@ -208,7 +208,7 @@ pub(crate) mod tools {
         pub(crate) fn name(&self) -> &str {
             match self {
                 ToolSpec::Function(tool) => tool.name.as_str(),
-                ToolSpec::ToolSearch { .. } => "tool_search",
+                ToolSpec::ToolSearch { .. } => "tool_search_tool",
                 ToolSpec::LocalShell {} => "local_shell",
                 ToolSpec::ImageGeneration { .. } => "image_generation",
                 ToolSpec::WebSearch { .. } => "web_search",

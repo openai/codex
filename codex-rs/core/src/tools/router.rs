@@ -8,6 +8,7 @@ use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::discoverable::DiscoverableTool;
+use crate::tools::handlers::TOOL_SEARCH_TOOL_NAME;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::ConfiguredToolSpec;
 use crate::tools::registry::ToolRegistry;
@@ -158,7 +159,7 @@ impl ToolRouter {
                         ))
                     })?;
                 Ok(Some(ToolCall {
-                    tool_name: "tool_search".to_string(),
+                    tool_name: TOOL_SEARCH_TOOL_NAME.to_string(),
                     tool_namespace: None,
                     call_id,
                     payload: ToolPayload::ToolSearch { arguments },

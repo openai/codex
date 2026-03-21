@@ -6381,8 +6381,9 @@ pub(crate) async fn built_tools(
         mcp_tools = selected_mcp_tools;
     }
 
-    // Expose app tools directly when tool_search is disabled, or when tool_search
-    // is enabled but the accessible app tool set stays below the direct-exposure threshold.
+    // Expose app tools directly when the search tool is disabled, or when the
+    // search tool is enabled but the accessible app tool set stays below the
+    // direct-exposure threshold.
     let expose_app_tools_directly = !turn_context.tools_config.search_tool
         || app_tools
             .as_ref()
