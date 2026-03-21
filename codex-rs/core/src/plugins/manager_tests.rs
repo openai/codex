@@ -1913,10 +1913,10 @@ plugins = true
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/backend-api/plugins/featured"))
-        .and(query_param("platform", "atlas"))
+        .and(query_param("platform", "chat"))
         .and(header("authorization", "Bearer Access Token"))
         .and(header("chatgpt-account-id", "account_id"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(r#"["atlas-plugin"]"#))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"["chat-plugin"]"#))
         .mount(&server)
         .await;
 
@@ -1924,7 +1924,7 @@ plugins = true
     config.chatgpt_base_url = format!("{}/backend-api/", server.uri());
     let manager = PluginsManager::new_with_restriction_product(
         tmp.path().to_path_buf(),
-        Some(Product::Atlas),
+        Some(Product::Chatgpt),
     );
 
     let featured_plugin_ids = manager
@@ -1935,7 +1935,7 @@ plugins = true
         .await
         .unwrap();
 
-    assert_eq!(featured_plugin_ids, vec!["atlas-plugin".to_string()]);
+    assert_eq!(featured_plugin_ids, vec!["chat-plugin".to_string()]);
 }
 
 #[tokio::test]

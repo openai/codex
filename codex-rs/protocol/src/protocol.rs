@@ -2978,9 +2978,9 @@ pub enum Product {
     Atlas,
 }
 impl Product {
-    pub fn as_str(self) -> &'static str {
+    pub fn to_app_platform(self) -> &'static str {
         match self {
-            Self::Chatgpt => "chatgpt",
+            Self::Chatgpt => "chat",
             Self::Codex => "codex",
             Self::Atlas => "atlas",
         }
