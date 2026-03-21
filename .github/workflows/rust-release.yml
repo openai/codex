@@ -693,7 +693,7 @@ jobs:
 
     steps:
       - name: Publish to WinGet
-        uses: vedantmgoyal9/winget-releaser@19e706d4c9121098010096f9c495a70a7518b30f
+        uses: vedantmgoyal9/winget-releaser@7bd472be23763def6e16bd06cc8b1cdfab0e2fd5
         with:
           identifier: OpenAI.Codex
           version: ${{ needs.release.outputs.version }}
