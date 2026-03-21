@@ -142,20 +142,66 @@ impl TryFrom<String> for AbsolutePathBuf {
     }
 }
 
-thread_local! {
-    static ABSOLUTE_PATH_BASE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AbsolutePathBufGuardMode {
+    ResolveRelativePaths,
+    ExpandHomeOnly,
 }
 
-/// Ensure this guard is held while deserializing `AbsolutePathBuf` values to
-/// provide a base path for resolving relative paths. Because this relies on
-/// thread-local storage, the deserialization must be single-threaded and
-/// occur on the same thread that created the guard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AbsolutePathBufGuardState {
+    base_path: PathBuf,
+    mode: AbsolutePathBufGuardMode,
+}
+
+impl AbsolutePathBufGuardState {
+    fn deserialize_absolute_path(&self, path: PathBuf) -> std::io::Result<AbsolutePathBuf> {
+        match self.mode {
+            AbsolutePathBufGuardMode::ResolveRelativePaths => {
+                AbsolutePathBuf::resolve_path_against_base(path, &self.base_path)
+            }
+            AbsolutePathBufGuardMode::ExpandHomeOnly => {
+                let expanded = AbsolutePathBuf::maybe_expand_home_directory(&path);
+                if expanded.is_absolute() {
+                    AbsolutePathBuf::from_absolute_path(expanded)
+                } else {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "AbsolutePathBuf deserialized without an absolute path",
+                    ))
+                }
+            }
+        }
+    }
+}
+
+thread_local! {
+    static ABSOLUTE_PATH_GUARD_STATE: RefCell<Option<AbsolutePathBufGuardState>> =
+        const { RefCell::new(None) };
+}
+
+/// Ensure this guard is held while deserializing `AbsolutePathBuf` values so
+/// the deserializer knows whether to resolve relative paths or only expand
+/// `~/...`. Because this relies on thread-local storage, the deserialization
+/// must be single-threaded and occur on the same thread that created the
+/// guard.
 pub struct AbsolutePathBufGuard;
 
 impl AbsolutePathBufGuard {
     pub fn new(base_path: &Path) -> Self {
-        ABSOLUTE_PATH_BASE.with(|cell| {
-            *cell.borrow_mut() = Some(base_path.to_path_buf());
+        Self::with_mode(base_path, AbsolutePathBufGuardMode::ResolveRelativePaths)
+    }
+
+    pub fn home_expansion_only(base_path: &Path) -> Self {
+        Self::with_mode(base_path, AbsolutePathBufGuardMode::ExpandHomeOnly)
+    }
+
+    fn with_mode(base_path: &Path, mode: AbsolutePathBufGuardMode) -> Self {
+        ABSOLUTE_PATH_GUARD_STATE.with(|cell| {
+            *cell.borrow_mut() = Some(AbsolutePathBufGuardState {
+                base_path: base_path.to_path_buf(),
+                mode,
+            });
         });
         Self
     }
@@ -163,7 +209,7 @@ impl AbsolutePathBufGuard {
 
 impl Drop for AbsolutePathBufGuard {
     fn drop(&mut self) {
-        ABSOLUTE_PATH_BASE.with(|cell| {
+        ABSOLUTE_PATH_GUARD_STATE.with(|cell| {
             *cell.borrow_mut() = None;
         });
     }
@@ -175,10 +221,10 @@ impl<'de> Deserialize<'de> for AbsolutePathBuf {
         D: Deserializer<'de>,
     {
         let path = PathBuf::deserialize(deserializer)?;
-        ABSOLUTE_PATH_BASE.with(|cell| match cell.borrow().as_deref() {
-            Some(base) => {
-                Ok(Self::resolve_path_against_base(path, base).map_err(SerdeError::custom)?)
-            }
+        ABSOLUTE_PATH_GUARD_STATE.with(|cell| match cell.borrow().as_ref() {
+            Some(guard_state) => Ok(guard_state
+                .deserialize_absolute_path(path)
+                .map_err(SerdeError::custom)?),
             None if path.is_absolute() => {
                 Self::from_absolute_path(path).map_err(SerdeError::custom)
             }
@@ -258,6 +304,35 @@ mod tests {
             serde_json::from_str::<AbsolutePathBuf>("\"~/code\"").expect("failed to deserialize")
         };
         assert_eq!(abs_path_buf.as_path(), home.join("code").as_path());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn home_expansion_only_guard_expands_home_directory_subpath() {
+        let Some(home) = home_dir() else {
+            return;
+        };
+        let temp_dir = tempdir().expect("base dir");
+        let abs_path_buf = {
+            let _guard = AbsolutePathBufGuard::home_expansion_only(temp_dir.path());
+            serde_json::from_str::<AbsolutePathBuf>("\"~/code\"").expect("should deserialize")
+        };
+        assert_eq!(abs_path_buf.as_path(), home.join("code").as_path());
+    }
+
+    #[test]
+    fn home_expansion_only_guard_rejects_relative_paths() {
+        let temp_dir = tempdir().expect("base dir");
+        let err = {
+            let _guard = AbsolutePathBufGuard::home_expansion_only(temp_dir.path());
+            serde_json::from_str::<AbsolutePathBuf>("\"subdir/file.txt\"")
+                .expect_err("relative path with home-only guard should fail")
+        };
+        assert!(
+            err.to_string()
+                .contains("AbsolutePathBuf deserialized without an absolute path"),
+            "unexpected error: {err}",
+        );
     }
 
     #[cfg(not(target_os = "windows"))]
