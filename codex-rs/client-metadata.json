@@ -1,0 +1,19 @@
+{
+  "client_name": "Codex",
+  "grant_types": [
+    "authorization_code",
+    "refresh_token",
+    "urn:ietf:params:oauth:grant-type:device_code"
+  ],
+  "response_types": [
+    "code"
+  ],
+  "token_endpoint_auth_method": "none",
+  "application_type": "native",
+  "client_id": "https://raw.githubusercontent.com/openai/codex/main/codex-rs/client-metadata.json",
+  "client_uri": "https://github.com/openai/codex",
+  "redirect_uris": [
+    "http://127.0.0.1:33418/",
+    "http://127.0.0.1:33418/callback"
+  ]
+}
