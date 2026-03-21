@@ -1,5 +1,6 @@
 // Aggregates all former standalone integration tests as modules.
 mod add_dir;
+mod agent_jobs;
 mod apply_patch;
 mod auth_env;
 mod ephemeral;
