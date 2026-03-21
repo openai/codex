@@ -96,6 +96,8 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(target_os = "linux")]
+use std::process::Command;
 
 use crate::config::permissions::compile_permission_profile;
 use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
@@ -154,19 +156,44 @@ const RESERVED_MODEL_PROVIDER_IDS: [&str; 3] = [
 ];
 
 #[cfg(target_os = "linux")]
-pub fn missing_system_bwrap_warning() -> Option<String> {
-    if Path::new(SYSTEM_BWRAP_PATH).is_file() {
-        None
-    } else {
-        Some(format!(
-            "Codex could not find system bubblewrap at {SYSTEM_BWRAP_PATH}. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime."
-        ))
-    }
+pub fn system_bwrap_warning() -> Option<String> {
+    system_bwrap_warning_for_path(Path::new(SYSTEM_BWRAP_PATH))
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn missing_system_bwrap_warning() -> Option<String> {
+pub fn system_bwrap_warning() -> Option<String> {
     None
+}
+
+#[cfg(target_os = "linux")]
+fn system_bwrap_warning_for_path(system_bwrap_path: &Path) -> Option<String> {
+    if !system_bwrap_path.is_file() {
+        return Some(format!(
+            "Codex could not find system bubblewrap at {}. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime.",
+            system_bwrap_path.display()
+        ));
+    }
+    if system_bwrap_supports_argv0(system_bwrap_path) {
+        return None;
+    }
+
+    Some(format!(
+        "Codex found system bubblewrap at {}, but it is too old to support `--argv0`. Please upgrade bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime.",
+        system_bwrap_path.display()
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn system_bwrap_supports_argv0(system_bwrap_path: &Path) -> bool {
+    // bubblewrap added `--argv0` in v0.9.0:
+    // https://github.com/containers/bubblewrap/releases/tag/v0.9.0
+    let output = match Command::new(system_bwrap_path).arg("--help").output() {
+        Ok(output) => output,
+        Err(_) => return false,
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    stdout.contains("--argv0") || stderr.contains("--argv0")
 }
 
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
