@@ -530,6 +530,10 @@ impl GuardianReviewSessionManager {
         trunk_state
     }
 
+    /// Returns true only when eager init should try to spawn a trunk now.
+    ///
+    /// Eager init is strictly best-effort: if any trunk already exists, or shutdown has started,
+    /// the caller should do nothing and let the real review path handle trunk reuse/replacement.
     async fn prepare_trunk_for_eager_init(&self) -> bool {
         let state = self.state.lock().await;
         if state.shutdown_started {
