@@ -147,10 +147,6 @@ impl CodeModeTurnHost for CoreTurnHost {
     }
 }
 
-pub(crate) fn wait_tool_description() -> &'static str {
-    codex_code_mode::build_wait_tool_description()
-}
-
 pub(super) async fn handle_runtime_response(
     exec: &ExecContext,
     response: RuntimeResponse,
