@@ -2254,9 +2254,13 @@ impl ChatWidget {
     }
 
     fn pop_next_queued_user_message(&mut self) -> Option<UserMessage> {
-        self.rejected_steers_queue
-            .pop_front()
-            .or_else(|| self.queued_user_messages.pop_front())
+        if self.rejected_steers_queue.is_empty() {
+            self.queued_user_messages.pop_front()
+        } else {
+            Some(merge_user_messages(
+                self.rejected_steers_queue.drain(..).collect(),
+            ))
+        }
     }
 
     fn pop_latest_queued_user_message(&mut self) -> Option<UserMessage> {
