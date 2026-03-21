@@ -1,5 +1,3 @@
-use serde_json::Value as JsonValue;
-
 use super::RuntimeState;
 use super::callbacks::exit_callback;
 use super::callbacks::image_callback;
@@ -9,7 +7,6 @@ use super::callbacks::store_callback;
 use super::callbacks::text_callback;
 use super::callbacks::tool_callback;
 use super::callbacks::yield_control_callback;
-use super::value::json_to_v8;
 
 pub(super) fn install_globals(scope: &mut v8::PinScope<'_, '_>) -> Result<(), String> {
     let global = scope.get_current_context().global(scope);
@@ -56,23 +53,35 @@ fn build_tools_object<'s>(
 fn build_all_tools_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Result<v8::Local<'s, v8::Value>, String> {
-    let all_tools = scope
+    let enabled_tools = scope
         .get_slot::<RuntimeState>()
-        .map(|state| {
-            state
-                .enabled_tools
-                .iter()
-                .map(|tool| {
-                    serde_json::json!({
-                        "name": tool.global_name,
-                        "description": tool.description,
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
+        .map(|state| state.enabled_tools.clone())
         .unwrap_or_default();
-    json_to_v8(scope, &JsonValue::Array(all_tools))
-        .ok_or_else(|| "failed to build ALL_TOOLS metadata".to_string())
+    let array = v8::Array::new(scope, enabled_tools.len() as i32);
+    let name_key = v8::String::new(scope, "name")
+        .ok_or_else(|| "failed to allocate ALL_TOOLS name key".to_string())?;
+    let description_key = v8::String::new(scope, "description")
+        .ok_or_else(|| "failed to allocate ALL_TOOLS description key".to_string())?;
+
+    for (index, tool) in enabled_tools.iter().enumerate() {
+        let item = v8::Object::new(scope);
+        let name = v8::String::new(scope, &tool.global_name)
+            .ok_or_else(|| "failed to allocate ALL_TOOLS name".to_string())?;
+        let description = v8::String::new(scope, &tool.description)
+            .ok_or_else(|| "failed to allocate ALL_TOOLS description".to_string())?;
+
+        if item.set(scope, name_key.into(), name.into()) != Some(true) {
+            return Err("failed to set ALL_TOOLS name".to_string());
+        }
+        if item.set(scope, description_key.into(), description.into()) != Some(true) {
+            return Err("failed to set ALL_TOOLS description".to_string());
+        }
+        if array.set_index(scope, index as u32, item.into()) != Some(true) {
+            return Err("failed to append ALL_TOOLS metadata".to_string());
+        }
+    }
+
+    Ok(array.into())
 }
 
 fn helper_function<'s, F>(
