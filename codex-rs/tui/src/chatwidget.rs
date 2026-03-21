@@ -741,6 +741,20 @@ pub(crate) struct ChatWidget {
     retry_status_header: Option<String>,
     // Set when commentary output completes; once stream queues go idle we restore the status row.
     pending_status_indicator_restore: bool,
+    // Tracks the live assistant message item currently streaming into `stream_controller`.
+    live_agent_message_item_id: Option<String>,
+    // Core emits item-scoped content deltas plus a back-compat legacy delta immediately after.
+    // Keep the last item-scoped chunk so the live path can ignore the echoed legacy event while
+    // still accepting legacy-only producers.
+    pending_live_agent_message_legacy_echo: Option<String>,
+    // Older thread snapshots may lack a final `AgentMessageItem` and only preserve
+    // `TurnComplete.last_agent_message`. Track whether the replayed turn already produced a
+    // final assistant item, plus the latest replayed assistant item text, so replay can fall
+    // back only when needed without duplicating commentary echoed by `TurnComplete`.
+    thread_snapshot_replay_saw_final_agent_message_item: bool,
+    thread_snapshot_replay_last_agent_message_item: Option<String>,
+    thread_snapshot_replay_agent_delta_turn_id: Option<String>,
+    thread_snapshot_replay_agent_deltas_active: bool,
     suppress_queue_autosend: bool,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
@@ -1162,7 +1176,9 @@ impl ChatWidget {
         if let Some(mut controller) = self.stream_controller.take()
             && let Some(cell) = controller.finalize()
         {
-            self.add_boxed_history(cell);
+            self.active_cell = Some(cell);
+            self.bump_active_cell_revision();
+            self.flush_active_cell();
         }
         self.adaptive_chunking.reset();
     }
@@ -1185,12 +1201,12 @@ impl ChatWidget {
     /// This gate prevents flicker while normal output is still actively
     /// streaming, but still restores a visible "working" affordance when a
     /// commentary block ends before the turn itself has completed.
-    fn maybe_restore_status_indicator_after_stream_idle(&mut self) {
+    fn maybe_restore_status_indicator_after_stream_idle(&mut self) -> bool {
         if !self.pending_status_indicator_restore
             || !self.bottom_pane.is_task_running()
             || !self.stream_controllers_idle()
         {
-            return;
+            return false;
         }
 
         self.bottom_pane.ensure_status_indicator();
@@ -1201,6 +1217,7 @@ impl ChatWidget {
             self.current_status.details_max_lines,
         );
         self.pending_status_indicator_restore = false;
+        true
     }
 
     /// Update the status indicator header and details.
@@ -1590,7 +1607,35 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn finalize_completed_assistant_message(&mut self, message: Option<&str>) {
+    fn completed_agent_message_cell(&self, message: &str) -> Option<Box<dyn HistoryCell>> {
+        let mut controller = StreamController::new(
+            self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
+            &self.config.cwd,
+        );
+        let _ = controller.push(message);
+        controller.finalize()
+    }
+
+    fn finalize_completed_assistant_message(
+        &mut self,
+        message: Option<&str>,
+        replay_kind: Option<ReplayKind>,
+    ) {
+        if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
+            && let Some(message) = message
+            && !message.is_empty()
+        {
+            self.stream_controller = None;
+            self.adaptive_chunking.reset();
+            self.app_event_tx.send(AppEvent::StopCommitAnimation);
+            if let Some(cell) = self.completed_agent_message_cell(message) {
+                self.add_boxed_history(cell);
+            }
+            self.handle_stream_finished();
+            self.request_redraw();
+            return;
+        }
+
         // If we have a stream_controller, the finalized message payload is redundant because the
         // visible content has already been accumulated through deltas.
         if self.stream_controller.is_none()
@@ -1605,10 +1650,21 @@ impl ChatWidget {
     }
 
     fn on_agent_message(&mut self, message: String) {
-        self.finalize_completed_assistant_message(Some(&message));
+        self.finalize_completed_assistant_message(Some(&message), None);
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
+        self.handle_streaming_delta(delta);
+    }
+
+    fn on_agent_message_content_delta(&mut self, item_id: String, delta: String) {
+        if self.live_agent_message_item_id.as_deref() != Some(item_id.as_str()) {
+            if self.live_agent_message_item_id.is_some() {
+                self.flush_answer_stream_with_separator();
+            }
+            self.live_agent_message_item_id = Some(item_id);
+        }
+        self.pending_live_agent_message_legacy_echo = Some(delta.clone());
         self.handle_streaming_delta(delta);
     }
 
@@ -1621,11 +1677,18 @@ impl ChatWidget {
             self.plan_delta_buffer.clear();
         }
         self.plan_delta_buffer.push_str(&delta);
-        // Before streaming plan content, flush any active exec cell group.
-        self.flush_unified_exec_wait_streak();
-        self.flush_active_cell();
-
+        if self
+            .active_cell
+            .as_ref()
+            .is_some_and(|cell| !cell.as_any().is::<history_cell::ProposedPlanStreamCell>())
+        {
+            self.flush_unified_exec_wait_streak();
+            self.flush_active_cell();
+        }
         if self.plan_stream_controller.is_none() {
+            // Before streaming plan content, flush any active exec cell group.
+            self.flush_unified_exec_wait_streak();
+            self.flush_active_cell();
             self.plan_stream_controller = Some(PlanStreamController::new(
                 self.last_rendered_width.get().map(|w| w.saturating_sub(4)),
                 &self.config.cwd,
@@ -1663,7 +1726,17 @@ impl ChatWidget {
                 None
             };
         if let Some(cell) = finalized_streamed_cell {
-            self.add_boxed_history(cell);
+            if self
+                .active_cell
+                .as_ref()
+                .is_some_and(|active| !active.as_any().is::<history_cell::ProposedPlanStreamCell>())
+            {
+                self.flush_unified_exec_wait_streak();
+                self.flush_active_cell();
+            }
+            self.active_cell = Some(cell);
+            self.bump_active_cell_revision();
+            self.flush_active_cell();
             // TODO: Replace streamed output with the final plan item text if plan streaming is
             // removed or if we need to reconcile mismatches between streamed and final content.
         } else if !plan_text.is_empty() {
@@ -1740,6 +1813,10 @@ impl ChatWidget {
         self.update_task_running_state();
         self.retry_status_header = None;
         self.pending_status_indicator_restore = false;
+        self.live_agent_message_item_id = None;
+        self.pending_live_agent_message_legacy_echo = None;
+        self.thread_snapshot_replay_saw_final_agent_message_item = false;
+        self.thread_snapshot_replay_last_agent_message_item = None;
         self.bottom_pane
             .set_interrupt_hint_visible(/*visible*/ true);
         self.terminal_title_status_kind = TerminalTitleStatusKind::Working;
@@ -1749,19 +1826,46 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
+    fn on_task_complete(
+        &mut self,
+        last_agent_message: Option<String>,
+        replay_kind: Option<ReplayKind>,
+    ) {
+        let from_replay = replay_kind.is_some();
         self.submit_pending_steers_after_interrupt = false;
         if let Some(message) = last_agent_message.as_ref()
             && !message.trim().is_empty()
         {
             self.last_copyable_output = Some(message.clone());
         }
+        if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
+            && !self.thread_snapshot_replay_saw_final_agent_message_item
+            && let Some(message) = last_agent_message.as_deref()
+            && !message.trim().is_empty()
+            && self
+                .thread_snapshot_replay_last_agent_message_item
+                .as_deref()
+                != Some(message)
+            && let Some(cell) = self.completed_agent_message_cell(message)
+        {
+            self.add_boxed_history(cell);
+        }
         // If a stream is currently active, finalize it.
         self.flush_answer_stream_with_separator();
         if let Some(mut controller) = self.plan_stream_controller.take()
             && let Some(cell) = controller.finalize()
         {
-            self.add_boxed_history(cell);
+            if self
+                .active_cell
+                .as_ref()
+                .is_some_and(|active| !active.as_any().is::<history_cell::ProposedPlanStreamCell>())
+            {
+                self.flush_unified_exec_wait_streak();
+                self.flush_active_cell();
+            }
+            self.active_cell = Some(cell);
+            self.bump_active_cell_revision();
+            self.flush_active_cell();
         }
         self.flush_unified_exec_wait_streak();
         if !from_replay {
@@ -1794,10 +1898,15 @@ impl ChatWidget {
         self.turn_sleep_inhibitor
             .set_turn_running(/*turn_running*/ false);
         self.update_task_running_state();
+        self.live_agent_message_item_id = None;
+        self.pending_live_agent_message_legacy_echo = None;
+        self.thread_snapshot_replay_agent_deltas_active = false;
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
+        self.thread_snapshot_replay_saw_final_agent_message_item = false;
+        self.thread_snapshot_replay_last_agent_message_item = None;
         self.request_redraw();
 
         let had_pending_steers = !self.pending_steers.is_empty();
@@ -3063,15 +3172,27 @@ impl ChatWidget {
     /// Commentary completion sets a deferred restore flag so the status row
     /// returns once stream queues are idle. Final-answer completion (or absent
     /// phase for legacy models) clears the flag to preserve historical behavior.
-    fn on_agent_message_item_completed(&mut self, item: AgentMessageItem) {
+    fn on_agent_message_item_completed(
+        &mut self,
+        item: AgentMessageItem,
+        replay_kind: Option<ReplayKind>,
+    ) {
         let mut message = String::new();
         for content in &item.content {
             match content {
                 AgentMessageContent::Text { text } => message.push_str(text),
             }
         }
+        if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot)) && !message.is_empty() {
+            self.thread_snapshot_replay_last_agent_message_item = Some(message.clone());
+        }
+        if replay_kind.is_none() {
+            self.live_agent_message_item_id = None;
+            self.pending_live_agent_message_legacy_echo = None;
+        }
         self.finalize_completed_assistant_message(
             (!message.is_empty()).then_some(message.as_str()),
+            replay_kind,
         );
         self.pending_status_indicator_restore = match item.phase {
             // Models that don't support preambles only output AgentMessageItems on turn completion.
@@ -3112,13 +3233,23 @@ impl ChatWidget {
             scope,
             now,
         );
-        for cell in outcome.cells {
+        if let Some(cell) = outcome.active_cell {
+            if self.active_cell.as_ref().is_some_and(|active| {
+                !active.as_any().is::<AgentMessageCell>()
+                    && !active.as_any().is::<history_cell::ProposedPlanStreamCell>()
+            }) {
+                self.flush_active_cell();
+            }
             self.bottom_pane.hide_status_indicator();
-            self.add_boxed_history(cell);
+            self.active_cell = Some(cell);
+            self.bump_active_cell_revision();
+            self.request_redraw();
         }
 
         if outcome.has_controller && outcome.all_idle {
-            self.maybe_restore_status_indicator_after_stream_idle();
+            if self.maybe_restore_status_indicator_after_stream_idle() {
+                self.request_redraw();
+            }
             self.app_event_tx.send(AppEvent::StopCommitAnimation);
         }
 
@@ -3160,11 +3291,10 @@ impl ChatWidget {
 
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
-        // Before streaming agent content, flush any active exec cell group.
-        self.flush_unified_exec_wait_streak();
-        self.flush_active_cell();
-
         if self.stream_controller.is_none() {
+            // Before streaming agent content, flush any active exec cell group.
+            self.flush_unified_exec_wait_streak();
+            self.flush_active_cell();
             // If the previous turn inserted non-stream history (exec output, patch status, MCP
             // calls), render a separator before starting the next streamed assistant message.
             if self.needs_final_message_separator && self.had_work_activity {
@@ -3675,6 +3805,12 @@ impl ChatWidget {
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            live_agent_message_item_id: None,
+            pending_live_agent_message_legacy_echo: None,
+            thread_snapshot_replay_saw_final_agent_message_item: false,
+            thread_snapshot_replay_last_agent_message_item: None,
+            thread_snapshot_replay_agent_delta_turn_id: None,
+            thread_snapshot_replay_agent_deltas_active: false,
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
@@ -3876,6 +4012,12 @@ impl ChatWidget {
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            live_agent_message_item_id: None,
+            pending_live_agent_message_legacy_echo: None,
+            thread_snapshot_replay_saw_final_agent_message_item: false,
+            thread_snapshot_replay_last_agent_message_item: None,
+            thread_snapshot_replay_agent_delta_turn_id: None,
+            thread_snapshot_replay_agent_deltas_active: false,
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
@@ -4069,6 +4211,12 @@ impl ChatWidget {
             terminal_title_status_kind: TerminalTitleStatusKind::Working,
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            live_agent_message_item_id: None,
+            pending_live_agent_message_legacy_echo: None,
+            thread_snapshot_replay_saw_final_agent_message_item: false,
+            thread_snapshot_replay_last_agent_message_item: None,
+            thread_snapshot_replay_agent_delta_turn_id: None,
+            thread_snapshot_replay_agent_deltas_active: false,
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
@@ -5308,6 +5456,21 @@ impl ChatWidget {
         self.dispatch_event_msg(/*id*/ None, msg, Some(ReplayKind::ThreadSnapshot));
     }
 
+    pub(crate) fn prepare_thread_snapshot_replay(&mut self, active_delta_turn_id: Option<String>) {
+        self.thread_snapshot_replay_agent_delta_turn_id = active_delta_turn_id;
+        self.thread_snapshot_replay_agent_deltas_active = false;
+        self.thread_snapshot_replay_saw_final_agent_message_item = false;
+        self.thread_snapshot_replay_last_agent_message_item = None;
+    }
+
+    pub(crate) fn finish_thread_snapshot_replay(&mut self) {
+        if self.thread_snapshot_replay_agent_deltas_active {
+            self.run_commit_tick();
+        }
+        self.thread_snapshot_replay_agent_delta_turn_id = None;
+        self.thread_snapshot_replay_agent_deltas_active = false;
+    }
+
     /// Dispatch a protocol `EventMsg` to the appropriate handler.
     ///
     /// `id` is `Some` for live events and `None` for replayed events from
@@ -5353,9 +5516,24 @@ impl ChatWidget {
                 self.on_agent_message(message)
             }
             EventMsg::AgentMessage(AgentMessageEvent { .. }) => {}
-            EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
-                self.on_agent_message_delta(delta)
+            EventMsg::AgentMessageContentDelta(event) if !from_replay => {
+                self.on_agent_message_content_delta(event.item_id, event.delta)
             }
+            EventMsg::AgentMessageContentDelta(_) => {}
+            EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta })
+                if !matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
+                    || self.thread_snapshot_replay_agent_deltas_active =>
+            {
+                if !from_replay
+                    && self.pending_live_agent_message_legacy_echo.as_deref()
+                        == Some(delta.as_str())
+                {
+                    self.pending_live_agent_message_legacy_echo = None;
+                } else {
+                    self.on_agent_message_delta(delta)
+                }
+            }
+            EventMsg::AgentMessageDelta(_) => {}
             EventMsg::PlanDelta(event) => self.on_plan_delta(event.delta),
             EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta })
             | EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
@@ -5368,14 +5546,20 @@ impl ChatWidget {
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TurnStarted(event) => {
+                let replay_agent_deltas = matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
+                    && self.thread_snapshot_replay_agent_delta_turn_id.as_deref()
+                        == Some(event.turn_id.as_str());
                 if !is_resume_initial_replay {
                     self.apply_turn_started_context_window(event.model_context_window);
                     self.on_task_started();
                 }
+                if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot)) {
+                    self.thread_snapshot_replay_agent_deltas_active = replay_agent_deltas;
+                }
             }
             EventMsg::TurnComplete(TurnCompleteEvent {
                 last_agent_message, ..
-            }) => self.on_task_complete(last_agent_message, from_replay),
+            }) => self.on_task_complete(last_agent_message, replay_kind),
             EventMsg::TokenCount(ev) => {
                 self.set_token_info(ev.info);
                 self.on_rate_limit_snapshot(ev.rate_limits);
@@ -5528,7 +5712,6 @@ impl ChatWidget {
             }
             EventMsg::RawResponseItem(_)
             | EventMsg::ItemStarted(_)
-            | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
             | EventMsg::DynamicToolCallRequest(_)
@@ -5592,7 +5775,15 @@ impl ChatWidget {
                     self.on_plan_item_completed(plan_item.text.clone());
                 }
                 if let codex_protocol::items::TurnItem::AgentMessage(item) = item {
-                    self.on_agent_message_item_completed(item);
+                    if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot)) {
+                        self.thread_snapshot_replay_agent_deltas_active = false;
+                    }
+                    if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
+                        && matches!(item.phase, Some(MessagePhase::FinalAnswer) | None)
+                    {
+                        self.thread_snapshot_replay_saw_final_agent_message_item = true;
+                    }
+                    self.on_agent_message_item_completed(item, replay_kind);
                 }
             }
         }

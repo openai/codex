@@ -37,8 +37,8 @@ pub(crate) enum CommitTickScope {
 
 /// Describes what a single commit tick produced.
 pub(crate) struct CommitTickOutput {
-    /// Cells produced by drained stream lines during this tick.
-    pub(crate) cells: Vec<Box<dyn HistoryCell>>,
+    /// Latest in-flight stream/plan cell snapshot produced during this tick.
+    pub(crate) active_cell: Option<Box<dyn HistoryCell>>,
     /// Whether at least one stream controller was present for this tick.
     pub(crate) has_controller: bool,
     /// Whether all present controllers were idle after this tick.
@@ -52,7 +52,7 @@ impl Default for CommitTickOutput {
     /// the scope is [`CommitTickScope::CatchUpOnly`] and policy is not in catch-up mode.
     fn default() -> Self {
         Self {
-            cells: Vec::new(),
+            active_cell: None,
             has_controller: false,
             all_idle: true,
         }
@@ -155,18 +155,18 @@ fn apply_commit_tick_plan(
     if let Some(controller) = stream_controller {
         output.has_controller = true;
         let (cell, is_idle) = drain_stream_controller(controller, drain_plan);
-        if let Some(cell) = cell {
-            output.cells.push(cell);
-        }
+        output.active_cell = cell;
         output.all_idle &= is_idle;
     }
     if let Some(controller) = plan_stream_controller {
         output.has_controller = true;
-        let (cell, is_idle) = drain_plan_stream_controller(controller, drain_plan);
-        if let Some(cell) = cell {
-            output.cells.push(cell);
+        if output.active_cell.is_none() {
+            let (cell, is_idle) = drain_plan_stream_controller(controller, drain_plan);
+            output.active_cell = cell;
+            output.all_idle &= is_idle;
+        } else {
+            output.all_idle &= controller.queued_lines() == 0;
         }
-        output.all_idle &= is_idle;
     }
 
     output
@@ -210,5 +210,73 @@ fn max_duration(lhs: Option<Duration>, rhs: Option<Duration>) -> Option<Duration
         (Some(left), None) => Some(left),
         (None, Some(right)) => Some(right),
         (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn render_cell_lines(cell: &dyn HistoryCell) -> Vec<String> {
+        cell.display_lines(80)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| span.content.into_owned())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn commit_tick_defers_plan_snapshot_when_stream_snapshot_wins_tick() {
+        let cwd = Path::new("/tmp/project");
+        let mut stream = StreamController::new(None, cwd);
+        let mut plan = PlanStreamController::new(None, cwd);
+
+        assert!(stream.push("assistant line\n"));
+        assert!(plan.push("- plan step\n"));
+
+        let first = apply_commit_tick_plan(DrainPlan::Single, Some(&mut stream), Some(&mut plan));
+        let first_cell = first.active_cell.expect("expected stream snapshot");
+        assert!(
+            render_cell_lines(first_cell.as_ref())
+                .join("\n")
+                .contains("assistant line")
+        );
+        assert!(
+            !first.all_idle,
+            "expected queued plan snapshot to remain pending"
+        );
+        assert_eq!(plan.queued_lines(), 1);
+
+        let second = apply_commit_tick_plan(DrainPlan::Single, Some(&mut stream), Some(&mut plan));
+        let second_cell = second.active_cell.expect("expected deferred plan snapshot");
+        assert!(
+            render_cell_lines(second_cell.as_ref())
+                .join("\n")
+                .contains("plan step")
+        );
+        assert!(
+            second.all_idle,
+            "expected both controllers to be idle after second tick"
+        );
+        assert_eq!(plan.queued_lines(), 0);
+    }
+
+    #[test]
+    fn commit_tick_reports_idle_when_deferred_plan_controller_has_no_pending_snapshot() {
+        let cwd = Path::new("/tmp/project");
+        let mut stream = StreamController::new(None, cwd);
+        let mut plan = PlanStreamController::new(None, cwd);
+
+        assert!(stream.push("assistant line\n"));
+        let _ = plan.finalize();
+
+        let output = apply_commit_tick_plan(DrainPlan::Single, Some(&mut stream), Some(&mut plan));
+        assert!(output.active_cell.is_some());
+        assert!(output.all_idle);
     }
 }
