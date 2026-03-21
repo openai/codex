@@ -71,11 +71,11 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
         .await;
     session
         .record_into_history(
-            &[
-                crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT.into_message(
-                    "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>".to_string(),
-                ),
-            ],
+            &[crate::model_visible_context::model_visible_message::<
+                crate::model_visible_context::ContextualUserContextRole,
+            >(
+                "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>".to_string(),
+            )],
             &turn_context,
         )
         .await;

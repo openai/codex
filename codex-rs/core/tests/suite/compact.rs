@@ -767,10 +767,13 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         let filtered_content = content
             .iter()
             .filter(|item| {
-                !item
-                    .get("text")
-                    .and_then(|text| text.as_str())
-                    .is_some_and(|text| text.starts_with("# AGENTS.md instructions for "))
+                let Some(text) = item.get("text").and_then(|text| text.as_str()) else {
+                    return true;
+                };
+                !text.starts_with("# AGENTS.md instructions for ")
+                    && !text.starts_with("<user_instructions>")
+                    && !text.starts_with("<js_repl_instructions>")
+                    && !text.starts_with("<child_agents_instructions>")
             })
             .cloned()
             .collect::<Vec<_>>();

@@ -7,12 +7,13 @@ use crate::config::AgentRoleConfig;
 use crate::config::Config;
 use crate::config::ConfigBuilder;
 use crate::config_loader::LoaderOverrides;
-use crate::contextual_user_message::SUBAGENT_NOTIFICATION_OPEN_TAG;
+use crate::model_visible_context::SUBAGENT_NOTIFICATION_OPEN_TAG;
 use assert_matches::assert_matches;
 use chrono::Utc;
 use codex_features::Feature;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::MessageRole;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
@@ -98,7 +99,7 @@ fn has_subagent_notification(history_items: &[ResponseItem]) -> bool {
         let ResponseItem::Message { role, content, .. } = item else {
             return false;
         };
-        if role != "user" {
+        if role != "developer" {
             return false;
         }
         content.iter().any(|content_item| match content_item {
@@ -146,7 +147,7 @@ async fn wait_for_subagent_notification(parent_thread: &Arc<CodexThread>) -> boo
 
 async fn persist_thread_for_tree_resume(thread: &Arc<CodexThread>, message: &str) {
     thread
-        .inject_user_message_without_turn(message.to_string())
+        .inject_message_without_turn(MessageRole::User, message.to_string())
         .await;
     thread.codex.session.ensure_rollout_materialized().await;
     thread.codex.session.flush_rollout().await;
@@ -418,7 +419,7 @@ async fn spawn_agent_can_fork_parent_thread_history() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
     parent_thread
-        .inject_user_message_without_turn("parent seed context".to_string())
+        .inject_message_without_turn(MessageRole::User, "parent seed context".to_string())
         .await;
     let turn_context = parent_thread.codex.session.new_default_turn().await;
     let parent_spawn_call_id = "spawn-call-history".to_string();
@@ -912,7 +913,7 @@ async fn completion_watcher_notifies_parent_when_child_is_missing() {
     assert_eq!(
         history_contains_text(
             &history_items,
-            &format!("\"agent_path\":\"{child_thread_id}\"")
+            &format!("\"agent_id\":\"{child_thread_id}\"")
         ),
         true
     );
@@ -1079,6 +1080,12 @@ async fn resume_thread_subagent_restores_stored_nickname_and_role() {
         .session_source
         .get_nickname()
         .expect("spawned sub-agent should have a nickname");
+    child_thread
+        .codex
+        .session
+        .ensure_rollout_materialized()
+        .await;
+    child_thread.codex.session.flush_rollout().await;
     let state_db = child_thread
         .state_db()
         .expect("sqlite state db should be available for nickname resume test");

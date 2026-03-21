@@ -31,23 +31,29 @@ async fn hierarchical_agents_appends_to_project_doc_in_user_instructions() {
 
     let request = resp_mock.single_request();
     let user_messages = request.message_input_texts("user");
-    let instructions = user_messages
+    let agents_instructions = user_messages
         .iter()
         .find(|text| text.starts_with("# AGENTS.md instructions for "))
-        .expect("instructions message");
+        .expect("AGENTS instructions message");
     assert!(
-        instructions.contains("be nice"),
-        "expected AGENTS.md text included: {instructions}"
+        agents_instructions.contains("be nice"),
+        "expected AGENTS.md text included: {agents_instructions}"
     );
-    let snippet_pos = instructions
-        .find(HIERARCHICAL_AGENTS_SNIPPET)
-        .expect("expected hierarchical agents snippet");
-    let base_pos = instructions
-        .find("be nice")
-        .expect("expected AGENTS.md text");
+    let child_agents_instructions = user_messages
+        .iter()
+        .find(|text| text.contains(HIERARCHICAL_AGENTS_SNIPPET))
+        .expect("child agents instructions message");
+    let agents_pos = user_messages
+        .iter()
+        .position(|text| std::ptr::eq(text, agents_instructions))
+        .expect("AGENTS instructions position");
+    let child_agents_pos = user_messages
+        .iter()
+        .position(|text| std::ptr::eq(text, child_agents_instructions))
+        .expect("child agents instructions position");
     assert!(
-        snippet_pos > base_pos,
-        "expected hierarchical agents message appended after base instructions: {instructions}"
+        child_agents_pos > agents_pos,
+        "expected child-agents instructions after AGENTS fragment: {user_messages:?}"
     );
 }
 
@@ -72,12 +78,10 @@ async fn hierarchical_agents_emits_when_no_project_doc() {
 
     let request = resp_mock.single_request();
     let user_messages = request.message_input_texts("user");
-    let instructions = user_messages
-        .iter()
-        .find(|text| text.starts_with("# AGENTS.md instructions for "))
-        .expect("instructions message");
     assert!(
-        instructions.contains(HIERARCHICAL_AGENTS_SNIPPET),
-        "expected hierarchical agents message appended: {instructions}"
+        user_messages
+            .iter()
+            .any(|text| text.contains(HIERARCHICAL_AGENTS_SNIPPET)),
+        "expected hierarchical agents instructions fragment: {user_messages:?}"
     );
 }

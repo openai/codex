@@ -25,7 +25,6 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
-use serde_json::json;
 
 const PRETURN_CONTEXT_DIFF_CWD: &str = "PRETURN_CONTEXT_DIFF_CWD";
 
@@ -45,36 +44,12 @@ fn format_labeled_requests_snapshot(
     )
 }
 
-fn user_instructions_wrapper_count(request: &ResponsesRequest) -> usize {
+fn agents_message_count(request: &ResponsesRequest) -> usize {
     request
         .message_input_texts("user")
         .iter()
         .filter(|text| text.starts_with("# AGENTS.md instructions for "))
         .count()
-}
-
-fn format_environment_context_subagents_snapshot(subagents: &[&str]) -> String {
-    let subagents_block = if subagents.is_empty() {
-        String::new()
-    } else {
-        let lines = subagents
-            .iter()
-            .map(|line| format!("    {line}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        format!("\n  <subagents>\n{lines}\n  </subagents>")
-    };
-    let items = vec![json!({
-        "type": "message",
-        "role": "user",
-        "content": [{
-            "type": "input_text",
-            "text": format!(
-                "<environment_context>\n  <cwd>/tmp/example</cwd>\n  <shell>bash</shell>{subagents_block}\n</environment_context>"
-            ),
-        }],
-    })];
-    context_snapshot::format_response_items_snapshot(items.as_slice(), &context_snapshot_options())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -175,9 +150,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-// TODO(ccunningham): Diff `user_instructions` and emit updates when AGENTS.md content changes
-// (for example after cwd changes), then update this test to assert refreshed AGENTS content.
-async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> Result<()> {
+async fn snapshot_model_visible_layout_cwd_change_refreshes_agents() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -262,19 +235,19 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
     let requests = responses.requests();
     assert_eq!(requests.len(), 2, "expected two requests");
     assert_eq!(
-        user_instructions_wrapper_count(&requests[0]),
-        0,
-        "expected first request to omit the serialized user-instructions wrapper when cwd-only project docs are introduced after session init"
+        agents_message_count(&requests[0]),
+        1,
+        "expected exactly one AGENTS message in first request"
     );
     assert_eq!(
-        user_instructions_wrapper_count(&requests[1]),
-        0,
-        "expected second request to keep omitting the serialized user-instructions wrapper after cwd change with the current session-scoped project doc behavior"
+        agents_message_count(&requests[1]),
+        2,
+        "expected updated AGENTS instructions to be re-injected after cwd change"
     );
     insta::assert_snapshot!(
-        "model_visible_layout_cwd_change_does_not_refresh_agents",
+        "model_visible_layout_cwd_change_refreshes_agents",
         format_labeled_requests_snapshot(
-            "Second turn changes cwd to a directory with different AGENTS.md; current behavior does not emit refreshed AGENTS instructions.",
+            "Second turn changes cwd to a directory with different AGENTS.md; updated AGENTS instructions are re-injected.",
             &[
                 ("First Request (agents_one)", &requests[0]),
                 ("Second Request (agents_two cwd)", &requests[1]),
@@ -478,26 +451,6 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
                 ("First Request After Resume + Override", &resumed_request),
             ]
         )
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn snapshot_model_visible_layout_environment_context_includes_one_subagent() -> Result<()> {
-    insta::assert_snapshot!(
-        "model_visible_layout_environment_context_includes_one_subagent",
-        format_environment_context_subagents_snapshot(&["- agent-1: Atlas"])
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn snapshot_model_visible_layout_environment_context_includes_two_subagents() -> Result<()> {
-    insta::assert_snapshot!(
-        "model_visible_layout_environment_context_includes_two_subagents",
-        format_environment_context_subagents_snapshot(&["- agent-1: Atlas", "- agent-2: Juniper"])
     );
 
     Ok(())

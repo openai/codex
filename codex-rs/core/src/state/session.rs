@@ -19,6 +19,7 @@ use codex_protocol::protocol::TurnContextItem;
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
+    pub(crate) session_configuration_revision: u64,
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
     pub(crate) server_reasoning_included: bool,
@@ -41,6 +42,7 @@ impl SessionState {
         let history = ContextManager::new();
         Self {
             session_configuration,
+            session_configuration_revision: 0,
             history,
             latest_rate_limits: None,
             server_reasoning_included: false,
@@ -66,6 +68,15 @@ impl SessionState {
     pub(crate) fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
         self.previous_turn_settings.clone()
     }
+
+    pub(crate) fn replace_session_configuration(
+        &mut self,
+        session_configuration: SessionConfiguration,
+    ) {
+        self.session_configuration = session_configuration;
+        self.session_configuration_revision = self.session_configuration_revision.saturating_add(1);
+    }
+
     pub(crate) fn set_previous_turn_settings(
         &mut self,
         previous_turn_settings: Option<PreviousTurnSettings>,

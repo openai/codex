@@ -42,6 +42,7 @@ fn resume_history(
         summary: config
             .model_reasoning_summary
             .unwrap_or(ReasoningSummary::Auto),
+        project_doc_instructions: None,
         user_instructions: None,
         developer_instructions: None,
         final_output_json_schema: None,

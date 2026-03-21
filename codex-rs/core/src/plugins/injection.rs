@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
-use codex_protocol::models::DeveloperInstructions;
+use crate::model_visible_context::DeveloperTextFragment;
+use crate::model_visible_context::ModelVisibleContextFragment;
 use codex_protocol::models::ResponseItem;
 
 use crate::connectors;
@@ -51,8 +52,8 @@ pub(crate) fn build_plugin_injections(
                 .into_iter()
                 .collect::<Vec<_>>();
             render_explicit_plugin_instructions(plugin, &available_mcp_servers, &available_apps)
-                .map(DeveloperInstructions::new)
-                .map(ResponseItem::from)
+                .map(DeveloperTextFragment::new)
+                .map(ModelVisibleContextFragment::into_message)
         })
         .collect()
 }
