@@ -393,26 +393,18 @@ impl GuardianReviewSessionManager {
 
     async fn maybe_prepare_trunk_eagerly(&self, params: &GuardianReviewSessionParams) {
         let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&params.spawn_config);
-        let GuardianTrunkState::NeedsSpawn {
-            stale_trunk_to_shutdown,
-        } = self.prepare_trunk_for_eager_init().await
-        else {
+        if !self.prepare_trunk_for_eager_init().await {
             return;
-        };
-        shutdown_stale_trunk_in_background(stale_trunk_to_shutdown);
+        }
 
         let Ok(spawn_guard) = self.spawn_lock.try_lock() else {
             return;
         };
 
-        let GuardianTrunkState::NeedsSpawn {
-            stale_trunk_to_shutdown,
-        } = self.prepare_trunk_for_eager_init().await
-        else {
+        if !self.prepare_trunk_for_eager_init().await {
             drop(spawn_guard);
             return;
-        };
-        shutdown_stale_trunk_in_background(stale_trunk_to_shutdown);
+        }
 
         let spawn_cancel_token = CancellationToken::new();
         let review_session = match run_before_review_deadline_with_cancel(
@@ -569,18 +561,12 @@ impl GuardianReviewSessionManager {
         }
     }
 
-    async fn prepare_trunk_for_eager_init(&self) -> GuardianTrunkState {
+    async fn prepare_trunk_for_eager_init(&self) -> bool {
         let state = self.state.lock().await;
         if state.shutdown_started {
-            return GuardianTrunkState::ShutdownStarted;
+            return false;
         }
-        if let Some(trunk) = state.trunk.as_ref() {
-            GuardianTrunkState::Ready(Arc::clone(trunk))
-        } else {
-            GuardianTrunkState::NeedsSpawn {
-                stale_trunk_to_shutdown: None,
-            }
-        }
+        state.trunk.is_none()
     }
 
     async fn install_spawned_trunk(
