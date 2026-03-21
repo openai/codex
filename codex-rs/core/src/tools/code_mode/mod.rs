@@ -165,28 +165,19 @@ pub(super) async fn handle_runtime_response(
     max_output_tokens: Option<usize>,
     started_at: std::time::Instant,
 ) -> Result<FunctionToolOutput, String> {
+    let script_status = format_script_status(&response);
+
     match response {
-        RuntimeResponse::Yielded {
-            cell_id,
-            content_items,
-        } => {
+        RuntimeResponse::Yielded { content_items, .. } => {
             let mut content_items = into_function_call_output_content_items(content_items);
             content_items = truncate_code_mode_result(content_items, max_output_tokens);
-            prepend_script_status(
-                &mut content_items,
-                CodeModeExecutionStatus::Running(cell_id),
-                started_at.elapsed(),
-            );
+            prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
             Ok(FunctionToolOutput::from_content(content_items, Some(true)))
         }
         RuntimeResponse::Terminated { content_items, .. } => {
             let mut content_items = into_function_call_output_content_items(content_items);
             content_items = truncate_code_mode_result(content_items, max_output_tokens);
-            prepend_script_status(
-                &mut content_items,
-                CodeModeExecutionStatus::Terminated,
-                started_at.elapsed(),
-            );
+            prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
             Ok(FunctionToolOutput::from_content(content_items, Some(true)))
         }
         RuntimeResponse::Result {
@@ -208,15 +199,7 @@ pub(super) async fn handle_runtime_response(
                 });
             }
             content_items = truncate_code_mode_result(content_items, max_output_tokens);
-            prepend_script_status(
-                &mut content_items,
-                if success {
-                    CodeModeExecutionStatus::Completed
-                } else {
-                    CodeModeExecutionStatus::Failed
-                },
-                started_at.elapsed(),
-            );
+            prepend_script_status(&mut content_items, &script_status, started_at.elapsed());
             Ok(FunctionToolOutput::from_content(
                 content_items,
                 Some(success),
@@ -225,30 +208,29 @@ pub(super) async fn handle_runtime_response(
     }
 }
 
-enum CodeModeExecutionStatus {
-    Completed,
-    Failed,
-    Running(String),
-    Terminated,
+fn format_script_status(response: &RuntimeResponse) -> String {
+    match response {
+        RuntimeResponse::Yielded { cell_id, .. } => {
+            format!("Script running with cell ID {cell_id}")
+        }
+        RuntimeResponse::Terminated { .. } => "Script terminated".to_string(),
+        RuntimeResponse::Result { error_text, .. } => {
+            if error_text.is_none() {
+                "Script completed".to_string()
+            } else {
+                "Script failed".to_string()
+            }
+        }
+    }
 }
 
 fn prepend_script_status(
     content_items: &mut Vec<FunctionCallOutputContentItem>,
-    status: CodeModeExecutionStatus,
+    status: &str,
     wall_time: Duration,
 ) {
     let wall_time_seconds = ((wall_time.as_secs_f32()) * 10.0).round() / 10.0;
-    let header = format!(
-        "{}\nWall time {wall_time_seconds:.1} seconds\nOutput:\n",
-        match status {
-            CodeModeExecutionStatus::Completed => "Script completed".to_string(),
-            CodeModeExecutionStatus::Failed => "Script failed".to_string(),
-            CodeModeExecutionStatus::Running(cell_id) => {
-                format!("Script running with cell ID {cell_id}")
-            }
-            CodeModeExecutionStatus::Terminated => "Script terminated".to_string(),
-        }
-    );
+    let header = format!("{status}\nWall time {wall_time_seconds:.1} seconds\nOutput:\n");
     content_items.insert(0, FunctionCallOutputContentItem::InputText { text: header });
 }
 
