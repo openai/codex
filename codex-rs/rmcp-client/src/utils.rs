@@ -14,7 +14,11 @@ pub(crate) fn create_env_for_mcp_server(
         .iter()
         .copied()
         .chain(env_vars.iter().map(String::as_str))
-        .filter_map(|var| env::var(var).ok().map(|value| (var.to_string(), value)))
+        .filter_map(|var| match var {
+            "PATH" => env::var_os(var)
+                .map(|value| (var.to_string(), value.to_string_lossy().into_owned())),
+            _ => env::var(var).ok().map(|value| (var.to_string(), value)),
+        })
         .chain(extra_env.unwrap_or_default())
         .collect()
 }
@@ -158,6 +162,18 @@ mod tests {
                 original,
             }
         }
+
+        #[cfg(unix)]
+        fn set_os(key: &str, value: &std::ffi::OsStr) -> Self {
+            let original = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self {
+                key: key.to_string(),
+                original,
+            }
+        }
     }
 
     impl Drop for EnvVarGuard {
@@ -190,5 +206,20 @@ mod tests {
         let _guard = EnvVarGuard::set(custom_var, value);
         let env = create_env_for_mcp_server(None, &[custom_var.to_string()]);
         assert_eq!(env.get(custom_var), Some(&value.to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[serial(extra_rmcp_env)]
+    fn create_env_preserves_path_when_it_is_not_utf8() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let raw_path = std::ffi::OsStr::from_bytes(b"/tmp/codex-\xFF/bin");
+        let expected = raw_path.to_string_lossy().into_owned();
+        let _guard = EnvVarGuard::set_os("PATH", raw_path);
+
+        let env = create_env_for_mcp_server(None, &[]);
+
+        assert_eq!(env.get("PATH"), Some(&expected));
     }
 }

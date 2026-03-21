@@ -11,7 +11,7 @@ use anyhow::anyhow;
 use anyhow::Result;
 use std::collections::HashSet;
 use std::ffi::c_void;
-use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -61,10 +61,10 @@ fn gather_candidates(cwd: &Path, env: &std::collections::HashMap<String, String>
     // 4) PATH entries (best-effort)
     if let Some(path) = env
         .get("PATH")
-        .cloned()
-        .or_else(|| std::env::var("PATH").ok())
+        .map(OsString::from)
+        .or_else(|| std::env::var_os("PATH"))
     {
-        for part in std::env::split_paths(OsStr::new(&path)) {
+        for part in std::env::split_paths(&path) {
             if !part.as_os_str().is_empty() {
                 unique_push(&mut set, &mut out, part);
             }

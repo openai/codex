@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use dirs_next::home_dir;
 use std::collections::HashMap;
 use std::env;
+use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -31,8 +32,8 @@ pub fn ensure_non_interactive_pager(env_map: &mut HashMap<String, String>) {
 // Keep PATH and PATHEXT stable for callers that rely on inheriting the parent process env.
 pub fn inherit_path_env(env_map: &mut HashMap<String, String>) {
     if !env_map.contains_key("PATH") {
-        if let Ok(path) = env::var("PATH") {
-            env_map.insert("PATH".into(), path);
+        if let Some(path) = env::var_os("PATH") {
+            env_map.insert("PATH".into(), path.to_string_lossy().into_owned());
         }
     }
     if !env_map.contains_key("PATHEXT") {
@@ -42,27 +43,30 @@ pub fn inherit_path_env(env_map: &mut HashMap<String, String>) {
     }
 }
 
-fn prepend_path(env_map: &mut HashMap<String, String>, prefix: &str) {
+fn prepend_path(env_map: &mut HashMap<String, String>, prefix: &Path) -> Result<()> {
     let existing = env_map
         .get("PATH")
-        .cloned()
-        .or_else(|| env::var("PATH").ok())
+        .map(OsString::from)
+        .or_else(|| env::var_os("PATH"))
         .unwrap_or_default();
-    let parts: Vec<String> = existing.split(';').map(|s| s.to_string()).collect();
+    let parts: Vec<PathBuf> = env::split_paths(&existing).collect();
     if parts
         .first()
-        .map(|p| p.eq_ignore_ascii_case(prefix))
+        .map(|path| {
+            path.as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&prefix.as_os_str().to_string_lossy())
+        })
         .unwrap_or(false)
     {
-        return;
+        return Ok(());
     }
-    let mut new_path = String::new();
-    new_path.push_str(prefix);
-    if !existing.is_empty() {
-        new_path.push(';');
-        new_path.push_str(&existing);
-    }
-    env_map.insert("PATH".into(), new_path);
+    let new_path = env::join_paths(
+        std::iter::once(prefix.as_os_str()).chain(parts.iter().map(|path| path.as_os_str())),
+    )
+    .map_err(|err| anyhow!("failed to construct PATH: {err}"))?;
+    env_map.insert("PATH".into(), new_path.to_string_lossy().into_owned());
+    Ok(())
 }
 
 fn reorder_pathext_for_stubs(env_map: &mut HashMap<String, String>) {
@@ -168,7 +172,7 @@ pub fn apply_no_network_to_env(env_map: &mut HashMap<String, String>) -> Result<
             }
         }
     }
-    prepend_path(env_map, &base.to_string_lossy());
+    prepend_path(env_map, &base)?;
     reorder_pathext_for_stubs(env_map);
     Ok(())
 }
