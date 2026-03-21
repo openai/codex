@@ -50,6 +50,8 @@ pub use protocol::InitializeParams;
 pub use protocol::InitializeResponse;
 pub use protocol::ReadParams;
 pub use protocol::ReadResponse;
+pub use protocol::ShellExecParams;
+pub use protocol::ShellExecResponse;
 pub use protocol::TerminateParams;
 pub use protocol::TerminateResponse;
 pub use protocol::WriteParams;

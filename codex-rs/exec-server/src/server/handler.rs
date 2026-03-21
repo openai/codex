@@ -19,6 +19,8 @@ use crate::protocol::ExecResponse;
 use crate::protocol::InitializeResponse;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
+use crate::protocol::ShellExecParams;
+use crate::protocol::ShellExecResponse;
 use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
@@ -26,17 +28,21 @@ use crate::protocol::WriteResponse;
 use crate::rpc::RpcNotificationSender;
 use crate::server::file_system_handler::FileSystemHandler;
 use crate::server::process_handler::ProcessHandler;
+use crate::server::shell_exec_handler::ShellExecHandler;
 
 #[derive(Clone)]
 pub(crate) struct ExecServerHandler {
     process: ProcessHandler,
+    shell_exec: ShellExecHandler,
     file_system: FileSystemHandler,
 }
 
 impl ExecServerHandler {
     pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
+        let process = ProcessHandler::new(notifications);
         Self {
-            process: ProcessHandler::new(notifications),
+            shell_exec: ShellExecHandler::new(process.clone()),
+            process,
             file_system: FileSystemHandler::default(),
         }
     }
@@ -76,6 +82,13 @@ impl ExecServerHandler {
         params: TerminateParams,
     ) -> Result<TerminateResponse, JSONRPCErrorError> {
         self.process.terminate(params).await
+    }
+
+    pub(crate) async fn shell_exec(
+        &self,
+        params: ShellExecParams,
+    ) -> Result<ShellExecResponse, JSONRPCErrorError> {
+        self.shell_exec.exec(params).await
     }
 
     pub(crate) async fn fs_read_file(

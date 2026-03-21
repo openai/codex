@@ -1,4 +1,5 @@
 use super::*;
+use codex_exec_server::Environment as ExecutorEnvironment;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -197,6 +198,58 @@ async fn read_output_retains_all_bytes_for_full_buffer_capture() {
 
     let out = read_output(reader, None, false, None).await.expect("read");
     assert_eq!(out.text.len(), expected_len);
+}
+
+#[tokio::test]
+async fn consume_exec_server_output_collects_split_streams() -> anyhow::Result<()> {
+    let environment = ExecutorEnvironment::create(None).await?;
+    let executor = environment.get_executor();
+    let process_id = format!("exec-test-{}", uuid::Uuid::new_v4());
+
+    #[cfg(windows)]
+    let argv = vec![
+        "powershell.exe".to_string(),
+        "-NonInteractive".to_string(),
+        "-NoLogo".to_string(),
+        "-Command".to_string(),
+        "[Console]::Out.Write('hello'); [Console]::Error.Write('oops')".to_string(),
+    ];
+    #[cfg(not(windows))]
+    let argv = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "printf hello; printf oops >&2".to_string(),
+    ];
+
+    executor
+        .start(codex_exec_server::ExecParams {
+            process_id: process_id.clone(),
+            argv,
+            cwd: std::env::current_dir()?,
+            env: HashMap::new(),
+            tty: false,
+            arg0: None,
+        })
+        .await?;
+
+    let output = consume_exec_server_output(
+        executor,
+        &process_id,
+        5_000.into(),
+        ExecCapturePolicy::ShellTool,
+        None,
+    )
+    .await?;
+
+    assert_eq!(output.exit_status.code(), Some(0));
+    assert_eq!(bytes_to_string_smart(&output.stdout.text), "hello");
+    assert_eq!(bytes_to_string_smart(&output.stderr.text), "oops");
+    assert_eq!(
+        bytes_to_string_smart(&output.aggregated_output.text),
+        "hellooops"
+    );
+
+    Ok(())
 }
 
 #[test]
