@@ -1,4 +1,4 @@
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
+<p align="center"><strong>Mac/Linux:</strong> <code>curl -fsSL https://chatgpt.com/codex/install.sh | sh</code><br /><strong>Windows:</strong> <code>powershell -c "irm https://chatgpt.com/codex/install.ps1|iex"</code></p>
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 <p align="center">
   <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
@@ -14,17 +14,20 @@ If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="http
 
 ### Installing and running Codex CLI
 
-Install globally with your preferred package manager:
+Install with the native installer for your platform:
 
 ```shell
-# Install using npm
-npm install -g @openai/codex
+# Mac + Linux
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
 ```
 
-```shell
-# Install using Homebrew
-brew install --cask codex
+```powershell
+# Windows
+powershell -c "irm https://chatgpt.com/codex/install.ps1|iex"
 ```
+
+> [!NOTE]
+> If you prefer a package manager, you can also install with `npm install -g @openai/codex` or `brew install --cask codex`.
 
 Then simply run `codex` to get started.
 
@@ -39,6 +42,8 @@ Each GitHub Release contains many executables, but in practice, you likely want 
 - Linux
   - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
   - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
+- Windows
+  - Use `install.ps1` or download the appropriate Windows `.zip` asset from the release page.
 
 Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
 

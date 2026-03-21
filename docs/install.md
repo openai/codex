@@ -2,11 +2,27 @@
 
 ### System requirements
 
-| Requirement                 | Details                                                         |
-| --------------------------- | --------------------------------------------------------------- |
-| Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11 **via WSL2** |
-| Git (optional, recommended) | 2.23+ for built-in PR helpers                                   |
-| RAM                         | 4-GB minimum (8-GB recommended)                                 |
+| Requirement                 | Details                                            |
+| --------------------------- | -------------------------------------------------- |
+| Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11 |
+| Git (optional, recommended) | 2.23+ for built-in PR helpers                      |
+| RAM                         | 4-GB minimum (8-GB recommended)                    |
+
+## Install Codex
+
+Use the native installer for your platform:
+
+```bash
+# Mac + Linux
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
+```
+
+```powershell
+# Windows
+powershell -c "irm https://chatgpt.com/codex/install.ps1|iex"
+```
+
+If you prefer a package manager, you can also install via npm (`npm install -g @openai/codex`) or Homebrew (`brew install --cask codex`).
 
 ### DotSlash
 
