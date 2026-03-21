@@ -2011,7 +2011,7 @@ async fn make_chatwidget_manual(
         show_welcome_banner: true,
         startup_tooltip_override: None,
         queued_user_messages: VecDeque::new(),
-        steer_rejected_user_messages: VecDeque::new(),
+        rejected_steers_queue: VecDeque::new(),
         pending_steers: VecDeque::new(),
         submit_pending_steers_after_interrupt: false,
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
@@ -3794,7 +3794,7 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
     chat.restore_thread_input_state(Some(ThreadInputState {
         composer: None,
         pending_steers: VecDeque::new(),
-        steer_rejected_user_messages: VecDeque::new(),
+        rejected_steers_queue: VecDeque::new(),
         queued_user_messages: VecDeque::new(),
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
@@ -3817,15 +3817,15 @@ async fn restore_thread_input_state_keeps_rejected_follow_ups_ahead_of_pending_s
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     let mut pending_steers = VecDeque::new();
     pending_steers.push_back(UserMessage::from("pending steer"));
-    let mut steer_rejected_user_messages = VecDeque::new();
-    steer_rejected_user_messages.push_back(UserMessage::from("already rejected"));
+    let mut rejected_steers_queue = VecDeque::new();
+    rejected_steers_queue.push_back(UserMessage::from("already rejected"));
     let mut queued_user_messages = VecDeque::new();
     queued_user_messages.push_back(UserMessage::from("queued draft"));
 
     chat.restore_thread_input_state(Some(ThreadInputState {
         composer: None,
         pending_steers,
-        steer_rejected_user_messages,
+        rejected_steers_queue,
         queued_user_messages,
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),

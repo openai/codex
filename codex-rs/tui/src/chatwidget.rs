@@ -746,7 +746,7 @@ pub(crate) struct ChatWidget {
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
     // User messages that tried to steer a non-regular turn and must be retried first.
-    steer_rejected_user_messages: VecDeque<UserMessage>,
+    rejected_steers_queue: VecDeque<UserMessage>,
     // Steers already submitted to core but not yet committed into history.
     //
     // The bottom pane shows these above queued drafts until core records the
@@ -907,7 +907,7 @@ impl ThreadComposerState {
 pub(crate) struct ThreadInputState {
     composer: Option<ThreadComposerState>,
     pending_steers: VecDeque<UserMessage>,
-    steer_rejected_user_messages: VecDeque<UserMessage>,
+    rejected_steers_queue: VecDeque<UserMessage>,
     queued_user_messages: VecDeque<UserMessage>,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
@@ -1890,11 +1890,11 @@ impl ChatWidget {
     }
 
     fn has_queued_follow_up_messages(&self) -> bool {
-        !self.steer_rejected_user_messages.is_empty() || !self.queued_user_messages.is_empty()
+        !self.rejected_steers_queue.is_empty() || !self.queued_user_messages.is_empty()
     }
 
     fn pop_next_queued_user_message(&mut self) -> Option<UserMessage> {
-        self.steer_rejected_user_messages
+        self.rejected_steers_queue
             .pop_front()
             .or_else(|| self.queued_user_messages.pop_front())
     }
@@ -1902,7 +1902,7 @@ impl ChatWidget {
     fn pop_latest_queued_user_message(&mut self) -> Option<UserMessage> {
         self.queued_user_messages
             .pop_back()
-            .or_else(|| self.steer_rejected_user_messages.pop_back())
+            .or_else(|| self.rejected_steers_queue.pop_back())
     }
 
     pub(crate) fn queue_next_pending_steer_for_follow_up(&mut self) -> bool {
@@ -1912,7 +1912,7 @@ impl ChatWidget {
             );
             return false;
         };
-        self.steer_rejected_user_messages
+        self.rejected_steers_queue
             .push_back(pending_steer.user_message);
         self.refresh_pending_input_preview();
         true
@@ -2295,7 +2295,7 @@ impl ChatWidget {
             mention_bindings: self.bottom_pane.composer_mention_bindings(),
         };
 
-        let mut to_merge: Vec<UserMessage> = self.steer_rejected_user_messages.drain(..).collect();
+        let mut to_merge: Vec<UserMessage> = self.rejected_steers_queue.drain(..).collect();
         to_merge.extend(
             self.pending_steers
                 .drain(..)
@@ -2346,7 +2346,7 @@ impl ChatWidget {
                 .iter()
                 .map(|pending| pending.user_message.clone())
                 .collect(),
-            steer_rejected_user_messages: self.steer_rejected_user_messages.clone(),
+            rejected_steers_queue: self.rejected_steers_queue.clone(),
             queued_user_messages: self.queued_user_messages.clone(),
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
@@ -2387,14 +2387,14 @@ impl ChatWidget {
                 self.bottom_pane.set_composer_pending_pastes(Vec::new());
             }
             self.pending_steers.clear();
-            self.steer_rejected_user_messages = input_state.steer_rejected_user_messages;
-            self.steer_rejected_user_messages
+            self.rejected_steers_queue = input_state.rejected_steers_queue;
+            self.rejected_steers_queue
                 .extend(input_state.pending_steers);
             self.queued_user_messages = input_state.queued_user_messages;
         } else {
             self.agent_turn_running = false;
             self.pending_steers.clear();
-            self.steer_rejected_user_messages.clear();
+            self.rejected_steers_queue.clear();
             self.set_remote_image_urls(Vec::new());
             self.bottom_pane.set_composer_text_with_mention_bindings(
                 String::new(),
@@ -3710,7 +3710,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
-            steer_rejected_user_messages: VecDeque::new(),
+            rejected_steers_queue: VecDeque::new(),
             pending_steers: VecDeque::new(),
             submit_pending_steers_after_interrupt: false,
             queued_message_edit_binding,
@@ -3914,7 +3914,7 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
-            steer_rejected_user_messages: VecDeque::new(),
+            rejected_steers_queue: VecDeque::new(),
             pending_steers: VecDeque::new(),
             submit_pending_steers_after_interrupt: false,
             queued_message_edit_binding,
@@ -4100,7 +4100,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
-            steer_rejected_user_messages: VecDeque::new(),
+            rejected_steers_queue: VecDeque::new(),
             pending_steers: VecDeque::new(),
             submit_pending_steers_after_interrupt: false,
             queued_message_edit_binding,
@@ -5776,7 +5776,7 @@ impl ChatWidget {
     /// Rebuild and update the bottom-pane pending-input preview.
     fn refresh_pending_input_preview(&mut self) {
         let queued_messages: Vec<String> = self
-            .steer_rejected_user_messages
+            .rejected_steers_queue
             .iter()
             .map(|m| m.text.clone())
             .chain(self.queued_user_messages.iter().map(|m| m.text.clone()))
@@ -8778,7 +8778,7 @@ impl ChatWidget {
 
     #[cfg(test)]
     pub(crate) fn queued_user_message_texts(&self) -> Vec<String> {
-        self.steer_rejected_user_messages
+        self.rejected_steers_queue
             .iter()
             .map(|message| message.text.clone())
             .chain(
