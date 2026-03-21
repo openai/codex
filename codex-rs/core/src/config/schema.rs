@@ -1,4 +1,5 @@
 use crate::config::ConfigToml;
+use crate::config::WebSearchFeatureToml;
 use crate::config::types::RawMcpServerConfig;
 use codex_features::FEATURES;
 use codex_features::legacy_feature_keys;
@@ -51,6 +52,21 @@ pub(crate) fn mcp_servers_schema(schema_gen: &mut SchemaGenerator) -> Schema {
     object.object = Some(Box::new(validation));
 
     Schema::Object(object)
+}
+
+/// Schema for `tools.web_search`, which still accepts a legacy boolean
+/// shorthand in addition to the grouped object form.
+pub(crate) fn web_search_feature_schema(schema_gen: &mut SchemaGenerator) -> Schema {
+    Schema::Object(SchemaObject {
+        subschemas: Some(Box::new(schemars::schema::SubschemaValidation {
+            any_of: Some(vec![
+                schema_gen.subschema_for::<bool>(),
+                schema_gen.subschema_for::<WebSearchFeatureToml>(),
+            ]),
+            ..Default::default()
+        })),
+        ..Default::default()
+    })
 }
 
 /// Build the config schema for `config.toml`.

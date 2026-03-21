@@ -1,4 +1,5 @@
 use crate::client_common::tools::FreeformTool;
+use crate::config::ToolFeatureOverrides;
 use crate::config::test_config;
 use crate::models_manager::manager::ModelsManager;
 use crate::models_manager::model_info::with_config_overrides;
@@ -515,12 +516,52 @@ fn test_build_specs_collab_tools_enabled() {
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
-    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+    let (tools, registry) = build_specs(&tools_config, None, None, &[]).build();
     assert_contains_tool_names(
         &tools,
         &["spawn_agent", "send_input", "wait_agent", "close_agent"],
     );
     assert_lacks_tool_name(&tools, "spawn_agents_on_csv");
+    assert!(registry.has_handler("spawn_agent", None));
+    assert!(registry.has_handler("send_input", None));
+    assert!(registry.has_handler("resume_agent", None));
+    assert!(registry.has_handler("wait_agent", None));
+    assert!(registry.has_handler("close_agent", None));
+}
+
+#[test]
+fn test_build_specs_multi_agent_handlers_omitted_when_capability_disabled() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::Collab);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_tool_feature_overrides(ToolFeatureOverrides {
+        disable_defaults: true,
+        ..Default::default()
+    });
+
+    let (tools, registry) = build_specs(&tools_config, None, None, &[]).build();
+
+    for tool_name in [
+        "spawn_agent",
+        "send_input",
+        "resume_agent",
+        "wait_agent",
+        "close_agent",
+    ] {
+        assert_lacks_tool_name(&tools, tool_name);
+        assert!(!registry.has_handler(tool_name, None));
+    }
 }
 
 #[test]
@@ -1134,6 +1175,79 @@ fn web_search_mode_live_sets_external_web_access_true() {
             search_content_types: None,
         }
     );
+}
+
+#[test]
+fn web_search_mode_respects_disable_defaults() {
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &search_capable_model_info(),
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Live),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_tool_feature_overrides(ToolFeatureOverrides {
+        disable_defaults: true,
+        shell: Some(true),
+        ..Default::default()
+    });
+
+    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+
+    assert_lacks_tool_name(&tools, "web_search");
+}
+
+#[test]
+fn disable_defaults_ignores_legacy_view_image_override_without_filesystem_override() {
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &search_capable_model_info(),
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Disabled),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_tool_feature_overrides(ToolFeatureOverrides {
+        disable_defaults: true,
+        ..Default::default()
+    })
+    .with_legacy_view_image_override(Some(true));
+
+    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+
+    assert_lacks_tool_name(&tools, "view_image");
+}
+
+#[test]
+fn explicit_filesystem_override_enables_view_image_with_disable_defaults() {
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &search_capable_model_info(),
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Disabled),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_tool_feature_overrides(ToolFeatureOverrides {
+        disable_defaults: true,
+        filesystem: Some(true),
+        ..Default::default()
+    })
+    .with_legacy_view_image_override(Some(true));
+
+    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+
+    assert_contains_tool_names(&tools, &["view_image"]);
 }
 
 #[test]

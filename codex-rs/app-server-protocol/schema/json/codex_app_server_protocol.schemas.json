@@ -13826,9 +13826,117 @@
         ],
         "type": "object"
       },
+      "ToolFeatureConfig": {
+        "properties": {
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "ToolsV2": {
         "properties": {
+          "agent_jobs": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ToolFeatureConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "agents": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ToolFeatureConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "disable_defaults": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "document_generation": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ToolFeatureConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "filesystem": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ToolFeatureConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "image_generation": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ToolFeatureConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "javascript": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ToolFeatureConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "planning": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ToolFeatureConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "shell": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ToolFeatureConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "user_input": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ToolFeatureConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "view_image": {
+            "description": "Legacy enablement for the `view_image` capability.",
             "type": [
               "boolean",
               "null"
@@ -13837,7 +13945,7 @@
           "web_search": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/WebSearchToolConfig"
+                "$ref": "#/definitions/v2/WebSearchFeatureConfig"
               },
               {
                 "type": "null"
@@ -14459,6 +14567,46 @@
         ],
         "type": "string"
       },
+      "WebSearchFeatureConfig": {
+        "properties": {
+          "allowed_domains": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "context_size": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/WebSearchContextSize"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "location": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/WebSearchLocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
       "WebSearchLocation": {
         "additionalProperties": false,
         "properties": {
@@ -14496,41 +14644,6 @@
           "live"
         ],
         "type": "string"
-      },
-      "WebSearchToolConfig": {
-        "additionalProperties": false,
-        "properties": {
-          "allowed_domains": {
-            "items": {
-              "type": "string"
-            },
-            "type": [
-              "array",
-              "null"
-            ]
-          },
-          "context_size": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/WebSearchContextSize"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "location": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/WebSearchLocation"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "type": "object"
       },
       "WindowsSandboxSetupCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",

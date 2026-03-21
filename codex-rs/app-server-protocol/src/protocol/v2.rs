@@ -536,8 +536,35 @@ pub struct SandboxWorkspaceWrite {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
+pub struct ToolFeatureConfig {
+    pub enabled: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct WebSearchFeatureConfig {
+    pub enabled: Option<bool>,
+    #[serde(flatten)]
+    pub config: WebSearchToolConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
 pub struct ToolsV2 {
-    pub web_search: Option<WebSearchToolConfig>,
+    pub disable_defaults: Option<bool>,
+    pub shell: Option<ToolFeatureConfig>,
+    pub filesystem: Option<ToolFeatureConfig>,
+    pub javascript: Option<ToolFeatureConfig>,
+    pub agents: Option<ToolFeatureConfig>,
+    pub agent_jobs: Option<ToolFeatureConfig>,
+    pub planning: Option<ToolFeatureConfig>,
+    pub user_input: Option<ToolFeatureConfig>,
+    pub web_search: Option<WebSearchFeatureConfig>,
+    pub image_generation: Option<ToolFeatureConfig>,
+    pub document_generation: Option<ToolFeatureConfig>,
+    /// Legacy enablement for the `view_image` capability.
     pub view_image: Option<bool>,
 }
 

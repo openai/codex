@@ -8,6 +8,7 @@ use crate::function_tool::FunctionCallError;
 use crate::memories::usage::emit_metric_for_tool_read;
 use crate::protocol::SandboxPolicy;
 use crate::sandbox_tags::sandbox_tag;
+use crate::tools::code_mode::PUBLIC_TOOL_NAME;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -20,8 +21,211 @@ use codex_hooks::HookToolInput;
 use codex_hooks::HookToolInputLocalShell;
 use codex_hooks::HookToolKind;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::VIEW_IMAGE_TOOL_NAME;
 use codex_utils_readiness::Readiness;
 use tracing::warn;
+
+pub(crate) const CONTAINER_EXEC_TOOL_NAME: &str = "container.exec";
+pub(crate) const EXEC_COMMAND_TOOL_NAME: &str = "exec_command";
+pub(crate) const LOCAL_SHELL_TOOL_NAME: &str = "local_shell";
+pub(crate) const SHELL_COMMAND_TOOL_NAME: &str = "shell_command";
+pub(crate) const SHELL_TOOL_NAME: &str = "shell";
+pub(crate) const WRITE_STDIN_TOOL_NAME: &str = "write_stdin";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// Individual built-in tools known to Codex, independent of how they are
+/// grouped for config-driven enablement.
+pub(crate) enum BuiltinToolKey {
+    ApplyPatch,
+    Artifacts,
+    CloseAgent,
+    CodeMode,
+    ContainerExec,
+    ExecCommand,
+    GrepFiles,
+    ImageGeneration,
+    JsRepl,
+    JsReplReset,
+    ListDir,
+    ListMcpResources,
+    ListMcpResourceTemplates,
+    LocalShell,
+    ReadFile,
+    ReadMcpResource,
+    RequestPermissions,
+    RequestUserInput,
+    ReportAgentJobResult,
+    ResumeAgent,
+    SearchToolBm25,
+    SendInput,
+    Shell,
+    ShellCommand,
+    SpawnAgent,
+    SpawnAgentsOnCsv,
+    TestSyncTool,
+    UpdatePlan,
+    ViewImage,
+    Wait,
+    WebSearch,
+    WriteStdin,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// Coarse-grained built-in tool capability groups exposed in `config.tools`.
+pub(crate) enum ToolFeatureKey {
+    Shell,
+    Filesystem,
+    Javascript,
+    Agents,
+    AgentJobs,
+    Planning,
+    UserInput,
+    WebSearch,
+    ImageGeneration,
+    DocumentGeneration,
+}
+
+impl BuiltinToolKey {
+    pub(crate) const ALL: [Self; 32] = [
+        Self::ApplyPatch,
+        Self::Artifacts,
+        Self::CloseAgent,
+        Self::CodeMode,
+        Self::ContainerExec,
+        Self::ExecCommand,
+        Self::GrepFiles,
+        Self::ImageGeneration,
+        Self::JsRepl,
+        Self::JsReplReset,
+        Self::ListDir,
+        Self::ListMcpResources,
+        Self::ListMcpResourceTemplates,
+        Self::LocalShell,
+        Self::ReadFile,
+        Self::ReadMcpResource,
+        Self::RequestPermissions,
+        Self::RequestUserInput,
+        Self::ReportAgentJobResult,
+        Self::ResumeAgent,
+        Self::SearchToolBm25,
+        Self::SendInput,
+        Self::Shell,
+        Self::ShellCommand,
+        Self::SpawnAgent,
+        Self::SpawnAgentsOnCsv,
+        Self::TestSyncTool,
+        Self::UpdatePlan,
+        Self::ViewImage,
+        Self::Wait,
+        Self::WebSearch,
+        Self::WriteStdin,
+    ];
+
+    pub(crate) fn iter() -> impl Iterator<Item = Self> {
+        Self::ALL.into_iter()
+    }
+
+    pub(crate) const fn invocation_names(self) -> &'static [&'static str] {
+        match self {
+            Self::CodeMode => &[PUBLIC_TOOL_NAME],
+            Self::ContainerExec => &[CONTAINER_EXEC_TOOL_NAME],
+            Self::ExecCommand => &[EXEC_COMMAND_TOOL_NAME],
+            Self::LocalShell => &[LOCAL_SHELL_TOOL_NAME],
+            Self::Shell => &[SHELL_TOOL_NAME],
+            Self::ShellCommand => &[SHELL_COMMAND_TOOL_NAME],
+            Self::WriteStdin => &[WRITE_STDIN_TOOL_NAME],
+            Self::ListMcpResources => &["list_mcp_resources"],
+            Self::ListMcpResourceTemplates => &["list_mcp_resource_templates"],
+            Self::ReadMcpResource => &["read_mcp_resource"],
+            Self::UpdatePlan => &["update_plan"],
+            Self::JsRepl => &["js_repl"],
+            Self::JsReplReset => &["js_repl_reset"],
+            Self::RequestUserInput => &["request_user_input"],
+            Self::RequestPermissions => &["request_permissions"],
+            Self::SearchToolBm25 => &["tool_search"],
+            Self::ApplyPatch => &["apply_patch"],
+            Self::GrepFiles => &["grep_files"],
+            Self::ReadFile => &["read_file"],
+            Self::ListDir => &["list_dir"],
+            Self::TestSyncTool => &["test_sync_tool"],
+            Self::WebSearch => &["web_search"],
+            Self::ImageGeneration => &["image_generation"],
+            Self::ViewImage => &[VIEW_IMAGE_TOOL_NAME],
+            Self::Artifacts => &["artifacts"],
+            Self::SpawnAgent => &["spawn_agent"],
+            Self::SendInput => &["send_input"],
+            Self::ResumeAgent => &["resume_agent"],
+            Self::Wait => &["wait_agent"],
+            Self::CloseAgent => &["close_agent"],
+            Self::SpawnAgentsOnCsv => &["spawn_agents_on_csv"],
+            Self::ReportAgentJobResult => &["report_agent_job_result"],
+        }
+    }
+}
+
+impl ToolFeatureKey {
+    const ALL: [Self; 10] = [
+        Self::Shell,
+        Self::Filesystem,
+        Self::Javascript,
+        Self::Agents,
+        Self::AgentJobs,
+        Self::Planning,
+        Self::UserInput,
+        Self::WebSearch,
+        Self::ImageGeneration,
+        Self::DocumentGeneration,
+    ];
+
+    pub(crate) fn iter() -> impl Iterator<Item = Self> {
+        Self::ALL.into_iter()
+    }
+
+    pub(crate) const fn builtin_tool_keys(self) -> &'static [BuiltinToolKey] {
+        match self {
+            Self::Shell => &[
+                BuiltinToolKey::ContainerExec,
+                BuiltinToolKey::ExecCommand,
+                BuiltinToolKey::LocalShell,
+                BuiltinToolKey::Shell,
+                BuiltinToolKey::ShellCommand,
+                BuiltinToolKey::WriteStdin,
+            ],
+            Self::Filesystem => &[
+                BuiltinToolKey::ApplyPatch,
+                BuiltinToolKey::GrepFiles,
+                BuiltinToolKey::ReadFile,
+                BuiltinToolKey::ListDir,
+                BuiltinToolKey::ViewImage,
+            ],
+            Self::Javascript => &[BuiltinToolKey::JsRepl, BuiltinToolKey::JsReplReset],
+            Self::Agents => &[
+                BuiltinToolKey::SpawnAgent,
+                BuiltinToolKey::SendInput,
+                BuiltinToolKey::ResumeAgent,
+                BuiltinToolKey::Wait,
+                BuiltinToolKey::CloseAgent,
+            ],
+            Self::AgentJobs => &[
+                BuiltinToolKey::SpawnAgentsOnCsv,
+                BuiltinToolKey::ReportAgentJobResult,
+            ],
+            Self::Planning => &[BuiltinToolKey::UpdatePlan],
+            Self::UserInput => &[BuiltinToolKey::RequestUserInput],
+            Self::WebSearch => &[BuiltinToolKey::WebSearch],
+            Self::ImageGeneration => &[BuiltinToolKey::ImageGeneration],
+            Self::DocumentGeneration => &[BuiltinToolKey::Artifacts],
+        }
+    }
+
+    pub(crate) fn for_builtin_tool(tool: BuiltinToolKey) -> Option<Self> {
+        Self::iter().find(|feature| feature.builtin_tool_keys().contains(&tool))
+    }
+}
+
+pub(crate) fn builtin_tool_key(name: &str) -> Option<BuiltinToolKey> {
+    BuiltinToolKey::iter().find(|key| key.invocation_names().contains(&name))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ToolKind {

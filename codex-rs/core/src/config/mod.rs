@@ -54,6 +54,7 @@ use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
 use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
+use crate::tools::registry::ToolFeatureKey;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
@@ -547,6 +548,12 @@ pub struct Config {
     /// Additional parameters for the web search tool when it is enabled.
     pub web_search_config: Option<WebSearchConfig>,
 
+    /// Explicit grouped tool feature overrides requested by config.
+    pub tool_feature_overrides: ToolFeatureOverrides,
+
+    /// Legacy `tools.view_image` fallback used when no explicit capability override is present.
+    pub legacy_view_image_override: Option<bool>,
+
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
@@ -599,6 +606,38 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: crate::config::types::OtelConfig,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolFeatureOverrides {
+    pub disable_defaults: bool,
+    pub shell: Option<bool>,
+    pub filesystem: Option<bool>,
+    pub javascript: Option<bool>,
+    pub agents: Option<bool>,
+    pub agent_jobs: Option<bool>,
+    pub planning: Option<bool>,
+    pub user_input: Option<bool>,
+    pub web_search: Option<bool>,
+    pub image_generation: Option<bool>,
+    pub document_generation: Option<bool>,
+}
+
+impl ToolFeatureOverrides {
+    pub(crate) fn for_feature(&self, feature: ToolFeatureKey) -> Option<bool> {
+        match feature {
+            ToolFeatureKey::Shell => self.shell,
+            ToolFeatureKey::Filesystem => self.filesystem,
+            ToolFeatureKey::Javascript => self.javascript,
+            ToolFeatureKey::Agents => self.agents,
+            ToolFeatureKey::AgentJobs => self.agent_jobs,
+            ToolFeatureKey::Planning => self.planning,
+            ToolFeatureKey::UserInput => self.user_input,
+            ToolFeatureKey::WebSearch => self.web_search,
+            ToolFeatureKey::ImageGeneration => self.image_generation,
+            ToolFeatureKey::DocumentGeneration => self.document_generation,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1605,42 +1644,82 @@ pub struct RealtimeAudioToml {
     pub speaker: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ToolFeatureToml {
+    pub enabled: Option<bool>,
+}
+
+impl ToolFeatureToml {
+    fn is_enabled(&self) -> bool {
+        self.enabled.unwrap_or(true)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct WebSearchFeatureToml {
+    pub enabled: Option<bool>,
+    #[serde(flatten)]
+    pub config: WebSearchToolConfig,
+}
+
+impl WebSearchFeatureToml {
+    fn is_enabled(&self) -> bool {
+        self.enabled.unwrap_or(true)
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ToolsToml {
+    pub disable_defaults: Option<bool>,
+    pub shell: Option<ToolFeatureToml>,
+    pub filesystem: Option<ToolFeatureToml>,
+    pub javascript: Option<ToolFeatureToml>,
+    pub agents: Option<ToolFeatureToml>,
+    pub agent_jobs: Option<ToolFeatureToml>,
+    pub planning: Option<ToolFeatureToml>,
+    pub user_input: Option<ToolFeatureToml>,
     #[serde(
         default,
-        deserialize_with = "deserialize_optional_web_search_tool_config"
+        deserialize_with = "deserialize_optional_web_search_feature_config"
     )]
-    pub web_search: Option<WebSearchToolConfig>,
+    #[schemars(schema_with = "crate::config::schema::web_search_feature_schema")]
+    pub web_search: Option<WebSearchFeatureToml>,
+    pub image_generation: Option<ToolFeatureToml>,
+    pub document_generation: Option<ToolFeatureToml>,
 
-    /// Enable the `view_image` tool that lets the agent attach local images.
+    /// Legacy enablement for the `view_image` capability.
     #[serde(default)]
     pub view_image: Option<bool>,
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize)]
 #[serde(untagged)]
-enum WebSearchToolConfigInput {
+enum WebSearchFeatureConfigInput {
     Enabled(bool),
-    Config(WebSearchToolConfig),
+    Feature(WebSearchFeatureToml),
 }
 
-fn deserialize_optional_web_search_tool_config<'de, D>(
+fn deserialize_optional_web_search_feature_config<'de, D>(
     deserializer: D,
-) -> Result<Option<WebSearchToolConfig>, D::Error>
+) -> Result<Option<WebSearchFeatureToml>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let value = Option::<WebSearchToolConfigInput>::deserialize(deserializer)?;
+    let value = Option::<WebSearchFeatureConfigInput>::deserialize(deserializer)?;
 
     Ok(match value {
         None => None,
-        Some(WebSearchToolConfigInput::Enabled(enabled)) => {
+        // Preserve legacy behavior: accept boolean `tools.web_search = true|false`
+        // without treating it as a grouped feature override.
+        Some(WebSearchFeatureConfigInput::Enabled(enabled)) => {
             let _ = enabled;
             None
         }
-        Some(WebSearchToolConfigInput::Config(config)) => Some(config),
+        Some(WebSearchFeatureConfigInput::Feature(feature)) => Some(feature),
     })
 }
 
@@ -1723,7 +1802,10 @@ pub struct AgentRoleToml {
 impl From<ToolsToml> for Tools {
     fn from(tools_toml: ToolsToml) -> Self {
         Self {
-            web_search: tools_toml.web_search.is_some().then_some(true),
+            web_search: tools_toml
+                .web_search
+                .as_ref()
+                .map(WebSearchFeatureToml::is_enabled),
             view_image: tools_toml.view_image,
         }
     }
@@ -2012,37 +2094,135 @@ fn resolve_web_search_mode(
     config_toml: &ConfigToml,
     config_profile: &ConfigProfile,
     features: &Features,
+    tool_feature_overrides: &ToolFeatureOverrides,
 ) -> Option<WebSearchMode> {
-    if let Some(mode) = config_profile.web_search.or(config_toml.web_search) {
-        return Some(mode);
+    match tool_feature_overrides.web_search {
+        Some(false) => Some(WebSearchMode::Disabled),
+        None if tool_feature_overrides.disable_defaults => Some(WebSearchMode::Disabled),
+        None | Some(true) => config_profile
+            .web_search
+            .or(config_toml.web_search)
+            .or_else(|| {
+                if features.enabled(Feature::WebSearchCached) {
+                    Some(WebSearchMode::Cached)
+                } else if features.enabled(Feature::WebSearchRequest) {
+                    Some(WebSearchMode::Live)
+                } else {
+                    None
+                }
+            }),
     }
-    if features.enabled(Feature::WebSearchCached) {
-        return Some(WebSearchMode::Cached);
-    }
-    if features.enabled(Feature::WebSearchRequest) {
-        return Some(WebSearchMode::Live);
-    }
-    None
 }
 
 fn resolve_web_search_config(
     config_toml: &ConfigToml,
     config_profile: &ConfigProfile,
 ) -> Option<WebSearchConfig> {
-    let base = config_toml
-        .tools
-        .as_ref()
-        .and_then(|tools| tools.web_search.as_ref());
-    let profile = config_profile
-        .tools
-        .as_ref()
-        .and_then(|tools| tools.web_search.as_ref());
+    let base = config_toml.tools.as_ref().and_then(|tools| {
+        tools
+            .web_search
+            .as_ref()
+            .map(|web_search| &web_search.config)
+    });
+    let profile = config_profile.tools.as_ref().and_then(|tools| {
+        tools
+            .web_search
+            .as_ref()
+            .map(|web_search| &web_search.config)
+    });
 
     match (base, profile) {
         (None, None) => None,
         (Some(base), None) => Some(base.clone().into()),
         (None, Some(profile)) => Some(profile.clone().into()),
         (Some(base), Some(profile)) => Some(base.merge(profile).into()),
+    }
+}
+
+fn resolve_legacy_view_image_override(
+    config_toml: &ConfigToml,
+    config_profile: &ConfigProfile,
+) -> Option<bool> {
+    config_profile
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.view_image)
+        .or(config_profile.tools_view_image)
+        .or_else(|| {
+            config_toml
+                .tools
+                .as_ref()
+                .and_then(|tools| tools.view_image)
+        })
+}
+
+fn resolve_tool_feature_overrides(
+    config_toml: &ConfigToml,
+    config_profile: &ConfigProfile,
+) -> ToolFeatureOverrides {
+    let base = config_toml.tools.as_ref();
+    let profile = config_profile.tools.as_ref();
+
+    let resolve_feature = |profile_feature: Option<&ToolFeatureToml>,
+                           base_feature: Option<&ToolFeatureToml>| {
+        profile_feature
+            .map(ToolFeatureToml::is_enabled)
+            .or_else(|| base_feature.map(ToolFeatureToml::is_enabled))
+    };
+
+    ToolFeatureOverrides {
+        disable_defaults: profile
+            .and_then(|tools| tools.disable_defaults)
+            .or_else(|| base.and_then(|tools| tools.disable_defaults))
+            .unwrap_or(false),
+        shell: resolve_feature(
+            profile.and_then(|tools| tools.shell.as_ref()),
+            base.and_then(|tools| tools.shell.as_ref()),
+        ),
+        filesystem: resolve_feature(
+            profile.and_then(|tools| tools.filesystem.as_ref()),
+            base.and_then(|tools| tools.filesystem.as_ref()),
+        ),
+        javascript: resolve_feature(
+            profile.and_then(|tools| tools.javascript.as_ref()),
+            base.and_then(|tools| tools.javascript.as_ref()),
+        ),
+        agents: resolve_feature(
+            profile.and_then(|tools| tools.agents.as_ref()),
+            base.and_then(|tools| tools.agents.as_ref()),
+        ),
+        agent_jobs: resolve_feature(
+            profile.and_then(|tools| tools.agent_jobs.as_ref()),
+            base.and_then(|tools| tools.agent_jobs.as_ref()),
+        ),
+        planning: resolve_feature(
+            profile.and_then(|tools| tools.planning.as_ref()),
+            base.and_then(|tools| tools.planning.as_ref()),
+        ),
+        user_input: resolve_feature(
+            profile.and_then(|tools| tools.user_input.as_ref()),
+            base.and_then(|tools| tools.user_input.as_ref()),
+        ),
+        web_search: match (
+            profile.and_then(|tools| tools.web_search.as_ref()),
+            base.and_then(|tools| tools.web_search.as_ref()),
+        ) {
+            (Some(profile_web_search), Some(base_web_search)) => profile_web_search
+                .enabled
+                .or(base_web_search.enabled)
+                .or(Some(true)),
+            (Some(profile_web_search), None) => Some(profile_web_search.is_enabled()),
+            (None, Some(base_web_search)) => Some(base_web_search.is_enabled()),
+            (None, None) => None,
+        },
+        image_generation: resolve_feature(
+            profile.and_then(|tools| tools.image_generation.as_ref()),
+            base.and_then(|tools| tools.image_generation.as_ref()),
+        ),
+        document_generation: resolve_feature(
+            profile.and_then(|tools| tools.document_generation.as_ref()),
+            base.and_then(|tools| tools.document_generation.as_ref()),
+        ),
     }
 }
 
@@ -2348,13 +2528,16 @@ impl Config {
             );
             approval_policy = constrained_approval_policy.value();
         }
+        let tool_feature_overrides = resolve_tool_feature_overrides(&cfg, &config_profile);
         let approvals_reviewer = approvals_reviewer_override
             .or(config_profile.approvals_reviewer)
             .or(cfg.approvals_reviewer)
             .unwrap_or(ApprovalsReviewer::User);
-        let web_search_mode = resolve_web_search_mode(&cfg, &config_profile, &features)
-            .unwrap_or(WebSearchMode::Cached);
+        let web_search_mode =
+            resolve_web_search_mode(&cfg, &config_profile, &features, &tool_feature_overrides)
+                .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
+        let legacy_view_image_override = resolve_legacy_view_image_override(&cfg, &config_profile);
 
         let agent_roles =
             agent_roles::load_agent_roles(&cfg, &config_layer_stack, &mut startup_warnings)?;
@@ -2781,6 +2964,8 @@ impl Config {
             include_apply_patch_tool: include_apply_patch_tool_flag,
             web_search_mode: constrained_web_search_mode.value,
             web_search_config,
+            tool_feature_overrides,
+            legacy_view_image_override,
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
             ghost_snapshot,
