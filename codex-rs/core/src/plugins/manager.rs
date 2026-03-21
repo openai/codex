@@ -38,6 +38,9 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::PluginConfig;
 use crate::config_loader::ConfigLayerStack;
 use crate::skills::SkillMetadata;
+use crate::skills::config_rules::SkillConfigRules;
+use crate::skills::config_rules::resolve_disabled_skill_paths;
+use crate::skills::config_rules::skill_config_rules_from_stack;
 use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
 use codex_app_server_protocol::ConfigValueWriteParams;
@@ -152,6 +155,7 @@ pub struct PluginDetail {
     pub installed: bool,
     pub enabled: bool,
     pub skills: Vec<SkillMetadata>,
+    pub disabled_skill_paths: HashSet<PathBuf>,
     pub apps: Vec<AppConnectorId>,
     pub mcp_server_names: Vec<String>,
 }
@@ -183,6 +187,8 @@ pub struct LoadedPlugin {
     pub root: AbsolutePathBuf,
     pub enabled: bool,
     pub skill_roots: Vec<PathBuf>,
+    pub disabled_skill_paths: HashSet<PathBuf>,
+    pub has_enabled_skills: bool,
     pub mcp_servers: HashMap<String, McpServerConfig>,
     pub apps: Vec<AppConnectorId>,
     pub error: Option<String>,
@@ -235,7 +241,7 @@ impl PluginCapabilitySummary {
                 .clone()
                 .unwrap_or_else(|| plugin.config_name.clone()),
             description: prompt_safe_plugin_description(plugin.manifest_description.as_deref()),
-            has_skills: !plugin.skill_roots.is_empty(),
+            has_skills: plugin.has_enabled_skills,
             mcp_server_names,
             app_connector_ids: plugin.apps.clone(),
         };
@@ -258,11 +264,16 @@ impl PluginCapabilitySummary {
 
 impl From<PluginDetail> for PluginCapabilitySummary {
     fn from(value: PluginDetail) -> Self {
+        let has_skills = value.skills.iter().any(|skill| {
+            !value
+                .disabled_skill_paths
+                .contains(&skill.path_to_skills_md)
+        });
         Self {
             config_name: value.id,
             display_name: value.name,
             description: prompt_safe_plugin_description(value.description.as_deref()),
-            has_skills: !value.skills.is_empty(),
+            has_skills,
             mcp_server_names: value.mcp_server_names,
             app_connector_ids: value.apps,
         }
@@ -531,7 +542,11 @@ impl PluginsManager {
             return outcome;
         }
 
-        let outcome = load_plugins_from_layer_stack(&config.config_layer_stack, &self.store);
+        let outcome = load_plugins_from_layer_stack(
+            &config.config_layer_stack,
+            &self.store,
+            self.restriction_product,
+        );
         log_plugin_load_errors(&outcome);
         let mut cache = match self.cached_enabled_outcome.write() {
             Ok(cache) => cache,
@@ -1077,15 +1092,13 @@ impl PluginsManager {
         })?;
         let description = manifest.description.clone();
         let manifest_paths = &manifest.paths;
-        let skill_roots = plugin_skill_roots(source_path.as_path(), manifest_paths);
-        let skills = load_skills_from_roots(skill_roots.into_iter().map(|path| SkillRoot {
-            path,
-            scope: SkillScope::User,
-        }))
-        .skills
-        .into_iter()
-        .filter(|skill| skill.matches_product_restriction_for_product(self.restriction_product))
-        .collect();
+        let skill_config_rules = skill_config_rules_from_stack(&config.config_layer_stack);
+        let resolved_skills = load_plugin_skills(
+            source_path.as_path(),
+            manifest_paths,
+            self.restriction_product,
+            &skill_config_rules,
+        );
         let apps = load_plugin_apps(source_path.as_path());
         let mcp_config_paths = plugin_mcp_config_paths(source_path.as_path(), manifest_paths);
         let mut mcp_server_names = Vec::new();
@@ -1111,7 +1124,8 @@ impl PluginsManager {
                 interface: plugin.interface,
                 installed: installed_plugins.contains(&plugin_key),
                 enabled: enabled_plugins.contains(&plugin_key),
-                skills,
+                skills: resolved_skills.skills,
+                disabled_skill_paths: resolved_skills.disabled_skill_paths,
                 apps,
                 mcp_server_names,
             },
@@ -1347,7 +1361,9 @@ struct PluginAppConfig {
 pub(crate) fn load_plugins_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
     store: &PluginStore,
+    restriction_product: Option<Product>,
 ) -> PluginLoadOutcome {
+    let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
     let mut configured_plugins: Vec<_> = configured_plugins_from_stack(config_layer_stack)
         .into_iter()
         .collect();
@@ -1356,7 +1372,13 @@ pub(crate) fn load_plugins_from_layer_stack(
     let mut plugins = Vec::with_capacity(configured_plugins.len());
     let mut seen_mcp_server_names = HashMap::<String, String>::new();
     for (configured_name, plugin) in configured_plugins {
-        let loaded_plugin = load_plugin(configured_name.clone(), &plugin, store);
+        let loaded_plugin = load_plugin(
+            configured_name.clone(),
+            &plugin,
+            store,
+            restriction_product,
+            &skill_config_rules,
+        );
         for name in loaded_plugin.mcp_servers.keys() {
             if let Some(previous_plugin) =
                 seen_mcp_server_names.insert(name.clone(), configured_name.clone())
@@ -1463,7 +1485,13 @@ fn configured_plugins_from_stack(
     }
 }
 
-fn load_plugin(config_name: String, plugin: &PluginConfig, store: &PluginStore) -> LoadedPlugin {
+fn load_plugin(
+    config_name: String,
+    plugin: &PluginConfig,
+    store: &PluginStore,
+    restriction_product: Option<Product>,
+    skill_config_rules: &SkillConfigRules,
+) -> LoadedPlugin {
     let plugin_root = PluginId::parse(&config_name).map(|plugin_id| {
         store
             .active_plugin_root(&plugin_id)
@@ -1480,6 +1508,8 @@ fn load_plugin(config_name: String, plugin: &PluginConfig, store: &PluginStore) 
         root,
         enabled: plugin.enabled,
         skill_roots: Vec::new(),
+        disabled_skill_paths: HashSet::new(),
+        has_enabled_skills: false,
         mcp_servers: HashMap::new(),
         apps: Vec::new(),
         error: None,
@@ -1511,6 +1541,15 @@ fn load_plugin(config_name: String, plugin: &PluginConfig, store: &PluginStore) 
     loaded_plugin.manifest_name = Some(manifest.name.clone());
     loaded_plugin.manifest_description = manifest.description.clone();
     loaded_plugin.skill_roots = plugin_skill_roots(plugin_root.as_path(), manifest_paths);
+    let resolved_skills = load_plugin_skills(
+        plugin_root.as_path(),
+        manifest_paths,
+        restriction_product,
+        skill_config_rules,
+    );
+    let has_enabled_skills = resolved_skills.has_enabled_skills();
+    loaded_plugin.disabled_skill_paths = resolved_skills.disabled_skill_paths;
+    loaded_plugin.has_enabled_skills = has_enabled_skills;
     let mut mcp_servers = HashMap::new();
     for mcp_config_path in plugin_mcp_config_paths(plugin_root.as_path(), manifest_paths) {
         let plugin_mcp = load_mcp_servers_from_file(plugin_root.as_path(), &mcp_config_path);
@@ -1528,6 +1567,52 @@ fn load_plugin(config_name: String, plugin: &PluginConfig, store: &PluginStore) 
     loaded_plugin.mcp_servers = mcp_servers;
     loaded_plugin.apps = load_plugin_apps(plugin_root.as_path());
     loaded_plugin
+}
+
+struct ResolvedPluginSkills {
+    skills: Vec<SkillMetadata>,
+    disabled_skill_paths: HashSet<PathBuf>,
+    had_errors: bool,
+}
+
+impl ResolvedPluginSkills {
+    fn has_enabled_skills(&self) -> bool {
+        // Keep the plugin visible in capability summaries if skill loading was partial.
+        self.had_errors
+            || self
+                .skills
+                .iter()
+                .any(|skill| !self.disabled_skill_paths.contains(&skill.path_to_skills_md))
+    }
+}
+
+fn load_plugin_skills(
+    plugin_root: &Path,
+    manifest_paths: &PluginManifestPaths,
+    restriction_product: Option<Product>,
+    skill_config_rules: &SkillConfigRules,
+) -> ResolvedPluginSkills {
+    let outcome = load_skills_from_roots(
+        plugin_skill_roots(plugin_root, manifest_paths)
+            .into_iter()
+            .map(|path| SkillRoot {
+                path,
+                scope: SkillScope::User,
+            }),
+    );
+    let had_errors = !outcome.errors.is_empty();
+    let skills = outcome
+        .skills
+        .into_iter()
+        .filter(|skill| skill.matches_product_restriction_for_product(restriction_product))
+        .collect::<Vec<_>>();
+    let disabled_skill_paths = resolve_disabled_skill_paths(&skills, skill_config_rules);
+
+    ResolvedPluginSkills {
+        skills,
+        disabled_skill_paths,
+        had_errors,
+    }
 }
 
 fn plugin_skill_roots(plugin_root: &Path, manifest_paths: &PluginManifestPaths) -> Vec<PathBuf> {

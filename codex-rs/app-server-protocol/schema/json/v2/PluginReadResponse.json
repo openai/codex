@@ -318,6 +318,9 @@
         "description": {
           "type": "string"
         },
+        "enabled": {
+          "type": "boolean"
+        },
         "interface": {
           "anyOf": [
             {
@@ -343,6 +346,7 @@
       },
       "required": [
         "description",
+        "enabled",
         "name",
         "path"
       ],
