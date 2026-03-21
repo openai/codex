@@ -3439,6 +3439,7 @@ impl Session {
             DeveloperInstructions::from_policy(
                 turn_context.sandbox_policy.get(),
                 turn_context.approval_policy.value(),
+                turn_context.config.approvals_reviewer,
                 self.services.exec_policy.current().as_ref(),
                 &turn_context.cwd,
                 turn_context

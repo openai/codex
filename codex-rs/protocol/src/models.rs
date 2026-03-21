@@ -9,6 +9,7 @@ use serde::Serialize;
 use serde::ser::Serializer;
 use ts_rs::TS;
 
+use crate::config_types::ApprovalsReviewer;
 use crate::config_types::CollaborationMode;
 use crate::config_types::SandboxMode;
 use crate::protocol::AskForApproval;
@@ -481,6 +482,7 @@ const APPROVAL_POLICY_ON_REQUEST_RULE: &str =
     include_str!("prompts/permissions/approval_policy/on_request.md");
 const APPROVAL_POLICY_ON_REQUEST_RULE_REQUEST_PERMISSION: &str =
     include_str!("prompts/permissions/approval_policy/on_request_rule_request_permission.md");
+const GUARDIAN_SUBAGENT_APPROVAL_SUFFIX: &str = "`approvals_reviewer` is `guardian_subagent`: Sandbox escalations with require_escalated will be reviewed for compliance with the policy. If a rejection happens, you should proceed only with a materially safer alternative or inform the user of the risk and ask for approval.";
 
 const SANDBOX_MODE_DANGER_FULL_ACCESS: &str =
     include_str!("prompts/permissions/sandbox_mode/danger_full_access.md");
@@ -498,6 +500,7 @@ impl DeveloperInstructions {
 
     pub fn from(
         approval_policy: AskForApproval,
+        approvals_reviewer: ApprovalsReviewer,
         exec_policy: &Policy,
         exec_permission_approvals_enabled: bool,
         request_permissions_tool_enabled: bool,
@@ -539,6 +542,12 @@ impl DeveloperInstructions {
                 exec_permission_approvals_enabled,
                 request_permissions_tool_enabled,
             ),
+        };
+
+        let text = if approvals_reviewer == ApprovalsReviewer::GuardianSubagent {
+            format!("{text}\n\n{GUARDIAN_SUBAGENT_APPROVAL_SUFFIX}")
+        } else {
+            text
         };
 
         DeveloperInstructions::new(text)
@@ -590,6 +599,7 @@ impl DeveloperInstructions {
     pub fn from_policy(
         sandbox_policy: &SandboxPolicy,
         approval_policy: AskForApproval,
+        approvals_reviewer: ApprovalsReviewer,
         exec_policy: &Policy,
         cwd: &Path,
         exec_permission_approvals_enabled: bool,
@@ -615,6 +625,7 @@ impl DeveloperInstructions {
             sandbox_mode,
             network_access,
             approval_policy,
+            approvals_reviewer,
             exec_policy,
             writable_roots,
             exec_permission_approvals_enabled,
@@ -640,6 +651,7 @@ impl DeveloperInstructions {
         sandbox_mode: SandboxMode,
         network_access: NetworkAccess,
         approval_policy: AskForApproval,
+        approvals_reviewer: ApprovalsReviewer,
         exec_policy: &Policy,
         writable_roots: Option<Vec<WritableRoot>>,
         exec_permission_approvals_enabled: bool,
@@ -654,6 +666,7 @@ impl DeveloperInstructions {
             ))
             .concat(DeveloperInstructions::from(
                 approval_policy,
+                approvals_reviewer,
                 exec_policy,
                 exec_permission_approvals_enabled,
                 request_permissions_tool_enabled,
@@ -1924,6 +1937,7 @@ mod tests {
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
             AskForApproval::OnRequest,
+            ApprovalsReviewer::User,
             &Policy::empty(),
             None,
             false,
@@ -1954,6 +1968,7 @@ mod tests {
         let instructions = DeveloperInstructions::from_policy(
             &policy,
             AskForApproval::UnlessTrusted,
+            ApprovalsReviewer::User,
             &Policy::empty(),
             &PathBuf::from("/tmp"),
             false,
@@ -1977,6 +1992,7 @@ mod tests {
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
             AskForApproval::OnRequest,
+            ApprovalsReviewer::User,
             &exec_policy,
             None,
             false,
@@ -1995,6 +2011,7 @@ mod tests {
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
             AskForApproval::UnlessTrusted,
+            ApprovalsReviewer::User,
             &Policy::empty(),
             None,
             false,
@@ -2012,6 +2029,7 @@ mod tests {
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
             AskForApproval::OnFailure,
+            ApprovalsReviewer::User,
             &Policy::empty(),
             None,
             false,
@@ -2029,6 +2047,7 @@ mod tests {
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
             AskForApproval::OnRequest,
+            ApprovalsReviewer::User,
             &Policy::empty(),
             None,
             true,
@@ -2046,6 +2065,7 @@ mod tests {
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
             AskForApproval::OnRequest,
+            ApprovalsReviewer::User,
             &Policy::empty(),
             None,
             false,
@@ -2065,6 +2085,7 @@ mod tests {
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
             AskForApproval::OnRequest,
+            ApprovalsReviewer::User,
             &Policy::empty(),
             None,
             true,
@@ -2074,6 +2095,21 @@ mod tests {
         let text = instructions.into_text();
         assert!(text.contains("with_additional_permissions"));
         assert!(text.contains("# request_permissions Tool"));
+    }
+
+    #[test]
+    fn guardian_subagent_approvals_append_guardian_specific_guidance() {
+        let text = DeveloperInstructions::from(
+            AskForApproval::OnRequest,
+            ApprovalsReviewer::GuardianSubagent,
+            &Policy::empty(),
+            false,
+            false,
+        )
+        .into_text();
+
+        assert!(text.contains("`approvals_reviewer` is `guardian_subagent`"));
+        assert!(text.contains("materially safer alternative"));
     }
 
     fn granular_categories_section(title: &str, categories: &[&str]) -> String {
@@ -2118,6 +2154,7 @@ mod tests {
                 request_permissions: true,
                 mcp_elicitations: false,
             }),
+            ApprovalsReviewer::User,
             &Policy::empty(),
             true,
             false,
@@ -2151,6 +2188,7 @@ mod tests {
                 request_permissions: true,
                 mcp_elicitations: true,
             }),
+            ApprovalsReviewer::User,
             &Policy::empty(),
             true,
             false,
@@ -2183,6 +2221,7 @@ mod tests {
                 request_permissions: true,
                 mcp_elicitations: true,
             }),
+            ApprovalsReviewer::User,
             &Policy::empty(),
             false,
             false,
@@ -2215,6 +2254,7 @@ mod tests {
                 request_permissions: true,
                 mcp_elicitations: true,
             }),
+            ApprovalsReviewer::User,
             &Policy::empty(),
             true,
             true,
@@ -2230,6 +2270,7 @@ mod tests {
                 request_permissions: false,
                 mcp_elicitations: true,
             }),
+            ApprovalsReviewer::User,
             &Policy::empty(),
             true,
             true,
@@ -2249,6 +2290,7 @@ mod tests {
                 request_permissions: true,
                 mcp_elicitations: false,
             }),
+            ApprovalsReviewer::User,
             &Policy::empty(),
             true,
             false,
