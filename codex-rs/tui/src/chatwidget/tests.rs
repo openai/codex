@@ -89,6 +89,7 @@ use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::McpStartupCompleteEvent;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
+use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
@@ -1535,6 +1536,131 @@ async fn entered_review_mode_defaults_to_current_changes_banner() {
 }
 
 #[tokio::test]
+async fn steer_rejection_queues_review_follow_up_before_existing_queued_messages() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.handle_codex_event(Event {
+        id: "turn-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::BaseBranch {
+                branch: "feature".to_string(),
+            },
+            user_facing_hint: Some("feature branch".to_string()),
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+    chat.queued_user_messages
+        .push_back(UserMessage::from("queued later"));
+
+    chat.submit_user_message(UserMessage::from("review follow-up one"));
+    chat.submit_user_message(UserMessage::from("review follow-up two"));
+
+    assert_eq!(chat.pending_steers.len(), 2);
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "review follow-up one".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected running-turn steer submit, got {other:?}"),
+    }
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "review follow-up two".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected second running-turn steer submit, got {other:?}"),
+    }
+
+    chat.handle_codex_event(Event {
+        id: "steer-rejected-1".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "cannot steer a review turn".to_string(),
+            codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
+                turn_kind: NonSteerableTurnKind::Review,
+            }),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "steer-rejected-2".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "cannot steer a review turn".to_string(),
+            codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
+                turn_kind: NonSteerableTurnKind::Review,
+            }),
+        }),
+    });
+
+    assert!(chat.pending_steers.is_empty());
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec![
+            "review follow-up one",
+            "review follow-up two",
+            "queued later"
+        ]
+    );
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.handle_codex_event(Event {
+        id: "review-exit".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: None,
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "turn-complete".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+        }),
+    });
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "review follow-up one\nreview follow-up two".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected merged rejected-steer follow-up submit, got {other:?}"),
+    }
+
+    chat.handle_codex_event(Event {
+        id: "turn-complete-2".into(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-2".to_string(),
+            last_agent_message: None,
+        }),
+    });
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "queued later".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected queued draft submit after rejected steers, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn live_agent_message_renders_during_review_mode() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
 
@@ -1912,6 +2038,7 @@ async fn make_chatwidget_manual(
         show_welcome_banner: true,
         startup_tooltip_override: None,
         queued_user_messages: VecDeque::new(),
+        rejected_steers_queue: VecDeque::new(),
         pending_steers: VecDeque::new(),
         submit_pending_steers_after_interrupt: false,
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
@@ -3704,9 +3831,11 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
     chat.restore_thread_input_state(Some(ThreadInputState {
         composer: None,
         pending_steers: VecDeque::new(),
+        rejected_steers_queue: VecDeque::new(),
         queued_user_messages: VecDeque::new(),
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),
+        task_running: true,
         agent_turn_running: true,
     }));
 
@@ -3719,6 +3848,38 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
     assert!(!chat.agent_turn_running);
     assert!(!chat.turn_sleep_inhibitor.is_turn_running());
     assert!(!chat.bottom_pane.is_task_running());
+}
+
+#[tokio::test]
+async fn restore_thread_input_state_restores_pending_steers_without_downgrading_them() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let mut pending_steers = VecDeque::new();
+    pending_steers.push_back(UserMessage::from("pending steer"));
+    let mut rejected_steers_queue = VecDeque::new();
+    rejected_steers_queue.push_back(UserMessage::from("already rejected"));
+    let mut queued_user_messages = VecDeque::new();
+    queued_user_messages.push_back(UserMessage::from("queued draft"));
+
+    chat.restore_thread_input_state(Some(ThreadInputState {
+        composer: None,
+        pending_steers,
+        rejected_steers_queue,
+        queued_user_messages,
+        current_collaboration_mode: chat.current_collaboration_mode.clone(),
+        active_collaboration_mask: chat.active_collaboration_mask.clone(),
+        task_running: false,
+        agent_turn_running: false,
+    }));
+
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["already rejected", "queued draft"]
+    );
+    assert_eq!(chat.pending_steers.len(), 1);
+    assert_eq!(
+        chat.pending_steers.front().unwrap().user_message.text,
+        "pending steer"
+    );
 }
 
 #[tokio::test]
@@ -4058,6 +4219,97 @@ async fn steer_enter_queues_while_plan_stream_is_active() {
     assert!(chat.pending_steers.is_empty());
     assert_no_submit_op(&mut op_rx);
     assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[tokio::test]
+async fn submit_user_message_queues_while_compaction_turn_is_running() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.handle_codex_event(Event {
+        id: "turn-started".to_string(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    chat.submit_user_message(UserMessage::from("queued while compacting"));
+
+    assert_eq!(chat.pending_steers.len(), 1);
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "queued while compacting".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected running-turn compact steer submit, got {other:?}"),
+    }
+
+    chat.handle_codex_event(Event {
+        id: "steer-rejected".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "cannot steer a compact turn".to_string(),
+            codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
+                turn_kind: NonSteerableTurnKind::Compact,
+            }),
+        }),
+    });
+
+    assert!(chat.pending_steers.is_empty());
+    assert_eq!(
+        chat.queued_user_message_texts(),
+        vec!["queued while compacting"]
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-complete".to_string(),
+        msg: EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: "turn-1".to_string(),
+            last_agent_message: None,
+        }),
+    });
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "queued while compacting".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected queued compact follow-up Op::UserTurn, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn slash_compact_eagerly_queues_follow_up_before_turn_start() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Compact);
+
+    assert!(chat.bottom_pane.is_task_running());
+    match rx.try_recv() {
+        Ok(AppEvent::CodexOp(Op::Compact)) => {}
+        other => panic!("expected compact op to be submitted, got {other:?}"),
+    }
+
+    chat.bottom_pane.set_composer_text(
+        "queued before compact turn start".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(chat.pending_steers.is_empty());
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "queued before compact turn start"
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
 }
 
 #[tokio::test]
@@ -11500,9 +11752,17 @@ async fn chatwidget_tall() {
 }
 
 #[tokio::test]
-async fn enter_queues_user_messages_while_review_is_running() {
+async fn enter_submits_steer_while_review_is_running() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
+    chat.handle_codex_event(Event {
+        id: "turn-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
 
     chat.handle_codex_event(Event {
         id: "review-1".into(),
@@ -11514,19 +11774,28 @@ async fn enter_queues_user_messages_while_review_is_running() {
     let _ = drain_insert_history(&mut rx);
 
     chat.bottom_pane.set_composer_text(
-        "Queued while /review is running.".to_string(),
+        "Steer submitted while /review was running.".to_string(),
         Vec::new(),
         Vec::new(),
     );
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert!(chat.queued_user_messages.is_empty());
+    assert_eq!(chat.pending_steers.len(), 1);
     assert_eq!(
-        chat.queued_user_messages.front().unwrap().text,
-        "Queued while /review is running."
+        chat.pending_steers.front().unwrap().user_message.text,
+        "Steer submitted while /review was running."
     );
-    assert!(chat.pending_steers.is_empty());
-    assert_no_submit_op(&mut op_rx);
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "Steer submitted while /review was running.".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected running-turn steer submit, got {other:?}"),
+    }
     assert!(drain_insert_history(&mut rx).is_empty());
 }
 
@@ -11534,6 +11803,14 @@ async fn enter_queues_user_messages_while_review_is_running() {
 async fn review_queues_user_messages_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
+    chat.handle_codex_event(Event {
+        id: "turn-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
 
     chat.handle_codex_event(Event {
         id: "review-1".into(),
@@ -11544,9 +11821,57 @@ async fn review_queues_user_messages_snapshot() {
     });
     let _ = drain_insert_history(&mut rx);
 
-    chat.queue_user_message(UserMessage::from(
-        "Queued while /review is running.".to_string(),
+    chat.submit_user_message(UserMessage::from(
+        "Steer submitted while /review was running.".to_string(),
     ));
+    chat.handle_codex_event(Event {
+        id: "steer-rejected".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "cannot steer a review turn".to_string(),
+            codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
+                turn_kind: NonSteerableTurnKind::Review,
+            }),
+        }),
+    });
+
+    let width: u16 = 80;
+    let height: u16 = 18;
+    let backend = VT100Backend::new(width, height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    let desired_height = chat.desired_height(width).min(height);
+    term.set_viewport_area(Rect::new(0, height - desired_height, width, desired_height));
+    term.draw(|f| {
+        chat.render(f.area(), f.buffer_mut());
+    })
+    .unwrap();
+    assert_snapshot!(term.backend().vt100().screen().contents());
+}
+
+#[tokio::test]
+async fn compact_queues_user_messages_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.handle_codex_event(Event {
+        id: "turn-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    chat.submit_user_message(UserMessage::from(
+        "Steer submitted while /compact was running.".to_string(),
+    ));
+    chat.handle_codex_event(Event {
+        id: "steer-rejected".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "cannot steer a compact turn".to_string(),
+            codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
+                turn_kind: NonSteerableTurnKind::Compact,
+            }),
+        }),
+    });
 
     let width: u16 = 80;
     let height: u16 = 18;
