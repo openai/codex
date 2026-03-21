@@ -33,6 +33,8 @@ use std::ops::Range;
 use textwrap::Options;
 
 use crate::render::line_utils::push_owned_lines;
+use crate::terminal_wrappers::parse_zero_width_terminal_wrapper;
+use crate::terminal_wrappers::strip_zero_width_terminal_wrappers;
 
 /// Returns byte-ranges into `text` for each wrapped line, including
 /// trailing whitespace and a +1 sentinel byte. Used by the textarea
@@ -177,12 +179,7 @@ fn map_owned_wrapped_line_to_range(
 ///
 /// Concatenates all span contents and delegates to [`text_contains_url_like`].
 pub(crate) fn line_contains_url_like(line: &Line<'_>) -> bool {
-    let text: String = line
-        .spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect();
-    text_contains_url_like(&text)
+    text_contains_url_like(&visible_line_text(line))
 }
 
 /// Returns `true` if `line` contains both a URL-like token and at least one
@@ -191,12 +188,15 @@ pub(crate) fn line_contains_url_like(line: &Line<'_>) -> bool {
 /// Decorative marker tokens (for example list prefixes like `-`, `1.`, `|`,
 /// `│`) are ignored for the non-URL side of this check.
 pub(crate) fn line_has_mixed_url_and_non_url_tokens(line: &Line<'_>) -> bool {
-    let text: String = line
-        .spans
+    text_has_mixed_url_and_non_url_tokens(&visible_line_text(line))
+}
+
+fn visible_line_text(line: &Line<'_>) -> String {
+    line.spans
         .iter()
-        .map(|span| span.content.as_ref())
-        .collect();
-    text_has_mixed_url_and_non_url_tokens(&text)
+        .map(|span| strip_zero_width_terminal_wrappers(span.content.as_ref()))
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 /// Returns `true` if any whitespace-delimited token in `text` looks like a URL.
@@ -639,16 +639,25 @@ pub(crate) fn word_wrap_line<'a, O>(line: &'a Line<'a>, width_or_options: O) -> 
 where
     O: Into<RtOptions<'a>>,
 {
-    // Flatten the line and record span byte ranges.
+    // Flatten the line to visible text and record the original span bounds.
+    // Zero-width terminal wrappers stay out of `flat` so textwrap sees only
+    // display cells, but we keep their exact prefix/suffix bytes for
+    // rewrapping each sliced fragment later.
     let mut flat = String::new();
     let mut span_bounds = Vec::new();
     let mut acc = 0usize;
     for s in &line.spans {
-        let text = s.content.as_ref();
+        let parsed = parse_zero_width_terminal_wrapper(s.content.as_ref());
+        let text = parsed.map_or_else(|| s.content.as_ref(), |wrapper| wrapper.text);
         let start = acc;
         flat.push_str(text);
         acc += text.len();
-        span_bounds.push((start..acc, s.style));
+        span_bounds.push(SpanBound {
+            range: start..acc,
+            style: s.style,
+            wrapper_prefix: parsed.map(|wrapper| wrapper.prefix),
+            wrapper_suffix: parsed.map(|wrapper| wrapper.suffix),
+        });
     }
 
     let rt_opts: RtOptions<'a> = width_or_options.into();
@@ -841,15 +850,15 @@ where
 
 fn slice_line_spans<'a>(
     original: &'a Line<'a>,
-    span_bounds: &[(Range<usize>, ratatui::style::Style)],
+    span_bounds: &[SpanBound<'a>],
     range: &Range<usize>,
 ) -> Line<'a> {
     let start_byte = range.start;
     let end_byte = range.end;
     let mut acc: Vec<Span<'a>> = Vec::new();
-    for (i, (range, style)) in span_bounds.iter().enumerate() {
-        let s = range.start;
-        let e = range.end;
+    for (i, bound) in span_bounds.iter().enumerate() {
+        let s = bound.range.start;
+        let e = bound.range.end;
         if e <= start_byte {
             continue;
         }
@@ -861,11 +870,15 @@ fn slice_line_spans<'a>(
         if seg_end > seg_start {
             let local_start = seg_start - s;
             let local_end = seg_end - s;
-            let content = original.spans[i].content.as_ref();
-            let slice = &content[local_start..local_end];
+            let slice = slice_span_content(
+                original.spans[i].content.as_ref(),
+                bound,
+                local_start,
+                local_end,
+            );
             acc.push(Span {
-                style: *style,
-                content: std::borrow::Cow::Borrowed(slice),
+                style: bound.style,
+                content: slice,
             });
         }
         if e >= end_byte {
@@ -879,9 +892,44 @@ fn slice_line_spans<'a>(
     }
 }
 
+#[derive(Clone, Debug)]
+struct SpanBound<'a> {
+    range: Range<usize>,
+    style: ratatui::style::Style,
+    wrapper_prefix: Option<&'a str>,
+    wrapper_suffix: Option<&'a str>,
+}
+
+fn slice_span_content<'a>(
+    content: &'a str,
+    bound: &SpanBound<'a>,
+    local_start: usize,
+    local_end: usize,
+) -> Cow<'a, str> {
+    // If the original span was wrapped in a zero-width terminal control
+    // sequence, re-emit that wrapper around the visible slice instead of
+    // cutting through the escape payload.
+    if let (Some(prefix), Some(suffix)) = (bound.wrapper_prefix, bound.wrapper_suffix) {
+        if let Some(parsed) = parse_zero_width_terminal_wrapper(content) {
+            Cow::Owned(format!(
+                "{prefix}{}{suffix}",
+                &parsed.text[local_start..local_end]
+            ))
+        } else {
+            Cow::Borrowed(&content[local_start..local_end])
+        }
+    } else {
+        Cow::Borrowed(&content[local_start..local_end])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::osc8::osc8_hyperlink;
+    use crate::terminal_wrappers::ParsedTerminalWrapper;
+    use crate::terminal_wrappers::parse_zero_width_terminal_wrapper;
+    use crate::terminal_wrappers::strip_zero_width_terminal_wrappers;
     use itertools::Itertools as _;
     use pretty_assertions::assert_eq;
     use ratatui::style::Color;
@@ -963,6 +1011,85 @@ mod tests {
         let out = word_wrap_line(&line, 10);
         assert_eq!(out.len(), 1);
         assert_eq!(concat_line(&out[0]), "");
+    }
+
+    #[test]
+    fn osc8_wrapped_span_wraps_by_visible_text() {
+        let url = "https://example.com/docs";
+        let line = Line::from(vec![osc8_hyperlink(url, "abcdefghij").cyan().underlined()]);
+        let out = word_wrap_line(&line, 5);
+        assert_eq!(out.len(), 2);
+
+        let first = concat_line(&out[0]);
+        let second = concat_line(&out[1]);
+
+        assert_eq!(strip_zero_width_terminal_wrappers(&first), "abcde");
+        assert_eq!(strip_zero_width_terminal_wrappers(&second), "fghij");
+        assert_eq!(
+            parse_zero_width_terminal_wrapper(&first).expect("first line should stay hyperlinked"),
+            ParsedTerminalWrapper {
+                prefix: "\u{1b}]8;;https://example.com/docs\u{7}",
+                text: "abcde",
+                suffix: "\u{1b}]8;;\u{7}",
+            }
+        );
+        assert_eq!(
+            parse_zero_width_terminal_wrapper(&second)
+                .expect("second line should stay hyperlinked"),
+            ParsedTerminalWrapper {
+                prefix: "\u{1b}]8;;https://example.com/docs\u{7}",
+                text: "fghij",
+                suffix: "\u{1b}]8;;\u{7}",
+            }
+        );
+    }
+
+    #[test]
+    fn osc8_wrapper_with_params_and_st_is_preserved_across_wraps() {
+        let line = Line::from(vec![
+            "x".into(),
+            Span::from("\u{1b}]8;id=abc;https://example.com\u{1b}\\docs\u{1b}]8;;\u{1b}\\")
+                .underlined(),
+        ]);
+
+        let out = word_wrap_line(&line, 3);
+
+        let expected = vec![
+            Line::from(vec![
+                "x".into(),
+                Span::from("\u{1b}]8;id=abc;https://example.com\u{1b}\\do\u{1b}]8;;\u{1b}\\")
+                    .underlined(),
+            ]),
+            Line::from(vec![
+                Span::from("\u{1b}]8;id=abc;https://example.com\u{1b}\\cs\u{1b}]8;;\u{1b}\\")
+                    .underlined(),
+            ]),
+        ];
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn mixed_ascii_and_osc8_wrapped_spans_preserve_ratatui_spans_across_wraps() {
+        let url = "https://example.com/docs";
+        let line = Line::from(vec![
+            "ab".into(),
+            osc8_hyperlink(url, "cdef").cyan().underlined(),
+            "gh".into(),
+        ]);
+
+        let out = word_wrap_line(&line, 4);
+
+        let expected = vec![
+            Line::from(vec![
+                "ab".into(),
+                osc8_hyperlink(url, "cd").cyan().underlined(),
+            ]),
+            Line::from(vec![
+                osc8_hyperlink(url, "ef").cyan().underlined(),
+                "gh".into(),
+            ]),
+        ];
+        assert_eq!(out, expected);
     }
 
     #[test]
