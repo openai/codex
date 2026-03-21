@@ -258,6 +258,30 @@ fn missing_cell_response(cell_id: String) -> RuntimeResponse {
     }
 }
 
+fn pending_result_response(cell_id: &str, result: PendingResult) -> RuntimeResponse {
+    RuntimeResponse::Result {
+        cell_id: cell_id.to_string(),
+        content_items: result.content_items,
+        stored_values: result.stored_values,
+        error_text: result.error_text,
+    }
+}
+
+fn send_or_buffer_result(
+    cell_id: &str,
+    result: PendingResult,
+    response_tx: &mut Option<oneshot::Sender<RuntimeResponse>>,
+    pending_result: &mut Option<PendingResult>,
+) -> bool {
+    if let Some(response_tx) = response_tx.take() {
+        let _ = response_tx.send(pending_result_response(cell_id, result));
+        return true;
+    }
+
+    *pending_result = Some(result);
+    false
+}
+
 async fn run_session_control(
     inner: Arc<Inner>,
     context: SessionControlContext,
@@ -304,16 +328,14 @@ async fn run_session_control(
                             stored_values: HashMap::new(),
                             error_text: Some("exec runtime ended unexpectedly".to_string()),
                         };
-                        if let Some(response_tx) = response_tx.take() {
-                            let _ = response_tx.send(RuntimeResponse::Result {
-                                cell_id: cell_id.clone(),
-                                content_items: result.content_items,
-                                stored_values: result.stored_values,
-                                error_text: result.error_text,
-                            });
+                        if send_or_buffer_result(
+                            &cell_id,
+                            result,
+                            &mut response_tx,
+                            &mut pending_result,
+                        ) {
                             break;
                         }
-                        pending_result = Some(result);
                     }
                     continue;
                 };
@@ -367,16 +389,14 @@ async fn run_session_control(
                             stored_values,
                             error_text,
                         };
-                        if let Some(response_tx) = response_tx.take() {
-                            let _ = response_tx.send(RuntimeResponse::Result {
-                                cell_id: cell_id.clone(),
-                                content_items: result.content_items,
-                                stored_values: result.stored_values,
-                                error_text: result.error_text,
-                            });
+                        if send_or_buffer_result(
+                            &cell_id,
+                            result,
+                            &mut response_tx,
+                            &mut pending_result,
+                        ) {
                             break;
                         }
-                        pending_result = Some(result);
                     }
                 }
             }
@@ -390,12 +410,7 @@ async fn run_session_control(
                         response_tx: next_response_tx,
                     } => {
                         if let Some(result) = pending_result.take() {
-                            let _ = next_response_tx.send(RuntimeResponse::Result {
-                                cell_id: cell_id.clone(),
-                                content_items: result.content_items,
-                                stored_values: result.stored_values,
-                                error_text: result.error_text,
-                            });
+                            let _ = next_response_tx.send(pending_result_response(&cell_id, result));
                             break;
                         }
                         response_tx = Some(next_response_tx);
@@ -403,12 +418,7 @@ async fn run_session_control(
                     }
                     SessionControlCommand::Terminate { response_tx: next_response_tx } => {
                         if let Some(result) = pending_result.take() {
-                            let _ = next_response_tx.send(RuntimeResponse::Result {
-                                cell_id: cell_id.clone(),
-                                content_items: result.content_items,
-                                stored_values: result.stored_values,
-                                error_text: result.error_text,
-                            });
+                            let _ = next_response_tx.send(pending_result_response(&cell_id, result));
                             break;
                         }
 
@@ -518,6 +528,32 @@ mod tests {
                 cell_id: "1".to_string(),
                 content_items: vec![FunctionCallOutputContentItem::InputText {
                     text: "before".to_string(),
+                }],
+                stored_values: HashMap::new(),
+                error_text: None,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn v8_console_is_not_exposed_on_global_this() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"text(String(Object.hasOwn(globalThis, "console")));"#.to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: vec![FunctionCallOutputContentItem::InputText {
+                    text: "false".to_string(),
                 }],
                 stored_values: HashMap::new(),
                 error_text: None,

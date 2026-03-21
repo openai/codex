@@ -10,6 +10,12 @@ use super::callbacks::yield_control_callback;
 
 pub(super) fn install_globals(scope: &mut v8::PinScope<'_, '_>) -> Result<(), String> {
     let global = scope.get_current_context().global(scope);
+    let console = v8::String::new(scope, "console")
+        .ok_or_else(|| "failed to allocate global `console`".to_string())?;
+    if global.delete(scope, console.into()) != Some(true) {
+        return Err("failed to remove global `console`".to_string());
+    }
+
     let tools = build_tools_object(scope)?;
     let all_tools = build_all_tools_value(scope)?;
     let text = helper_function(scope, "text", text_callback)?;
