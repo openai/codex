@@ -21,7 +21,6 @@ use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
@@ -106,15 +105,8 @@ use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 #[cfg(test)]
 use codex_protocol::protocol::TurnStartedEvent;
-use serde_json::Value;
 #[cfg(test)]
 use std::time::Duration;
-
-#[derive(Debug, PartialEq, Eq)]
-enum LegacyThreadNotification {
-    Warning(String),
-    Rollback { num_turns: u32 },
-}
 
 impl App {
     pub(super) async fn handle_app_server_event(
@@ -133,37 +125,8 @@ impl App {
                 self.handle_server_notification_event(app_server_client, notification)
                     .await;
             }
-            AppServerEvent::LegacyNotification(notification) => {
-                if let Some((thread_id, legacy_notification)) =
-                    legacy_thread_notification(notification)
-                {
-                    let result = match legacy_notification {
-                        LegacyThreadNotification::Warning(message) => {
-                            if self.primary_thread_id == Some(thread_id)
-                                || self.primary_thread_id.is_none()
-                            {
-                                self.enqueue_primary_thread_legacy_warning(message).await
-                            } else {
-                                self.enqueue_thread_legacy_warning(thread_id, message).await
-                            }
-                        }
-                        LegacyThreadNotification::Rollback { num_turns } => {
-                            if self.primary_thread_id == Some(thread_id)
-                                || self.primary_thread_id.is_none()
-                            {
-                                self.enqueue_primary_thread_legacy_rollback(num_turns).await
-                            } else {
-                                self.enqueue_thread_legacy_rollback(thread_id, num_turns)
-                                    .await
-                            }
-                        }
-                    };
-                    if let Err(err) = result {
-                        tracing::warn!("failed to enqueue app-server legacy notification: {err}");
-                    }
-                } else {
-                    tracing::debug!("ignoring legacy app-server notification in tui_app_server");
-                }
+            AppServerEvent::LegacyNotification(_) => {
+                tracing::debug!("ignoring legacy app-server notification in tui_app_server");
             }
             AppServerEvent::ServerRequest(request) => {
                 if let ServerRequest::ChatgptAuthTokensRefresh { request_id, params } = request {
@@ -565,48 +528,6 @@ pub(super) fn thread_snapshot_events(
         .iter()
         .flat_map(|turn| turn_snapshot_events(thread_id, turn, show_raw_agent_reasoning))
         .collect()
-}
-
-fn legacy_thread_notification(
-    notification: JSONRPCNotification,
-) -> Option<(ThreadId, LegacyThreadNotification)> {
-    let method = notification
-        .method
-        .strip_prefix("codex/event/")
-        .unwrap_or(&notification.method);
-
-    let Value::Object(mut params) = notification.params? else {
-        return None;
-    };
-    let thread_id = params
-        .remove("conversationId")
-        .and_then(|value| serde_json::from_value::<String>(value).ok())
-        .and_then(|value| ThreadId::from_string(&value).ok())?;
-    let msg = params.get("msg").and_then(Value::as_object)?;
-
-    match method {
-        "warning" => {
-            let message = msg
-                .get("type")
-                .and_then(Value::as_str)
-                .zip(msg.get("message"))
-                .and_then(|(kind, message)| (kind == "warning").then_some(message))
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)?;
-            Some((thread_id, LegacyThreadNotification::Warning(message)))
-        }
-        "thread_rolled_back" => {
-            let num_turns = msg
-                .get("type")
-                .and_then(Value::as_str)
-                .zip(msg.get("num_turns"))
-                .and_then(|(kind, num_turns)| (kind == "thread_rolled_back").then_some(num_turns))
-                .and_then(Value::as_u64)
-                .and_then(|num_turns| u32::try_from(num_turns).ok())?;
-            Some((thread_id, LegacyThreadNotification::Rollback { num_turns }))
-        }
-        _ => None,
-    }
 }
 
 #[cfg(test)]
@@ -1289,9 +1210,7 @@ fn app_server_codex_error_info_to_core(
 
 #[cfg(test)]
 mod tests {
-    use super::LegacyThreadNotification;
     use super::command_execution_started_event;
-    use super::legacy_thread_notification;
     use super::server_notification_thread_events;
     use super::thread_snapshot_events;
     use super::turn_snapshot_events;
@@ -1303,7 +1222,6 @@ mod tests {
     use codex_app_server_protocol::CommandExecutionStatus;
     use codex_app_server_protocol::ItemCompletedNotification;
     use codex_app_server_protocol::ItemStartedNotification;
-    use codex_app_server_protocol::JSONRPCNotification;
     use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::Thread;
@@ -1324,56 +1242,7 @@ mod tests {
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
     use pretty_assertions::assert_eq;
-    use serde_json::json;
     use std::path::PathBuf;
-
-    #[test]
-    fn legacy_warning_notification_extracts_thread_id_and_message() {
-        let thread_id = ThreadId::new();
-        let warning = legacy_thread_notification(JSONRPCNotification {
-            method: "codex/event/warning".to_string(),
-            params: Some(json!({
-                "conversationId": thread_id.to_string(),
-                "id": "event-1",
-                "msg": {
-                    "type": "warning",
-                    "message": "legacy warning message",
-                },
-            })),
-        });
-
-        assert_eq!(
-            warning,
-            Some((
-                thread_id,
-                LegacyThreadNotification::Warning("legacy warning message".to_string())
-            ))
-        );
-    }
-
-    #[test]
-    fn legacy_thread_rollback_notification_extracts_thread_id_and_turn_count() {
-        let thread_id = ThreadId::new();
-        let rollback = legacy_thread_notification(JSONRPCNotification {
-            method: "codex/event/thread_rolled_back".to_string(),
-            params: Some(json!({
-                "conversationId": thread_id.to_string(),
-                "id": "event-1",
-                "msg": {
-                    "type": "thread_rolled_back",
-                    "num_turns": 2,
-                },
-            })),
-        });
-
-        assert_eq!(
-            rollback,
-            Some((
-                thread_id,
-                LegacyThreadNotification::Rollback { num_turns: 2 }
-            ))
-        );
-    }
 
     #[test]
     fn bridges_completed_agent_messages_from_server_notifications() {

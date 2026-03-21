@@ -9548,10 +9548,6 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn add_warning_message(&mut self, message: String) {
-        self.on_warning(message);
-    }
-
     fn add_app_server_stub_message(&mut self, feature: &str) {
         warn!(feature, "stubbed unsupported app-server TUI feature");
         self.add_error_message(format!("{feature}: {APP_SERVER_TUI_STUB_MESSAGE}"));
