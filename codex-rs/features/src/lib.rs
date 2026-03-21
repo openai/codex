@@ -142,6 +142,8 @@ pub enum Feature {
     SpawnCsv,
     /// Enable apps.
     Apps,
+    /// Enable OpenAI file upload/download bridging for Codex Apps MCP tools.
+    AppsFileBridge,
     /// Enable discoverable tool suggestions for apps.
     ToolSuggest,
     /// Enable plugins.
@@ -719,6 +721,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Use a connected ChatGPT App using \"$\". Install Apps via /apps command. Restart Codex after enabling.",
             announcement: "NEW: Use ChatGPT Apps (Connectors) in Codex via $ mentions. Enable in /experimental and restart Codex!",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::AppsFileBridge,
+        key: "apps_file_bridge",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

@@ -338,6 +338,9 @@
             "apps": {
               "type": "boolean"
             },
+            "apps_file_bridge": {
+              "type": "boolean"
+            },
             "artifact": {
               "type": "boolean"
             },
@@ -1942,6 +1945,9 @@
           "type": "boolean"
         },
         "apps": {
+          "type": "boolean"
+        },
+        "apps_file_bridge": {
           "type": "boolean"
         },
         "artifact": {

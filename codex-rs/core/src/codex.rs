@@ -222,6 +222,7 @@ use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::mcp_connection_manager::filter_non_codex_apps_mcp_tools_only;
+use crate::mcp_openai_file::retain_openai_file_tool_meta_map;
 use crate::memories;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
@@ -229,6 +230,7 @@ use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
+use crate::openai_files::managed_download_root_for_session;
 use crate::plugins::PluginsManager;
 use crate::plugins::build_plugin_injections;
 use crate::plugins::render_plugins_section;
@@ -1152,6 +1154,41 @@ pub(crate) struct SessionSettingsUpdate {
 }
 
 impl Session {
+    fn add_session_openai_file_root_to_sandbox(
+        session_configuration: &mut SessionConfiguration,
+        conversation_id: ThreadId,
+    ) -> anyhow::Result<()> {
+        let session_openai_file_root =
+            managed_download_root_for_session(&conversation_id.to_string());
+        let session_openai_file_root =
+            AbsolutePathBuf::from_absolute_path(&session_openai_file_root).map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to resolve session OpenAI file root `{}`: {error}",
+                    session_openai_file_root.display()
+                )
+            })?;
+        session_configuration.file_system_sandbox_policy = session_configuration
+            .file_system_sandbox_policy
+            .clone()
+            .with_additional_readable_roots(
+                &session_configuration.cwd,
+                std::slice::from_ref(&session_openai_file_root),
+            );
+        if matches!(
+            session_configuration.sandbox_policy.get(),
+            SandboxPolicy::WorkspaceWrite { .. }
+        ) {
+            session_configuration.file_system_sandbox_policy = session_configuration
+                .file_system_sandbox_policy
+                .clone()
+                .with_additional_writable_roots(
+                    &session_configuration.cwd,
+                    std::slice::from_ref(&session_openai_file_root),
+                );
+        }
+        Ok(())
+    }
+
     /// Builds the `x-codex-beta-features` header value for this session.
     ///
     /// `ModelClient` is session-scoped and intentionally does not depend on the full `Config`, so
@@ -1461,6 +1498,12 @@ impl Session {
             ),
             InitialHistory::New | InitialHistory::Forked(_) => None,
         };
+        if config.features.enabled(Feature::AppsFileBridge) {
+            Self::add_session_openai_file_root_to_sandbox(
+                &mut session_configuration,
+                conversation_id,
+            )?;
+        }
 
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
@@ -6399,13 +6442,8 @@ pub(crate) async fn built_tools(
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
         ToolRouterParams {
-            mcp_tools: has_mcp_servers.then(|| {
-                mcp_tools
-                    .into_iter()
-                    .map(|(name, tool)| (name, tool.tool))
-                    .collect()
-            }),
-            app_tools,
+            mcp_tools: retain_openai_file_tool_meta_map(has_mcp_servers.then_some(mcp_tools)),
+            app_tools: retain_openai_file_tool_meta_map(app_tools),
             discoverable_tools,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },

@@ -5,6 +5,10 @@ use crate::client_common::tools::ToolSpec;
 use crate::config::AgentRoleConfig;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
+use crate::mcp_openai_file::declared_openai_file_outputs;
+use crate::mcp_openai_file::declared_openai_file_params;
+use crate::mcp_openai_file::mask_input_schema_for_model;
+use crate::mcp_openai_file::mask_output_schema_for_model;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::shell::Shell;
@@ -274,6 +278,7 @@ pub(crate) struct ToolsConfig {
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
     pub search_tool: bool,
     pub tool_suggest: bool,
+    pub openai_file_bridge: bool,
     pub exec_permission_approvals_enabled: bool,
     pub request_permissions_tool_enabled: bool,
     pub code_mode_enabled: bool,
@@ -339,6 +344,7 @@ impl ToolsConfig {
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool = model_info.supports_search_tool;
         let include_tool_suggest = include_search_tool && features.enabled(Feature::ToolSuggest);
+        let include_openai_file_bridge = features.enabled(Feature::AppsFileBridge);
         let include_original_image_detail = can_request_original_image_detail(features, model_info);
         let include_artifact_tools =
             features.enabled(Feature::Artifact) && codex_artifacts::can_manage_artifact_runtime();
@@ -408,6 +414,7 @@ impl ToolsConfig {
             agent_roles: BTreeMap::new(),
             search_tool: include_search_tool,
             tool_suggest: include_tool_suggest,
+            openai_file_bridge: include_openai_file_bridge,
             exec_permission_approvals_enabled,
             request_permissions_tool_enabled,
             code_mode_enabled: include_code_mode,
@@ -1026,6 +1033,44 @@ fn create_view_image_tool(can_request_original_image_detail: bool) -> ToolSpec {
                 }
             },
             "required": ["image_url", "detail"],
+            "additionalProperties": false
+        })),
+    })
+}
+
+fn create_download_openai_file_tool() -> ToolSpec {
+    let properties = BTreeMap::from([(
+        "file_id".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "OpenAI file identifier to download. Accepts either a bare `file_id` or `sediment://{file_id}`. Downloads into a Codex-managed temporary directory and returns the local temp path."
+                    .to_string(),
+            ),
+        },
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "download_openai_file".to_string(),
+        description: "Downloads an OpenAI file handle from Codex Apps MCP flows into a Codex-managed temporary directory. Use this with `sediment://{file_id}` values returned by tools when Codex did not auto-download them."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["file_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string"},
+                "uri": {"type": "string"},
+                "file_name": {"type": "string"},
+                "mime_type": {"type": ["string", "null"]},
+                "destination_path": {"type": "string"},
+                "bytes_written": {"type": "number"}
+            },
+            "required": ["file_id", "uri", "file_name", "mime_type", "destination_path", "bytes_written"],
             "additionalProperties": false
         })),
     })
@@ -2333,9 +2378,11 @@ fn push_tool_spec(
 
 pub(crate) fn mcp_tool_to_openai_tool(
     fully_qualified_name: String,
-    tool: rmcp::model::Tool,
+    tool_info: ToolInfo,
+    openai_file_bridge_enabled: bool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    let (description, input_schema, output_schema) = mcp_tool_to_openai_tool_parts(tool)?;
+    let (description, input_schema, output_schema) =
+        mcp_tool_to_openai_tool_parts(&tool_info, openai_file_bridge_enabled)?;
 
     Ok(ResponsesApiTool {
         name: fully_qualified_name,
@@ -2349,9 +2396,11 @@ pub(crate) fn mcp_tool_to_openai_tool(
 
 pub(crate) fn mcp_tool_to_deferred_openai_tool(
     name: String,
-    tool: rmcp::model::Tool,
+    tool_info: &ToolInfo,
+    openai_file_bridge_enabled: bool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    let (description, input_schema, _) = mcp_tool_to_openai_tool_parts(tool)?;
+    let (description, input_schema, _) =
+        mcp_tool_to_openai_tool_parts(tool_info, openai_file_bridge_enabled)?;
 
     Ok(ResponsesApiTool {
         name,
@@ -2386,8 +2435,10 @@ pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, s
 }
 
 fn mcp_tool_to_openai_tool_parts(
-    tool: rmcp::model::Tool,
+    tool_info: &ToolInfo,
+    openai_file_bridge_enabled: bool,
 ) -> Result<(String, JsonSchema, Option<JsonValue>), serde_json::Error> {
+    let tool = tool_info.tool.clone();
     let rmcp::model::Tool {
         description,
         input_schema,
@@ -2396,6 +2447,12 @@ fn mcp_tool_to_openai_tool_parts(
     } = tool;
 
     let mut serialized_input_schema = serde_json::Value::Object(input_schema.as_ref().clone());
+    if openai_file_bridge_enabled && tool_info.server_name == CODEX_APPS_MCP_SERVER_NAME {
+        mask_input_schema_for_model(
+            &mut serialized_input_schema,
+            &declared_openai_file_params(tool_info.tool.meta.as_deref()),
+        );
+    }
 
     // OpenAI models mandate the "properties" field in the schema. Some MCP
     // servers omit it (or set it to null), so we insert an empty object to
@@ -2416,9 +2473,15 @@ fn mcp_tool_to_openai_tool_parts(
     // `type`, so we coerce/sanitize here for compatibility.
     sanitize_json_schema(&mut serialized_input_schema);
     let input_schema = serde_json::from_value::<JsonSchema>(serialized_input_schema)?;
-    let structured_content_schema = output_schema
+    let mut structured_content_schema = output_schema
         .map(|output_schema| serde_json::Value::Object(output_schema.as_ref().clone()))
         .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()));
+    if openai_file_bridge_enabled && tool_info.server_name == CODEX_APPS_MCP_SERVER_NAME {
+        mask_output_schema_for_model(
+            &mut structured_content_schema,
+            &declared_openai_file_outputs(tool_info.tool.meta.as_deref()),
+        );
+    }
     let output_schema = Some(mcp_call_tool_result_output_schema(
         structured_content_schema,
     ));
@@ -2561,7 +2624,7 @@ fn sanitize_json_schema(value: &mut JsonValue) {
 #[cfg(test)]
 pub(crate) fn build_specs(
     config: &ToolsConfig,
-    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
+    mcp_tools: Option<HashMap<String, ToolInfo>>,
     app_tools: Option<HashMap<String, ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
@@ -2570,7 +2633,7 @@ pub(crate) fn build_specs(
 
 pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
-    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
+    mcp_tools: Option<HashMap<String, ToolInfo>>,
     app_tools: Option<HashMap<String, ToolInfo>>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
@@ -2579,6 +2642,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::ArtifactsHandler;
     use crate::tools::handlers::CodeModeExecuteHandler;
     use crate::tools::handlers::CodeModeWaitHandler;
+    use crate::tools::handlers::DownloadOpenAiFileHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
@@ -2802,7 +2866,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
     if config.search_tool
         && let Some(app_tools) = app_tools
     {
-        let search_tool_handler = Arc::new(ToolSearchHandler::new(app_tools.clone()));
+        let search_tool_handler = Arc::new(ToolSearchHandler::new(
+            app_tools.clone(),
+            config.openai_file_bridge,
+        ));
         push_tool_spec(
             &mut builder,
             create_tool_search_tool(&app_tools),
@@ -2969,6 +3036,16 @@ pub(crate) fn build_specs_with_discoverable_tools(
     );
     builder.register_handler("view_image", view_image_handler);
 
+    if config.openai_file_bridge {
+        push_tool_spec(
+            &mut builder,
+            create_download_openai_file_tool(),
+            /*supports_parallel_tool_calls*/ true,
+            config.code_mode_enabled,
+        );
+        builder.register_handler("download_openai_file", Arc::new(DownloadOpenAiFileHandler));
+    }
+
     if config.artifact_tools {
         push_tool_spec(
             &mut builder,
@@ -3040,11 +3117,15 @@ pub(crate) fn build_specs_with_discoverable_tools(
     }
 
     if let Some(mcp_tools) = mcp_tools {
-        let mut entries: Vec<(String, rmcp::model::Tool)> = mcp_tools.into_iter().collect();
+        let mut entries: Vec<(String, ToolInfo)> = mcp_tools.into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-        for (name, tool) in entries.into_iter() {
-            match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {
+        for (name, tool_info) in entries.into_iter() {
+            match mcp_tool_to_openai_tool(
+                name.clone(),
+                tool_info.clone(),
+                config.openai_file_bridge,
+            ) {
                 Ok(converted_tool) => {
                     push_tool_spec(
                         &mut builder,

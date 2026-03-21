@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use crate::function_tool::FunctionCallError;
+use crate::mcp_tool_call::QualifiedMcpTool;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -23,6 +24,8 @@ impl ToolHandler for McpHandler {
             session,
             turn,
             call_id,
+            tool_name,
+            tool_namespace,
             payload,
             ..
         } = invocation;
@@ -47,6 +50,10 @@ impl ToolHandler for McpHandler {
             Arc::clone(&session),
             &turn,
             call_id.clone(),
+            QualifiedMcpTool {
+                name: &tool_name,
+                namespace: tool_namespace.as_deref(),
+            },
             server,
             tool,
             arguments_str,

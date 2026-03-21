@@ -48,6 +48,8 @@ fn approval_metadata(
         tool_title: tool_title.map(str::to_string),
         tool_description: tool_description.map(str::to_string),
         codex_apps_meta: None,
+        openai_file_params: Vec::new(),
+        openai_file_outputs: Vec::new(),
     }
 }
 
@@ -225,6 +227,173 @@ fn custom_mcp_tool_question_mentions_server_name() {
             .into_iter()
             .map(|option| option.label)
             .any(|label| label == MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER)
+    );
+}
+
+#[tokio::test]
+async fn openai_file_argument_rewrite_requires_feature_flag() {
+    let (session, turn_context) = make_session_and_context().await;
+    let arguments = Some(serde_json::json!({
+        "file": "/tmp/codex-smoke-file.txt"
+    }));
+    let metadata = McpToolApprovalMetadata {
+        annotations: None,
+        connector_id: Some("file_meta_test".to_string()),
+        connector_name: Some("File Meta Test".to_string()),
+        connector_description: None,
+        tool_title: None,
+        tool_description: None,
+        codex_apps_meta: None,
+        openai_file_params: vec!["file".to_string()],
+        openai_file_outputs: Vec::new(),
+    };
+
+    let rewritten = rewrite_mcp_tool_arguments_for_openai_files(
+        &session,
+        &turn_context,
+        CODEX_APPS_MCP_SERVER_NAME,
+        arguments.clone(),
+        Some(&metadata),
+    )
+    .await
+    .expect("rewrite should succeed");
+
+    assert_eq!(rewritten, arguments);
+}
+
+#[tokio::test]
+async fn openai_file_result_rewrite_requires_feature_flag() {
+    let (session, turn_context) = make_session_and_context().await;
+    let result = CallToolResult {
+        content: Vec::new(),
+        structured_content: Some(serde_json::json!({
+            "outputFile": "sediment://file_123"
+        })),
+        is_error: None,
+        meta: None,
+    };
+    let metadata = McpToolApprovalMetadata {
+        annotations: None,
+        connector_id: Some("file_meta_test".to_string()),
+        connector_name: Some("File Meta Test".to_string()),
+        connector_description: None,
+        tool_title: None,
+        tool_description: None,
+        codex_apps_meta: None,
+        openai_file_params: Vec::new(),
+        openai_file_outputs: vec!["outputFile".to_string()],
+    };
+
+    let rewritten = rewrite_mcp_tool_result_for_openai_files(
+        &session,
+        &turn_context,
+        "call_123",
+        CODEX_APPS_MCP_SERVER_NAME,
+        result.clone(),
+        Some(&metadata),
+    )
+    .await;
+
+    assert_eq!(rewritten, result);
+}
+
+#[tokio::test]
+async fn rewrite_single_argument_string_prefers_existing_local_file_over_bare_file_id() {
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::body_json;
+    use wiremock::matchers::header;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/backend-api/files"))
+        .and(header("chatgpt-account-id", "account_id"))
+        .and(body_json(serde_json::json!({
+            "file_name": "file_report.csv",
+            "file_size": 5,
+            "use_case": "codex",
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "file_id": "file_123",
+            "upload_url": format!("{}/upload/file_123", server.uri()),
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/upload/file_123"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/backend-api/files/file_123/uploaded"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "status": "success",
+            "download_url": format!("{}/download/file_123", server.uri()),
+            "file_name": "file_report.csv",
+            "mime_type": "text/csv",
+            "file_size_bytes": 5,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (_, mut turn_context) = make_session_and_context().await;
+    let auth = crate::CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let dir = tempdir().expect("temp dir");
+    let local_path = dir.path().join("file_report.csv");
+    tokio::fs::write(&local_path, b"hello")
+        .await
+        .expect("write local file");
+    turn_context.cwd = dir.path().to_path_buf();
+
+    let mut config = (*turn_context.config).clone();
+    config.chatgpt_base_url = format!("{}/backend-api", server.uri());
+    turn_context.config = Arc::new(config);
+
+    let rewritten = rewrite_single_argument_string(
+        &turn_context,
+        Some(&auth),
+        "file",
+        /*index*/ None,
+        "file_report.csv",
+    )
+    .await
+    .expect("rewrite should upload the local file");
+
+    assert_eq!(
+        rewritten,
+        serde_json::json!({
+            "download_url": format!("{}/download/file_123", server.uri()),
+            "file_id": "file_123",
+            "mime_type": "text/csv",
+            "file_name": "file_report.csv",
+        })
+    );
+}
+
+#[tokio::test]
+async fn rewrite_single_argument_string_requires_sediment_uri_for_remote_handles() {
+    let (_, turn_context) = make_session_and_context().await;
+    let auth = crate::CodexAuth::create_dummy_chatgpt_auth_for_testing();
+
+    let error = rewrite_single_argument_string(
+        &turn_context,
+        Some(&auth),
+        "file",
+        /*index*/ None,
+        "file_123",
+    )
+    .await
+    .expect_err("bare OpenAI file ids should not be accepted in MCP file arguments");
+
+    assert!(
+        error.starts_with("failed to upload `file_123` for `file`:"),
+        "unexpected error: {error}"
     );
 }
 
@@ -489,6 +658,8 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
             .cloned()
             .expect("_codex_apps metadata should be an object"),
         ),
+        openai_file_params: Vec::new(),
+        openai_file_outputs: Vec::new(),
     };
 
     assert_eq!(
@@ -629,6 +800,8 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
         tool_title: None,
         tool_description: None,
         codex_apps_meta: None,
+        openai_file_params: Vec::new(),
+        openai_file_outputs: Vec::new(),
     };
 
     let request = build_guardian_mcp_tool_review_request("call-1", &invocation, Some(&metadata));
@@ -983,6 +1156,8 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
         tool_title: Some("Read Only Tool".to_string()),
         tool_description: None,
         codex_apps_meta: None,
+        openai_file_params: Vec::new(),
+        openai_file_outputs: Vec::new(),
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1047,6 +1222,8 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_for_model() {
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
         codex_apps_meta: None,
+        openai_file_params: Vec::new(),
+        openai_file_outputs: Vec::new(),
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1124,6 +1301,8 @@ async fn full_access_auto_mode_blocks_when_arc_returns_interrupt_for_model() {
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
         codex_apps_meta: None,
+        openai_file_params: Vec::new(),
+        openai_file_outputs: Vec::new(),
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -1227,6 +1406,8 @@ async fn approve_mode_routes_arc_ask_user_to_guardian_when_guardian_reviewer_is_
         tool_title: Some("Dangerous Tool".to_string()),
         tool_description: Some("Performs a risky action.".to_string()),
         codex_apps_meta: None,
+        openai_file_params: Vec::new(),
+        openai_file_outputs: Vec::new(),
     };
 
     let decision = maybe_request_mcp_tool_approval(

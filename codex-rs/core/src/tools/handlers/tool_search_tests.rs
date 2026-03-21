@@ -89,7 +89,7 @@ fn serialize_tool_search_output_tools_groups_results_by_namespace() {
         ),
     ];
 
-    let tools = serialize_tool_search_output_tools(&[&entries[0], &entries[1], &entries[2]])
+    let tools = serialize_tool_search_output_tools(&[&entries[0], &entries[1], &entries[2]], false)
         .expect("serialize tool search output");
 
     assert_eq!(
@@ -174,7 +174,7 @@ fn serialize_tool_search_output_tools_falls_back_to_connector_name_description()
         },
     )];
 
-    let tools = serialize_tool_search_output_tools(&[&entries[0]]).expect("serialize");
+    let tools = serialize_tool_search_output_tools(&[&entries[0]], false).expect("serialize");
 
     assert_eq!(
         tools,

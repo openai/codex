@@ -12,6 +12,7 @@ use crate::exec::ExecToolCallOutput;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::model_info;
+use crate::openai_files::managed_download_root_for_session;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
 
@@ -2168,6 +2169,57 @@ async fn session_configuration_apply_preserves_split_file_system_policy_on_cwd_o
     assert_eq!(
         updated.file_system_sandbox_policy,
         session_configuration.file_system_sandbox_policy
+    );
+}
+
+#[tokio::test]
+async fn session_openai_file_root_is_scoped_to_the_current_session() {
+    let mut session_configuration = make_session_configuration_for_tests().await;
+    session_configuration.sandbox_policy =
+        codex_config::Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            read_only_access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: true,
+                readable_roots: Vec::new(),
+            },
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        });
+    session_configuration.file_system_sandbox_policy =
+        FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::CurrentWorkingDirectory,
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+    let session_id = ThreadId::new();
+    let session_root = managed_download_root_for_session(&session_id.to_string());
+    let other_session_root = managed_download_root_for_session(&ThreadId::new().to_string());
+
+    Session::add_session_openai_file_root_to_sandbox(&mut session_configuration, session_id)
+        .expect("session OpenAI file root should be added to sandbox");
+
+    assert!(
+        session_configuration
+            .file_system_sandbox_policy
+            .can_read_path_with_cwd(&session_root, &session_configuration.cwd)
+    );
+    assert!(
+        session_configuration
+            .file_system_sandbox_policy
+            .can_write_path_with_cwd(&session_root, &session_configuration.cwd)
+    );
+    assert!(
+        !session_configuration
+            .file_system_sandbox_policy
+            .can_read_path_with_cwd(&other_session_root, &session_configuration.cwd)
+    );
+    assert!(
+        !session_configuration
+            .file_system_sandbox_policy
+            .can_write_path_with_cwd(&other_session_root, &session_configuration.cwd)
     );
 }
 
@@ -4565,12 +4617,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
     let router = ToolRouter::from_config(
         &turn_context.tools_config,
         crate::tools::router::ToolRouterParams {
-            mcp_tools: Some(
-                tools
-                    .into_iter()
-                    .map(|(name, tool)| (name, tool.tool))
-                    .collect(),
-            ),
+            mcp_tools: Some(tools),
             app_tools,
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),

@@ -196,6 +196,12 @@ fn apps_require_feature_flag_and_chatgpt_auth() {
 }
 
 #[test]
+fn apps_file_bridge_is_under_development() {
+    assert_eq!(Feature::AppsFileBridge.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::AppsFileBridge.default_enabled(), false);
+}
+
+#[test]
 fn from_sources_applies_base_profile_and_overrides() {
     let mut base_entries = BTreeMap::new();
     base_entries.insert("plugins".to_string(), true);
