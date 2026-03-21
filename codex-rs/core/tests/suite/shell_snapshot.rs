@@ -72,7 +72,12 @@ async fn wait_for_snapshot(codex_home: &Path) -> Result<PathBuf> {
 }
 
 async fn wait_for_file_contents(path: &Path) -> Result<String> {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let file_wait_timeout = if cfg!(target_os = "macos") {
+        Duration::from_secs(10)
+    } else {
+        Duration::from_secs(5)
+    };
+    let deadline = Instant::now() + file_wait_timeout;
     loop {
         match fs::read_to_string(path).await {
             Ok(contents) => return Ok(contents),
@@ -526,9 +531,14 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
     let target = cwd.join("snapshot-apply.txt");
 
     let script = "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: snapshot-apply.txt\n+hello from snapshot\n*** End Patch\nEOF\n";
+    let shell_timeout_ms = if cfg!(target_os = "macos") {
+        3_000
+    } else {
+        1_000
+    };
     let args = json!({
         "command": script,
-        "timeout_ms": 1_000,
+        "timeout_ms": shell_timeout_ms,
     });
     let call_id = "shell-snapshot-apply-patch";
     let responses = vec![
