@@ -278,8 +278,6 @@ impl GuardianReviewSessionManager {
                     return;
                 }
             };
-        let next_reuse_key =
-            GuardianReviewSessionReuseKey::from_spawn_config(&resolved.spawn_config);
         let params = GuardianReviewSessionParams {
             parent_session,
             parent_turn: Arc::clone(&parent_turn),
@@ -1060,8 +1058,7 @@ mod tests {
         Arc<GuardianReviewSession>,
         tokio::sync::oneshot::Receiver<()>,
     ) {
-        let (child_session, _child_turn_context) =
-            crate::codex::make_session_and_context().await;
+        let (child_session, _child_turn_context) = crate::codex::make_session_and_context().await;
         let child_session = Arc::new(child_session);
         let child_config = child_session.get_config().await;
         let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(child_config.as_ref());
@@ -1171,6 +1168,7 @@ mod tests {
 
         let (parent_session, parent_turn) = crate::codex::make_session_and_context().await;
         let parent_session = Arc::new(parent_session);
+        let parent_turn = Arc::new(parent_turn);
         let mut spawn_config = crate::config::test_config();
         spawn_config.model_provider.base_url = Some("https://guardian.example.invalid/v2".into());
         let params = GuardianReviewSessionParams {
