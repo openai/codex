@@ -5,7 +5,6 @@ import importlib.util
 import io
 import json
 import sys
-import tomllib
 import urllib.error
 from pathlib import Path
 
@@ -168,6 +167,24 @@ def test_examples_readme_matches_pinned_runtime_version() -> None:
     )
 
 
+def test_pinned_runtime_git_ref_matches_runtime_setup_pin() -> None:
+    script = _load_update_script_module()
+    runtime_setup = _load_runtime_setup_module()
+
+    assert script.pinned_runtime_git_ref() == (
+        f"rust-v{runtime_setup.pinned_runtime_version()}"
+    )
+
+
+def test_parser_supports_generate_types_for_pinned_runtime() -> None:
+    script = _load_update_script_module()
+
+    args = script.parse_args(["generate-types-for-pinned-runtime"])
+
+    assert args.command == "generate-types-for-pinned-runtime"
+    assert args.git_ref is None
+
+
 def test_release_metadata_retries_without_invalid_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     runtime_setup = _load_runtime_setup_module()
     authorizations: list[str | None] = []
@@ -193,9 +210,7 @@ def test_release_metadata_retries_without_invalid_auth(monkeypatch: pytest.Monke
 
 
 def test_runtime_package_is_wheel_only_and_builds_platform_specific_wheels() -> None:
-    pyproject = tomllib.loads(
-        (ROOT.parent / "python-runtime" / "pyproject.toml").read_text()
-    )
+    pyproject_text = (ROOT.parent / "python-runtime" / "pyproject.toml").read_text()
     hook_source = (ROOT.parent / "python-runtime" / "hatch_build.py").read_text()
     hook_tree = ast.parse(hook_source)
     initialize_fn = next(
@@ -235,14 +250,12 @@ def test_runtime_package_is_wheel_only_and_builds_platform_specific_wheels() -> 
         and isinstance(node.value, ast.Constant)
     }
 
-    assert pyproject["tool"]["hatch"]["build"]["targets"]["wheel"] == {
-        "packages": ["src/codex_cli_bin"],
-        "include": ["src/codex_cli_bin/bin/**"],
-        "hooks": {"custom": {}},
-    }
-    assert pyproject["tool"]["hatch"]["build"]["targets"]["sdist"] == {
-        "hooks": {"custom": {}},
-    }
+    assert "[tool.hatch.build.targets.wheel]" in pyproject_text
+    assert 'packages = ["src/codex_cli_bin"]' in pyproject_text
+    assert 'include = ["src/codex_cli_bin/bin/**"]' in pyproject_text
+    assert "[tool.hatch.build.targets.wheel.hooks.custom]" in pyproject_text
+    assert "[tool.hatch.build.targets.sdist]" in pyproject_text
+    assert "[tool.hatch.build.targets.sdist.hooks.custom]" in pyproject_text
     assert sdist_guard is not None
     assert build_data_assignments == {"pure_python": False, "infer_tag": True}
 
@@ -322,6 +335,9 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
     def fake_generate_types() -> None:
         calls.append("generate_types")
 
+    def fake_generate_types_for_pinned_runtime(_git_ref: str | None = None) -> None:
+        calls.append("generate_types_for_pinned_runtime")
+
     def fake_stage_sdk_package(
         _staging_dir: Path, _sdk_version: str, _runtime_version: str
     ) -> Path:
@@ -338,6 +354,7 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
 
     ops = script.CliOps(
         generate_types=fake_generate_types,
+        generate_types_for_pinned_runtime=fake_generate_types_for_pinned_runtime,
         stage_python_sdk_package=fake_stage_sdk_package,
         stage_python_runtime_package=fake_stage_runtime_package,
         current_sdk_version=fake_current_sdk_version,
@@ -366,6 +383,9 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
     def fake_generate_types() -> None:
         calls.append("generate_types")
 
+    def fake_generate_types_for_pinned_runtime(_git_ref: str | None = None) -> None:
+        calls.append("generate_types_for_pinned_runtime")
+
     def fake_stage_sdk_package(
         _staging_dir: Path, _sdk_version: str, _runtime_version: str
     ) -> Path:
@@ -382,6 +402,7 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
 
     ops = script.CliOps(
         generate_types=fake_generate_types,
+        generate_types_for_pinned_runtime=fake_generate_types_for_pinned_runtime,
         stage_python_sdk_package=fake_stage_sdk_package,
         stage_python_runtime_package=fake_stage_runtime_package,
         current_sdk_version=fake_current_sdk_version,

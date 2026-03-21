@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
 import json
 import platform
 import re
@@ -63,6 +64,81 @@ def run(cmd: list[str], cwd: Path) -> None:
 
 def run_python_module(module: str, args: list[str], cwd: Path) -> None:
     run([sys.executable, "-m", module, *args], cwd)
+
+
+def run_capture(cmd: list[str], cwd: Path) -> str:
+    result = subprocess.run(
+        cmd,
+        cwd=str(cwd),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Command failed ({result.returncode}): {' '.join(cmd)}\n"
+            f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+        )
+    return result.stdout
+
+
+def runtime_setup_path() -> Path:
+    return sdk_root() / "_runtime_setup.py"
+
+
+def pinned_runtime_version() -> str:
+    spec = importlib.util.spec_from_file_location(
+        "_runtime_setup", runtime_setup_path()
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Failed to load runtime setup module: {runtime_setup_path()}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.pinned_runtime_version()  # type: ignore[no-any-return]
+
+
+def pinned_runtime_git_ref() -> str:
+    return f"rust-v{pinned_runtime_version()}"
+
+
+def ensure_git_ref_available(git_ref: str) -> None:
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", git_ref],
+        cwd=str(repo_root()),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return
+    run(["git", "fetch", "origin", "tag", git_ref, "--depth=1"], repo_root())
+
+
+def read_git_file(git_ref: str, repo_path: str) -> str:
+    return run_capture(["git", "show", f"{git_ref}:{repo_path}"], repo_root())
+
+
+def materialize_schema_files_from_git_ref(git_ref: str, out_dir: Path) -> tuple[Path, Path]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    schema_bundle = out_dir / "codex_app_server_protocol.v2.schemas.json"
+    schema_bundle.write_text(
+        read_git_file(
+            git_ref,
+            "codex-rs/app-server-protocol/schema/json/"
+            "codex_app_server_protocol.v2.schemas.json",
+        )
+    )
+
+    server_notification = out_dir / "ServerNotification.json"
+    server_notification.write_text(
+        read_git_file(
+            git_ref,
+            "codex-rs/app-server-protocol/schema/json/ServerNotification.json",
+        )
+    )
+
+    return schema_bundle, server_notification
 
 
 def current_sdk_version() -> str:
@@ -396,8 +472,9 @@ def _annotate_schema(value: Any, base: str | None = None) -> None:
         _annotate_schema(child, base)
 
 
-def _normalized_schema_bundle_text() -> str:
-    schema = json.loads(schema_bundle_path().read_text())
+def _normalized_schema_bundle_text(schema_bundle: Path | None = None) -> str:
+    bundle = schema_bundle or schema_bundle_path()
+    schema = json.loads(bundle.read_text())
     definitions = schema.get("definitions", {})
     if isinstance(definitions, dict):
         for definition in definitions.values():
@@ -409,16 +486,17 @@ def _normalized_schema_bundle_text() -> str:
     return json.dumps(schema, indent=2, sort_keys=True) + "\n"
 
 
-def generate_v2_all() -> None:
+def generate_v2_all(schema_bundle: Path | None = None) -> None:
     out_path = sdk_root() / "src" / "codex_app_server" / "generated" / "v2_all.py"
     out_dir = out_path.parent
     old_package_dir = out_dir / "v2_all"
     if old_package_dir.exists():
         shutil.rmtree(old_package_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    bundle = schema_bundle or schema_bundle_path()
     with tempfile.TemporaryDirectory() as td:
-        normalized_bundle = Path(td) / schema_bundle_path().name
-        normalized_bundle.write_text(_normalized_schema_bundle_text())
+        normalized_bundle = Path(td) / bundle.name
+        normalized_bundle.write_text(_normalized_schema_bundle_text(bundle))
         run_python_module(
             "datamodel_code_generator",
             [
@@ -455,9 +533,14 @@ def generate_v2_all() -> None:
     _normalize_generated_timestamps(out_path)
 
 
-def _notification_specs() -> list[tuple[str, str]]:
+def _notification_specs(
+    server_notification_schema: Path | None = None,
+) -> list[tuple[str, str]]:
+    server_notification_path = server_notification_schema or (
+        schema_root_dir() / "ServerNotification.json"
+    )
     server_notifications = json.loads(
-        (schema_root_dir() / "ServerNotification.json").read_text()
+        server_notification_path.read_text()
     )
     one_of = server_notifications.get("oneOf", [])
     generated_source = (
@@ -494,7 +577,9 @@ def _notification_specs() -> list[tuple[str, str]]:
     return specs
 
 
-def generate_notification_registry() -> None:
+def generate_notification_registry(
+    server_notification_schema: Path | None = None,
+) -> None:
     out = (
         sdk_root()
         / "src"
@@ -502,7 +587,7 @@ def generate_notification_registry() -> None:
         / "generated"
         / "notification_registry.py"
     )
-    specs = _notification_specs()
+    specs = _notification_specs(server_notification_schema)
     class_names = sorted({class_name for _, class_name in specs})
 
     lines = [
@@ -558,6 +643,7 @@ class PublicFieldSpec:
 @dataclass(frozen=True)
 class CliOps:
     generate_types: Callable[[], None]
+    generate_types_for_pinned_runtime: Callable[[str | None], None]
     stage_python_sdk_package: Callable[[Path, str, str], Path]
     stage_python_runtime_package: Callable[[Path, str, Path], Path]
     current_sdk_version: Callable[[], str]
@@ -867,9 +953,9 @@ def generate_public_api_flat_methods() -> None:
         exclude={"thread_id", "input"},
     )
 
-    source = public_api_path.read_text()
+    original_source = public_api_path.read_text()
     source = _replace_generated_block(
-        source,
+        original_source,
         "Codex.flat_methods",
         _render_codex_block(
             thread_start_fields,
@@ -898,14 +984,33 @@ def generate_public_api_flat_methods() -> None:
         "AsyncThread.flat_methods",
         _render_async_thread_block(turn_start_fields),
     )
+    if source == original_source:
+        return
     public_api_path.write_text(source)
 
 
-def generate_types() -> None:
+def generate_types(
+    schema_bundle: Path | None = None,
+    server_notification_schema: Path | None = None,
+) -> None:
     # v2_all is the authoritative generated surface.
-    generate_v2_all()
-    generate_notification_registry()
+    generate_v2_all(schema_bundle)
+    generate_notification_registry(server_notification_schema)
     generate_public_api_flat_methods()
+
+
+def generate_types_for_pinned_runtime(git_ref: str | None = None) -> None:
+    pinned_ref = git_ref or pinned_runtime_git_ref()
+    ensure_git_ref_available(pinned_ref)
+    with tempfile.TemporaryDirectory(prefix="codex-python-pinned-schema-") as temp_root:
+        schema_bundle, server_notification_schema = materialize_schema_files_from_git_ref(
+            pinned_ref,
+            Path(temp_root),
+        )
+        generate_types(
+            schema_bundle=schema_bundle,
+            server_notification_schema=server_notification_schema,
+        )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -914,6 +1019,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser(
         "generate-types", help="Regenerate Python protocol-derived types"
+    )
+    pinned_types_parser = subparsers.add_parser(
+        "generate-types-for-pinned-runtime",
+        help="Regenerate Python protocol-derived types from the pinned runtime version",
+    )
+    pinned_types_parser.add_argument(
+        "--git-ref",
+        help="Optional git ref to source vendored schema files from",
     )
 
     stage_sdk_parser = subparsers.add_parser(
@@ -964,6 +1077,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def default_cli_ops() -> CliOps:
     return CliOps(
         generate_types=generate_types,
+        generate_types_for_pinned_runtime=generate_types_for_pinned_runtime,
         stage_python_sdk_package=stage_python_sdk_package,
         stage_python_runtime_package=stage_python_runtime_package,
         current_sdk_version=current_sdk_version,
@@ -973,6 +1087,8 @@ def default_cli_ops() -> CliOps:
 def run_command(args: argparse.Namespace, ops: CliOps) -> None:
     if args.command == "generate-types":
         ops.generate_types()
+    elif args.command == "generate-types-for-pinned-runtime":
+        ops.generate_types_for_pinned_runtime(args.git_ref)
     elif args.command == "stage-sdk":
         ops.generate_types()
         ops.stage_python_sdk_package(
