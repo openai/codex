@@ -642,6 +642,21 @@ fn filter_connectors_for_input_skips_disabled_connectors() {
 }
 
 #[test]
+fn filter_connectors_for_input_skips_plugin_mentions() {
+    let connectors = vec![make_connector("figma", "Figma")];
+    let input = vec![user_message("use [@figma](plugin://figma@openai-curated)")];
+    let explicitly_enabled_connectors = HashSet::new();
+    let selected = filter_connectors_for_input(
+        &connectors,
+        &input,
+        &explicitly_enabled_connectors,
+        &HashMap::new(),
+    );
+
+    assert_eq!(selected, Vec::new());
+}
+
+#[test]
 fn collect_explicit_app_ids_from_skill_items_includes_linked_mentions() {
     let connectors = vec![make_connector("calendar", "Calendar")];
     let skill_items = vec![skill_message(
