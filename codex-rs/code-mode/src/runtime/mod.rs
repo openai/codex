@@ -267,16 +267,15 @@ fn run_runtime(
 fn capture_scope_send_error(
     scope: &mut v8::PinScope<'_, '_>,
     event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
-    error_text: Option<String>
+    error_text: Option<String>,
 ) {
     let stored_values = scope
         .get_slot::<RuntimeState>()
         .map(|state| state.stored_values.clone())
         .unwrap_or_default();
 
-    send_result(&event_tx, stored_values, error_text);
+    send_result(event_tx, stored_values, error_text);
 }
-    
 
 fn send_result(
     event_tx: &mpsc::UnboundedSender<RuntimeEvent>,

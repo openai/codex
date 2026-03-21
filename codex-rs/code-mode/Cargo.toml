@@ -22,5 +22,4 @@ tracing = { workspace = true }
 v8 = { workspace = true }
 
 [dev-dependencies]
-libc = { workspace = true }
 pretty_assertions = { workspace = true }

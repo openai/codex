@@ -1805,7 +1805,6 @@ name = "codex-code-mode"
 version = "0.0.0"
 dependencies = [
  "async-trait",
- "libc",
  "pretty_assertions",
  "serde",
  "serde_json",
