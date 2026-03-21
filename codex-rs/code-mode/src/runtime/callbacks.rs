@@ -3,7 +3,6 @@ use crate::response::FunctionCallOutputContentItem;
 use super::EXIT_SENTINEL;
 use super::RuntimeEvent;
 use super::RuntimeState;
-use super::value::content_item_to_js_value;
 use super::value::json_to_v8;
 use super::value::normalize_output_image;
 use super::value::serialize_output_text;
@@ -71,14 +70,10 @@ pub(super) fn text_callback(
     };
     if let Some(state) = scope.get_slot::<RuntimeState>() {
         let _ = state.event_tx.send(RuntimeEvent::ContentItem(
-            FunctionCallOutputContentItem::InputText { text: text.clone() },
+            FunctionCallOutputContentItem::InputText { text },
         ));
     }
-    let Some(text_value) = v8::String::new(scope, &text) else {
-        throw_type_error(scope, "failed to allocate text output value");
-        return;
-    };
-    retval.set(text_value.into());
+    retval.set(v8::undefined(scope).into());
 }
 
 pub(super) fn image_callback(
@@ -96,15 +91,9 @@ pub(super) fn image_callback(
         Err(()) => return,
     };
     if let Some(state) = scope.get_slot::<RuntimeState>() {
-        let _ = state
-            .event_tx
-            .send(RuntimeEvent::ContentItem(image_item.clone()));
+        let _ = state.event_tx.send(RuntimeEvent::ContentItem(image_item));
     }
-    let item = match content_item_to_js_value(scope, &image_item) {
-        Some(item) => item,
-        None => return,
-    };
-    retval.set(item);
+    retval.set(v8::undefined(scope).into());
 }
 
 pub(super) fn store_callback(
@@ -190,14 +179,10 @@ pub(super) fn notify_callback(
     if let Some(state) = scope.get_slot::<RuntimeState>() {
         let _ = state.event_tx.send(RuntimeEvent::Notify {
             call_id: state.tool_call_id.clone(),
-            text: text.clone(),
+            text,
         });
     }
-    let Some(value) = v8::String::new(scope, &text) else {
-        throw_type_error(scope, "failed to allocate notify result");
-        return;
-    };
-    retval.set(value.into());
+    retval.set(v8::undefined(scope).into());
 }
 
 pub(super) fn yield_control_callback(

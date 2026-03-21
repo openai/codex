@@ -562,6 +562,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn output_helpers_return_undefined() {
+        let service = CodeModeService::new();
+
+        let response = service
+            .execute(ExecuteRequest {
+                source: r#"
+const returnsUndefined = [
+  text("first"),
+  image("https://example.com/image.jpg"),
+  notify("ping"),
+].map((value) => value === undefined);
+text(JSON.stringify(returnsUndefined));
+"#
+                .to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: "1".to_string(),
+                content_items: vec![
+                    FunctionCallOutputContentItem::InputText {
+                        text: "first".to_string(),
+                    },
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: "https://example.com/image.jpg".to_string(),
+                        detail: None,
+                    },
+                    FunctionCallOutputContentItem::InputText {
+                        text: "[true,true,true]".to_string(),
+                    },
+                ],
+                stored_values: HashMap::new(),
+                error_text: None,
+            }
+        );
+    }
+
+    #[tokio::test]
     async fn terminate_waits_for_runtime_shutdown_before_responding() {
         let inner = test_inner();
         let (event_tx, event_rx) = mpsc::unbounded_channel();

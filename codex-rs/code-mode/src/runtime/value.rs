@@ -114,24 +114,6 @@ pub(super) fn normalize_output_image(
     }
 }
 
-pub(super) fn content_item_to_js_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    item: &FunctionCallOutputContentItem,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let value = match item {
-        FunctionCallOutputContentItem::InputText { text } => serde_json::json!({
-            "type": "input_text",
-            "text": text,
-        }),
-        FunctionCallOutputContentItem::InputImage { image_url, detail } => serde_json::json!({
-            "type": "input_image",
-            "image_url": image_url,
-            "detail": detail,
-        }),
-    };
-    json_to_v8(scope, &value)
-}
-
 pub(super) fn v8_value_to_json(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
