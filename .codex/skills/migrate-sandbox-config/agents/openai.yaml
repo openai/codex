@@ -1,0 +1,4 @@
+interface:
+  display_name: "Migrate Sandbox Config to Permissions"
+  short_description: "Migrate current sandbox config to permissions"
+  default_prompt: "Use $migrate-sandbox-config to migrate my current sandbox config in config.toml to the new permissions structure."
