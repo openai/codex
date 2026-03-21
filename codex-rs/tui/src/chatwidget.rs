@@ -1919,6 +1919,10 @@ impl ChatWidget {
         };
         self.rejected_steers_queue
             .push_back(pending_steer.user_message);
+        if !self.bottom_pane.is_task_running() {
+            // Will drain rejected_steers_queue in case the steer rejection arrives after task completion
+            self.maybe_send_next_queued_input();
+        }
         self.refresh_pending_input_preview();
         true
     }
