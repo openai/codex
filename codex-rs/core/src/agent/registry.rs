@@ -20,7 +20,7 @@ use std::sync::atomic::Ordering;
 /// This structure is shared by all agents in the same user session (because the `AgentControl`
 /// is).
 #[derive(Default)]
-pub(crate) struct Guards {
+pub(crate) struct AgentRegistry {
     active_agents: Mutex<ActiveAgents>,
     total_count: AtomicUsize,
 }
@@ -75,7 +75,7 @@ pub(crate) fn exceeds_thread_spawn_depth_limit(depth: i32, max_depth: i32) -> bo
     depth > max_depth
 }
 
-impl Guards {
+impl AgentRegistry {
     pub(crate) fn reserve_spawn_slot(
         self: &Arc<Self>,
         max_threads: Option<usize>,
@@ -263,7 +263,7 @@ impl Guards {
 }
 
 pub(crate) struct SpawnReservation {
-    state: Arc<Guards>,
+    state: Arc<AgentRegistry>,
     active: bool,
     reserved_agent_nickname: Option<String>,
     reserved_agent_path: Option<AgentPath>,
@@ -311,5 +311,5 @@ impl Drop for SpawnReservation {
 }
 
 #[cfg(test)]
-#[path = "guards_tests.rs"]
+#[path = "registry_tests.rs"]
 mod tests;
