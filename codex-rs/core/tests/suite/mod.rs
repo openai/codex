@@ -132,6 +132,7 @@ mod subagent_notifications;
 mod text_encoding_fix;
 mod tool_harness;
 mod tool_parallelism;
+mod tool_suggest;
 mod tools;
 mod truncation;
 mod turn_state;

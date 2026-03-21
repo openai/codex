@@ -341,7 +341,7 @@ impl ToolsConfig {
         let include_default_mode_request_user_input =
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool = model_info.supports_search_tool;
-        let include_tool_suggest = include_search_tool && features.enabled(Feature::ToolSuggest);
+        let include_tool_suggest = features.enabled(Feature::ToolSuggest);
         let include_original_image_detail = can_request_original_image_detail(features, model_info);
         let include_artifact_tools =
             features.enabled(Feature::Artifact) && codex_artifacts::can_manage_artifact_runtime();

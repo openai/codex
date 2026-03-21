@@ -6337,10 +6337,7 @@ pub(crate) async fn built_tools(
         None
     };
     let auth = sess.services.auth_manager.auth().await;
-    let discoverable_tools = if apps_enabled
-        && turn_context.tools_config.search_tool
-        && turn_context.tools_config.tool_suggest
-    {
+    let discoverable_tools = if apps_enabled && turn_context.tools_config.tool_suggest {
         if let Some(accessible_connectors) = accessible_connectors_with_enabled_state.as_ref() {
             match connectors::list_tool_suggest_discoverable_tools_with_auth(
                 &turn_context.config,
