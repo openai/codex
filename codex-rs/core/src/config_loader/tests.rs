@@ -382,6 +382,51 @@ flag = false
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
+async fn managed_preferences_resolve_relative_workspace_write_roots() -> std::io::Result<()> {
+    use base64::Engine;
+
+    let codex_home = tempdir().expect("tempdir");
+
+    let overrides = LoaderOverrides {
+        managed_config_path: Some(codex_home.path().join("managed_config.toml")),
+        managed_preferences_base64: Some(
+            base64::prelude::BASE64_STANDARD.encode(
+                r#"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+writable_roots = ["managed-write"]
+"#
+                .as_bytes(),
+            ),
+        ),
+        macos_managed_config_requirements_base64: None,
+    };
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .loader_overrides(overrides)
+        .build()
+        .await?;
+
+    let expected_root =
+        AbsolutePathBuf::resolve_path_against_base("managed-write", codex_home.path())?;
+    match config.permissions.sandbox_policy.get() {
+        SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+            assert!(
+                writable_roots.contains(&expected_root),
+                "expected writable_roots to contain {expected_root:?}, got {writable_roots:?}"
+            );
+        }
+        other => panic!("expected workspace-write sandbox policy, got {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
 async fn managed_preferences_requirements_are_applied() -> anyhow::Result<()> {
     use base64::Engine;
 
