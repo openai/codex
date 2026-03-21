@@ -11,7 +11,6 @@ use app_test_support::McpProcess;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
-use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
 use codex_app_server_protocol::CommandAction;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
@@ -19,6 +18,7 @@ use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
@@ -35,9 +35,12 @@ use codex_features::Feature;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use std::collections::BTreeMap;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use tempfile::TempDir;
+use tokio::time::sleep;
 use tokio::time::timeout;
 
 #[cfg(windows)]
@@ -62,19 +65,14 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     };
     eprintln!("using zsh path for zsh-fork test: {}", zsh_path.display());
 
-    // Keep the shell command in flight until we interrupt it. A fast command
+    // Keep the exec command in flight until we interrupt it. A fast command
     // like `echo hi` can finish before the interrupt arrives on faster runners,
     // which turns this into a test for post-command follow-up behavior instead
     // of interrupting an active zsh-fork command.
     let release_marker_escaped = release_marker.to_string_lossy().replace('\'', r#"'\''"#);
     let wait_for_interrupt =
         format!("while [ ! -f '{release_marker_escaped}' ]; do sleep 0.01; done");
-    let response = create_shell_command_sse_response(
-        vec!["/bin/sh".to_string(), "-c".to_string(), wait_for_interrupt],
-        None,
-        Some(5000),
-        "call-zsh-fork",
-    )?;
+    let response = create_zsh_fork_exec_command_sse_response(&wait_for_interrupt, "call-zsh-fork")?;
     let no_op_response = responses::sse(vec![
         responses::ev_response_created("resp-2"),
         responses::ev_completed("resp-2"),
@@ -91,7 +89,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
         "never",
         &BTreeMap::from([
             (Feature::ShellZshFork, true),
-            (Feature::UnifiedExec, false),
+            (Feature::UnifiedExec, true),
             (Feature::ShellSnapshot, false),
         ]),
         &zsh_path,
@@ -163,13 +161,193 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     assert_eq!(id, "call-zsh-fork");
     assert_eq!(status, CommandExecutionStatus::InProgress);
     assert!(command.starts_with(&zsh_path.display().to_string()));
-    assert!(command.contains("/bin/sh -c"));
+    assert!(command.contains(" -lc "));
     assert!(command.contains("sleep 0.01"));
     assert!(command.contains(&release_marker.display().to_string()));
     assert_eq!(cwd, workspace);
 
     mcp.interrupt_turn_and_wait_for_aborted(thread.id, turn.id, DEFAULT_READ_TIMEOUT)
         .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_shell_zsh_fork_login_startup_helper_does_not_prompt_separately_v2() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace)?;
+    let startup_helper_marker = workspace.join("startup-helper-ran");
+    let startup_helper = workspace.join("startup-helper.sh");
+    std::fs::write(
+        &startup_helper,
+        format!(
+            "#!/bin/sh\nprintf 'startup-helper-ran\\n' >> '{}'\n",
+            startup_helper_marker.display()
+        ),
+    )?;
+    std::fs::set_permissions(&startup_helper, std::fs::Permissions::from_mode(0o755))?;
+    std::fs::write(
+        workspace.join(".zprofile"),
+        format!(
+            "export SNAPSHOT_LOGIN_ENV=from-zprofile\n'{}'\n",
+            startup_helper.display()
+        ),
+    )?;
+
+    let Some(zsh_path) = find_test_zsh_path()? else {
+        eprintln!("skipping zsh fork test: no zsh executable found");
+        return Ok(());
+    };
+    if !supports_exec_wrapper_intercept(&zsh_path) {
+        eprintln!(
+            "skipping zsh fork test: zsh does not support EXEC_WRAPPER intercepts ({})",
+            zsh_path.display()
+        );
+        return Ok(());
+    }
+    eprintln!("using zsh path for zsh-fork test: {}", zsh_path.display());
+
+    let server = create_mock_responses_server_sequence(vec![
+        create_zsh_fork_exec_command_sse_response_with_args(
+            json!({
+                "cmd": "python3 -c 'import os; print(os.environ.get(\"SNAPSHOT_LOGIN_ENV\", \"missing\"))'",
+                "yield_time_ms": 5000,
+                "login": true,
+                "sandbox_permissions": "require_escalated",
+                "justification": "test login startup helper approvals",
+            }),
+            "call-zsh-fork-login-startup-helper",
+        )?,
+        create_final_assistant_message_sse_response("done")?,
+    ])
+    .await;
+    create_config_toml(
+        &codex_home,
+        &server.uri(),
+        "on-request",
+        &BTreeMap::from([
+            (Feature::ShellZshFork, true),
+            (Feature::UnifiedExec, true),
+            (Feature::ShellSnapshot, true),
+        ]),
+        &zsh_path,
+    )?;
+
+    let mut mcp = create_zsh_test_mcp_process(&codex_home, &workspace).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            cwd: Some(workspace.to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            if startup_helper_marker.exists() {
+                return Ok::<(), anyhow::Error>(());
+            }
+            sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await??;
+    let startup_runs_before_turn = std::fs::read_to_string(&startup_helper_marker)?;
+    assert_eq!(startup_runs_before_turn, "startup-helper-ran\n");
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "run login zsh-fork command".to_string(),
+                text_elements: Vec::new(),
+            }],
+            cwd: Some(workspace.clone()),
+            approval_policy: Some(codex_app_server_protocol::AskForApproval::OnRequest),
+            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
+            model: Some("mock-model".to_string()),
+            effort: Some(codex_protocol::openai_models::ReasoningEffort::Medium),
+            summary: Some(codex_protocol::config_types::ReasoningSummary::Auto),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+
+    let mut saw_command_completion = false;
+    loop {
+        let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
+        match message {
+            JSONRPCMessage::Request(request) => {
+                let server_req: ServerRequest = request.try_into()?;
+                if let ServerRequest::CommandExecutionRequestApproval { params, .. } = server_req {
+                    panic!(
+                        "unexpected approval during login-shell startup helper test: {:?}",
+                        params.command
+                    );
+                }
+            }
+            JSONRPCMessage::Notification(notification)
+                if notification.method == "item/completed" =>
+            {
+                let completed: ItemCompletedNotification =
+                    serde_json::from_value(notification.params.expect("item/completed params"))?;
+                if let ThreadItem::CommandExecution {
+                    id,
+                    status,
+                    aggregated_output,
+                    ..
+                } = completed.item
+                    && id == "call-zsh-fork-login-startup-helper"
+                {
+                    assert_eq!(status, CommandExecutionStatus::Completed);
+                    assert!(
+                        aggregated_output
+                            .as_deref()
+                            .is_some_and(|output| output.contains("from-zprofile")),
+                        "expected completed command output to contain restored login-shell env, got: {aggregated_output:?}"
+                    );
+                    saw_command_completion = true;
+                }
+            }
+            JSONRPCMessage::Notification(notification)
+                if notification.method == "turn/completed" =>
+            {
+                let completed: TurnCompletedNotification =
+                    serde_json::from_value(notification.params.expect("turn/completed params"))?;
+                assert_eq!(completed.thread_id, thread.id);
+                assert_eq!(completed.turn.id, turn.id);
+                assert_eq!(completed.turn.status, TurnStatus::Completed);
+                assert!(
+                    saw_command_completion,
+                    "expected completed command execution item for login-shell startup helper test"
+                );
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    assert_eq!(
+        std::fs::read_to_string(&startup_helper_marker)?,
+        startup_runs_before_turn
+    );
 
     Ok(())
 }
@@ -191,14 +369,8 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
     eprintln!("using zsh path for zsh-fork test: {}", zsh_path.display());
 
     let responses = vec![
-        create_shell_command_sse_response(
-            vec![
-                "python3".to_string(),
-                "-c".to_string(),
-                "print(42)".to_string(),
-            ],
-            None,
-            Some(5000),
+        create_zsh_fork_exec_command_sse_response(
+            "python3 -c 'print(42)'",
             "call-zsh-fork-decline",
         )?,
         create_final_assistant_message_sse_response("done")?,
@@ -210,7 +382,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
         "untrusted",
         &BTreeMap::from([
             (Feature::ShellZshFork, true),
-            (Feature::UnifiedExec, false),
+            (Feature::UnifiedExec, true),
             (Feature::ShellSnapshot, false),
         ]),
         &zsh_path,
@@ -326,14 +498,8 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
     };
     eprintln!("using zsh path for zsh-fork test: {}", zsh_path.display());
 
-    let responses = vec![create_shell_command_sse_response(
-        vec![
-            "python3".to_string(),
-            "-c".to_string(),
-            "print(42)".to_string(),
-        ],
-        None,
-        Some(5000),
+    let responses = vec![create_zsh_fork_exec_command_sse_response(
+        "python3 -c 'print(42)'",
         "call-zsh-fork-cancel",
     )?];
     let server = create_mock_responses_server_sequence(responses).await;
@@ -343,7 +509,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
         "untrusted",
         &BTreeMap::from([
             (Feature::ShellZshFork, true),
-            (Feature::UnifiedExec, false),
+            (Feature::UnifiedExec, true),
             (Feature::ShellSnapshot, false),
         ]),
         &zsh_path,
@@ -442,6 +608,204 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
 }
 
 #[tokio::test]
+async fn turn_start_shell_zsh_fork_interrupt_kills_approved_subcommand_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace)?;
+    let launch_marker = workspace.join("approved-subcommand.started");
+    let leaked_marker = workspace.join("approved-subcommand.leaked");
+    let launch_marker_display = launch_marker.display().to_string();
+    assert!(
+        !launch_marker_display.contains('\''),
+        "test workspace path should not contain single quotes: {launch_marker_display}"
+    );
+    let leaked_marker_display = leaked_marker.display().to_string();
+    assert!(
+        !leaked_marker_display.contains('\''),
+        "test workspace path should not contain single quotes: {leaked_marker_display}"
+    );
+
+    let Some(zsh_path) = find_test_zsh_path()? else {
+        eprintln!("skipping zsh fork interrupt cleanup test: no zsh executable found");
+        return Ok(());
+    };
+    if !supports_exec_wrapper_intercept(&zsh_path) {
+        eprintln!(
+            "skipping zsh fork interrupt cleanup test: zsh does not support EXEC_WRAPPER intercepts ({})",
+            zsh_path.display()
+        );
+        return Ok(());
+    }
+    let zsh_path_display = zsh_path.display().to_string();
+    eprintln!("using zsh path for zsh-fork test: {zsh_path_display}");
+
+    let shell_command = format!(
+        "/bin/sh -c 'echo started > \"{launch_marker_display}\" && /bin/sleep 0.5 && echo leaked > \"{leaked_marker_display}\" && exec /bin/sleep 100'"
+    );
+    let tool_call_arguments = serde_json::to_string(&json!({
+        "cmd": shell_command,
+        "yield_time_ms": 30_000,
+    }))?;
+    let response = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_function_call(
+            "call-zsh-fork-interrupt-cleanup",
+            "exec_command",
+            &tool_call_arguments,
+        ),
+        responses::ev_completed("resp-1"),
+    ]);
+    let no_op_response = responses::sse(vec![
+        responses::ev_response_created("resp-2"),
+        responses::ev_completed("resp-2"),
+    ]);
+    let server =
+        create_mock_responses_server_sequence_unchecked(vec![response, no_op_response]).await;
+    create_config_toml(
+        &codex_home,
+        &server.uri(),
+        "untrusted",
+        &BTreeMap::from([
+            (Feature::ShellZshFork, true),
+            (Feature::UnifiedExec, true),
+            (Feature::ShellSnapshot, false),
+        ]),
+        &zsh_path,
+    )?;
+
+    let mut mcp = create_zsh_test_mcp_process(&codex_home, &workspace).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            cwd: Some(workspace.to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "run the long-lived command".to_string(),
+                text_elements: Vec::new(),
+            }],
+            cwd: Some(workspace.clone()),
+            approval_policy: Some(codex_app_server_protocol::AskForApproval::UnlessTrusted),
+            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![workspace.clone().try_into()?],
+                read_only_access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
+                network_access: false,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            }),
+            model: Some("mock-model".to_string()),
+            effort: Some(codex_protocol::openai_models::ReasoningEffort::Medium),
+            summary: Some(codex_protocol::config_types::ReasoningSummary::Auto),
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+
+    let mut saw_target_approval = false;
+    while !saw_target_approval {
+        let server_req = timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_request_message(),
+        )
+        .await??;
+        let ServerRequest::CommandExecutionRequestApproval { request_id, params } = server_req
+        else {
+            panic!("expected CommandExecutionRequestApproval request");
+        };
+        let approval_command = params.command.clone().unwrap_or_default();
+        saw_target_approval = approval_command.contains("/bin/sh")
+            && approval_command.contains(&launch_marker_display)
+            && !approval_command.contains(&zsh_path_display);
+        mcp.send_response(
+            request_id,
+            serde_json::to_value(CommandExecutionRequestApprovalResponse {
+                decision: CommandExecutionApprovalDecision::Accept,
+            })?,
+        )
+        .await?;
+    }
+
+    let started_command = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let notif = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let started: ItemStartedNotification =
+                serde_json::from_value(notif.params.clone().expect("item/started params"))?;
+            if let ThreadItem::CommandExecution { .. } = started.item {
+                return Ok::<ThreadItem, anyhow::Error>(started.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::CommandExecution {
+        id,
+        process_id,
+        status,
+        command,
+        cwd,
+        ..
+    } = started_command
+    else {
+        unreachable!("loop ensures we break on command execution items");
+    };
+    assert_eq!(id, "call-zsh-fork-interrupt-cleanup");
+    assert_eq!(status, CommandExecutionStatus::InProgress);
+    assert!(command.starts_with(&zsh_path.display().to_string()));
+    assert!(command.contains(" -lc "));
+    assert!(command.contains(&launch_marker_display));
+    assert_eq!(cwd, workspace);
+    assert!(process_id.is_some(), "process id should be present");
+
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            if launch_marker.exists() {
+                return Ok::<(), anyhow::Error>(());
+            }
+            sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await??;
+
+    mcp.interrupt_turn_and_wait_for_aborted(
+        thread.id.clone(),
+        turn.id.clone(),
+        DEFAULT_READ_TIMEOUT,
+    )
+    .await?;
+
+    sleep(std::time::Duration::from_millis(750)).await;
+    assert!(
+        !leaked_marker.exists(),
+        "expected interrupt to stop approved subcommand before it wrote {leaked_marker_display}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -472,16 +836,15 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
         first_file.display(),
         second_file.display()
     );
-    let tool_call_arguments = serde_json::to_string(&serde_json::json!({
-        "command": shell_command,
-        "workdir": serde_json::Value::Null,
-        "timeout_ms": 5000
+    let tool_call_arguments = serde_json::to_string(&json!({
+        "cmd": shell_command,
+        "yield_time_ms": 5000,
     }))?;
     let response = responses::sse(vec![
         responses::ev_response_created("resp-1"),
         responses::ev_function_call(
             "call-zsh-fork-subcommand-decline",
-            "shell_command",
+            "exec_command",
             &tool_call_arguments,
         ),
         responses::ev_completed("resp-1"),
@@ -502,7 +865,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
         "untrusted",
         &BTreeMap::from([
             (Feature::ShellZshFork, true),
-            (Feature::UnifiedExec, false),
+            (Feature::UnifiedExec, true),
             (Feature::ShellSnapshot, false),
         ]),
         &zsh_path,
@@ -742,6 +1105,31 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
 async fn create_zsh_test_mcp_process(codex_home: &Path, zdotdir: &Path) -> Result<McpProcess> {
     let zdotdir = zdotdir.to_string_lossy().into_owned();
     McpProcess::new_with_env(codex_home, &[("ZDOTDIR", Some(zdotdir.as_str()))]).await
+}
+
+fn create_zsh_fork_exec_command_sse_response(
+    command: &str,
+    call_id: &str,
+) -> anyhow::Result<String> {
+    create_zsh_fork_exec_command_sse_response_with_args(
+        json!({
+            "cmd": command,
+            "yield_time_ms": 5000,
+        }),
+        call_id,
+    )
+}
+
+fn create_zsh_fork_exec_command_sse_response_with_args(
+    tool_call_arguments: serde_json::Value,
+    call_id: &str,
+) -> anyhow::Result<String> {
+    let tool_call_arguments = serde_json::to_string(&tool_call_arguments)?;
+    Ok(responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_function_call(call_id, "exec_command", &tool_call_arguments),
+        responses::ev_completed("resp-1"),
+    ]))
 }
 
 fn create_config_toml(

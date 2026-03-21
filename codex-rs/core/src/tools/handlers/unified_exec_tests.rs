@@ -119,7 +119,7 @@ fn test_get_command_rejects_explicit_login_when_disallowed() -> anyhow::Result<(
 }
 
 #[test]
-fn test_get_command_ignores_explicit_shell_in_zsh_fork_mode() -> anyhow::Result<()> {
+fn test_get_command_rejects_explicit_shell_in_zsh_fork_mode() -> anyhow::Result<()> {
     let json = r#"{"cmd": "echo hello", "shell": "/bin/bash"}"#;
     let args: ExecCommandArgs = parse_arguments(json)?;
     let shell_zsh_path = AbsolutePathBuf::from_absolute_path(if cfg!(windows) {
@@ -128,7 +128,7 @@ fn test_get_command_ignores_explicit_shell_in_zsh_fork_mode() -> anyhow::Result<
         "/opt/codex/zsh"
     })?;
     let shell_mode = UnifiedExecShellMode::ZshFork(ZshForkConfig {
-        shell_zsh_path: shell_zsh_path.clone(),
+        shell_zsh_path,
         main_execve_wrapper_exe: AbsolutePathBuf::from_absolute_path(if cfg!(windows) {
             r"C:\opt\codex\codex-execve-wrapper"
         } else {
@@ -136,20 +136,14 @@ fn test_get_command_ignores_explicit_shell_in_zsh_fork_mode() -> anyhow::Result<
         })?,
     });
 
-    let command = get_command(&args, Arc::new(default_user_shell()), &shell_mode, true)
-        .map_err(anyhow::Error::msg)?;
-
-    assert_eq!(
-        command,
-        vec![
-            shell_zsh_path.to_string_lossy().to_string(),
-            "-lc".to_string(),
-            "echo hello".to_string()
-        ]
+    let err = get_command(&args, Arc::new(default_user_shell()), &shell_mode, true)
+        .expect_err("shell override should be rejected for zsh-fork mode");
+    assert!(
+        err.contains("shell override is not supported"),
+        "unexpected error: {err}"
     );
     Ok(())
 }
-
 #[test]
 fn exec_command_args_resolve_relative_additional_permissions_against_workdir() -> anyhow::Result<()>
 {
