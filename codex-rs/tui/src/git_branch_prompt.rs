@@ -1,5 +1,4 @@
-use std::path::Path;
-
+use crate::cwd_prompt::CwdPromptAction;
 use crate::key_hint;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
@@ -24,66 +23,44 @@ use ratatui::widgets::WidgetRef;
 use tokio_stream::StreamExt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CwdPromptAction {
-    Resume,
-    Fork,
-}
-
-impl CwdPromptAction {
-    pub(crate) fn verb(self) -> &'static str {
-        match self {
-            CwdPromptAction::Resume => "resume",
-            CwdPromptAction::Fork => "fork",
-        }
-    }
-
-    pub(crate) fn past_participle(self) -> &'static str {
-        match self {
-            CwdPromptAction::Resume => "resumed",
-            CwdPromptAction::Fork => "forked",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CwdSelection {
+pub(crate) enum GitBranchSelection {
     Current,
     Session,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CwdPromptOutcome {
-    Selection(CwdSelection),
+pub(crate) enum GitBranchPromptOutcome {
+    Selection(GitBranchSelection),
     Exit,
 }
 
-impl CwdSelection {
+impl GitBranchSelection {
     fn next(self) -> Self {
         match self {
-            CwdSelection::Current => CwdSelection::Session,
-            CwdSelection::Session => CwdSelection::Current,
+            GitBranchSelection::Current => GitBranchSelection::Session,
+            GitBranchSelection::Session => GitBranchSelection::Current,
         }
     }
 
     fn prev(self) -> Self {
         match self {
-            CwdSelection::Current => CwdSelection::Session,
-            CwdSelection::Session => CwdSelection::Current,
+            GitBranchSelection::Current => GitBranchSelection::Session,
+            GitBranchSelection::Session => GitBranchSelection::Current,
         }
     }
 }
 
-pub(crate) async fn run_cwd_selection_prompt(
+pub(crate) async fn run_git_branch_selection_prompt(
     tui: &mut Tui,
     action: CwdPromptAction,
-    current_cwd: &Path,
-    session_cwd: &Path,
-) -> Result<CwdPromptOutcome> {
-    let mut screen = CwdPromptScreen::new(
+    current_branch: &str,
+    session_branch: &str,
+) -> Result<GitBranchPromptOutcome> {
+    let mut screen = GitBranchPromptScreen::new(
         tui.frame_requester(),
         action,
-        current_cwd.display().to_string(),
-        session_cwd.display().to_string(),
+        current_branch.to_string(),
+        session_branch.to_string(),
     );
     tui.draw(u16::MAX, |frame| {
         frame.render_widget_ref(&screen, frame.area());
@@ -109,37 +86,37 @@ pub(crate) async fn run_cwd_selection_prompt(
     }
 
     if screen.should_exit {
-        Ok(CwdPromptOutcome::Exit)
+        Ok(GitBranchPromptOutcome::Exit)
     } else {
-        Ok(CwdPromptOutcome::Selection(
-            screen.selection().unwrap_or(CwdSelection::Session),
+        Ok(GitBranchPromptOutcome::Selection(
+            screen.selection().unwrap_or(GitBranchSelection::Session),
         ))
     }
 }
 
-struct CwdPromptScreen {
+struct GitBranchPromptScreen {
     request_frame: FrameRequester,
     action: CwdPromptAction,
-    current_cwd: String,
-    session_cwd: String,
-    highlighted: CwdSelection,
-    selection: Option<CwdSelection>,
+    current_branch: String,
+    session_branch: String,
+    highlighted: GitBranchSelection,
+    selection: Option<GitBranchSelection>,
     should_exit: bool,
 }
 
-impl CwdPromptScreen {
+impl GitBranchPromptScreen {
     fn new(
         request_frame: FrameRequester,
         action: CwdPromptAction,
-        current_cwd: String,
-        session_cwd: String,
+        current_branch: String,
+        session_branch: String,
     ) -> Self {
         Self {
             request_frame,
             action,
-            current_cwd,
-            session_cwd,
-            highlighted: CwdSelection::Session,
+            current_branch,
+            session_branch,
+            highlighted: GitBranchSelection::Session,
             selection: None,
             should_exit: false,
         }
@@ -160,22 +137,22 @@ impl CwdPromptScreen {
         match key_event.code {
             KeyCode::Up | KeyCode::Char('k') => self.set_highlight(self.highlighted.prev()),
             KeyCode::Down | KeyCode::Char('j') => self.set_highlight(self.highlighted.next()),
-            KeyCode::Char('1') => self.select(CwdSelection::Session),
-            KeyCode::Char('2') => self.select(CwdSelection::Current),
+            KeyCode::Char('1') => self.select(GitBranchSelection::Session),
+            KeyCode::Char('2') => self.select(GitBranchSelection::Current),
             KeyCode::Enter => self.select(self.highlighted),
-            KeyCode::Esc => self.select(CwdSelection::Session),
+            KeyCode::Esc => self.select(GitBranchSelection::Current),
             _ => {}
         }
     }
 
-    fn set_highlight(&mut self, highlight: CwdSelection) {
+    fn set_highlight(&mut self, highlight: GitBranchSelection) {
         if self.highlighted != highlight {
             self.highlighted = highlight;
             self.request_frame.schedule_frame();
         }
     }
 
-    fn select(&mut self, selection: CwdSelection) {
+    fn select(&mut self, selection: GitBranchSelection) {
         self.highlighted = selection;
         self.selection = Some(selection);
         self.request_frame.schedule_frame();
@@ -185,52 +162,49 @@ impl CwdPromptScreen {
         self.should_exit || self.selection.is_some()
     }
 
-    fn selection(&self) -> Option<CwdSelection> {
+    fn selection(&self) -> Option<GitBranchSelection> {
         self.selection
     }
 }
 
-impl WidgetRef for &CwdPromptScreen {
+impl WidgetRef for &GitBranchPromptScreen {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
         let mut column = ColumnRenderable::new();
 
         let action_verb = self.action.verb();
         let action_past = self.action.past_participle();
-        let current_cwd = self.current_cwd.as_str();
-        let session_cwd = self.session_cwd.as_str();
+        let current_branch = self.current_branch.as_str();
+        let session_branch = self.session_branch.as_str();
 
         column.push("");
         column.push(Line::from(vec![
-            "Choose working directory to ".into(),
+            "Choose git branch to ".into(),
             action_verb.bold(),
             " this session".into(),
         ]));
         column.push("");
         column.push(
             Line::from(format!(
-                "Session = latest cwd recorded in the {action_past} session"
+                "Session = git branch recorded in the {action_past} session"
             ))
             .dim()
-            .inset(Insets::tlbr(
-                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
-            )),
+            .inset(Insets::tlbr(0, 2, 0, 0)),
         );
         column.push(
-            Line::from("Current = your current working directory".dim()).inset(Insets::tlbr(
-                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
-            )),
+            Line::from("Current = branch checked out in the selected working directory".dim())
+                .inset(Insets::tlbr(0, 2, 0, 0)),
         );
         column.push("");
         column.push(selection_option_row(
-            /*index*/ 0,
-            format!("Use session directory ({session_cwd})"),
-            self.highlighted == CwdSelection::Session,
+            0,
+            format!("Switch to session branch ({session_branch})"),
+            self.highlighted == GitBranchSelection::Session,
         ));
         column.push(selection_option_row(
-            /*index*/ 1,
-            format!("Use current directory ({current_cwd})"),
-            self.highlighted == CwdSelection::Current,
+            1,
+            format!("Continue on current branch ({current_branch})"),
+            self.highlighted == GitBranchSelection::Current,
         ));
         column.push("");
         column.push(
@@ -239,9 +213,7 @@ impl WidgetRef for &CwdPromptScreen {
                 key_hint::plain(KeyCode::Enter).into(),
                 " to continue".dim(),
             ])
-            .inset(Insets::tlbr(
-                /*top*/ 0, /*left*/ 2, /*bottom*/ 0, /*right*/ 0,
-            )),
+            .inset(Insets::tlbr(0, 2, 0, 0)),
         );
         column.render(area, buf);
     }
@@ -256,57 +228,42 @@ mod tests {
     use pretty_assertions::assert_eq;
     use ratatui::Terminal;
 
-    fn new_prompt() -> CwdPromptScreen {
-        CwdPromptScreen::new(
+    fn new_prompt() -> GitBranchPromptScreen {
+        GitBranchPromptScreen::new(
             FrameRequester::test_dummy(),
             CwdPromptAction::Resume,
-            "/Users/example/current".to_string(),
-            "/Users/example/session".to_string(),
+            "main".to_string(),
+            "feature/resume".to_string(),
         )
     }
 
     #[test]
-    fn cwd_prompt_snapshot() {
+    fn git_branch_prompt_snapshot() {
         let screen = new_prompt();
         let mut terminal = Terminal::new(VT100Backend::new(80, 14)).expect("terminal");
         terminal
             .draw(|frame| frame.render_widget_ref(&screen, frame.area()))
-            .expect("render cwd prompt");
-        insta::assert_snapshot!("cwd_prompt_modal", terminal.backend());
+            .expect("render git branch prompt");
+        insta::assert_snapshot!("git_branch_prompt_modal", terminal.backend());
     }
 
     #[test]
-    fn cwd_prompt_fork_snapshot() {
-        let screen = CwdPromptScreen::new(
-            FrameRequester::test_dummy(),
-            CwdPromptAction::Fork,
-            "/Users/example/current".to_string(),
-            "/Users/example/session".to_string(),
-        );
-        let mut terminal = Terminal::new(VT100Backend::new(80, 14)).expect("terminal");
-        terminal
-            .draw(|frame| frame.render_widget_ref(&screen, frame.area()))
-            .expect("render cwd prompt");
-        insta::assert_snapshot!("cwd_prompt_fork_modal", terminal.backend());
-    }
-
-    #[test]
-    fn cwd_prompt_selects_session_by_default() {
+    fn git_branch_prompt_selects_session_by_default() {
         let mut screen = new_prompt();
         screen.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(screen.selection(), Some(CwdSelection::Session));
+        assert_eq!(screen.selection(), Some(GitBranchSelection::Session));
     }
 
     #[test]
-    fn cwd_prompt_can_select_current() {
+    fn git_branch_prompt_can_select_current() {
         let mut screen = new_prompt();
         screen.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         screen.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(screen.selection(), Some(CwdSelection::Current));
+        assert_eq!(screen.selection(), Some(GitBranchSelection::Current));
     }
 
     #[test]
-    fn cwd_prompt_ctrl_c_exits_instead_of_selecting() {
+    fn git_branch_prompt_ctrl_c_exits_instead_of_selecting() {
         let mut screen = new_prompt();
         screen.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert_eq!(screen.selection(), None);
