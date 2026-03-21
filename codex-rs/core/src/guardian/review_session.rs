@@ -454,21 +454,16 @@ impl GuardianReviewSessionManager {
         external_cancel: Option<&CancellationToken>,
     ) -> Result<GuardianTrunkState, GuardianReviewSessionOutcome> {
         loop {
-            let trunk_state = self.prepare_trunk(next_reuse_key).await;
-            if matches!(
-                trunk_state,
-                GuardianTrunkState::Ready(_) | GuardianTrunkState::ShutdownStarted
-            ) {
-                return Ok(trunk_state);
+            match self.prepare_trunk(next_reuse_key).await {
+                state @ (GuardianTrunkState::Ready(_) | GuardianTrunkState::ShutdownStarted) => {
+                    return Ok(state);
+                }
+                GuardianTrunkState::NeedsSpawn {
+                    stale_trunk_to_shutdown,
+                } => {
+                    shutdown_stale_trunk_in_background(stale_trunk_to_shutdown);
+                }
             }
-
-            let GuardianTrunkState::NeedsSpawn {
-                stale_trunk_to_shutdown,
-            } = trunk_state
-            else {
-                unreachable!();
-            };
-            shutdown_stale_trunk_in_background(stale_trunk_to_shutdown);
 
             let spawn_guard =
                 match run_before_review_deadline(deadline, external_cancel, self.spawn_lock.lock())
@@ -478,22 +473,17 @@ impl GuardianReviewSessionManager {
                     Err(outcome) => return Err(outcome),
                 };
 
-            let trunk_state = self.prepare_trunk(next_reuse_key).await;
-            if matches!(
-                trunk_state,
-                GuardianTrunkState::Ready(_) | GuardianTrunkState::ShutdownStarted
-            ) {
-                drop(spawn_guard);
-                return Ok(trunk_state);
+            match self.prepare_trunk(next_reuse_key).await {
+                state @ (GuardianTrunkState::Ready(_) | GuardianTrunkState::ShutdownStarted) => {
+                    drop(spawn_guard);
+                    return Ok(state);
+                }
+                GuardianTrunkState::NeedsSpawn {
+                    stale_trunk_to_shutdown,
+                } => {
+                    shutdown_stale_trunk_in_background(stale_trunk_to_shutdown);
+                }
             }
-
-            let GuardianTrunkState::NeedsSpawn {
-                stale_trunk_to_shutdown,
-            } = trunk_state
-            else {
-                unreachable!();
-            };
-            shutdown_stale_trunk_in_background(stale_trunk_to_shutdown);
 
             let spawn_cancel_token = CancellationToken::new();
             let review_session = match run_before_review_deadline_with_cancel(
