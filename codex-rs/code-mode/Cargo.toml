@@ -24,7 +24,3 @@ v8 = { workspace = true }
 [dev-dependencies]
 libc = { workspace = true }
 pretty_assertions = { workspace = true }
-
-[[bench]]
-name = "exec_overhead"
-harness = false

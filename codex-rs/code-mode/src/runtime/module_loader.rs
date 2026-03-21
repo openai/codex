@@ -1,11 +1,7 @@
 use serde_json::Value as JsonValue;
-use tracing::warn;
-
-use crate::description::EnabledToolMetadata;
 
 use super::CompletionState;
 use super::EXIT_SENTINEL;
-use super::MODULE_TOOLS_SYMBOL_KEY;
 use super::RuntimeState;
 use super::value::json_to_v8;
 use super::value::value_to_error_text;
@@ -228,106 +224,12 @@ fn resolve_module<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     specifier: &str,
 ) -> Option<v8::Local<'s, v8::Module>> {
-    if let Some(existing) = scope
-        .get_slot::<RuntimeState>()
-        .and_then(|state| state.module_cache.get(specifier).cloned())
+    if let Some(message) =
+        v8::String::new(scope, &format!("Unsupported import in exec: {specifier}"))
     {
-        return Some(v8::Local::new(scope, existing));
+        scope.throw_exception(message.into());
+    } else {
+        scope.throw_exception(v8::undefined(scope).into());
     }
-
-    let module_source = scope
-        .get_slot::<RuntimeState>()
-        .and_then(|state| helper_module_source(&state.enabled_tools, specifier));
-    let module_source = match module_source {
-        Some(source) => source,
-        None => {
-            if let Some(message) =
-                v8::String::new(scope, &format!("Unsupported import in exec: {specifier}"))
-            {
-                scope.throw_exception(message.into());
-            } else {
-                scope.throw_exception(v8::undefined(scope).into());
-            }
-            return None;
-        }
-    };
-    let source = v8::String::new(scope, &module_source)?;
-    let origin = script_origin(scope, specifier).ok()?;
-    let mut source = v8::script_compiler::Source::new(source, Some(&origin));
-    let module = match v8::script_compiler::compile_module(scope, &mut source) {
-        Some(module) => module,
-        None => {
-            warn!("failed to compile helper module `{specifier}`");
-            return None;
-        }
-    };
-    let global = v8::Global::new(scope, module);
-    if let Some(state) = scope.get_slot_mut::<RuntimeState>() {
-        state.module_cache.insert(specifier.to_string(), global);
-    }
-    Some(module)
-}
-
-fn helper_module_source(enabled_tools: &[EnabledToolMetadata], specifier: &str) -> Option<String> {
-    if specifier == "tools.js" {
-        let mut lines = vec![
-            "const tools = globalThis.tools;".to_string(),
-            "export const ALL_TOOLS = globalThis.ALL_TOOLS;".to_string(),
-        ];
-        for tool in enabled_tools {
-            if tool.global_name != "ALL_TOOLS" {
-                lines.push(format!(
-                    "export const {} = tools.{};",
-                    tool.global_name, tool.global_name
-                ));
-            }
-        }
-        return Some(lines.join("\n"));
-    }
-
-    if specifier == "@openai/code_mode" || specifier == "openai/code_mode" {
-        return Some(
-            [
-                "export const exit = globalThis.exit;",
-                "export const image = globalThis.image;",
-                "export const load = globalThis.load;",
-                "export const notify = globalThis.notify;",
-                "export const output_image = globalThis.image;",
-                "export const output_text = globalThis.text;",
-                "export const store = globalThis.store;",
-                "export const text = globalThis.text;",
-                "export const yield_control = globalThis.yield_control;",
-            ]
-            .join("\n"),
-        );
-    }
-
-    let namespace = specifier
-        .strip_prefix("tools/")?
-        .strip_suffix(".js")?
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if namespace.is_empty() {
-        return None;
-    }
-
-    let exports = enabled_tools
-        .iter()
-        .filter(|tool| tool.namespace == namespace)
-        .map(|tool| tool.name.clone())
-        .collect::<Vec<_>>();
-    if exports.is_empty() {
-        return None;
-    }
-
-    let namespace_key = namespace.join("/");
-    let mut lines = vec![format!(
-        "const tools = globalThis[Symbol.for({MODULE_TOOLS_SYMBOL_KEY:?})][{namespace_key:?}];"
-    )];
-    for export in exports {
-        lines.push(format!("export const {export} = tools.{export};"));
-    }
-    Some(lines.join("\n"))
+    None
 }

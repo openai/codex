@@ -44,21 +44,6 @@ pub enum CodeModeToolKind {
     Freeform,
 }
 
-pub trait CodeModeToolDefinition {
-    fn name(&self) -> &str;
-    fn description(&self) -> &str;
-    fn kind(&self) -> CodeModeToolKind;
-    fn input_schema(&self) -> Option<&JsonValue>;
-    fn output_schema(&self) -> Option<&JsonValue>;
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ToolReference {
-    pub module_path: String,
-    pub namespace: Vec<String>,
-    pub tool_key: String,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolDefinition {
     pub name: String,
@@ -66,28 +51,6 @@ pub struct ToolDefinition {
     pub kind: CodeModeToolKind,
     pub input_schema: Option<JsonValue>,
     pub output_schema: Option<JsonValue>,
-}
-
-impl CodeModeToolDefinition for ToolDefinition {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn description(&self) -> &str {
-        &self.description
-    }
-
-    fn kind(&self) -> CodeModeToolKind {
-        self.kind
-    }
-
-    fn input_schema(&self) -> Option<&JsonValue> {
-        self.input_schema.as_ref()
-    }
-
-    fn output_schema(&self) -> Option<&JsonValue> {
-        self.output_schema.as_ref()
-    }
 }
 
 #[derive(Debug, Default, Deserialize, PartialEq, Eq)]
@@ -229,23 +192,6 @@ pub fn build_wait_tool_description() -> &'static str {
     WAIT_DESCRIPTION_TEMPLATE
 }
 
-pub fn tool_reference(tool_name: &str) -> ToolReference {
-    if let Some((server_name, tool_key)) = split_qualified_tool_name(tool_name) {
-        let namespace = vec!["mcp".to_string(), server_name];
-        return ToolReference {
-            module_path: format!("tools/{}.js", namespace.join("/")),
-            namespace,
-            tool_key,
-        };
-    }
-
-    ToolReference {
-        module_path: "tools.js".to_string(),
-        namespace: Vec::new(),
-        tool_key: tool_name.to_string(),
-    }
-}
-
 pub fn normalize_code_mode_identifier(tool_key: &str) -> String {
     let mut identifier = String::new();
 
@@ -277,18 +223,12 @@ pub fn augment_tool_definition(mut definition: ToolDefinition) -> ToolDefinition
     definition
 }
 
-pub fn enabled_tool_metadata(definition: &impl CodeModeToolDefinition) -> EnabledToolMetadata {
-    let tool_name = definition.name().to_string();
-    let reference = tool_reference(&tool_name);
-
+pub fn enabled_tool_metadata(definition: &ToolDefinition) -> EnabledToolMetadata {
     EnabledToolMetadata {
-        tool_name,
-        global_name: normalize_code_mode_identifier(definition.name()),
-        module_path: reference.module_path,
-        namespace: reference.namespace,
-        name: normalize_code_mode_identifier(&reference.tool_key),
-        description: definition.description().to_string(),
-        kind: definition.kind(),
+        tool_name: definition.name.clone(),
+        global_name: normalize_code_mode_identifier(&definition.name),
+        description: definition.description.clone(),
+        kind: definition.kind,
     }
 }
 
@@ -296,9 +236,6 @@ pub fn enabled_tool_metadata(definition: &impl CodeModeToolDefinition) -> Enable
 pub struct EnabledToolMetadata {
     pub tool_name: String,
     pub global_name: String,
-    pub module_path: String,
-    pub namespace: Vec<String>,
-    pub name: String,
     pub description: String,
     pub kind: CodeModeToolKind,
 }
@@ -317,25 +254,27 @@ pub fn append_code_mode_sample(
     format!("{description}\n\nexec tool declaration:\n```ts\n{declaration}\n```")
 }
 
-fn append_code_mode_sample_for_definition(definition: &impl CodeModeToolDefinition) -> String {
-    let input_name = match definition.kind() {
+fn append_code_mode_sample_for_definition(definition: &ToolDefinition) -> String {
+    let input_name = match definition.kind {
         CodeModeToolKind::Function => "args",
         CodeModeToolKind::Freeform => "input",
     };
-    let input_type = match definition.kind() {
+    let input_type = match definition.kind {
         CodeModeToolKind::Function => definition
-            .input_schema()
+            .input_schema
+            .as_ref()
             .map(render_json_schema_to_typescript)
             .unwrap_or_else(|| "unknown".to_string()),
         CodeModeToolKind::Freeform => "string".to_string(),
     };
     let output_type = definition
-        .output_schema()
+        .output_schema
+        .as_ref()
         .map(render_json_schema_to_typescript)
         .unwrap_or_else(|| "unknown".to_string());
     append_code_mode_sample(
-        definition.description(),
-        definition.name(),
+        &definition.description,
+        &definition.name,
         input_name,
         input_type,
         output_type,
@@ -350,20 +289,6 @@ fn render_code_mode_tool_declaration(
 ) -> String {
     let tool_name = normalize_code_mode_identifier(tool_name);
     format!("{tool_name}({input_name}: {input_type}): Promise<{output_type}>;")
-}
-
-fn split_qualified_tool_name(qualified_name: &str) -> Option<(String, String)> {
-    let mut parts = qualified_name.split("__");
-    let prefix = parts.next()?;
-    if prefix != "mcp" {
-        return None;
-    }
-    let server_name = parts.next()?;
-    let tool_name: String = parts.collect::<Vec<_>>().join("__");
-    if tool_name.is_empty() {
-        return None;
-    }
-    Some((server_name.to_string(), tool_name))
 }
 
 pub fn render_json_schema_to_typescript(schema: &JsonValue) -> String {

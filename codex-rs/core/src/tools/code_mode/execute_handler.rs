@@ -47,11 +47,9 @@ impl CodeModeExecuteHandler {
             })
             .await
             .map_err(FunctionCallError::RespondToModel)?;
-        handle_runtime_response(
-            &exec, response, /*poll_max_output_tokens*/ None, started_at,
-        )
-        .await
-        .map_err(FunctionCallError::RespondToModel)
+        handle_runtime_response(&exec, response, args.max_output_tokens, started_at)
+            .await
+            .map_err(FunctionCallError::RespondToModel)
     }
 }
 

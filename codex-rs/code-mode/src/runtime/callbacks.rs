@@ -74,26 +74,11 @@ pub(super) fn text_callback(
             FunctionCallOutputContentItem::InputText { text: text.clone() },
         ));
     }
-    let item = v8::Object::new(scope);
-    let Some(type_key) = v8::String::new(scope, "type") else {
-        throw_type_error(scope, "failed to allocate text output item");
-        return;
-    };
-    let Some(type_value) = v8::String::new(scope, "input_text") else {
-        throw_type_error(scope, "failed to allocate text output item");
-        return;
-    };
-    let Some(text_key) = v8::String::new(scope, "text") else {
-        throw_type_error(scope, "failed to allocate text output item");
-        return;
-    };
     let Some(text_value) = v8::String::new(scope, &text) else {
-        throw_type_error(scope, "failed to allocate text output item");
+        throw_type_error(scope, "failed to allocate text output value");
         return;
     };
-    item.set(scope, type_key.into(), type_value.into());
-    item.set(scope, text_key.into(), text_value.into());
-    retval.set(item.into());
+    retval.set(text_value.into());
 }
 
 pub(super) fn image_callback(
@@ -236,11 +221,4 @@ pub(super) fn exit_callback(
     if let Some(error) = v8::String::new(scope, EXIT_SENTINEL) {
         scope.throw_exception(error.into());
     }
-}
-
-pub(super) fn noop_callback(
-    _scope: &mut v8::PinScope<'_, '_>,
-    _args: v8::FunctionCallbackArguments,
-    _retval: v8::ReturnValue<v8::Value>,
-) {
 }

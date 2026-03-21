@@ -72,7 +72,7 @@ impl ToolHandler for CodeModeWaitHandler {
                     })
                     .await
                     .map_err(FunctionCallError::RespondToModel)?;
-                handle_runtime_response(&exec, response, Some(args.max_tokens), started_at)
+                handle_runtime_response(&exec, response, args.max_tokens, started_at)
                     .await
                     .map_err(FunctionCallError::RespondToModel)
             }

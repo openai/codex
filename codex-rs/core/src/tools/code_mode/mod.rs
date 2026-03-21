@@ -162,7 +162,7 @@ pub(crate) fn wait_tool_description() -> &'static str {
 pub(super) async fn handle_runtime_response(
     exec: &ExecContext,
     response: RuntimeResponse,
-    poll_max_output_tokens: Option<Option<usize>>,
+    max_output_tokens: Option<usize>,
     started_at: std::time::Instant,
 ) -> Result<FunctionToolOutput, String> {
     match response {
@@ -171,8 +171,7 @@ pub(super) async fn handle_runtime_response(
             content_items,
         } => {
             let mut content_items = into_function_call_output_content_items(content_items);
-            content_items =
-                truncate_code_mode_result(content_items, poll_max_output_tokens.flatten());
+            content_items = truncate_code_mode_result(content_items, max_output_tokens);
             prepend_script_status(
                 &mut content_items,
                 CodeModeExecutionStatus::Running(cell_id),
@@ -182,8 +181,7 @@ pub(super) async fn handle_runtime_response(
         }
         RuntimeResponse::Terminated { content_items, .. } => {
             let mut content_items = into_function_call_output_content_items(content_items);
-            content_items =
-                truncate_code_mode_result(content_items, poll_max_output_tokens.flatten());
+            content_items = truncate_code_mode_result(content_items, max_output_tokens);
             prepend_script_status(
                 &mut content_items,
                 CodeModeExecutionStatus::Terminated,
@@ -195,7 +193,6 @@ pub(super) async fn handle_runtime_response(
             content_items,
             stored_values,
             error_text,
-            max_output_tokens_per_exec_call,
             ..
         } => {
             let mut content_items = into_function_call_output_content_items(content_items);
@@ -210,10 +207,7 @@ pub(super) async fn handle_runtime_response(
                     text: format!("Script error:\n{error_text}"),
                 });
             }
-            content_items = truncate_code_mode_result(
-                content_items,
-                poll_max_output_tokens.unwrap_or(max_output_tokens_per_exec_call),
-            );
+            content_items = truncate_code_mode_result(content_items, max_output_tokens);
             prepend_script_status(
                 &mut content_items,
                 if success {
@@ -260,9 +254,9 @@ fn prepend_script_status(
 
 fn truncate_code_mode_result(
     items: Vec<FunctionCallOutputContentItem>,
-    max_output_tokens_per_exec_call: Option<usize>,
+    max_output_tokens: Option<usize>,
 ) -> Vec<FunctionCallOutputContentItem> {
-    let max_output_tokens = resolve_max_tokens(max_output_tokens_per_exec_call);
+    let max_output_tokens = resolve_max_tokens(max_output_tokens);
     let policy = TruncationPolicy::Tokens(max_output_tokens);
     if items
         .iter()

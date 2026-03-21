@@ -37,88 +37,81 @@ pub(super) fn normalize_output_image(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
 ) -> Result<FunctionCallOutputContentItem, ()> {
-    let (image_url, detail) = if value.is_string() {
-        (value.to_rust_string_lossy(scope), None)
-    } else if value.is_object() && !value.is_array() {
-        let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
-            throw_type_error(
-                scope,
-                "image expects a non-empty image URL string or an object with image_url and optional detail",
+    let result = (|| -> Result<FunctionCallOutputContentItem, String> {
+        let (image_url, detail) = if value.is_string() {
+            (value.to_rust_string_lossy(scope), None)
+        } else if value.is_object() && !value.is_array() {
+            let object = v8::Local::<v8::Object>::try_from(value).map_err(|_| {
+                "image expects a non-empty image URL string or an object with image_url and optional detail".to_string()
+            })?;
+            let image_url_key = v8::String::new(scope, "image_url")
+                .ok_or_else(|| "failed to allocate image helper keys".to_string())?;
+            let detail_key = v8::String::new(scope, "detail")
+                .ok_or_else(|| "failed to allocate image helper keys".to_string())?;
+            let image_url = object
+                .get(scope, image_url_key.into())
+                .filter(|value| value.is_string())
+                .map(|value| value.to_rust_string_lossy(scope))
+                .ok_or_else(|| {
+                    "image expects a non-empty image URL string or an object with image_url and optional detail"
+                        .to_string()
+                })?;
+            let detail = match object.get(scope, detail_key.into()) {
+                Some(value) if value.is_string() => Some(value.to_rust_string_lossy(scope)),
+                Some(value) if value.is_null() || value.is_undefined() => None,
+                Some(_) => return Err("image detail must be a string when provided".to_string()),
+                None => None,
+            };
+            (image_url, detail)
+        } else {
+            return Err(
+                "image expects a non-empty image URL string or an object with image_url and optional detail"
+                    .to_string(),
             );
-            return Err(());
         };
-        let Some(image_url_key) = v8::String::new(scope, "image_url") else {
-            throw_type_error(scope, "failed to allocate image helper keys");
-            return Err(());
-        };
-        let Some(detail_key) = v8::String::new(scope, "detail") else {
-            throw_type_error(scope, "failed to allocate image helper keys");
-            return Err(());
-        };
-        let image_url = object
-            .get(scope, image_url_key.into())
-            .filter(|value| value.is_string())
-            .map(|value| value.to_rust_string_lossy(scope));
-        let detail = object.get(scope, detail_key.into()).and_then(|value| {
-            if value.is_string() {
-                Some(value.to_rust_string_lossy(scope))
-            } else if value.is_null() || value.is_undefined() {
-                None
-            } else {
-                throw_type_error(scope, "image detail must be a string when provided");
-                None
-            }
-        });
-        let Some(image_url) = image_url else {
-            throw_type_error(
-                scope,
-                "image expects a non-empty image URL string or an object with image_url and optional detail",
+
+        if image_url.is_empty() {
+            return Err(
+                "image expects a non-empty image URL string or an object with image_url and optional detail"
+                    .to_string(),
             );
-            return Err(());
-        };
-        (image_url, detail)
-    } else {
-        throw_type_error(
-            scope,
-            "image expects a non-empty image URL string or an object with image_url and optional detail",
-        );
-        return Err(());
-    };
-
-    if image_url.is_empty() {
-        throw_type_error(
-            scope,
-            "image expects a non-empty image URL string or an object with image_url and optional detail",
-        );
-        return Err(());
-    }
-    let lower = image_url.to_ascii_lowercase();
-    if !(lower.starts_with("http://")
-        || lower.starts_with("https://")
-        || lower.starts_with("data:"))
-    {
-        throw_type_error(scope, "image expects an http(s) or data URL");
-        return Err(());
-    }
-
-    let detail = detail.and_then(|detail| {
-        let normalized = detail.to_ascii_lowercase();
-        match normalized.as_str() {
-            "auto" => Some(ImageDetail::Auto),
-            "low" => Some(ImageDetail::Low),
-            "high" => Some(ImageDetail::High),
-            "original" => Some(ImageDetail::Original),
-            _ => {
-                throw_type_error(
-                    scope,
-                    "image detail must be one of: auto, low, high, original",
-                );
-                None
-            }
         }
-    });
+        let lower = image_url.to_ascii_lowercase();
+        if !(lower.starts_with("http://")
+            || lower.starts_with("https://")
+            || lower.starts_with("data:"))
+        {
+            return Err("image expects an http(s) or data URL".to_string());
+        }
 
-    Ok(FunctionCallOutputContentItem::InputImage { image_url, detail })
+        let detail = match detail {
+            Some(detail) => {
+                let normalized = detail.to_ascii_lowercase();
+                Some(match normalized.as_str() {
+                    "auto" => ImageDetail::Auto,
+                    "low" => ImageDetail::Low,
+                    "high" => ImageDetail::High,
+                    "original" => ImageDetail::Original,
+                    _ => {
+                        return Err(
+                            "image detail must be one of: auto, low, high, original".to_string()
+                        );
+                    }
+                })
+            }
+            None => None,
+        };
+
+        Ok(FunctionCallOutputContentItem::InputImage { image_url, detail })
+    })();
+
+    match result {
+        Ok(item) => Ok(item),
+        Err(error_text) => {
+            throw_type_error(scope, &error_text);
+            Err(())
+        }
+    }
 }
 
 pub(super) fn content_item_to_js_value<'s>(

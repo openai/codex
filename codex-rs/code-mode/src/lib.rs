@@ -4,7 +4,6 @@ mod runtime;
 mod service;
 
 pub use description::CODE_MODE_PRAGMA_PREFIX;
-pub use description::CodeModeToolDefinition;
 pub use description::CodeModeToolKind;
 pub use description::ToolDefinition;
 pub use description::append_code_mode_sample;
@@ -15,7 +14,6 @@ pub use description::is_code_mode_nested_tool;
 pub use description::normalize_code_mode_identifier;
 pub use description::parse_exec_source;
 pub use description::render_json_schema_to_typescript;
-pub use description::tool_reference;
 pub use response::FunctionCallOutputContentItem;
 pub use response::ImageDetail;
 pub use runtime::DEFAULT_EXEC_YIELD_TIME_MS;

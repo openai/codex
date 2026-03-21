@@ -98,7 +98,6 @@ impl CodeModeService {
             Arc::clone(&self.inner),
             SessionControlContext {
                 cell_id: cell_id.clone(),
-                max_output_tokens_per_exec_call: request.max_output_tokens,
                 runtime_tx,
                 runtime_terminate_handle,
             },
@@ -246,7 +245,6 @@ struct PendingResult {
 
 struct SessionControlContext {
     cell_id: String,
-    max_output_tokens_per_exec_call: Option<usize>,
     runtime_tx: std::sync::mpsc::Sender<RuntimeCommand>,
     runtime_terminate_handle: v8::IsolateHandle,
 }
@@ -257,7 +255,6 @@ fn missing_cell_response(cell_id: String) -> RuntimeResponse {
         cell_id,
         content_items: Vec::new(),
         stored_values: HashMap::new(),
-        max_output_tokens_per_exec_call: None,
     }
 }
 
@@ -271,7 +268,6 @@ async fn run_session_control(
 ) {
     let SessionControlContext {
         cell_id,
-        max_output_tokens_per_exec_call,
         runtime_tx,
         runtime_terminate_handle,
     } = context;
@@ -314,7 +310,6 @@ async fn run_session_control(
                                 content_items: result.content_items,
                                 stored_values: result.stored_values,
                                 error_text: result.error_text,
-                                max_output_tokens_per_exec_call,
                             });
                             break;
                         }
@@ -378,7 +373,6 @@ async fn run_session_control(
                                 content_items: result.content_items,
                                 stored_values: result.stored_values,
                                 error_text: result.error_text,
-                                max_output_tokens_per_exec_call,
                             });
                             break;
                         }
@@ -401,7 +395,6 @@ async fn run_session_control(
                                 content_items: result.content_items,
                                 stored_values: result.stored_values,
                                 error_text: result.error_text,
-                                max_output_tokens_per_exec_call,
                             });
                             break;
                         }
@@ -415,7 +408,6 @@ async fn run_session_control(
                                 content_items: result.content_items,
                                 stored_values: result.stored_values,
                                 error_text: result.error_text,
-                                max_output_tokens_per_exec_call,
                             });
                             break;
                         }
@@ -529,7 +521,6 @@ mod tests {
                 }],
                 stored_values: HashMap::new(),
                 error_text: None,
-                max_output_tokens_per_exec_call: None,
             }
         );
     }
@@ -555,7 +546,6 @@ mod tests {
             inner,
             SessionControlContext {
                 cell_id: "cell-1".to_string(),
-                max_output_tokens_per_exec_call: None,
                 runtime_tx: runtime_tx.clone(),
                 runtime_terminate_handle,
             },

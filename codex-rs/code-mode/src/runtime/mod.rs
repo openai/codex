@@ -4,7 +4,6 @@ mod module_loader;
 mod value;
 
 use std::collections::HashMap;
-use std::panic::AssertUnwindSafe;
 use std::sync::OnceLock;
 use std::sync::mpsc as std_mpsc;
 use std::thread;
@@ -21,7 +20,6 @@ pub const DEFAULT_EXEC_YIELD_TIME_MS: u64 = 10_000;
 pub const DEFAULT_WAIT_YIELD_TIME_MS: u64 = 10_000;
 pub const DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL: usize = 10_000;
 const EXIT_SENTINEL: &str = "__codex_code_mode_exit__";
-const MODULE_TOOLS_SYMBOL_KEY: &str = "__codex_code_mode_module_tools__";
 
 #[derive(Clone, Debug)]
 pub struct ExecuteRequest {
@@ -55,7 +53,6 @@ pub enum RuntimeResponse {
         content_items: Vec<FunctionCallOutputContentItem>,
         stored_values: HashMap<String, JsonValue>,
         error_text: Option<String>,
-        max_output_tokens_per_exec_call: Option<usize>,
     },
 }
 
@@ -120,23 +117,7 @@ pub(crate) fn spawn_runtime(
     };
 
     thread::spawn(move || {
-        let runtime_event_tx = event_tx.clone();
-        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            run_runtime(config, runtime_event_tx, command_rx, isolate_handle_tx)
-        }));
-        if let Err(panic_payload) = result {
-            let error_text = if let Some(message) = panic_payload.downcast_ref::<String>() {
-                message.clone()
-            } else if let Some(message) = panic_payload.downcast_ref::<&str>() {
-                (*message).to_string()
-            } else {
-                "code mode runtime panicked".to_string()
-            };
-            let _ = event_tx.send(RuntimeEvent::Result {
-                stored_values: HashMap::new(),
-                error_text: Some(error_text),
-            });
-        }
+        run_runtime(config, event_tx, command_rx, isolate_handle_tx);
     });
 
     let isolate_handle = isolate_handle_rx
@@ -158,7 +139,6 @@ pub(super) struct RuntimeState {
     pending_tool_calls: HashMap<String, v8::Global<v8::PromiseResolver>>,
     stored_values: HashMap<String, JsonValue>,
     enabled_tools: Vec<EnabledToolMetadata>,
-    module_cache: HashMap<String, v8::Global<v8::Module>>,
     next_tool_call_id: u64,
     tool_call_id: String,
     exit_requested: bool,
@@ -207,17 +187,13 @@ fn run_runtime(
         pending_tool_calls: HashMap::new(),
         stored_values: config.stored_values,
         enabled_tools: config.enabled_tools,
-        module_cache: HashMap::new(),
         next_tool_call_id: 1,
         tool_call_id: config.tool_call_id,
         exit_requested: false,
     });
 
     if let Err(error_text) = globals::install_globals(scope) {
-        let _ = event_tx.send(RuntimeEvent::Result {
-            stored_values: HashMap::new(),
-            error_text: Some(error_text),
-        });
+        send_result(&event_tx, HashMap::new(), Some(error_text));
         return;
     }
 
@@ -230,10 +206,7 @@ fn run_runtime(
                 .get_slot::<RuntimeState>()
                 .map(|state| state.stored_values.clone())
                 .unwrap_or_default();
-            let _ = event_tx.send(RuntimeEvent::Result {
-                stored_values,
-                error_text: Some(error_text),
-            });
+            send_result(&event_tx, stored_values, Some(error_text));
             return;
         }
     };
@@ -243,10 +216,7 @@ fn run_runtime(
             stored_values,
             error_text,
         } => {
-            let _ = event_tx.send(RuntimeEvent::Result {
-                stored_values,
-                error_text,
-            });
+            send_result(&event_tx, stored_values, error_text);
             return;
         }
         CompletionState::Pending => {}
@@ -267,10 +237,7 @@ fn run_runtime(
                         .get_slot::<RuntimeState>()
                         .map(|state| state.stored_values.clone())
                         .unwrap_or_default();
-                    let _ = event_tx.send(RuntimeEvent::Result {
-                        stored_values,
-                        error_text: Some(error_text),
-                    });
+                    send_result(&event_tx, stored_values, Some(error_text));
                     return;
                 }
             }
@@ -282,10 +249,7 @@ fn run_runtime(
                         .get_slot::<RuntimeState>()
                         .map(|state| state.stored_values.clone())
                         .unwrap_or_default();
-                    let _ = event_tx.send(RuntimeEvent::Result {
-                        stored_values,
-                        error_text: Some(runtime_error),
-                    });
+                    send_result(&event_tx, stored_values, Some(runtime_error));
                     return;
                 }
             }
@@ -297,10 +261,7 @@ fn run_runtime(
                 stored_values,
                 error_text,
             } => {
-                let _ = event_tx.send(RuntimeEvent::Result {
-                    stored_values,
-                    error_text,
-                });
+                send_result(&event_tx, stored_values, error_text);
                 return;
             }
             CompletionState::Pending => {}
@@ -313,6 +274,17 @@ fn run_runtime(
             }
         }
     }
+}
+
+fn send_result(
+    event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
+    stored_values: HashMap<String, JsonValue>,
+    error_text: Option<String>,
+) {
+    let _ = event_tx.send(RuntimeEvent::Result {
+        stored_values,
+        error_text,
+    });
 }
 
 #[cfg(test)]

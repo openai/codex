@@ -2365,12 +2365,8 @@ async fn js_repl_imported_local_files_can_access_repl_globals() -> anyhow::Resul
         return Ok(());
     }
 
-    let Ok(node_path) = which::which("node") else {
-        return Ok(());
-    };
-
     let cwd_dir = tempdir()?;
-    let expected_home_dir = serde_json::to_string(&std::env::var("HOME").ok())?;
+    let expected_home_dir = serde_json::to_string("/tmp/codex-home")?;
     write_js_repl_test_module(
         cwd_dir.path(),
         "globals.js",
@@ -2380,11 +2376,20 @@ async fn js_repl_imported_local_files_can_access_repl_globals() -> anyhow::Resul
     )?;
 
     let (session, mut turn) = make_session_and_context().await;
+    session
+        .set_dependency_env(HashMap::from([(
+            "HOME".to_string(),
+            "/tmp/codex-home".to_string(),
+        )]))
+        .await;
     turn.shell_environment_policy
         .r#set
         .remove("CODEX_JS_REPL_NODE_MODULE_DIRS");
     turn.cwd = cwd_dir.path().to_path_buf();
-    turn.js_repl = Arc::new(JsReplHandle::with_node_path(Some(node_path), Vec::new()));
+    turn.js_repl = Arc::new(JsReplHandle::with_node_path(
+        turn.config.js_repl_node_path.clone(),
+        Vec::new(),
+    ));
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
