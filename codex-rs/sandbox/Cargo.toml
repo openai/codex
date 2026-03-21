@@ -1,0 +1,57 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-sandbox"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_sandbox"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+async-channel = { workspace = true }
+chardetng = { workspace = true }
+codex-features = { workspace = true }
+codex-network-proxy = { workspace = true }
+codex-otel = { workspace = true }
+codex-protocol = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+codex-utils-home-dir = { workspace = true }
+codex-utils-pty = { workspace = true }
+codex-windows-sandbox = { workspace = true }
+dirs = { workspace = true }
+dunce = { workspace = true }
+encoding_rs = { workspace = true }
+libc = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }
+tokio-util = { workspace = true, features = ["rt"] }
+tracing = { workspace = true, features = ["log"] }
+url = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = { workspace = true }
+seccompiler = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = [
+    "io-std",
+    "macros",
+    "process",
+    "rt-multi-thread",
+    "signal",
+] }

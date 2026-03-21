@@ -1,9 +1,3 @@
-use crate::config::Config;
-use crate::config::ConfigToml;
-use crate::config::edit::ConfigEditsBuilder;
-use crate::config::profile::ConfigProfile;
-use crate::config::types::WindowsSandboxModeToml;
-use crate::default_client::originator;
 use crate::protocol::SandboxPolicy;
 use codex_features::Feature;
 use codex_features::Features;
@@ -22,17 +16,29 @@ use std::time::Instant;
 /// prompts users to enable the legacy sandbox feature.
 pub const ELEVATED_SANDBOX_NUX_ENABLED: bool = true;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowsSandboxMode {
+    Elevated,
+    Unelevated,
+}
+
 pub trait WindowsSandboxLevelExt {
-    fn from_config(config: &Config) -> WindowsSandboxLevel;
+    fn from_mode_and_features(
+        windows_sandbox_mode: Option<WindowsSandboxMode>,
+        features: &Features,
+    ) -> WindowsSandboxLevel;
     fn from_features(features: &Features) -> WindowsSandboxLevel;
 }
 
 impl WindowsSandboxLevelExt for WindowsSandboxLevel {
-    fn from_config(config: &Config) -> WindowsSandboxLevel {
-        match config.permissions.windows_sandbox_mode {
-            Some(WindowsSandboxModeToml::Elevated) => WindowsSandboxLevel::Elevated,
-            Some(WindowsSandboxModeToml::Unelevated) => WindowsSandboxLevel::RestrictedToken,
-            None => Self::from_features(&config.features),
+    fn from_mode_and_features(
+        windows_sandbox_mode: Option<WindowsSandboxMode>,
+        features: &Features,
+    ) -> WindowsSandboxLevel {
+        match windows_sandbox_mode {
+            Some(WindowsSandboxMode::Elevated) => WindowsSandboxLevel::Elevated,
+            Some(WindowsSandboxMode::Unelevated) => WindowsSandboxLevel::RestrictedToken,
+            None => Self::from_features(features),
         }
     }
 
@@ -48,43 +54,30 @@ impl WindowsSandboxLevelExt for WindowsSandboxLevel {
     }
 }
 
-pub fn windows_sandbox_level_from_config(config: &Config) -> WindowsSandboxLevel {
-    WindowsSandboxLevel::from_config(config)
-}
-
-pub fn windows_sandbox_level_from_features(features: &Features) -> WindowsSandboxLevel {
-    WindowsSandboxLevel::from_features(features)
-}
-
 pub fn resolve_windows_sandbox_mode(
-    cfg: &ConfigToml,
-    profile: &ConfigProfile,
-) -> Option<WindowsSandboxModeToml> {
-    if let Some(mode) = legacy_windows_sandbox_mode(profile.features.as_ref()) {
+    profile_mode: Option<WindowsSandboxMode>,
+    profile_features: Option<&FeaturesToml>,
+    cfg_mode: Option<WindowsSandboxMode>,
+    cfg_features: Option<&FeaturesToml>,
+) -> Option<WindowsSandboxMode> {
+    if let Some(mode) = legacy_windows_sandbox_mode(profile_features) {
         return Some(mode);
     }
-    if legacy_windows_sandbox_keys_present(profile.features.as_ref()) {
+    if legacy_windows_sandbox_keys_present(profile_features) {
         return None;
     }
 
-    profile
-        .windows
-        .as_ref()
-        .and_then(|windows| windows.sandbox)
-        .or_else(|| cfg.windows.as_ref().and_then(|windows| windows.sandbox))
-        .or_else(|| legacy_windows_sandbox_mode(cfg.features.as_ref()))
+    profile_mode
+        .or(cfg_mode)
+        .or_else(|| legacy_windows_sandbox_mode(cfg_features))
 }
 
-pub fn resolve_windows_sandbox_private_desktop(cfg: &ConfigToml, profile: &ConfigProfile) -> bool {
-    profile
-        .windows
-        .as_ref()
-        .and_then(|windows| windows.sandbox_private_desktop)
-        .or_else(|| {
-            cfg.windows
-                .as_ref()
-                .and_then(|windows| windows.sandbox_private_desktop)
-        })
+pub fn resolve_windows_sandbox_private_desktop(
+    profile_private_desktop: Option<bool>,
+    cfg_private_desktop: Option<bool>,
+) -> bool {
+    profile_private_desktop
+        .or(cfg_private_desktop)
         .unwrap_or(true)
 }
 
@@ -97,22 +90,20 @@ fn legacy_windows_sandbox_keys_present(features: Option<&FeaturesToml>) -> bool 
         || entries.contains_key("enable_experimental_windows_sandbox")
 }
 
-pub fn legacy_windows_sandbox_mode(
-    features: Option<&FeaturesToml>,
-) -> Option<WindowsSandboxModeToml> {
+pub fn legacy_windows_sandbox_mode(features: Option<&FeaturesToml>) -> Option<WindowsSandboxMode> {
     let entries = features.map(|features| &features.entries)?;
     legacy_windows_sandbox_mode_from_entries(entries)
 }
 
 pub fn legacy_windows_sandbox_mode_from_entries(
     entries: &BTreeMap<String, bool>,
-) -> Option<WindowsSandboxModeToml> {
+) -> Option<WindowsSandboxMode> {
     if entries
         .get(Feature::WindowsSandboxElevated.key())
         .copied()
         .unwrap_or(false)
     {
-        return Some(WindowsSandboxModeToml::Elevated);
+        return Some(WindowsSandboxMode::Elevated);
     }
     if entries
         .get(Feature::WindowsSandbox.key())
@@ -123,7 +114,7 @@ pub fn legacy_windows_sandbox_mode_from_entries(
             .copied()
             .unwrap_or(false)
     {
-        Some(WindowsSandboxModeToml::Unelevated)
+        Some(WindowsSandboxMode::Unelevated)
     } else {
         None
     }
@@ -274,14 +265,18 @@ pub struct WindowsSandboxSetupRequest {
     pub command_cwd: PathBuf,
     pub env_map: HashMap<String, String>,
     pub codex_home: PathBuf,
-    pub active_profile: Option<String>,
+    pub originator_tag: Option<String>,
 }
 
 pub async fn run_windows_sandbox_setup(request: WindowsSandboxSetupRequest) -> anyhow::Result<()> {
     let start = Instant::now();
     let mode = request.mode;
-    let originator_tag = sanitize_metric_tag_value(originator().value.as_str());
-    let result = run_windows_sandbox_setup_and_persist(request).await;
+    let originator_tag = request
+        .originator_tag
+        .as_deref()
+        .map(sanitize_metric_tag_value)
+        .unwrap_or_else(|| "unknown".to_string());
+    let result = run_windows_sandbox_setup_impl(request).await;
 
     match result {
         Ok(()) => {
@@ -304,19 +299,16 @@ pub async fn run_windows_sandbox_setup(request: WindowsSandboxSetupRequest) -> a
     }
 }
 
-async fn run_windows_sandbox_setup_and_persist(
-    request: WindowsSandboxSetupRequest,
-) -> anyhow::Result<()> {
+async fn run_windows_sandbox_setup_impl(request: WindowsSandboxSetupRequest) -> anyhow::Result<()> {
     let mode = request.mode;
     let policy = request.policy;
     let policy_cwd = request.policy_cwd;
     let command_cwd = request.command_cwd;
     let env_map = request.env_map;
     let codex_home = request.codex_home;
-    let active_profile = request.active_profile;
     let setup_codex_home = codex_home.clone();
 
-    let setup_result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
         match mode {
             WindowsSandboxSetupMode::Elevated => {
                 if !sandbox_setup_is_complete(setup_codex_home.as_path()) {
@@ -342,17 +334,7 @@ async fn run_windows_sandbox_setup_and_persist(
         Ok(())
     })
     .await
-    .map_err(|join_err| anyhow::anyhow!("windows sandbox setup task failed: {join_err}"))?;
-
-    setup_result?;
-
-    ConfigEditsBuilder::new(codex_home.as_path())
-        .with_profile(active_profile.as_deref())
-        .set_windows_sandbox_mode(windows_sandbox_setup_mode_tag(mode))
-        .clear_legacy_windows_sandbox_keys()
-        .apply()
-        .await
-        .map_err(|err| anyhow::anyhow!("failed to persist windows sandbox mode: {err}"))
+    .map_err(|join_err| anyhow::anyhow!("windows sandbox setup task failed: {join_err}"))?
 }
 
 fn emit_windows_sandbox_setup_success_metrics(
@@ -363,7 +345,7 @@ fn emit_windows_sandbox_setup_success_metrics(
     let Some(metrics) = codex_otel::metrics::global() else {
         return;
     };
-    let mode_tag = windows_sandbox_setup_mode_tag(mode);
+    let mode_tag = windows_sandbox_mode_tag(mode);
     let _ = metrics.record_duration(
         "codex.windows_sandbox.setup_duration_ms",
         duration,
@@ -389,7 +371,7 @@ fn emit_windows_sandbox_setup_failure_metrics(
     let Some(metrics) = codex_otel::metrics::global() else {
         return;
     };
-    let mode_tag = windows_sandbox_setup_mode_tag(mode);
+    let mode_tag = windows_sandbox_mode_tag(mode);
     let _ = metrics.record_duration(
         "codex.windows_sandbox.setup_duration_ms",
         duration,
@@ -436,7 +418,7 @@ fn emit_windows_sandbox_setup_failure_metrics(
     }
 }
 
-fn windows_sandbox_setup_mode_tag(mode: WindowsSandboxSetupMode) -> &'static str {
+pub fn windows_sandbox_mode_tag(mode: WindowsSandboxSetupMode) -> &'static str {
     match mode {
         WindowsSandboxSetupMode::Elevated => "elevated",
         WindowsSandboxSetupMode::Unelevated => "unelevated",

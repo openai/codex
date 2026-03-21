@@ -7,10 +7,10 @@ use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_sandbox::SandboxPermissions;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;

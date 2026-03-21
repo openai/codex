@@ -5,11 +5,11 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use codex_core::error::CodexErr;
-use codex_core::error::Result;
-use codex_core::error::SandboxErr;
 use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_sandbox::error::CodexErr;
+use codex_sandbox::error::Result;
+use codex_sandbox::error::SandboxErr;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use landlock::ABI;

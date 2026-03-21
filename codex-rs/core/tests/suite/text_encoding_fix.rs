@@ -3,7 +3,7 @@
 //! These tests simulate VSCode's shell preview on Windows/WSL where the output
 //! may be encoded with a legacy code page before it reaches Codex.
 
-use codex_core::exec::StreamOutput;
+use codex_sandbox::StreamOutput;
 use pretty_assertions::assert_eq;
 
 #[test]

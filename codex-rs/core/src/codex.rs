@@ -316,7 +316,6 @@ use crate::turn_timing::record_turn_ttfm_metric;
 use crate::turn_timing::record_turn_ttft_metric;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::util::backoff;
-use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_async_utils::OrCancelExt;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
@@ -334,6 +333,7 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
+use codex_sandbox::WindowsSandboxLevelExt;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_readiness::Readiness;
 use codex_utils_readiness::ReadinessFlag;
@@ -580,7 +580,10 @@ impl Codex {
             sandbox_policy: config.permissions.sandbox_policy.clone(),
             file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
             network_sandbox_policy: config.permissions.network_sandbox_policy,
-            windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+            windows_sandbox_level: WindowsSandboxLevel::from_mode_and_features(
+                config.permissions.windows_sandbox_mode.map(Into::into),
+                &config.features,
+            ),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
             thread_name: None,

@@ -74,6 +74,7 @@ use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_sandbox::WindowsSandboxLevelExt;
 use core_test_support::tracing::install_test_tracing;
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry::trace::TraceId;
@@ -1665,7 +1666,10 @@ async fn set_rate_limits_retains_previous_credits() {
         sandbox_policy: config.permissions.sandbox_policy.clone(),
         file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
         network_sandbox_policy: config.permissions.network_sandbox_policy,
-        windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+        windows_sandbox_level: WindowsSandboxLevel::from_mode_and_features(
+            config.permissions.windows_sandbox_mode.map(Into::into),
+            &config.features,
+        ),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -1763,7 +1767,10 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         sandbox_policy: config.permissions.sandbox_policy.clone(),
         file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
         network_sandbox_policy: config.permissions.network_sandbox_policy,
-        windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+        windows_sandbox_level: WindowsSandboxLevel::from_mode_and_features(
+            config.permissions.windows_sandbox_mode.map(Into::into),
+            &config.features,
+        ),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -2107,7 +2114,10 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         sandbox_policy: config.permissions.sandbox_policy.clone(),
         file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
         network_sandbox_policy: config.permissions.network_sandbox_policy,
-        windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+        windows_sandbox_level: WindowsSandboxLevel::from_mode_and_features(
+            config.permissions.windows_sandbox_mode.map(Into::into),
+            &config.features,
+        ),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -2338,7 +2348,10 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         sandbox_policy: config.permissions.sandbox_policy.clone(),
         file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
         network_sandbox_policy: config.permissions.network_sandbox_policy,
-        windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+        windows_sandbox_level: WindowsSandboxLevel::from_mode_and_features(
+            config.permissions.windows_sandbox_mode.map(Into::into),
+            &config.features,
+        ),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -2433,7 +2446,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         sandbox_policy: config.permissions.sandbox_policy.clone(),
         file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
         network_sandbox_policy: config.permissions.network_sandbox_policy,
-        windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+        windows_sandbox_level: WindowsSandboxLevel::from_mode_and_features(
+            config.permissions.windows_sandbox_mode.map(Into::into),
+            &config.features,
+        ),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
@@ -3232,7 +3248,10 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         sandbox_policy: config.permissions.sandbox_policy.clone(),
         file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
         network_sandbox_policy: config.permissions.network_sandbox_policy,
-        windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+        windows_sandbox_level: WindowsSandboxLevel::from_mode_and_features(
+            config.permissions.windows_sandbox_mode.map(Into::into),
+            &config.features,
+        ),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,

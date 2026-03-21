@@ -1448,6 +1448,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-sandbox",
  "codex-shell-command",
  "codex-state",
  "codex-utils-absolute-path",
@@ -1678,6 +1679,7 @@ dependencies = [
  "codex-protocol",
  "codex-responses-api-proxy",
  "codex-rmcp-client",
+ "codex-sandbox",
  "codex-state",
  "codex-stdio-to-uds",
  "codex-terminal-detection",
@@ -1885,6 +1887,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-sandbox",
  "codex-secrets",
  "codex-shell-command",
  "codex-shell-escalation",
@@ -1993,6 +1996,7 @@ dependencies = [
  "codex-feedback",
  "codex-otel",
  "codex-protocol",
+ "codex-sandbox",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
@@ -2184,6 +2188,7 @@ dependencies = [
  "clap",
  "codex-core",
  "codex-protocol",
+ "codex-sandbox",
  "codex-utils-absolute-path",
  "landlock",
  "libc",
@@ -2202,6 +2207,7 @@ name = "codex-lmstudio"
 version = "0.0.0"
 dependencies = [
  "codex-core",
+ "codex-sandbox",
  "reqwest",
  "serde_json",
  "tokio",
@@ -2257,6 +2263,7 @@ dependencies = [
  "codex-core",
  "codex-features",
  "codex-protocol",
+ "codex-sandbox",
  "codex-shell-command",
  "codex-utils-cli",
  "codex-utils-json-to-toml",
@@ -2315,6 +2322,7 @@ dependencies = [
  "async-stream",
  "bytes",
  "codex-core",
+ "codex-sandbox",
  "futures",
  "pretty_assertions",
  "reqwest",
@@ -2463,6 +2471,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-sandbox"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "chardetng",
+ "codex-features",
+ "codex-network-proxy",
+ "codex-otel",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "codex-utils-home-dir",
+ "codex-utils-pty",
+ "codex-windows-sandbox",
+ "dirs",
+ "dunce",
+ "encoding_rs",
+ "landlock",
+ "libc",
+ "pretty_assertions",
+ "seccompiler",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "codex-secrets"
 version = "0.0.0"
 dependencies = [
@@ -2608,6 +2647,7 @@ dependencies = [
  "codex-login",
  "codex-otel",
  "codex-protocol",
+ "codex-sandbox",
  "codex-shell-command",
  "codex-state",
  "codex-terminal-detection",
@@ -2701,6 +2741,7 @@ dependencies = [
  "codex-login",
  "codex-otel",
  "codex-protocol",
+ "codex-sandbox",
  "codex-shell-command",
  "codex-state",
  "codex-terminal-detection",

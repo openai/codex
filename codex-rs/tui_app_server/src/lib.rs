@@ -39,7 +39,6 @@ use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
 use codex_core::read_session_meta_line;
 use codex_core::state_db::get_state_db;
-use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
@@ -48,6 +47,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::TurnContextItem;
+use codex_sandbox::WindowsSandboxLevelExt;
 use codex_state::log_db;
 use codex_terminal_detection::Multiplexer;
 use codex_terminal_detection::terminal_info;
@@ -70,6 +70,13 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 use url::Url;
 use uuid::Uuid;
+
+fn windows_sandbox_level(config: &Config) -> WindowsSandboxLevel {
+    WindowsSandboxLevel::from_mode_and_features(
+        config.permissions.windows_sandbox_mode.map(Into::into),
+        &config.features,
+    )
+}
 
 mod additional_dirs;
 mod app;
@@ -1279,7 +1286,7 @@ async fn run_ratatui_app(
     let should_show_trust_screen = should_show_trust_screen(&config);
     let should_prompt_windows_sandbox_nux_at_startup = cfg!(target_os = "windows")
         && trust_decision_was_made
-        && WindowsSandboxLevel::from_config(&config) == WindowsSandboxLevel::Disabled;
+        && windows_sandbox_level(&config) == WindowsSandboxLevel::Disabled;
 
     let Cli {
         prompt,

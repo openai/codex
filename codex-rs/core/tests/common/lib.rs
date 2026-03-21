@@ -282,11 +282,11 @@ where
 }
 
 pub fn sandbox_env_var() -> &'static str {
-    codex_core::spawn::CODEX_SANDBOX_ENV_VAR
+    codex_sandbox::CODEX_SANDBOX_ENV_VAR
 }
 
 pub fn sandbox_network_env_var() -> &'static str {
-    codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
+    codex_sandbox::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
 }
 
 const REMOTE_ENV_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV";

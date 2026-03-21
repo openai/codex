@@ -20,11 +20,14 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ServerNotification;
 use codex_core::bytes_to_string_smart;
 use codex_core::config::StartedNetworkProxy;
-use codex_core::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS;
-use codex_core::exec::ExecExpiration;
-use codex_core::exec::IO_DRAIN_TIMEOUT_MS;
-use codex_core::exec::SandboxType;
-use codex_core::sandboxing::ExecRequest;
+use codex_sandbox::DEFAULT_EXEC_COMMAND_TIMEOUT_MS;
+use codex_sandbox::ExecCapturePolicy;
+use codex_sandbox::ExecExpiration;
+use codex_sandbox::ExecRequest;
+use codex_sandbox::IO_DRAIN_TIMEOUT_MS;
+use codex_sandbox::SandboxPermissions;
+use codex_sandbox::SandboxType;
+use codex_sandbox::execute_env;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use codex_utils_pty::ProcessHandle;
 use codex_utils_pty::SpawnedProcess;
@@ -201,9 +204,7 @@ impl CommandExecManager {
             let sessions = Arc::clone(&self.sessions);
             tokio::spawn(async move {
                 let _started_network_proxy = started_network_proxy;
-                match codex_core::sandboxing::execute_env(exec_request, /*stdout_stream*/ None)
-                    .await
-                {
+                match execute_env(exec_request, /*stdout_stream*/ None).await {
                     Ok(output) => {
                         outgoing
                             .send_response(
@@ -733,11 +734,11 @@ mod tests {
             env: HashMap::new(),
             network: None,
             expiration: ExecExpiration::DefaultTimeout,
-            capture_policy: codex_core::exec::ExecCapturePolicy::ShellTool,
+            capture_policy: ExecCapturePolicy::ShellTool,
             sandbox: SandboxType::WindowsRestrictedToken,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
-            sandbox_permissions: codex_core::sandboxing::SandboxPermissions::UseDefault,
+            sandbox_permissions: SandboxPermissions::UseDefault,
             sandbox_policy: sandbox_policy.clone(),
             file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
             network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
@@ -846,11 +847,11 @@ mod tests {
                     env: HashMap::new(),
                     network: None,
                     expiration: ExecExpiration::Cancellation(CancellationToken::new()),
-                    capture_policy: codex_core::exec::ExecCapturePolicy::ShellTool,
+                    capture_policy: ExecCapturePolicy::ShellTool,
                     sandbox: SandboxType::None,
                     windows_sandbox_level: WindowsSandboxLevel::Disabled,
                     windows_sandbox_private_desktop: false,
-                    sandbox_permissions: codex_core::sandboxing::SandboxPermissions::UseDefault,
+                    sandbox_permissions: SandboxPermissions::UseDefault,
                     sandbox_policy: sandbox_policy.clone(),
                     file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
                     network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),

@@ -38,6 +38,24 @@ pub enum WindowsSandboxModeToml {
     Unelevated,
 }
 
+impl From<WindowsSandboxModeToml> for codex_sandbox::WindowsSandboxMode {
+    fn from(value: WindowsSandboxModeToml) -> Self {
+        match value {
+            WindowsSandboxModeToml::Elevated => codex_sandbox::WindowsSandboxMode::Elevated,
+            WindowsSandboxModeToml::Unelevated => codex_sandbox::WindowsSandboxMode::Unelevated,
+        }
+    }
+}
+
+impl From<codex_sandbox::WindowsSandboxMode> for WindowsSandboxModeToml {
+    fn from(value: codex_sandbox::WindowsSandboxMode) -> Self {
+        match value {
+            codex_sandbox::WindowsSandboxMode::Elevated => WindowsSandboxModeToml::Elevated,
+            codex_sandbox::WindowsSandboxMode::Unelevated => WindowsSandboxModeToml::Unelevated,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct WindowsToml {

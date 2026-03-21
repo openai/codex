@@ -56,9 +56,6 @@ use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
-use crate::windows_sandbox::WindowsSandboxLevelExt;
-use crate::windows_sandbox::resolve_windows_sandbox_mode;
-use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
 use codex_features::Feature;
@@ -102,6 +99,9 @@ use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
 use crate::config::permissions::network_proxy_config_from_profile_network;
 use crate::config::profile::ConfigProfile;
 use codex_network_proxy::NetworkProxyConfig;
+use codex_sandbox::WindowsSandboxLevelExt;
+use codex_sandbox::resolve_windows_sandbox_mode;
+use codex_sandbox::resolve_windows_sandbox_private_desktop;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 use toml_edit::value;
@@ -2186,9 +2186,29 @@ impl Config {
             feature_overrides,
         );
         let features = ManagedFeatures::from_configured(configured_features, feature_requirements)?;
-        let windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
-        let windows_sandbox_private_desktop =
-            resolve_windows_sandbox_private_desktop(&cfg, &config_profile);
+        let windows_sandbox_mode = resolve_windows_sandbox_mode(
+            config_profile
+                .windows
+                .as_ref()
+                .and_then(|windows| windows.sandbox)
+                .map(Into::into),
+            config_profile.features.as_ref(),
+            cfg.windows
+                .as_ref()
+                .and_then(|windows| windows.sandbox)
+                .map(Into::into),
+            cfg.features.as_ref(),
+        )
+        .map(Into::into);
+        let windows_sandbox_private_desktop = resolve_windows_sandbox_private_desktop(
+            config_profile
+                .windows
+                .as_ref()
+                .and_then(|windows| windows.sandbox_private_desktop),
+            cfg.windows
+                .as_ref()
+                .and_then(|windows| windows.sandbox_private_desktop),
+        );
         let resolved_cwd = normalize_for_native_workdir({
             use std::env;
 
@@ -2237,11 +2257,10 @@ impl Config {
             ));
         }
 
-        let windows_sandbox_level = match windows_sandbox_mode {
-            Some(WindowsSandboxModeToml::Elevated) => WindowsSandboxLevel::Elevated,
-            Some(WindowsSandboxModeToml::Unelevated) => WindowsSandboxLevel::RestrictedToken,
-            None => WindowsSandboxLevel::from_features(&features),
-        };
+        let windows_sandbox_level = WindowsSandboxLevel::from_mode_and_features(
+            windows_sandbox_mode.map(Into::into),
+            &features,
+        );
         let memories_root = memory_root(&codex_home);
         std::fs::create_dir_all(&memories_root)?;
         let memories_root = AbsolutePathBuf::from_absolute_path(&memories_root)?;

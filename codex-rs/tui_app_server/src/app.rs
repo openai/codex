@@ -76,8 +76,6 @@ use codex_core::message_history;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
-#[cfg(target_os = "windows")]
-use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
@@ -100,6 +98,20 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
 use codex_protocol::protocol::TokenUsage;
+#[cfg(target_os = "windows")]
+use codex_sandbox::WindowsSandboxLevelExt;
+#[cfg(target_os = "windows")]
+use codex_sandbox::elevated_setup_failure_details;
+#[cfg(target_os = "windows")]
+use codex_sandbox::elevated_setup_failure_metric_name;
+#[cfg(target_os = "windows")]
+use codex_sandbox::grant_read_root_non_elevated;
+#[cfg(target_os = "windows")]
+use codex_sandbox::run_elevated_setup;
+#[cfg(target_os = "windows")]
+use codex_sandbox::run_legacy_setup_preflight;
+#[cfg(target_os = "windows")]
+use codex_sandbox::sandbox_setup_is_complete;
 use codex_terminal_detection::user_agent;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
@@ -124,6 +136,14 @@ use std::time::Duration;
 use std::time::Instant;
 use tokio::select;
 use tokio::sync::Mutex;
+
+#[cfg(target_os = "windows")]
+fn windows_sandbox_level(config: &Config) -> WindowsSandboxLevel {
+    WindowsSandboxLevel::from_mode_and_features(
+        config.permissions.windows_sandbox_mode.map(Into::into),
+        &config.features,
+    )
+}
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::error::TrySendError;
@@ -1323,7 +1343,7 @@ impl App {
         if windows_sandbox_changed {
             #[cfg(target_os = "windows")]
             {
-                let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+                let windows_sandbox_level = windows_sandbox_level(&self.config);
                 self.app_event_tx.send(AppEvent::CodexOp(
                     AppCommand::override_turn_context(
                         /*cwd*/ None,
@@ -3021,8 +3041,7 @@ impl App {
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
         {
-            let should_check = WindowsSandboxLevel::from_config(&app.config)
-                != WindowsSandboxLevel::Disabled
+            let should_check = windows_sandbox_level(&app.config) != WindowsSandboxLevel::Disabled
                 && matches!(
                     app.config.permissions.sandbox_policy.get(),
                     codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
@@ -3659,8 +3678,7 @@ impl App {
 
                     // If the elevated setup already ran on this machine, don't prompt for
                     // elevation again - just flip the config to use the elevated path.
-                    if codex_core::windows_sandbox::sandbox_setup_is_complete(codex_home.as_path())
-                    {
+                    if sandbox_setup_is_complete(codex_home.as_path()) {
                         tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
                             preset,
                             mode: WindowsSandboxEnableMode::Elevated,
@@ -3672,7 +3690,7 @@ impl App {
                     self.windows_sandbox.setup_started_at = Some(Instant::now());
                     let session_telemetry = self.session_telemetry.clone();
                     tokio::task::spawn_blocking(move || {
-                        let result = codex_core::windows_sandbox::run_elevated_setup(
+                        let result = run_elevated_setup(
                             &policy,
                             policy_cwd.as_path(),
                             command_cwd.as_path(),
@@ -3694,10 +3712,7 @@ impl App {
                             Err(err) => {
                                 let mut code_tag: Option<String> = None;
                                 let mut message_tag: Option<String> = None;
-                                if let Some((code, message)) =
-                                    codex_core::windows_sandbox::elevated_setup_failure_details(
-                                        &err,
-                                    )
+                                if let Some((code, message)) = elevated_setup_failure_details(&err)
                                 {
                                     code_tag = Some(code);
                                     message_tag = Some(message);
@@ -3710,9 +3725,7 @@ impl App {
                                     tags.push(("message", message));
                                 }
                                 session_telemetry.counter(
-                                    codex_core::windows_sandbox::elevated_setup_failure_metric_name(
-                                        &err,
-                                    ),
+                                    elevated_setup_failure_metric_name(&err),
                                     /*inc*/ 1,
                                     &tags,
                                 );
@@ -3745,7 +3758,7 @@ impl App {
 
                     self.chat_widget.show_windows_sandbox_setup_status();
                     tokio::task::spawn_blocking(move || {
-                        if let Err(err) = codex_core::windows_sandbox::run_legacy_setup_preflight(
+                        if let Err(err) = run_legacy_setup_preflight(
                             &policy,
                             policy_cwd.as_path(),
                             command_cwd.as_path(),
@@ -3792,7 +3805,7 @@ impl App {
 
                     tokio::task::spawn_blocking(move || {
                         let requested_path = PathBuf::from(path);
-                        let event = match codex_core::windows_sandbox_read_grants::grant_read_root_non_elevated(
+                        let event = match grant_read_root_non_elevated(
                             &policy,
                             policy_cwd.as_path(),
                             command_cwd.as_path(),
@@ -3865,8 +3878,7 @@ impl App {
                             self.chat_widget.set_windows_sandbox_mode(
                                 self.config.permissions.windows_sandbox_mode,
                             );
-                            let windows_sandbox_level =
-                                WindowsSandboxLevel::from_config(&self.config);
+                            let windows_sandbox_level = windows_sandbox_level(&self.config);
                             if let Some((sample_paths, extra_count, failed_scan)) =
                                 self.chat_widget.world_writable_warning_details()
                             {
@@ -4156,7 +4168,7 @@ impl App {
                         return Ok(AppRunControl::Continue);
                     }
 
-                    let should_check = WindowsSandboxLevel::from_config(&self.config)
+                    let should_check = windows_sandbox_level(&self.config)
                         != WindowsSandboxLevel::Disabled
                         && policy_is_workspace_write_or_ro
                         && !self.chat_widget.world_writable_warning_hidden();

@@ -200,12 +200,10 @@ use codex_core::config::types::McpServerTransportConfig;
 use codex_core::config_loader::CloudRequirementsLoadError;
 use codex_core::config_loader::CloudRequirementsLoadErrorCode;
 use codex_core::config_loader::CloudRequirementsLoader;
+use codex_core::default_client::originator;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::error::CodexErr;
 use codex_core::error::Result as CodexResult;
-use codex_core::exec::ExecCapturePolicy;
-use codex_core::exec::ExecExpiration;
-use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
 use codex_core::find_archived_thread_path_by_id_str;
 use codex_core::find_thread_name_by_id;
@@ -230,13 +228,9 @@ use codex_core::plugins::load_plugin_mcp_servers;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
-use codex_core::sandboxing::SandboxPermissions;
 use codex_core::state_db::StateDbHandle;
 use codex_core::state_db::get_state_db;
 use codex_core::state_db::reconcile_rollout;
-use codex_core::windows_sandbox::WindowsSandboxLevelExt;
-use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
-use codex_core::windows_sandbox::WindowsSandboxSetupRequest;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_features::Stage;
@@ -275,6 +269,16 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
+use codex_sandbox::ExecCapturePolicy;
+use codex_sandbox::ExecExpiration;
+use codex_sandbox::ExecParams;
+use codex_sandbox::SandboxPermissions;
+use codex_sandbox::WindowsSandboxLevelExt;
+use codex_sandbox::WindowsSandboxSetupMode as SandboxWindowsSandboxSetupMode;
+use codex_sandbox::WindowsSandboxSetupRequest;
+use codex_sandbox::build_exec_request;
+use codex_sandbox::run_windows_sandbox_setup;
+use codex_sandbox::windows_sandbox_mode_tag;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadata;
 use codex_state::ThreadMetadataBuilder;
@@ -1661,7 +1665,10 @@ impl CodexMessageProcessor {
             },
             None => None,
         };
-        let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
+        let windows_sandbox_level = WindowsSandboxLevel::from_mode_and_features(
+            self.config.permissions.windows_sandbox_mode.map(Into::into),
+            &self.config.features,
+        );
         let output_bytes_cap = if disable_output_cap {
             None
         } else {
@@ -1745,7 +1752,7 @@ impl CodexMessageProcessor {
             None => None,
         };
 
-        match codex_core::exec::build_exec_request(
+        match build_exec_request(
             exec_params,
             &effective_policy,
             &effective_file_system_sandbox_policy,
@@ -3974,7 +3981,10 @@ impl CodexMessageProcessor {
         // Persist Windows sandbox mode.
         let mut cli_overrides = cli_overrides.unwrap_or_default();
         if cfg!(windows) {
-            match WindowsSandboxLevel::from_config(&self.config) {
+            match WindowsSandboxLevel::from_mode_and_features(
+                self.config.permissions.windows_sandbox_mode.map(Into::into),
+                &self.config.features,
+            ) {
                 WindowsSandboxLevel::Elevated => {
                     cli_overrides
                         .insert("windows.sandbox".to_string(), serde_json::json!("elevated"));
@@ -7163,8 +7173,8 @@ impl CodexMessageProcessor {
             .await;
 
         let mode = match params.mode {
-            WindowsSandboxSetupMode::Elevated => CoreWindowsSandboxSetupMode::Elevated,
-            WindowsSandboxSetupMode::Unelevated => CoreWindowsSandboxSetupMode::Unelevated,
+            WindowsSandboxSetupMode::Elevated => SandboxWindowsSandboxSetupMode::Elevated,
+            WindowsSandboxSetupMode::Unelevated => SandboxWindowsSandboxSetupMode::Unelevated,
         };
         let config = Arc::clone(&self.config);
         let cli_overrides = self.cli_overrides.clone();
@@ -7191,23 +7201,38 @@ impl CodexMessageProcessor {
             .await;
             let setup_result = match derived_config {
                 Ok(config) => {
+                    let active_profile = config.active_profile.clone();
+                    let codex_home = config.codex_home.clone();
                     let setup_request = WindowsSandboxSetupRequest {
                         mode,
                         policy: config.permissions.sandbox_policy.get().clone(),
                         policy_cwd: config.cwd.clone(),
                         command_cwd,
                         env_map: std::env::vars().collect(),
-                        codex_home: config.codex_home.clone(),
-                        active_profile: config.active_profile.clone(),
+                        codex_home: codex_home.clone(),
+                        originator_tag: Some(originator().value),
                     };
-                    codex_core::windows_sandbox::run_windows_sandbox_setup(setup_request).await
+                    match run_windows_sandbox_setup(setup_request).await {
+                        Ok(()) => ConfigEditsBuilder::new(codex_home.as_path())
+                            .with_profile(active_profile.as_deref())
+                            .set_windows_sandbox_mode(windows_sandbox_mode_tag(mode))
+                            .clear_legacy_windows_sandbox_keys()
+                            .apply()
+                            .await
+                            .map_err(|err| {
+                                anyhow::anyhow!("failed to persist windows sandbox mode: {err}")
+                            }),
+                        Err(err) => Err(err),
+                    }
                 }
                 Err(err) => Err(err.into()),
             };
             let notification = WindowsSandboxSetupCompletedNotification {
                 mode: match mode {
-                    CoreWindowsSandboxSetupMode::Elevated => WindowsSandboxSetupMode::Elevated,
-                    CoreWindowsSandboxSetupMode::Unelevated => WindowsSandboxSetupMode::Unelevated,
+                    SandboxWindowsSandboxSetupMode::Elevated => WindowsSandboxSetupMode::Elevated,
+                    SandboxWindowsSandboxSetupMode::Unelevated => {
+                        WindowsSandboxSetupMode::Unelevated
+                    }
                 },
                 success: setup_result.is_ok(),
                 error: setup_result.err().map(|err| err.to_string()),

@@ -42,6 +42,7 @@ members = [
     "protocol",
     "rmcp-client",
     "responses-api-proxy",
+    "sandbox",
     "stdio-to-uds",
     "otel",
     "tui",
@@ -130,6 +131,7 @@ codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
+codex-sandbox = { path = "sandbox" }
 codex-secrets = { path = "secrets" }
 codex-shell-command = { path = "shell-command" }
 codex-shell-escalation = { path = "shell-escalation" }

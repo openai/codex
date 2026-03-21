@@ -3,9 +3,9 @@ use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ServerNotification;
 use codex_core::config::Config;
 #[cfg(target_os = "windows")]
-use codex_core::windows_sandbox::WindowsSandboxLevelExt;
-#[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
+#[cfg(target_os = "windows")]
+use codex_sandbox::WindowsSandboxLevelExt;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -76,6 +76,14 @@ pub(crate) struct OnboardingResult {
     pub should_exit: bool,
 }
 
+#[cfg(target_os = "windows")]
+fn windows_sandbox_level(config: &Config) -> WindowsSandboxLevel {
+    WindowsSandboxLevel::from_mode_and_features(
+        config.permissions.windows_sandbox_mode.map(Into::into),
+        &config.features,
+    )
+}
+
 impl OnboardingScreen {
     pub(crate) fn new(tui: &mut Tui, args: OnboardingScreenArgs) -> Self {
         let OnboardingScreenArgs {
@@ -121,7 +129,7 @@ impl OnboardingScreen {
         }
         #[cfg(target_os = "windows")]
         let show_windows_create_sandbox_hint =
-            WindowsSandboxLevel::from_config(&config) == WindowsSandboxLevel::Disabled;
+            windows_sandbox_level(&config) == WindowsSandboxLevel::Disabled;
         #[cfg(not(target_os = "windows"))]
         let show_windows_create_sandbox_hint = false;
         let highlighted = TrustDirectorySelection::Trust;

@@ -1,4 +1,5 @@
 use super::*;
+use codex_sandbox::IO_DRAIN_TIMEOUT_MS;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;

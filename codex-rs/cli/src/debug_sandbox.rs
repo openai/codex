@@ -11,14 +11,21 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::NetworkProxyAuditMetadata;
 use codex_core::exec_env::create_env;
-use codex_core::landlock::create_linux_sandbox_command_args_for_policies;
 #[cfg(target_os = "macos")]
-use codex_core::seatbelt::create_seatbelt_command_args_for_policies_with_extensions;
-#[cfg(target_os = "macos")]
-use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
-use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+#[cfg(target_os = "macos")]
+use codex_sandbox::CODEX_SANDBOX_ENV_VAR;
+use codex_sandbox::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_sandbox::SandboxType;
+use codex_sandbox::SandboxType::LinuxSeccomp;
+use codex_sandbox::SandboxType::MacosSeatbelt;
+use codex_sandbox::SandboxType::WindowsRestrictedToken;
+use codex_sandbox::WindowsSandboxLevelExt;
+use codex_sandbox::create_linux_sandbox_command_args_for_policies;
+#[cfg(target_os = "macos")]
+use codex_sandbox::create_seatbelt_command_args_for_policies_with_extensions;
 use codex_utils_cli::CliConfigOverrides;
 use tokio::process::Child;
 use tokio::process::Command as TokioCommand;
@@ -48,7 +55,7 @@ pub async fn run_command_under_seatbelt(
         command,
         config_overrides,
         codex_linux_sandbox_exe,
-        SandboxType::Seatbelt,
+        MacosSeatbelt,
         log_denials,
     )
     .await
@@ -76,7 +83,7 @@ pub async fn run_command_under_landlock(
         command,
         config_overrides,
         codex_linux_sandbox_exe,
-        SandboxType::Landlock,
+        LinuxSeccomp,
         /*log_denials*/ false,
     )
     .await
@@ -96,17 +103,10 @@ pub async fn run_command_under_windows(
         command,
         config_overrides,
         codex_linux_sandbox_exe,
-        SandboxType::Windows,
+        WindowsRestrictedToken,
         /*log_denials*/ false,
     )
     .await
-}
-
-enum SandboxType {
-    #[cfg(target_os = "macos")]
-    Seatbelt,
-    Landlock,
-    Windows,
 }
 
 async fn run_command_under_sandbox(
@@ -140,11 +140,9 @@ async fn run_command_under_sandbox(
     );
 
     // Special-case Windows sandbox: execute and exit the process to emulate inherited stdio.
-    if let SandboxType::Windows = sandbox_type {
+    if let WindowsRestrictedToken = sandbox_type {
         #[cfg(target_os = "windows")]
         {
-            use codex_core::windows_sandbox::WindowsSandboxLevelExt;
-            use codex_protocol::config_types::WindowsSandboxLevel;
             use codex_windows_sandbox::run_windows_sandbox_capture;
             use codex_windows_sandbox::run_windows_sandbox_capture_elevated;
 
@@ -156,7 +154,10 @@ async fn run_command_under_sandbox(
             let command_vec = command.clone();
             let base_dir = config.codex_home.clone();
             let use_elevated = matches!(
-                WindowsSandboxLevel::from_config(&config),
+                WindowsSandboxLevel::from_mode_and_features(
+                    config.permissions.windows_sandbox_mode.map(Into::into),
+                    &config.features,
+                ),
                 WindowsSandboxLevel::Elevated
             );
 
@@ -245,7 +246,7 @@ async fn run_command_under_sandbox(
 
     let mut child = match sandbox_type {
         #[cfg(target_os = "macos")]
-        SandboxType::Seatbelt => {
+        MacosSeatbelt => {
             let args = create_seatbelt_command_args_for_policies_with_extensions(
                 command,
                 &config.permissions.file_system_sandbox_policy,
@@ -272,7 +273,7 @@ async fn run_command_under_sandbox(
             )
             .await?
         }
-        SandboxType::Landlock => {
+        LinuxSeccomp => {
             #[expect(clippy::expect_used)]
             let codex_linux_sandbox_exe = config
                 .codex_linux_sandbox_exe
@@ -304,7 +305,7 @@ async fn run_command_under_sandbox(
             )
             .await?
         }
-        SandboxType::Windows => {
+        WindowsRestrictedToken => {
             unreachable!("Windows sandbox should have been handled above");
         }
     };

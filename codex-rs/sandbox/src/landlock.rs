@@ -60,7 +60,7 @@ where
     .await
 }
 
-pub(crate) fn allow_network_for_proxy(enforce_managed_network: bool) -> bool {
+pub fn allow_network_for_proxy(enforce_managed_network: bool) -> bool {
     // When managed network requirements are active, request proxy-only
     // networking from the Linux sandbox helper. Without managed requirements,
     // preserve existing behavior.

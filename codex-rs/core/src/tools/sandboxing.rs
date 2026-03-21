@@ -23,6 +23,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
+use codex_sandbox::SandboxPreference;
 use futures::Future;
 use futures::future::BoxFuture;
 use serde::Serialize;
@@ -280,14 +281,7 @@ pub(crate) trait Approvable<Req> {
     ) -> BoxFuture<'a, ReviewDecision>;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SandboxablePreference {
-    Auto,
-    #[allow(dead_code)] // Will be used by later tools.
-    Require,
-    #[allow(dead_code)] // Will be used by later tools.
-    Forbid,
-}
+pub(crate) type SandboxablePreference = SandboxPreference;
 
 pub(crate) trait Sandboxable {
     fn sandbox_preference(&self) -> SandboxablePreference;

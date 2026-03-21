@@ -1,6 +1,10 @@
 #![cfg(unix)]
-use codex_core::spawn::StdioPolicy;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_sandbox::StdioPolicy;
+#[cfg(target_os = "linux")]
+use codex_sandbox::spawn_command_under_linux_sandbox;
+#[cfg(target_os = "macos")]
+use codex_sandbox::spawn_command_under_seatbelt;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::future::Future;
@@ -20,7 +24,6 @@ async fn spawn_command_under_sandbox(
     stdio_policy: StdioPolicy,
     env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
-    use codex_core::seatbelt::spawn_command_under_seatbelt;
     spawn_command_under_seatbelt(
         command,
         command_cwd,
@@ -42,7 +45,6 @@ async fn spawn_command_under_sandbox(
     stdio_policy: StdioPolicy,
     env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
-    use codex_core::landlock::spawn_command_under_linux_sandbox;
     let codex_linux_sandbox_exe = codex_utils_cargo_bin::cargo_bin("codex-exec")
         .map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?;
     spawn_command_under_linux_sandbox(
