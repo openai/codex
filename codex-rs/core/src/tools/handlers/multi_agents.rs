@@ -307,13 +307,6 @@ fn apply_spawn_agent_runtime_overrides(
     config.permissions.shell_environment_policy = turn.shell_environment_policy.clone();
     config.codex_linux_sandbox_exe = turn.codex_linux_sandbox_exe.clone();
     config.cwd = turn.cwd.clone();
-    config
-        .permissions
-        .sandbox_policy
-        .set(turn.sandbox_policy.get().clone())
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!("sandbox_policy is invalid: {err}"))
-        })?;
     config.permissions.file_system_sandbox_policy = turn.file_system_sandbox_policy.clone();
     config.permissions.network_sandbox_policy = turn.network_sandbox_policy;
     Ok(())

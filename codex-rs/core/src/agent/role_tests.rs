@@ -7,6 +7,7 @@ use crate::skills::SkillsManager;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::SandboxPolicy;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::PathBuf;
@@ -69,17 +70,27 @@ async fn apply_role_returns_error_for_unknown_role() {
 }
 
 #[tokio::test]
-#[ignore = "No role requiring it for now"]
-async fn apply_explorer_role_sets_model_and_adds_session_flags_layer() {
-    let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+#[cfg_attr(target_os = "windows", ignore)]
+async fn apply_explorer_role_sets_read_only_config_and_adds_session_flags_layer() {
+    let (_home, mut config) = test_config_with_cli_overrides(vec![(
+        "sandbox_mode".to_string(),
+        TomlValue::String("workspace-write".to_string()),
+    )])
+    .await;
     let before_layers = session_flags_layer_count(&config);
+    assert!(matches!(
+        config.permissions.sandbox_policy.get(),
+        SandboxPolicy::WorkspaceWrite { .. }
+    ));
 
     apply_role_to_config(&mut config, Some("explorer"))
         .await
         .expect("explorer role should apply");
 
-    assert_eq!(config.model.as_deref(), Some("gpt-5.1-codex-mini"));
-    assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::Medium));
+    assert_eq!(
+        config.permissions.sandbox_policy.get(),
+        &SandboxPolicy::new_read_only_policy()
+    );
     assert_eq!(session_flags_layer_count(&config), before_layers + 1);
 }
 
@@ -734,6 +745,9 @@ fn spawn_tool_spec_marks_role_locked_reasoning_effort_only() {
 
 #[test]
 fn built_in_config_file_contents_resolves_explorer_only() {
+    let explorer =
+        built_in::config_file_contents(Path::new("explorer.toml")).expect("explorer config");
+    assert!(explorer.contains("sandbox_mode = \"read-only\""));
     assert_eq!(
         built_in::config_file_contents(Path::new("missing.toml")),
         None

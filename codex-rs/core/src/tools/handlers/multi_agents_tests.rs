@@ -468,7 +468,6 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         "spawn_agent",
         function_payload(json!({
             "message": "await this command",
-            "agent_type": "explorer"
         })),
     );
     let output = SpawnAgentHandler
@@ -1586,11 +1585,6 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("approval policy set");
-    expected
-        .permissions
-        .sandbox_policy
-        .set(turn.sandbox_policy.get().clone())
-        .expect("sandbox policy set");
     expected.permissions.file_system_sandbox_policy = file_system_sandbox_policy;
     expected.permissions.network_sandbox_policy = network_sandbox_policy;
     assert_eq!(config, expected);
