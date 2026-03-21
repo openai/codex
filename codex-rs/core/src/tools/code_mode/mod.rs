@@ -147,14 +147,6 @@ impl CodeModeTurnHost for CoreTurnHost {
     }
 }
 
-pub(crate) fn is_code_mode_nested_tool(tool_name: &str) -> bool {
-    codex_code_mode::is_code_mode_nested_tool(tool_name)
-}
-
-pub(crate) fn tool_description(enabled_tools: &[(String, String)], code_mode_only: bool) -> String {
-    codex_code_mode::build_exec_tool_description(enabled_tools, code_mode_only)
-}
-
 pub(crate) fn wait_tool_description() -> &'static str {
     codex_code_mode::build_wait_tool_description()
 }
@@ -269,7 +261,7 @@ pub(super) async fn build_enabled_tools(
 
 fn enabled_tool_from_spec(spec: ToolSpec) -> Option<codex_code_mode::ToolDefinition> {
     let tool_name = spec.name().to_string();
-    if !is_code_mode_nested_tool(&tool_name) {
+    if !codex_code_mode::is_code_mode_nested_tool(&tool_name) {
         return None;
     }
 
