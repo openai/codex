@@ -15,6 +15,7 @@
 //! hint. The pane schedules redraws so those hints can expire even when the UI is otherwise idle.
 use std::path::PathBuf;
 
+use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::pending_input_preview::PendingInputPreview;
@@ -1024,6 +1025,25 @@ impl BottomPane {
             Some("Respond to the MCP server request to continue.".to_string()),
         );
         self.push_view(Box::new(modal));
+    }
+
+    pub(crate) fn dismiss_app_server_request(
+        &mut self,
+        request: &ResolvedAppServerRequest,
+    ) -> bool {
+        let Some(view) = self.view_stack.last_mut() else {
+            return false;
+        };
+        let changed = view.dismiss_app_server_request(request);
+        if !changed {
+            return false;
+        }
+        if view.is_complete() {
+            self.view_stack.pop();
+            self.on_active_view_complete();
+        }
+        self.request_redraw();
+        true
     }
 
     fn on_active_view_complete(&mut self) {

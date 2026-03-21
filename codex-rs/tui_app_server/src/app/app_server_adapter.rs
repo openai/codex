@@ -144,8 +144,12 @@ impl App {
     ) {
         match &notification {
             ServerNotification::ServerRequestResolved(notification) => {
-                self.pending_app_server_requests
-                    .resolve_notification(&notification.request_id);
+                if let Some(request) = self
+                    .pending_app_server_requests
+                    .resolve_notification(&notification.request_id)
+                {
+                    self.chat_widget.dismiss_app_server_request(&request);
+                }
             }
             ServerNotification::AccountRateLimitsUpdated(notification) => {
                 self.chat_widget.on_rate_limit_snapshot(Some(
