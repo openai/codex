@@ -27,6 +27,7 @@ fn main() -> anyhow::Result<()> {
             arg0_paths,
             codex_core::config_loader::LoaderOverrides::default(),
             /*remote*/ None,
+            /*remote_auth_token*/ None,
         )
         .await?;
         let token_usage = exit_info.token_usage;
