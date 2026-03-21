@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AuthManager;
@@ -6,6 +5,8 @@ use crate::RolloutRecorder;
 use crate::agent::AgentControl;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::client::ModelClient;
+#[cfg(unix)]
+use crate::config::NetworkProxySpec;
 use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
 use crate::file_watcher::FileWatcher;
@@ -13,6 +14,7 @@ use crate::mcp::McpManager;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
 use crate::plugins::PluginsManager;
+use crate::skill_network_proxy_cache::SkillNetworkProxyCache;
 use crate::skills::SkillsManager;
 use crate::state_db::StateDbHandle;
 use crate::tools::code_mode::CodeModeService;
@@ -24,6 +26,7 @@ use codex_exec_server::Environment;
 use codex_hooks::Hooks;
 use codex_otel::SessionTelemetry;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
@@ -56,7 +59,10 @@ pub(crate) struct SessionServices {
     pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) file_watcher: Arc<FileWatcher>,
     pub(crate) agent_control: AgentControl,
+    #[cfg(unix)]
+    pub(crate) network_proxy_spec: Option<Arc<NetworkProxySpec>>,
     pub(crate) network_proxy: Option<StartedNetworkProxy>,
+    pub(crate) skill_network_proxy_cache: Arc<SkillNetworkProxyCache>,
     pub(crate) network_approval: Arc<NetworkApprovalService>,
     pub(crate) state_db: Option<StateDbHandle>,
     /// Session-scoped model client shared across turns.

@@ -23,6 +23,7 @@ use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::shell_snapshot::ShellSnapshot;
+use crate::skill_network_proxy_cache::SkillNetworkProxyCache;
 use crate::skills::SkillsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
@@ -156,6 +157,7 @@ pub(crate) struct ThreadManagerState {
     plugins_manager: Arc<PluginsManager>,
     mcp_manager: Arc<McpManager>,
     file_watcher: Arc<FileWatcher>,
+    skill_network_proxy_cache: Arc<SkillNetworkProxyCache>,
     session_source: SessionSource,
     // Captures submitted ops for testing purpose when test mode is enabled.
     ops_log: Option<SharedCapturedOps>,
@@ -188,6 +190,7 @@ impl ThreadManager {
             restriction_product,
         ));
         let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
+        let skill_network_proxy_cache = Arc::new(SkillNetworkProxyCache::new());
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -203,6 +206,7 @@ impl ThreadManager {
                 plugins_manager,
                 mcp_manager,
                 file_watcher,
+                skill_network_proxy_cache,
                 auth_manager,
                 session_source,
                 ops_log: should_use_test_thread_manager_behavior()
@@ -254,6 +258,7 @@ impl ThreadManager {
             restriction_product,
         ));
         let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
+        let skill_network_proxy_cache = Arc::new(SkillNetworkProxyCache::new());
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -267,6 +272,7 @@ impl ThreadManager {
                 plugins_manager,
                 mcp_manager,
                 file_watcher,
+                skill_network_proxy_cache,
                 auth_manager,
                 session_source: SessionSource::Exec,
                 ops_log: should_use_test_thread_manager_behavior()
@@ -772,6 +778,7 @@ impl ThreadManagerState {
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),
             file_watcher: Arc::clone(&self.file_watcher),
+            skill_network_proxy_cache: Arc::clone(&self.skill_network_proxy_cache),
             conversation_history: initial_history,
             session_source,
             agent_control,

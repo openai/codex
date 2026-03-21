@@ -1,4 +1,5 @@
 use super::*;
+use crate::skills::model::SkillManagedNetworkOverride;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -199,4 +200,100 @@ fn requirements_denied_domains_are_a_baseline_for_default_mode() {
         ]
     );
     assert_eq!(spec.constraints.denylist_expansion_enabled, Some(true));
+}
+
+#[test]
+fn skill_managed_network_override_replaces_only_requested_domain_lists() {
+    let mut config = NetworkProxyConfig::default();
+    config.network.allowed_domains = vec!["base-allow.example.com".to_string()];
+    config.network.denied_domains = vec!["base-deny.example.com".to_string()];
+    let spec = NetworkProxySpec {
+        config,
+        constraints: NetworkProxyConstraints {
+            allowed_domains: Some(vec!["base-allow.example.com".to_string()]),
+            denied_domains: Some(vec!["base-deny.example.com".to_string()]),
+            allowlist_expansion_enabled: Some(false),
+            denylist_expansion_enabled: Some(false),
+            ..NetworkProxyConstraints::default()
+        },
+        hard_deny_allowlist_misses: true,
+    };
+
+    let updated = spec.with_skill_managed_network_override(&SkillManagedNetworkOverride {
+        allowed_domains: Some(vec!["skill-allow.example.com".to_string()]),
+        denied_domains: None,
+    });
+
+    assert_eq!(
+        updated.config.network.allowed_domains,
+        vec!["skill-allow.example.com".to_string()]
+    );
+    assert_eq!(
+        updated.config.network.denied_domains,
+        vec!["base-deny.example.com".to_string()]
+    );
+    assert_eq!(
+        updated.constraints.allowed_domains,
+        Some(vec!["skill-allow.example.com".to_string()])
+    );
+    assert_eq!(
+        updated.constraints.denied_domains,
+        Some(vec!["base-deny.example.com".to_string()])
+    );
+    assert_eq!(updated.constraints.allowlist_expansion_enabled, Some(false));
+    assert_eq!(updated.constraints.denylist_expansion_enabled, Some(false));
+    assert!(updated.hard_deny_allowlist_misses);
+}
+
+#[test]
+fn shared_skill_proxy_key_normalizes_domain_order() {
+    let mut base_config = NetworkProxyConfig::default();
+    base_config.network.allowed_domains =
+        vec!["b.example.com".to_string(), "a.example.com".to_string()];
+    base_config.network.denied_domains = vec![
+        "deny-b.example.com".to_string(),
+        "deny-a.example.com".to_string(),
+    ];
+    let base = NetworkProxySpec {
+        config: base_config,
+        constraints: NetworkProxyConstraints {
+            allowed_domains: Some(vec![
+                "managed-b.example.com".to_string(),
+                "managed-a.example.com".to_string(),
+            ]),
+            denied_domains: Some(vec![
+                "managed-deny-b.example.com".to_string(),
+                "managed-deny-a.example.com".to_string(),
+            ]),
+            ..NetworkProxyConstraints::default()
+        },
+        hard_deny_allowlist_misses: false,
+    };
+    let mut reordered_config = NetworkProxyConfig::default();
+    reordered_config.network.allowed_domains =
+        vec!["a.example.com".to_string(), "b.example.com".to_string()];
+    reordered_config.network.denied_domains = vec![
+        "deny-a.example.com".to_string(),
+        "deny-b.example.com".to_string(),
+    ];
+    let reordered = NetworkProxySpec {
+        config: reordered_config,
+        constraints: NetworkProxyConstraints {
+            allowed_domains: Some(vec![
+                "managed-a.example.com".to_string(),
+                "managed-b.example.com".to_string(),
+            ]),
+            denied_domains: Some(vec![
+                "managed-deny-a.example.com".to_string(),
+                "managed-deny-b.example.com".to_string(),
+            ]),
+            ..NetworkProxyConstraints::default()
+        },
+        hard_deny_allowlist_misses: false,
+    };
+
+    assert_eq!(
+        base.shared_skill_proxy_key(),
+        reordered.shared_skill_proxy_key()
+    );
 }

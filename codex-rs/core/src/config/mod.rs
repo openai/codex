@@ -122,6 +122,8 @@ pub use codex_network_proxy::NetworkProxyAuditMetadata;
 
 pub use managed_features::ManagedFeatures;
 pub use network_proxy_spec::NetworkProxySpec;
+#[cfg(any(unix, test))]
+pub(crate) use network_proxy_spec::SkillNetworkProxyKey;
 pub use network_proxy_spec::StartedNetworkProxy;
 pub use permissions::FilesystemPermissionToml;
 pub use permissions::FilesystemPermissionsToml;

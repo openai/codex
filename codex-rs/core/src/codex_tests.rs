@@ -46,6 +46,7 @@ use crate::protocol::UserMessageEvent;
 use crate::rollout::policy::EventPersistenceMode;
 use crate::rollout::recorder::RolloutRecorder;
 use crate::rollout::recorder::RolloutRecorderParams;
+use crate::skill_network_proxy_cache::SkillNetworkProxyCache;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
@@ -2360,6 +2361,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         plugins_manager,
         mcp_manager,
         Arc::new(FileWatcher::noop()),
+        Arc::new(SkillNetworkProxyCache::new()),
         AgentControl::default(),
     )
     .await;
@@ -2494,7 +2496,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         mcp_manager,
         file_watcher,
         agent_control,
+        #[cfg(unix)]
+        network_proxy_spec: None,
         network_proxy: None,
+        skill_network_proxy_cache: Arc::new(SkillNetworkProxyCache::new()),
         network_approval: Arc::clone(&network_approval),
         state_db: None,
         model_client: ModelClient::new(
@@ -3293,7 +3298,10 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         mcp_manager,
         file_watcher,
         agent_control,
+        #[cfg(unix)]
+        network_proxy_spec: None,
         network_proxy: None,
+        skill_network_proxy_cache: Arc::new(SkillNetworkProxyCache::new()),
         network_approval: Arc::clone(&network_approval),
         state_db: None,
         model_client: ModelClient::new(

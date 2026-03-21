@@ -124,6 +124,7 @@ pub(crate) mod safety;
 pub mod seatbelt;
 pub mod shell;
 pub mod shell_snapshot;
+mod skill_network_proxy_cache;
 pub mod skills;
 pub mod spawn;
 pub mod state_db;
