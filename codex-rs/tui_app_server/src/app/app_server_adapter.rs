@@ -122,6 +122,9 @@ impl App {
                 self.handle_server_notification_event(app_server_client, notification)
                     .await;
             }
+            AppServerEvent::LegacyNotification(_) => {
+                tracing::debug!("ignoring legacy app-server notification in tui_app_server");
+            }
             AppServerEvent::ServerRequest(request) => {
                 self.handle_server_request_event(app_server_client, request)
                     .await;
