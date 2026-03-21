@@ -18,7 +18,7 @@ use crate::function_tool::FunctionCallError;
 use crate::memories::citations::get_thread_id_from_citations;
 use crate::memories::citations::parse_memory_citation;
 use crate::parse_turn_item;
-use crate::state_db;
+use crate::state_runtime;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
 use codex_protocol::models::DeveloperInstructions;
@@ -146,7 +146,7 @@ async fn maybe_mark_thread_memory_mode_polluted_from_web_search(
     {
         return;
     }
-    state_db::mark_thread_memory_mode_polluted(
+    state_runtime::mark_thread_memory_mode_polluted(
         sess.services.state_db.as_deref(),
         sess.conversation_id,
         "record_completed_response_item",
@@ -168,7 +168,7 @@ async fn record_stage1_output_usage_for_completed_item(
         return;
     }
 
-    if let Some(db) = state_db::get_state_db(turn_context.config.as_ref()).await {
+    if let Some(db) = state_runtime::get_state_db(turn_context.config.as_ref()).await {
         let _ = db.record_stage1_output_usage(&thread_ids).await;
     }
 }

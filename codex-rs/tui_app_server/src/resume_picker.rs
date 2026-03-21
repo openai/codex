@@ -17,16 +17,18 @@ use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
-use codex_core::Cursor;
-use codex_core::INTERACTIVE_SESSION_SOURCES;
-use codex_core::RolloutRecorder;
-use codex_core::ThreadItem;
-use codex_core::ThreadSortKey;
-use codex_core::ThreadsPage;
 use codex_core::config::Config;
-use codex_core::find_thread_names_by_ids;
 use codex_core::path_utils;
+use codex_core::rollout_config;
+use codex_core::state_runtime::get_state_db;
 use codex_protocol::ThreadId;
+use codex_rollout::Cursor;
+use codex_rollout::INTERACTIVE_SESSION_SOURCES;
+use codex_rollout::RolloutRecorder;
+use codex_rollout::ThreadItem;
+use codex_rollout::ThreadSortKey;
+use codex_rollout::ThreadsPage;
+use codex_rollout::find_thread_names_by_ids;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -317,8 +319,11 @@ fn spawn_rollout_page_loader(
                 Some(PageCursor::AppServer(_)) => None,
                 None => None,
             };
+            let rollout_config = rollout_config(&config);
+            let state_db_ctx = get_state_db(&config).await;
             let page = RolloutRecorder::list_threads(
-                &config,
+                &rollout_config,
+                state_db_ctx.as_deref(),
                 PAGE_SIZE,
                 cursor,
                 request.sort_key,

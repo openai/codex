@@ -7,6 +7,7 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::UserMessageEvent;
+use codex_rollout::SESSIONS_SUBDIR;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;

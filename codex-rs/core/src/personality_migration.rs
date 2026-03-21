@@ -1,14 +1,7 @@
 use crate::config::ConfigToml;
 use crate::config::edit::ConfigEditsBuilder;
-use crate::rollout::ARCHIVED_SESSIONS_SUBDIR;
-use crate::rollout::SESSIONS_SUBDIR;
-use crate::rollout::list::ThreadListConfig;
-use crate::rollout::list::ThreadListLayout;
-use crate::rollout::list::ThreadSortKey;
-use crate::rollout::list::get_threads_in_root;
-use crate::state_db;
 use codex_protocol::config_types::Personality;
-use codex_protocol::protocol::SessionSource;
+use codex_rollout::has_recorded_sessions as rollout_has_recorded_sessions;
 use std::io;
 use std::path::Path;
 use tokio::fs::OpenOptions;
@@ -64,57 +57,7 @@ pub async fn maybe_migrate_personality(
 }
 
 async fn has_recorded_sessions(codex_home: &Path, default_provider: &str) -> io::Result<bool> {
-    let allowed_sources: &[SessionSource] = &[];
-
-    if let Some(state_db_ctx) = state_db::open_if_present(codex_home, default_provider).await
-        && let Some(ids) = state_db::list_thread_ids_db(
-            Some(state_db_ctx.as_ref()),
-            codex_home,
-            /*page_size*/ 1,
-            /*cursor*/ None,
-            ThreadSortKey::CreatedAt,
-            allowed_sources,
-            /*model_providers*/ None,
-            /*archived_only*/ false,
-            "personality_migration",
-        )
-        .await
-        && !ids.is_empty()
-    {
-        return Ok(true);
-    }
-
-    let sessions = get_threads_in_root(
-        codex_home.join(SESSIONS_SUBDIR),
-        /*page_size*/ 1,
-        /*cursor*/ None,
-        ThreadSortKey::CreatedAt,
-        ThreadListConfig {
-            allowed_sources,
-            model_providers: None,
-            default_provider,
-            layout: ThreadListLayout::NestedByDate,
-        },
-    )
-    .await?;
-    if !sessions.items.is_empty() {
-        return Ok(true);
-    }
-
-    let archived_sessions = get_threads_in_root(
-        codex_home.join(ARCHIVED_SESSIONS_SUBDIR),
-        /*page_size*/ 1,
-        /*cursor*/ None,
-        ThreadSortKey::CreatedAt,
-        ThreadListConfig {
-            allowed_sources,
-            model_providers: None,
-            default_provider,
-            layout: ThreadListLayout::Flat,
-        },
-    )
-    .await?;
-    Ok(!archived_sessions.items.is_empty())
+    rollout_has_recorded_sessions(codex_home, default_provider).await
 }
 
 async fn create_marker(marker_path: &Path) -> io::Result<()> {

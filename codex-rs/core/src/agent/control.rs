@@ -7,13 +7,10 @@ use crate::agent::status::is_final;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
-use crate::find_archived_thread_path_by_id_str;
-use crate::find_thread_path_by_id_str;
-use crate::rollout::RolloutRecorder;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::shell_snapshot::ShellSnapshot;
-use crate::state_db;
+use crate::state_runtime;
 use crate::thread_manager::ThreadManagerState;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
@@ -27,6 +24,9 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::user_input::UserInput;
+use codex_rollout::RolloutRecorder;
+use codex_rollout::find_archived_thread_path_by_id_str;
+use codex_rollout::find_thread_path_by_id_str;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -371,7 +371,7 @@ impl AgentControl {
                 agent_nickname: _,
             }) => {
                 let (resumed_agent_nickname, resumed_agent_role) =
-                    if let Some(state_db_ctx) = state_db::get_state_db(&config).await {
+                    if let Some(state_db_ctx) = state_runtime::get_state_db(&config).await {
                         match state_db_ctx.get_thread(thread_id).await {
                             Ok(Some(metadata)) => (metadata.agent_nickname, metadata.agent_role),
                             Ok(None) | Err(_) => (None, None),

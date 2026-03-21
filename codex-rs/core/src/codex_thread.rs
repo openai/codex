@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use tokio::sync::Mutex;
 use tokio::sync::watch;
 
-use crate::state_db::StateDbHandle;
+use crate::state_runtime::StateDbHandle;
 
 #[derive(Clone, Debug)]
 pub struct ThreadConfigSnapshot {

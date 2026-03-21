@@ -43,6 +43,7 @@ codex-file-search = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-login = { workspace = true }
 codex-protocol = { workspace = true }
+codex-rollout = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-feedback = { workspace = true }
 codex-rmcp-client = { workspace = true }
@@ -66,7 +67,6 @@ tokio = { workspace = true, features = [
     "signal",
 ] }
 tokio-util = { workspace = true }
-tokio-tungstenite = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }
 uuid = { workspace = true, features = ["serde", "v7"] }

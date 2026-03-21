@@ -1,5 +1,3 @@
-use codex_core::ARCHIVED_SESSIONS_SUBDIR;
-use codex_core::SESSIONS_SUBDIR;
 use codex_core::config::ConfigToml;
 use codex_core::personality_migration::PERSONALITY_MIGRATION_FILENAME;
 use codex_core::personality_migration::PersonalityMigrationStatus;
@@ -13,6 +11,8 @@ use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::UserMessageEvent;
+use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
+use codex_rollout::SESSIONS_SUBDIR;
 use pretty_assertions::assert_eq;
 use std::io;
 use std::path::Path;

@@ -39,14 +39,12 @@ use super::list::parse_timestamp_uuid_from_filename;
 use super::metadata;
 use super::policy::EventPersistenceMode;
 use super::policy::is_persisted_response_item;
-use crate::config::Config;
-use crate::default_client::originator;
+use crate::RolloutConfig;
 use crate::git_info::collect_git_info;
 use crate::path_utils;
 use crate::state_db;
 use crate::state_db::StateDbHandle;
-use crate::truncate::TruncationPolicy;
-use crate::truncate::truncate_text;
+use codex_login::default_client::originator;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::ResumedHistory;
@@ -145,9 +143,9 @@ fn sanitize_rollout_item_for_persistence(
     match item {
         RolloutItem::EventMsg(EventMsg::ExecCommandEnd(mut event)) => {
             // Persist only a bounded aggregated summary of command output.
-            event.aggregated_output = truncate_text(
+            event.aggregated_output = truncate_bytes(
                 &event.aggregated_output,
-                TruncationPolicy::Bytes(PERSISTED_EXEC_AGGREGATED_OUTPUT_MAX_BYTES),
+                PERSISTED_EXEC_AGGREGATED_OUTPUT_MAX_BYTES,
             );
             // Drop unnecessary fields from rollout storage since aggregated_output is all we need.
             event.stdout.clear();
@@ -163,7 +161,8 @@ impl RolloutRecorder {
     /// List threads (rollout files) under the provided Codex home directory.
     #[allow(clippy::too_many_arguments)]
     pub async fn list_threads(
-        config: &Config,
+        config: &RolloutConfig,
+        state_db_ctx: Option<&StateRuntime>,
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
@@ -174,6 +173,7 @@ impl RolloutRecorder {
     ) -> std::io::Result<ThreadsPage> {
         Self::list_threads_with_db_fallback(
             config,
+            state_db_ctx,
             page_size,
             cursor,
             sort_key,
@@ -189,7 +189,8 @@ impl RolloutRecorder {
     /// List archived threads (rollout files) under the archived sessions directory.
     #[allow(clippy::too_many_arguments)]
     pub async fn list_archived_threads(
-        config: &Config,
+        config: &RolloutConfig,
+        state_db_ctx: Option<&StateRuntime>,
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
@@ -200,6 +201,7 @@ impl RolloutRecorder {
     ) -> std::io::Result<ThreadsPage> {
         Self::list_threads_with_db_fallback(
             config,
+            state_db_ctx,
             page_size,
             cursor,
             sort_key,
@@ -214,7 +216,8 @@ impl RolloutRecorder {
 
     #[allow(clippy::too_many_arguments)]
     async fn list_threads_with_db_fallback(
-        config: &Config,
+        config: &RolloutConfig,
+        state_db_ctx: Option<&StateRuntime>,
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
@@ -256,7 +259,6 @@ impl RolloutRecorder {
             .await?
         };
 
-        let state_db_ctx = state_db::get_state_db(config).await;
         if state_db_ctx.is_none() {
             // Keep legacy behavior when SQLite is unavailable: return filesystem results
             // at the requested page size.
@@ -266,7 +268,7 @@ impl RolloutRecorder {
         // Warm the DB by repairing every filesystem hit before querying SQLite.
         for item in &fs_page.items {
             state_db::read_repair_rollout_path(
-                state_db_ctx.as_deref(),
+                state_db_ctx,
                 item.thread_id,
                 Some(archived),
                 item.path.as_path(),
@@ -275,7 +277,7 @@ impl RolloutRecorder {
         }
 
         if let Some(db_page) = state_db::list_threads_db(
-            state_db_ctx.as_deref(),
+            state_db_ctx,
             codex_home,
             page_size,
             cursor,
@@ -298,7 +300,8 @@ impl RolloutRecorder {
     /// Find the newest recorded thread path, optionally filtering to a matching cwd.
     #[allow(clippy::too_many_arguments)]
     pub async fn find_latest_thread_path(
-        config: &Config,
+        config: &RolloutConfig,
+        state_db_ctx: Option<&StateRuntime>,
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
@@ -308,12 +311,11 @@ impl RolloutRecorder {
         filter_cwd: Option<&Path>,
     ) -> std::io::Result<Option<PathBuf>> {
         let codex_home = config.codex_home.as_path();
-        let state_db_ctx = state_db::get_state_db(config).await;
         if state_db_ctx.is_some() {
             let mut db_cursor = cursor.cloned();
             loop {
                 let Some(db_page) = state_db::list_threads_db(
-                    state_db_ctx.as_deref(),
+                    state_db_ctx,
                     codex_home,
                     page_size,
                     db_cursor.as_ref(),
@@ -368,7 +370,7 @@ impl RolloutRecorder {
     ///
     /// For resumed sessions, this immediately opens the existing rollout file.
     pub async fn new(
-        config: &Config,
+        config: &RolloutConfig,
         params: RolloutRecorderParams,
         state_db_ctx: Option<StateDbHandle>,
         state_builder: Option<ThreadMetadataBuilder>,
@@ -414,8 +416,7 @@ impl RolloutRecorder {
                         } else {
                             Some(dynamic_tools)
                         },
-                        memory_mode: (!config.memories.generate_memories)
-                            .then_some("disabled".to_string()),
+                        memory_mode: (!config.generate_memories).then_some("disabled".to_string()),
                     };
 
                     (
@@ -463,7 +464,7 @@ impl RolloutRecorder {
             state_db_ctx.clone(),
             state_builder,
             config.model_provider_id.clone(),
-            config.memories.generate_memories,
+            config.generate_memories,
         ));
 
         Ok(Self {
@@ -482,7 +483,7 @@ impl RolloutRecorder {
         self.state_db.clone()
     }
 
-    pub(crate) async fn record_items(&self, items: &[RolloutItem]) -> std::io::Result<()> {
+    pub async fn record_items(&self, items: &[RolloutItem]) -> std::io::Result<()> {
         let mut filtered = Vec::new();
         for item in items {
             // Note that function calls may look a bit strange if they are
@@ -528,7 +529,7 @@ impl RolloutRecorder {
             .map_err(|e| IoError::other(format!("failed waiting for rollout flush: {e}")))
     }
 
-    pub(crate) async fn load_rollout_items(
+    pub async fn load_rollout_items(
         path: &Path,
     ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
         trace!("Resuming rollout from {path:?}");
@@ -660,7 +661,7 @@ struct LogFileInfo {
 }
 
 fn precompute_log_file_info(
-    config: &Config,
+    config: &RolloutConfig,
     conversation_id: ThreadId,
 ) -> std::io::Result<LogFileInfo> {
     // Resolve ~/.codex/sessions/YYYY/MM/DD path.
@@ -703,6 +704,53 @@ fn open_log_file(path: &Path) -> std::io::Result<File> {
         .append(true)
         .create(true)
         .open(path)
+}
+
+fn truncate_bytes(text: &str, max_bytes: usize) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
+    if text.len() <= max_bytes {
+        return text.to_string();
+    }
+    if max_bytes == 0 {
+        return format!("…{} chars truncated…", text.chars().count());
+    }
+
+    let left_budget = max_bytes / 2;
+    let right_budget = max_bytes - left_budget;
+    let tail_start_target = text.len().saturating_sub(right_budget);
+    let mut prefix_end = 0usize;
+    let mut suffix_start = text.len();
+    let mut removed_chars = 0usize;
+    let mut suffix_started = false;
+
+    for (idx, ch) in text.char_indices() {
+        let char_end = idx + ch.len_utf8();
+        if char_end <= left_budget {
+            prefix_end = char_end;
+            continue;
+        }
+        if idx >= tail_start_target {
+            if !suffix_started {
+                suffix_start = idx;
+                suffix_started = true;
+            }
+            continue;
+        }
+        removed_chars = removed_chars.saturating_add(1);
+    }
+
+    if suffix_start < prefix_end {
+        suffix_start = prefix_end;
+    }
+
+    let marker = format!("…{removed_chars} chars truncated…");
+    let mut out = String::with_capacity(text.len().min(max_bytes) + marker.len());
+    out.push_str(&text[..prefix_end]);
+    out.push_str(&marker);
+    out.push_str(&text[suffix_start..]);
+    out
 }
 
 #[allow(clippy::too_many_arguments)]

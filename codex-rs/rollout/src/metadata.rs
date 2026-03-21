@@ -1,7 +1,9 @@
-use crate::config::Config;
-use crate::rollout;
-use crate::rollout::list::parse_timestamp_uuid_from_filename;
-use crate::rollout::recorder::RolloutRecorder;
+use crate::ARCHIVED_SESSIONS_SUBDIR;
+use crate::RolloutConfig;
+use crate::SESSIONS_SUBDIR;
+use crate::list::parse_timestamp_uuid_from_filename;
+use crate::list::read_session_meta_line;
+use crate::recorder::RolloutRecorder;
 use crate::state_db::normalize_cwd_for_state_db;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
@@ -131,7 +133,7 @@ pub(crate) async fn extract_metadata_from_rollout(
     })
 }
 
-pub(crate) async fn backfill_sessions(runtime: &codex_state::StateRuntime, config: &Config) {
+pub(crate) async fn backfill_sessions(runtime: &codex_state::StateRuntime, config: &RolloutConfig) {
     let metric_client = codex_otel::metrics::global();
     let timer = metric_client
         .as_ref()
@@ -190,8 +192,8 @@ pub(crate) async fn backfill_sessions(runtime: &codex_state::StateRuntime, confi
         }
     }
 
-    let sessions_root = config.codex_home.join(rollout::SESSIONS_SUBDIR);
-    let archived_root = config.codex_home.join(rollout::ARCHIVED_SESSIONS_SUBDIR);
+    let sessions_root = config.codex_home.join(SESSIONS_SUBDIR);
+    let archived_root = config.codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
     let mut rollout_paths: Vec<BackfillRolloutPath> = Vec::new();
     for (root, archived) in [(sessions_root, false), (archived_root, true)] {
         if !tokio::fs::try_exists(&root).await.unwrap_or(false) {
@@ -268,9 +270,7 @@ pub(crate) async fn backfill_sessions(runtime: &codex_state::StateRuntime, confi
                             continue;
                         }
                         stats.upserted = stats.upserted.saturating_add(1);
-                        if let Ok(meta_line) =
-                            rollout::list::read_session_meta_line(&rollout.path).await
-                        {
+                        if let Ok(meta_line) = read_session_meta_line(&rollout.path).await {
                             if let Err(err) = runtime
                                 .persist_dynamic_tools(
                                     meta_line.meta.id,

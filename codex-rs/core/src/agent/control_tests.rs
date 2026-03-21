@@ -22,6 +22,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::Duration;
@@ -1178,10 +1179,7 @@ async fn resume_agent_from_rollout_reads_archived_rollout_path() {
         .await
         .expect("child shutdown should succeed");
 
-    let archived_root = harness
-        .config
-        .codex_home
-        .join(crate::ARCHIVED_SESSIONS_SUBDIR);
+    let archived_root = harness.config.codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
     tokio::fs::create_dir_all(&archived_root)
         .await
         .expect("archived root should exist");

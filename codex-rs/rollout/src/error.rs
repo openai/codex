@@ -1,10 +1,9 @@
 use std::io::ErrorKind;
 use std::path::Path;
 
-use crate::error::CodexErr;
-use crate::rollout::SESSIONS_SUBDIR;
+use crate::SESSIONS_SUBDIR;
 
-pub(crate) fn map_session_init_error(err: &anyhow::Error, codex_home: &Path) -> CodexErr {
+pub(crate) fn session_init_error_message(err: &anyhow::Error, codex_home: &Path) -> String {
     if let Some(mapped) = err
         .chain()
         .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
@@ -13,10 +12,10 @@ pub(crate) fn map_session_init_error(err: &anyhow::Error, codex_home: &Path) -> 
         return mapped;
     }
 
-    CodexErr::Fatal(format!("Failed to initialize session: {err:#}"))
+    format!("Failed to initialize session: {err:#}")
 }
 
-fn map_rollout_io_error(io_err: &std::io::Error, codex_home: &Path) -> Option<CodexErr> {
+fn map_rollout_io_error(io_err: &std::io::Error, codex_home: &Path) -> Option<String> {
     let sessions_dir = codex_home.join(SESSIONS_SUBDIR);
     let hint = match io_err.kind() {
         ErrorKind::PermissionDenied => format!(
@@ -43,7 +42,5 @@ fn map_rollout_io_error(io_err: &std::io::Error, codex_home: &Path) -> Option<Co
         _ => return None,
     };
 
-    Some(CodexErr::Fatal(format!(
-        "{hint} (underlying error: {io_err})"
-    )))
+    Some(format!("{hint} (underlying error: {io_err})"))
 }

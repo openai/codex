@@ -15,10 +15,10 @@ use uuid::Uuid;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
-use crate::protocol::EventMsg;
 use crate::state_db;
 use codex_file_search as file_search;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMetaLine;
@@ -672,6 +672,62 @@ pub fn parse_cursor(token: &str) -> Option<Cursor> {
     })?;
 
     Some(Cursor::new(ts, uuid))
+}
+
+pub(crate) async fn has_recorded_sessions(
+    codex_home: &Path,
+    default_provider: &str,
+) -> io::Result<bool> {
+    let allowed_sources: &[SessionSource] = &[];
+    if let Some(state_db_ctx) = state_db::open_if_present(codex_home, default_provider).await
+        && let Some(ids) = state_db::list_thread_ids_db(
+            Some(state_db_ctx.as_ref()),
+            codex_home,
+            /*page_size*/ 1,
+            /*cursor*/ None,
+            ThreadSortKey::CreatedAt,
+            allowed_sources,
+            /*model_providers*/ None,
+            /*archived_only*/ false,
+            "has_recorded_sessions",
+        )
+        .await
+        && !ids.is_empty()
+    {
+        return Ok(true);
+    }
+
+    let sessions = get_threads_in_root(
+        codex_home.join(SESSIONS_SUBDIR),
+        /*page_size*/ 1,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        ThreadListConfig {
+            allowed_sources,
+            model_providers: None,
+            default_provider,
+            layout: ThreadListLayout::NestedByDate,
+        },
+    )
+    .await?;
+    if !sessions.items.is_empty() {
+        return Ok(true);
+    }
+
+    let archived = get_threads_in_root(
+        codex_home.join(ARCHIVED_SESSIONS_SUBDIR),
+        /*page_size*/ 1,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        ThreadListConfig {
+            allowed_sources,
+            model_providers: None,
+            default_provider,
+            layout: ThreadListLayout::Flat,
+        },
+    )
+    .await?;
+    Ok(!archived.items.is_empty())
 }
 
 fn build_next_cursor(items: &[ThreadItem], sort_key: ThreadSortKey) -> Option<Cursor> {

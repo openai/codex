@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::test_rollout_config;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Timelike;
@@ -16,7 +17,6 @@ use codex_state::ThreadMetadataBuilder;
 use pretty_assertions::assert_eq;
 use std::fs::File;
 use std::io::Write;
-use std::path::Path;
 use std::path::PathBuf;
 use tempfile::tempdir;
 use uuid::Uuid;
@@ -197,9 +197,7 @@ async fn backfill_sessions_resumes_from_watermark_and_marks_complete() {
     ))
     .await;
 
-    let mut config = crate::config::test_config();
-    config.codex_home = codex_home.clone();
-    config.model_provider_id = "test-provider".to_string();
+    let config = test_rollout_config(codex_home.as_path());
     backfill_sessions(runtime.as_ref(), &config).await;
 
     let first_id = ThreadId::from_string(&first_uuid.to_string()).expect("first thread id");
@@ -267,9 +265,7 @@ async fn backfill_sessions_preserves_existing_git_branch_and_fills_missing_git_f
         .await
         .expect("existing metadata upsert");
 
-    let mut config = crate::config::test_config();
-    config.codex_home = codex_home.clone();
-    config.model_provider_id = "test-provider".to_string();
+    let config = test_rollout_config(codex_home.as_path());
     backfill_sessions(runtime.as_ref(), &config).await;
 
     let persisted = runtime
@@ -304,9 +300,7 @@ async fn backfill_sessions_normalizes_cwd_before_upsert() {
         .await
         .expect("initialize runtime");
 
-    let mut config = crate::config::test_config();
-    config.codex_home = codex_home.clone();
-    config.model_provider_id = "test-provider".to_string();
+    let config = test_rollout_config(codex_home.as_path());
     backfill_sessions(runtime.as_ref(), &config).await;
 
     let thread_id = ThreadId::from_string(&thread_uuid.to_string()).expect("thread id");

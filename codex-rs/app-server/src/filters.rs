@@ -1,7 +1,7 @@
 use codex_app_server_protocol::ThreadSourceKind;
-use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
+use codex_rollout::INTERACTIVE_SESSION_SOURCES;
 
 pub(crate) fn compute_source_filters(
     source_kinds: Option<Vec<ThreadSourceKind>>,

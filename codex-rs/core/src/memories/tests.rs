@@ -689,7 +689,7 @@ mod phase2 {
         let rollout_path = subagent
             .rollout_path()
             .expect("consolidation thread should have a rollout path");
-        crate::state_db::read_repair_rollout_path(
+        codex_rollout::read_repair_rollout_path(
             Some(harness.state_db.as_ref()),
             Some(thread_id),
             Some(/*archived_only*/ false),

@@ -6,7 +6,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 
-use crate::rollout::list::find_thread_path_by_id_str;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::shell::get_shell;
@@ -16,6 +15,7 @@ use anyhow::anyhow;
 use anyhow::bail;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
+use codex_rollout::find_thread_path_by_id_str;
 use tokio::fs;
 use tokio::process::Command;
 use tokio::sync::watch;

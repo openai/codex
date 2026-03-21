@@ -31,7 +31,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
-use crate::state_db;
+use crate::state_runtime;
 use codex_features::Feature;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::openai_models::InputModality;
@@ -281,7 +281,7 @@ async fn maybe_mark_thread_memory_mode_polluted(sess: &Session, turn_context: &T
     {
         return;
     }
-    state_db::mark_thread_memory_mode_polluted(
+    state_runtime::mark_thread_memory_mode_polluted(
         sess.services.state_db.as_deref(),
         sess.conversation_id,
         "mcp_tool_call",

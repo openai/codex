@@ -10,9 +10,6 @@ pub use app::ExitReason;
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
-use codex_core::INTERACTIVE_SESSION_SOURCES;
-use codex_core::RolloutRecorder;
-use codex_core::ThreadSortKey;
 use codex_core::auth::AuthConfig;
 use codex_core::auth::AuthMode;
 use codex_core::auth::enforce_login_restrictions;
@@ -28,12 +25,10 @@ use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::format_config_error_with_source;
 use codex_core::default_client::set_default_client_residency_requirement;
-use codex_core::find_thread_path_by_id_str;
-use codex_core::find_thread_path_by_name_str;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
-use codex_core::read_session_meta_line;
-use codex_core::state_db::get_state_db;
+use codex_core::rollout_config;
+use codex_core::state_runtime::get_state_db;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
@@ -42,6 +37,12 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_rollout::INTERACTIVE_SESSION_SOURCES;
+use codex_rollout::RolloutRecorder;
+use codex_rollout::ThreadSortKey;
+use codex_rollout::find_thread_path_by_id_str;
+use codex_rollout::find_thread_path_by_name_str;
+use codex_rollout::read_session_meta_line;
 use codex_state::log_db;
 use codex_terminal_detection::Multiplexer;
 use codex_terminal_detection::terminal_info;
@@ -554,7 +555,7 @@ pub async fn run_main(
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let log_db_layer = codex_core::state_db::get_state_db(&config)
+    let log_db_layer = get_state_db(&config)
         .await
         .map(|db| log_db::start(db).with_filter(env_filter()));
 
@@ -742,8 +743,11 @@ async fn run_ratatui_app(
             }
         } else if cli.fork_last {
             let provider_filter = vec![config.model_provider_id.clone()];
+            let rollout_config = rollout_config(&config);
+            let state_db_ctx = get_state_db(&config).await;
             match RolloutRecorder::list_threads(
-                &config,
+                &rollout_config,
+                state_db_ctx.as_deref(),
                 /*page_size*/ 1,
                 /*cursor*/ None,
                 ThreadSortKey::UpdatedAt,
@@ -842,8 +846,11 @@ async fn run_ratatui_app(
         } else {
             Some(config.cwd.as_path())
         };
+        let rollout_config = rollout_config(&config);
+        let state_db_ctx = get_state_db(&config).await;
         match RolloutRecorder::find_latest_thread_path(
-            &config,
+            &rollout_config,
+            state_db_ctx.as_deref(),
             /*page_size*/ 1,
             /*cursor*/ None,
             ThreadSortKey::UpdatedAt,
