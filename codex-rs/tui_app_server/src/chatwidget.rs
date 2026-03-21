@@ -2265,7 +2265,7 @@ impl ChatWidget {
             .or_else(|| self.rejected_steers_queue.pop_back())
     }
 
-    pub(crate) fn queue_next_pending_steer_for_follow_up(&mut self) -> bool {
+    pub(crate) fn enqueue_rejected_steer(&mut self) -> bool {
         let Some(pending_steer) = self.pending_steers.pop_front() else {
             tracing::warn!(
                 "received active-turn-not-steerable error without a matching pending steer"
@@ -2283,7 +2283,7 @@ impl ChatWidget {
         matches!(
             codex_error_info,
             CoreCodexErrorInfo::ActiveTurnNotSteerable { .. }
-        ) && self.queue_next_pending_steer_for_follow_up()
+        ) && self.enqueue_rejected_steer()
     }
 
     fn handle_app_server_steer_rejected_error(
@@ -2293,7 +2293,7 @@ impl ChatWidget {
         matches!(
             codex_error_info,
             AppServerCodexErrorInfo::ActiveTurnNotSteerable { .. }
-        ) && self.queue_next_pending_steer_for_follow_up()
+        ) && self.enqueue_rejected_steer()
     }
 
     pub(crate) fn open_multi_agent_enable_prompt(&mut self) {
@@ -2785,10 +2785,19 @@ impl ChatWidget {
                 );
                 self.bottom_pane.set_composer_pending_pastes(Vec::new());
             }
-            self.pending_steers.clear();
+            self.pending_steers = input_state
+                .pending_steers
+                .into_iter()
+                .map(|user_message| PendingSteer {
+                    compare_key: PendingSteerCompareKey {
+                        message: user_message.text.clone(),
+                        image_count: user_message.local_images.len()
+                            + user_message.remote_image_urls.len(),
+                    },
+                    user_message,
+                })
+                .collect();
             self.rejected_steers_queue = input_state.rejected_steers_queue;
-            self.rejected_steers_queue
-                .extend(input_state.pending_steers);
             self.queued_user_messages = input_state.queued_user_messages;
         } else {
             self.agent_turn_running = false;

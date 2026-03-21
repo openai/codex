@@ -3803,7 +3803,7 @@ async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
 }
 
 #[tokio::test]
-async fn restore_thread_input_state_keeps_rejected_follow_ups_ahead_of_pending_steers() {
+async fn restore_thread_input_state_restores_pending_steers_without_downgrading_them() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     let mut pending_steers = VecDeque::new();
     pending_steers.push_back(UserMessage::from("pending steer"));
@@ -3824,7 +3824,12 @@ async fn restore_thread_input_state_keeps_rejected_follow_ups_ahead_of_pending_s
 
     assert_eq!(
         chat.queued_user_message_texts(),
-        vec!["already rejected", "pending steer", "queued draft"]
+        vec!["already rejected", "queued draft"]
+    );
+    assert_eq!(chat.pending_steers.len(), 1);
+    assert_eq!(
+        chat.pending_steers.front().unwrap().user_message.text,
+        "pending steer"
     );
 }
 

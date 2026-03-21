@@ -1982,7 +1982,7 @@ impl App {
                         Ok(_) => {}
                         Err(error) => {
                             if let Some(turn_error) = active_turn_not_steerable_turn_error(&error) {
-                                if !self.chat_widget.queue_next_pending_steer_for_follow_up() {
+                                if !self.chat_widget.enqueue_rejected_steer() {
                                     self.chat_widget.add_error_message(turn_error.message);
                                 }
                             } else {
