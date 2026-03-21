@@ -7,14 +7,12 @@ pub(super) fn serialize_output_text(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
 ) -> Result<String, String> {
-    if value.is_string() {
-        return Ok(value.to_rust_string_lossy(scope));
-    }
     if value.is_undefined()
         || value.is_null()
         || value.is_boolean()
         || value.is_number()
         || value.is_big_int()
+        || value.is_string()
     {
         return Ok(value.to_rust_string_lossy(scope));
     }
