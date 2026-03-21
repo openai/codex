@@ -2407,6 +2407,14 @@ impl fmt::Display for SubAgentSource {
 /// NOTE: There used to be an `instructions` field here, which stored user_instructions, but we
 /// now save that on TurnContext. base_instructions stores the base instructions for the session,
 /// and should be used when there is no config override.
+#[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+pub struct ApprovedCommandPrefixesSnapshot {
+    pub prefixes: Vec<Vec<String>>,
+    pub prompt_truncated: bool,
+    pub total_count: usize,
+    pub prompt_visible_count: usize,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct SessionMeta {
     pub id: ThreadId,
@@ -2436,6 +2444,8 @@ pub struct SessionMeta {
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_command_prefixes: Option<ApprovedCommandPrefixesSnapshot>,
 }
 
 impl Default for SessionMeta {
@@ -2455,6 +2465,7 @@ impl Default for SessionMeta {
             base_instructions: None,
             dynamic_tools: None,
             memory_mode: None,
+            approved_command_prefixes: None,
         }
     }
 }

@@ -784,13 +784,18 @@ const MAX_RENDERED_PREFIXES: usize = 100;
 const MAX_ALLOW_PREFIX_TEXT_BYTES: usize = 5000;
 const TRUNCATED_MARKER: &str = "...\n[Some commands were truncated]";
 
-pub fn format_allow_prefixes(prefixes: Vec<Vec<String>>) -> Option<String> {
-    let mut truncated = false;
-    if prefixes.len() > MAX_RENDERED_PREFIXES {
-        truncated = true;
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AllowPrefixRenderSummary {
+    pub rendered: String,
+    pub prompt_truncated: bool,
+    pub total_count: usize,
+    pub prompt_visible_count: usize,
+}
 
-    let mut prefixes = prefixes;
+pub fn summarize_allow_prefixes(mut prefixes: Vec<Vec<String>>) -> AllowPrefixRenderSummary {
+    let total_count = prefixes.len();
+    let mut truncated = total_count > MAX_RENDERED_PREFIXES;
+
     prefixes.sort_by(|a, b| {
         a.len()
             .cmp(&b.len())
@@ -798,15 +803,15 @@ pub fn format_allow_prefixes(prefixes: Vec<Vec<String>>) -> Option<String> {
             .then_with(|| a.cmp(b))
     });
 
-    let full_text = prefixes
+    let rendered_prefixes = prefixes
         .into_iter()
         .take(MAX_RENDERED_PREFIXES)
         .map(|prefix| format!("- {}", render_command_prefix(&prefix)))
-        .collect::<Vec<_>>()
-        .join("\n");
+        .collect::<Vec<_>>();
+    let mut output = rendered_prefixes.join("\n");
+    let mut prompt_visible_count = rendered_prefixes.len();
 
     // truncate to last UTF8 char
-    let mut output = full_text;
     let byte_idx = output
         .char_indices()
         .nth(MAX_ALLOW_PREFIX_TEXT_BYTES)
@@ -814,13 +819,27 @@ pub fn format_allow_prefixes(prefixes: Vec<Vec<String>>) -> Option<String> {
     if let Some(byte_idx) = byte_idx {
         truncated = true;
         output = output[..byte_idx].to_string();
+        prompt_visible_count = if output.is_empty() {
+            0
+        } else {
+            output.lines().count()
+        };
     }
 
     if truncated {
-        Some(format!("{output}{TRUNCATED_MARKER}"))
-    } else {
-        Some(output)
+        output = format!("{output}{TRUNCATED_MARKER}");
     }
+
+    AllowPrefixRenderSummary {
+        rendered: output,
+        prompt_truncated: truncated,
+        total_count,
+        prompt_visible_count,
+    }
+}
+
+pub fn format_allow_prefixes(prefixes: Vec<Vec<String>>) -> Option<String> {
+    Some(summarize_allow_prefixes(prefixes).rendered)
 }
 
 fn prefix_combined_str_len(prefix: &[String]) -> usize {
@@ -2289,10 +2308,11 @@ mod tests {
             .map(|i| vec![format!("{i:03}")])
             .collect::<Vec<_>>();
 
-        let output = format_allow_prefixes(prefixes).expect("rendered list");
-        assert_eq!(output.ends_with(TRUNCATED_MARKER), true);
-        eprintln!("output: {output}");
-        assert_eq!(output.lines().count(), MAX_RENDERED_PREFIXES + 1);
+        let summary = summarize_allow_prefixes(prefixes);
+        assert!(summary.rendered.ends_with(TRUNCATED_MARKER));
+        assert_eq!(summary.total_count, MAX_RENDERED_PREFIXES + 5);
+        assert_eq!(summary.prompt_visible_count, MAX_RENDERED_PREFIXES);
+        assert_eq!(summary.rendered.lines().count(), MAX_RENDERED_PREFIXES + 1);
     }
 
     #[test]
@@ -2307,12 +2327,26 @@ mod tests {
                 .expect("add rule");
         }
 
-        let output =
-            format_allow_prefixes(exec_policy.get_allowed_prefixes()).expect("formatted prefixes");
+        let summary = summarize_allow_prefixes(exec_policy.get_allowed_prefixes());
         assert!(
-            output.len() <= MAX_ALLOW_PREFIX_TEXT_BYTES + TRUNCATED_MARKER.len(),
-            "output length exceeds expected limit: {output}",
+            summary.rendered.len() <= MAX_ALLOW_PREFIX_TEXT_BYTES + TRUNCATED_MARKER.len(),
+            "output length exceeds expected limit: {}",
+            summary.rendered,
         );
+        assert!(summary.prompt_truncated);
+        assert!(summary.prompt_visible_count < summary.total_count);
+    }
+
+    #[test]
+    fn summarize_allow_prefixes_reports_untruncated_counts() {
+        let summary = summarize_allow_prefixes(vec![
+            vec!["git".to_string(), "fetch".to_string()],
+            vec!["cargo".to_string(), "test".to_string()],
+        ]);
+
+        assert_eq!(summary.total_count, 2);
+        assert_eq!(summary.prompt_visible_count, 2);
+        assert!(!summary.prompt_truncated);
     }
 
     #[test]

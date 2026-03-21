@@ -47,6 +47,7 @@ use crate::state_db;
 use crate::state_db::StateDbHandle;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
+use codex_protocol::protocol::ApprovedCommandPrefixesSnapshot;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::ResumedHistory;
@@ -83,6 +84,7 @@ pub enum RolloutRecorderParams {
         source: SessionSource,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
+        approved_command_prefixes: ApprovedCommandPrefixesSnapshot,
         event_persistence_mode: EventPersistenceMode,
     },
     Resume {
@@ -112,6 +114,7 @@ impl RolloutRecorderParams {
         source: SessionSource,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
+        approved_command_prefixes: ApprovedCommandPrefixesSnapshot,
         event_persistence_mode: EventPersistenceMode,
     ) -> Self {
         Self::Create {
@@ -120,6 +123,7 @@ impl RolloutRecorderParams {
             source,
             base_instructions,
             dynamic_tools,
+            approved_command_prefixes,
             event_persistence_mode,
         }
     }
@@ -381,6 +385,7 @@ impl RolloutRecorder {
                     source,
                     base_instructions,
                     dynamic_tools,
+                    approved_command_prefixes,
                     event_persistence_mode,
                 } => {
                     let log_file_info = precompute_log_file_info(config, conversation_id)?;
@@ -416,6 +421,7 @@ impl RolloutRecorder {
                         },
                         memory_mode: (!config.memories.generate_memories)
                             .then_some("disabled".to_string()),
+                        approved_command_prefixes: Some(approved_command_prefixes),
                     };
 
                     (

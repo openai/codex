@@ -1032,6 +1032,7 @@ mod tests {
                 base_instructions: None,
                 dynamic_tools: None,
                 memory_mode: Some("polluted".to_string()),
+                approved_command_prefixes: None,
             },
             git: None,
         })];
@@ -1087,6 +1088,7 @@ mod tests {
                 base_instructions: None,
                 dynamic_tools: None,
                 memory_mode: None,
+                approved_command_prefixes: None,
             },
             git: Some(GitInfo {
                 commit_hash: Some("rollout-sha".to_string()),
