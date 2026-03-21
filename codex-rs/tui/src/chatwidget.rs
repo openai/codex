@@ -4425,6 +4425,9 @@ impl ChatWidget {
             SlashCommand::Resume => {
                 self.app_event_tx.send(AppEvent::OpenResumePicker);
             }
+            SlashCommand::Recall => {
+                self.add_error_message("Usage: /recall <query>".to_string());
+            }
             SlashCommand::Fork => {
                 self.app_event_tx.send(AppEvent::ForkCurrentSession);
             }
@@ -4797,6 +4800,62 @@ impl ChatWidget {
                 self.request_redraw();
                 self.app_event_tx
                     .send(AppEvent::CodexOp(Op::SetThreadName { name }));
+                self.bottom_pane.drain_pending_submission_state();
+            }
+            SlashCommand::Recall if !trimmed.is_empty() => {
+                let Some((prepared_args, _prepared_elements)) = self
+                    .bottom_pane
+                    .prepare_inline_args_submission(/*record_history*/ false)
+                else {
+                    return;
+                };
+                let config = self.config.clone();
+                let current_thread_id = self.thread_id;
+                let query = prepared_args;
+                let tx = self.app_event_tx.clone();
+
+                self.add_info_message(
+                    format!("Searching past sessions for `{query}`..."),
+                    /*hint*/ None,
+                );
+                tokio::spawn(async move {
+                    match codex_core::recall::search_sessions(&config, &query, current_thread_id, 3)
+                        .await
+                    {
+                        Ok(hits) if hits.is_empty() => {
+                            tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                history_cell::new_info_event(
+                                    format!("No past sessions matched `{query}`."),
+                                    /*hint*/ None,
+                                ),
+                            )));
+                        }
+                        Ok(hits) => {
+                            tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                history_cell::new_info_event(
+                                    format!(
+                                        "Recalled {} past session(s) into the composer.",
+                                        hits.len()
+                                    ),
+                                    Some(
+                                        "Review/edit the recalled context, then press Enter to send."
+                                            .to_string(),
+                                    ),
+                                ),
+                            )));
+                            tx.send(AppEvent::InsertComposerText(
+                                codex_core::recall::format_recall_draft(&query, &hits),
+                            ));
+                        }
+                        Err(err) => {
+                            tx.send(AppEvent::InsertHistoryCell(Box::new(
+                                history_cell::new_error_event(format!(
+                                    "Failed to recall past sessions: {err}"
+                                )),
+                            )));
+                        }
+                    }
+                });
                 self.bottom_pane.drain_pending_submission_state();
             }
             SlashCommand::Plan if !trimmed.is_empty() => {

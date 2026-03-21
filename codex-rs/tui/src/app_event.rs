@@ -195,6 +195,10 @@ pub(crate) enum AppEvent {
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 
+    /// Insert text into the composer from an async UI workflow after the
+    /// original slash-command draft has already been consumed.
+    InsertComposerText(String),
+
     /// Apply rollback semantics to local transcript cells.
     ///
     /// This is emitted when rollback was not initiated by the current

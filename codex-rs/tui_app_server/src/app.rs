@@ -3439,6 +3439,10 @@ impl App {
                     }
                 }
             }
+            AppEvent::InsertComposerText(text) => {
+                self.chat_widget.insert_str(&text);
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::ApplyThreadRollback { num_turns } => {
                 if self.apply_non_pending_thread_rollback(num_turns) {
                     tui.frame_requester().schedule_frame();
