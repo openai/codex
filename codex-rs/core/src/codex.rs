@@ -1498,7 +1498,12 @@ impl Session {
             ),
             InitialHistory::New | InitialHistory::Forked(_) => None,
         };
-        Self::add_session_openai_file_root_to_sandbox(&mut session_configuration, conversation_id)?;
+        if config.features.enabled(Feature::AppsFileBridge) {
+            Self::add_session_openai_file_root_to_sandbox(
+                &mut session_configuration,
+                conversation_id,
+            )?;
+        }
 
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
