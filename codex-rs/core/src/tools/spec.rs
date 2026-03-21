@@ -4,7 +4,12 @@ use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::config::AgentRoleConfig;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use crate::mcp::split_qualified_tool_name;
 use crate::mcp_connection_manager::ToolInfo;
+use crate::mcp_tool_call::MCP_TOOL_ARGS_CODEX_KEY;
+use crate::mcp_tool_call::MCP_TOOL_ARGS_ELICITATION_DESCRIPTION_KEY;
+use crate::mcp_tool_call::MCP_TOOL_ARGS_META_KEY;
+use crate::mcp_tool_call::requires_mcp_tool_approval;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::shell::Shell;
@@ -47,6 +52,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -60,6 +66,9 @@ const TOOL_SEARCH_DESCRIPTION_TEMPLATE: &str =
 const TOOL_SUGGEST_DESCRIPTION_TEMPLATE: &str =
     include_str!("../../templates/search_tool/tool_suggest_description.md");
 const WEB_SEARCH_CONTENT_TYPES: [&str; 2] = ["text", "image"];
+const CODEX_APP_ELICITATION_DESCRIPTION_FIELD_DESCRIPTION: &str =
+    "Short user-facing approval sentence. This field is not forwarded to the app.";
+const CODEX_APP_ELICITATION_DESCRIPTION_NOTE: &str = "For consequential codex_apps tools that may require approval, you may optionally include `_meta._codex.elicitation_description` as a short user-facing approval sentence. This field is used for approval UI and is not forwarded to the app.";
 
 fn unified_exec_output_schema() -> JsonValue {
     json!({
@@ -2335,7 +2344,10 @@ pub(crate) fn mcp_tool_to_openai_tool(
     fully_qualified_name: String,
     tool: rmcp::model::Tool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    let (description, input_schema, output_schema) = mcp_tool_to_openai_tool_parts(tool)?;
+    let add_elicitation_metadata =
+        should_add_codex_app_elicitation_metadata(&fully_qualified_name, tool.annotations.as_ref());
+    let (description, input_schema, output_schema) =
+        mcp_tool_to_openai_tool_parts(tool, add_elicitation_metadata)?;
 
     Ok(ResponsesApiTool {
         name: fully_qualified_name,
@@ -2351,7 +2363,10 @@ pub(crate) fn mcp_tool_to_deferred_openai_tool(
     name: String,
     tool: rmcp::model::Tool,
 ) -> Result<ResponsesApiTool, serde_json::Error> {
-    let (description, input_schema, _) = mcp_tool_to_openai_tool_parts(tool)?;
+    let add_elicitation_metadata =
+        should_add_codex_app_elicitation_metadata(&name, tool.annotations.as_ref());
+    let (description, input_schema, _) =
+        mcp_tool_to_openai_tool_parts(tool, add_elicitation_metadata)?;
 
     Ok(ResponsesApiTool {
         name,
@@ -2387,6 +2402,7 @@ pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, s
 
 fn mcp_tool_to_openai_tool_parts(
     tool: rmcp::model::Tool,
+    add_elicitation_metadata: bool,
 ) -> Result<(String, JsonSchema, Option<JsonValue>), serde_json::Error> {
     let rmcp::model::Tool {
         description,
@@ -2415,16 +2431,92 @@ fn mcp_tool_to_openai_tool_parts(
     // `integer`. Our internal JsonSchema is a small subset and requires
     // `type`, so we coerce/sanitize here for compatibility.
     sanitize_json_schema(&mut serialized_input_schema);
-    let input_schema = serde_json::from_value::<JsonSchema>(serialized_input_schema)?;
+    let mut input_schema = serde_json::from_value::<JsonSchema>(serialized_input_schema)?;
     let structured_content_schema = output_schema
         .map(|output_schema| serde_json::Value::Object(output_schema.as_ref().clone()))
         .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()));
     let output_schema = Some(mcp_call_tool_result_output_schema(
         structured_content_schema,
     ));
-    let description = description.map(Into::into).unwrap_or_default();
+    let mut description = description
+        .map(std::borrow::Cow::into_owned)
+        .unwrap_or_default();
+
+    if add_elicitation_metadata
+        && add_codex_app_elicitation_metadata_to_input_schema(&mut input_schema)
+    {
+        description = append_codex_app_elicitation_description_note(&description);
+    }
 
     Ok((description, input_schema, output_schema))
+}
+
+fn should_add_codex_app_elicitation_metadata(
+    fully_qualified_name: &str,
+    annotations: Option<&ToolAnnotations>,
+) -> bool {
+    split_qualified_tool_name(fully_qualified_name)
+        .is_some_and(|(server_name, _)| server_name == CODEX_APPS_MCP_SERVER_NAME)
+        && annotations.is_some_and(requires_mcp_tool_approval)
+}
+
+fn append_codex_app_elicitation_description_note(description: &str) -> String {
+    if description.is_empty() {
+        return CODEX_APP_ELICITATION_DESCRIPTION_NOTE.to_string();
+    }
+
+    format!("{description}\n\n{CODEX_APP_ELICITATION_DESCRIPTION_NOTE}")
+}
+
+fn add_codex_app_elicitation_metadata_to_input_schema(input_schema: &mut JsonSchema) -> bool {
+    let JsonSchema::Object { properties, .. } = input_schema else {
+        return false;
+    };
+    let meta_schema = properties
+        .entry(MCP_TOOL_ARGS_META_KEY.to_string())
+        .or_insert_with(new_codex_app_meta_schema);
+
+    add_codex_app_elicitation_description_to_meta_schema(meta_schema)
+}
+
+fn add_codex_app_elicitation_description_to_meta_schema(meta_schema: &mut JsonSchema) -> bool {
+    let JsonSchema::Object { properties, .. } = meta_schema else {
+        return false;
+    };
+    let codex_schema = properties
+        .entry(MCP_TOOL_ARGS_CODEX_KEY.to_string())
+        .or_insert_with(new_codex_app_control_meta_schema);
+
+    add_codex_app_elicitation_description_to_codex_schema(codex_schema)
+}
+
+fn add_codex_app_elicitation_description_to_codex_schema(codex_schema: &mut JsonSchema) -> bool {
+    let JsonSchema::Object { properties, .. } = codex_schema else {
+        return false;
+    };
+    properties.insert(
+        MCP_TOOL_ARGS_ELICITATION_DESCRIPTION_KEY.to_string(),
+        JsonSchema::String {
+            description: Some(CODEX_APP_ELICITATION_DESCRIPTION_FIELD_DESCRIPTION.to_string()),
+        },
+    );
+    true
+}
+
+fn new_codex_app_meta_schema() -> JsonSchema {
+    JsonSchema::Object {
+        properties: BTreeMap::new(),
+        required: None,
+        additional_properties: Some(false.into()),
+    }
+}
+
+fn new_codex_app_control_meta_schema() -> JsonSchema {
+    JsonSchema::Object {
+        properties: BTreeMap::new(),
+        required: None,
+        additional_properties: Some(false.into()),
+    }
 }
 
 fn mcp_call_tool_result_output_schema(structured_content_schema: JsonValue) -> JsonValue {

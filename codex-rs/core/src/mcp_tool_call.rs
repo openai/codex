@@ -26,6 +26,7 @@ use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
+use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalTemplate;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
 use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
@@ -51,6 +52,10 @@ use std::path::Path;
 use std::sync::Arc;
 use toml_edit::value;
 
+pub(crate) const MCP_TOOL_ARGS_META_KEY: &str = "_meta";
+pub(crate) const MCP_TOOL_ARGS_CODEX_KEY: &str = "_codex";
+pub(crate) const MCP_TOOL_ARGS_ELICITATION_DESCRIPTION_KEY: &str = "elicitation_description";
+
 /// Handles the specified tool call dispatches the appropriate
 /// `McpToolCallBegin` and `McpToolCallEnd` events to the `Session`.
 pub(crate) async fn handle_mcp_tool_call(
@@ -73,6 +78,12 @@ pub(crate) async fn handle_mcp_tool_call(
                 return CallToolResult::from_error_text(format!("err: {e}"));
             }
         }
+    };
+
+    let (arguments_value, model_elicitation_description) = if server == CODEX_APPS_MCP_SERVER_NAME {
+        extract_codex_app_elicitation_description(arguments_value)
+    } else {
+        (arguments_value, None)
     };
 
     let invocation = McpInvocation {
@@ -133,6 +144,7 @@ pub(crate) async fn handle_mcp_tool_call(
         turn_context,
         &call_id,
         &invocation,
+        model_elicitation_description.as_deref(),
         metadata.as_ref(),
         app_tool_policy.approval,
     )
@@ -423,6 +435,12 @@ struct McpToolApprovalPromptOptions {
     allow_persistent_approval: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct McpToolApprovalPromptCopy<'a> {
+    question_override: Option<&'a str>,
+    message_override: Option<&'a str>,
+}
+
 struct McpToolApprovalElicitationRequest<'a> {
     server: &'a str,
     metadata: Option<&'a McpToolApprovalMetadata>,
@@ -491,6 +509,7 @@ async fn maybe_request_mcp_tool_approval(
     turn_context: &Arc<TurnContext>,
     call_id: &str,
     invocation: &McpInvocation,
+    model_elicitation_description: Option<&str>,
     metadata: Option<&McpToolApprovalMetadata>,
     approval_mode: AppToolApproval,
 ) -> Option<McpToolApprovalDecision> {
@@ -576,6 +595,11 @@ async fn maybe_request_mcp_tool_approval(
         metadata.and_then(|metadata| metadata.tool_title.as_deref()),
         invocation.arguments.as_ref(),
     );
+    let prompt_copy = build_mcp_tool_approval_prompt_copy(
+        model_elicitation_description,
+        rendered_template.as_ref(),
+        monitor_reason.as_deref(),
+    );
     let tool_params_display = rendered_template
         .as_ref()
         .map(|rendered_template| rendered_template.tool_params_display.clone())
@@ -586,9 +610,7 @@ async fn maybe_request_mcp_tool_approval(
         &invocation.tool,
         metadata.and_then(|metadata| metadata.connector_name.as_deref()),
         prompt_options,
-        rendered_template
-            .as_ref()
-            .map(|rendered_template| rendered_template.question.as_str()),
+        prompt_copy.question_override,
     );
     question.question =
         mcp_tool_approval_question_text(question.question, monitor_reason.as_deref());
@@ -608,11 +630,7 @@ async fn maybe_request_mcp_tool_approval(
                     .or(invocation.arguments.as_ref()),
                 tool_params_display: tool_params_display.as_deref(),
                 question,
-                message_override: rendered_template.as_ref().and_then(|rendered_template| {
-                    monitor_reason
-                        .is_none()
-                        .then_some(rendered_template.elicitation_message.as_str())
-                }),
+                message_override: prompt_copy.message_override,
                 prompt_options,
             },
         );
@@ -652,6 +670,66 @@ async fn maybe_request_mcp_tool_approval(
     )
     .await;
     Some(decision)
+}
+
+fn extract_codex_app_elicitation_description(
+    arguments: Option<serde_json::Value>,
+) -> (Option<serde_json::Value>, Option<String>) {
+    let Some(serde_json::Value::Object(mut arguments)) = arguments else {
+        return (arguments, None);
+    };
+
+    let mut remove_meta = false;
+    let mut elicitation_description = None;
+
+    if let Some(meta_value) = arguments.get_mut(MCP_TOOL_ARGS_META_KEY)
+        && let Some(meta) = meta_value.as_object_mut()
+    {
+        elicitation_description = meta
+            .remove(MCP_TOOL_ARGS_CODEX_KEY)
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .and_then(|codex_meta| codex_meta.get(MCP_TOOL_ARGS_ELICITATION_DESCRIPTION_KEY))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|description| !description.is_empty())
+            .map(ToString::to_string);
+        remove_meta = meta.is_empty();
+    }
+
+    if remove_meta {
+        arguments.remove(MCP_TOOL_ARGS_META_KEY);
+    }
+
+    (
+        (!arguments.is_empty()).then_some(serde_json::Value::Object(arguments)),
+        elicitation_description,
+    )
+}
+
+fn build_mcp_tool_approval_prompt_copy<'a>(
+    model_elicitation_description: Option<&'a str>,
+    rendered_template: Option<&'a RenderedMcpToolApprovalTemplate>,
+    monitor_reason: Option<&str>,
+) -> McpToolApprovalPromptCopy<'a> {
+    let model_elicitation_description = model_elicitation_description
+        .map(str::trim)
+        .filter(|description| !description.is_empty());
+    let question_override = model_elicitation_description
+        .or_else(|| rendered_template.map(|rendered_template| rendered_template.question.as_str()));
+    let message_override = if monitor_reason.is_some() {
+        None
+    } else {
+        model_elicitation_description.or_else(|| {
+            rendered_template
+                .map(|rendered_template| rendered_template.elicitation_message.as_str())
+        })
+    };
+
+    McpToolApprovalPromptCopy {
+        question_override,
+        message_override,
+    }
 }
 
 async fn maybe_monitor_auto_approved_mcp_tool_call(
@@ -1299,7 +1377,7 @@ async fn persist_codex_app_tool_approval(
         .await
 }
 
-fn requires_mcp_tool_approval(annotations: &ToolAnnotations) -> bool {
+pub(crate) fn requires_mcp_tool_approval(annotations: &ToolAnnotations) -> bool {
     if annotations.destructive_hint == Some(true) {
         return true;
     }

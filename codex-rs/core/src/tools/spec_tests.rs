@@ -13,6 +13,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use rmcp::model::ToolAnnotations;
 use std::path::PathBuf;
 
 use super::*;
@@ -28,6 +29,32 @@ fn mcp_tool(name: &str, description: &str, input_schema: serde_json::Value) -> r
         execution: None,
         icons: None,
         meta: None,
+    }
+}
+
+fn mcp_tool_with_annotations(
+    name: &str,
+    description: &str,
+    input_schema: serde_json::Value,
+    annotations: ToolAnnotations,
+) -> rmcp::model::Tool {
+    rmcp::model::Tool {
+        annotations: Some(annotations),
+        ..mcp_tool(name, description, input_schema)
+    }
+}
+
+fn annotations(
+    read_only: Option<bool>,
+    destructive: Option<bool>,
+    open_world: Option<bool>,
+) -> ToolAnnotations {
+    ToolAnnotations {
+        destructive_hint: destructive,
+        idempotent_hint: None,
+        open_world_hint: open_world,
+        read_only_hint: read_only,
+        title: None,
     }
 }
 
@@ -256,6 +283,121 @@ fn deferred_responses_api_tool_serializes_with_defer_loading() {
             }
         })
     );
+}
+
+#[test]
+fn consequential_codex_apps_tools_include_elicitation_description_meta() {
+    let openai_tool = mcp_tool_to_openai_tool(
+        "mcp__codex_apps__calendar_create_event".to_string(),
+        mcp_tool_with_annotations(
+            "calendar_create_event",
+            "Create an event",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"}
+                },
+                "required": ["title"],
+                "additionalProperties": false
+            }),
+            annotations(Some(false), None, Some(true)),
+        ),
+    )
+    .expect("convert tool");
+
+    assert_eq!(
+        serde_json::to_value(openai_tool.parameters).expect("serialize parameters"),
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "_meta": {
+                    "type": "object",
+                    "properties": {
+                        "_codex": {
+                            "type": "object",
+                            "properties": {
+                                "elicitation_description": {
+                                    "type": "string",
+                                    "description": "Short user-facing approval sentence. This field is not forwarded to the app."
+                                }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "title": {"type": "string"}
+            },
+            "required": ["title"],
+            "additionalProperties": false
+        })
+    );
+    assert!(
+        openai_tool
+            .description
+            .contains("`_meta._codex.elicitation_description`")
+    );
+    assert!(openai_tool.description.contains("not forwarded to the app"));
+}
+
+#[test]
+fn non_consequential_codex_apps_tools_do_not_include_elicitation_description_meta() {
+    let openai_tool = mcp_tool_to_openai_tool(
+        "mcp__codex_apps__calendar_list_events".to_string(),
+        mcp_tool_with_annotations(
+            "calendar_list_events",
+            "List events",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "calendar_id": {"type": "string"}
+                },
+                "additionalProperties": false
+            }),
+            annotations(Some(true), None, None),
+        ),
+    )
+    .expect("convert tool");
+    let parameters = serde_json::to_value(openai_tool.parameters).expect("serialize parameters");
+
+    assert_eq!(
+        parameters
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|properties| properties.get("_meta")),
+        None
+    );
+    assert_eq!(openai_tool.description, "List events");
+}
+
+#[test]
+fn non_codex_apps_tools_do_not_include_elicitation_description_meta() {
+    let openai_tool = mcp_tool_to_openai_tool(
+        "mcp__custom_server__dangerous_tool".to_string(),
+        mcp_tool_with_annotations(
+            "dangerous_tool",
+            "Dangerous action",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"}
+                },
+                "additionalProperties": false
+            }),
+            annotations(Some(false), Some(true), Some(true)),
+        ),
+    )
+    .expect("convert tool");
+    let parameters = serde_json::to_value(openai_tool.parameters).expect("serialize parameters");
+
+    assert_eq!(
+        parameters
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|properties| properties.get("_meta")),
+        None
+    );
+    assert_eq!(openai_tool.description, "Dangerous action");
 }
 
 fn tool_name(tool: &ToolSpec) -> &str {
@@ -2806,6 +2948,59 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
         description,
         "Echo text\n\nexec tool declaration:\n```ts\ndeclare const tools: { mcp__sample__echo(args: { message: string; }): Promise<{ _meta?: unknown; content: Array<unknown>; isError?: boolean; structuredContent?: unknown; }>; };\n```"
     );
+}
+
+#[test]
+fn code_mode_augments_consequential_codex_apps_tool_descriptions_with_elicitation_meta() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    features.enable(Feature::UnifiedExec);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (tools, _) = build_specs(
+        &tools_config,
+        Some(HashMap::from([(
+            "mcp__codex_apps__calendar_create_event".to_string(),
+            mcp_tool_with_annotations(
+                "calendar_create_event",
+                "Create an event",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"}
+                    },
+                    "required": ["title"],
+                    "additionalProperties": false
+                }),
+                annotations(Some(false), None, Some(true)),
+            ),
+        )])),
+        None,
+        &[],
+    )
+    .build();
+
+    let ToolSpec::Function(ResponsesApiTool { description, .. }) =
+        &find_tool(&tools, "mcp__codex_apps__calendar_create_event").spec
+    else {
+        panic!("expected function tool");
+    };
+
+    assert!(description.contains("`_meta._codex.elicitation_description`"));
+    assert!(description.contains(
+        "mcp__codex_apps__calendar_create_event(args: { _meta?: { _codex?: { elicitation_description?: string; }; }; title: string; })"
+    ));
 }
 
 #[test]
