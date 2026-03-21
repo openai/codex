@@ -911,6 +911,7 @@ pub(crate) struct ThreadInputState {
     queued_user_messages: VecDeque<UserMessage>,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
+    task_running: bool,
     agent_turn_running: bool,
 }
 
@@ -2354,11 +2355,13 @@ impl ChatWidget {
             queued_user_messages: self.queued_user_messages.clone(),
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
+            task_running: self.bottom_pane.is_task_running(),
             agent_turn_running: self.agent_turn_running,
         })
     }
 
     pub(crate) fn restore_thread_input_state(&mut self, input_state: Option<ThreadInputState>) {
+        let restored_task_running = input_state.as_ref().is_some_and(|state| state.task_running);
         if let Some(input_state) = input_state {
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
@@ -2421,6 +2424,10 @@ impl ChatWidget {
         self.turn_sleep_inhibitor
             .set_turn_running(self.agent_turn_running);
         self.update_task_running_state();
+        if restored_task_running && !self.bottom_pane.is_task_running() {
+            self.bottom_pane.set_task_running(/*running*/ true);
+            self.refresh_terminal_title();
+        }
         self.refresh_pending_input_preview();
         self.request_redraw();
     }
