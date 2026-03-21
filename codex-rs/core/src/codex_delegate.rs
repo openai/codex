@@ -669,7 +669,7 @@ async fn maybe_auto_review_mcp_request_user_input(
         parent_session.as_ref(),
         parent_ctx.as_ref(),
         &invocation.tool,
-        None,
+        /*qualified_tool_namespace*/ None,
         &invocation.server,
         &invocation.tool,
     )

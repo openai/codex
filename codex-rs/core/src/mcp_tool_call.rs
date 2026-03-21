@@ -60,14 +60,18 @@ use std::path::Path;
 use std::sync::Arc;
 use toml_edit::value;
 
+pub(crate) struct QualifiedMcpTool<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) namespace: Option<&'a str>,
+}
+
 /// Handles the specified tool call dispatches the appropriate
 /// `McpToolCallBegin` and `McpToolCallEnd` events to the `Session`.
 pub(crate) async fn handle_mcp_tool_call(
     sess: Arc<Session>,
     turn_context: &Arc<TurnContext>,
     call_id: String,
-    qualified_tool_name: &str,
-    qualified_tool_namespace: Option<&str>,
+    qualified_tool: QualifiedMcpTool<'_>,
     server: String,
     tool_name: String,
     arguments: String,
@@ -95,8 +99,8 @@ pub(crate) async fn handle_mcp_tool_call(
     let metadata = lookup_mcp_tool_metadata(
         sess.as_ref(),
         turn_context.as_ref(),
-        qualified_tool_name,
-        qualified_tool_namespace,
+        qualified_tool.name,
+        qualified_tool.namespace,
         &server,
         &tool_name,
     )
