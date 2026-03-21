@@ -16,10 +16,14 @@ use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::app_server_rate_limit_snapshot_to_core;
 use crate::app_server_session::status_account_display_from_auth_mode;
+use crate::exec_command::escape_command;
 use crate::local_chatgpt_auth::load_local_chatgpt_auth;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
+use codex_app_server_protocol::CommandAction;
+use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
+use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::RequestId;
@@ -193,8 +197,10 @@ impl App {
     ) {
         match &notification {
             ServerNotification::ServerRequestResolved(notification) => {
-                self.pending_app_server_requests
+                let resolved = self
+                    .pending_app_server_requests
                     .resolve_notification(&notification.request_id);
+                self.note_app_server_request_resolved(resolved).await;
             }
             ServerNotification::AccountRateLimitsUpdated(notification) => {
                 self.chat_widget.on_rate_limit_snapshot(Some(
@@ -254,6 +260,13 @@ impl App {
         app_server_client: &AppServerSession,
         request: ServerRequest,
     ) {
+        if self
+            .try_handle_legacy_approval_request(app_server_client, &request)
+            .await
+        {
+            return;
+        }
+
         if let Some(unsupported) = self
             .pending_app_server_requests
             .note_server_request(&request)
@@ -291,6 +304,102 @@ impl App {
             };
         if let Err(err) = result {
             tracing::warn!("failed to enqueue app-server request: {err}");
+        }
+    }
+
+    /// Bridges deprecated v1 approval requests into the v2 approval UI path.
+    ///
+    /// The TUI only has one live approval surface. Legacy exec/patch requests
+    /// therefore need to be tracked under their original request IDs for
+    /// response serialization, while the visible request is rewritten into the
+    /// current thread-scoped v2 shape for routing and rendering.
+    async fn try_handle_legacy_approval_request(
+        &mut self,
+        app_server_client: &AppServerSession,
+        request: &ServerRequest,
+    ) -> bool {
+        if !matches!(
+            request,
+            ServerRequest::ExecCommandApproval { .. } | ServerRequest::ApplyPatchApproval { .. }
+        ) {
+            return false;
+        }
+
+        match bridge_legacy_approval_request(request) {
+            Ok((thread_id, bridged_request)) => {
+                if let Some(unsupported) = self
+                    .pending_app_server_requests
+                    .note_server_request(request)
+                {
+                    tracing::warn!(
+                        request_id = ?unsupported.request_id,
+                        message = unsupported.message,
+                        "rejecting unsupported app-server request"
+                    );
+                    self.chat_widget
+                        .add_error_message(unsupported.message.clone());
+                    if let Err(err) = self
+                        .reject_app_server_request(
+                            app_server_client,
+                            unsupported.request_id,
+                            unsupported.message,
+                        )
+                        .await
+                    {
+                        tracing::warn!("{err}");
+                    }
+                    return true;
+                }
+
+                let result = if self.primary_thread_id == Some(thread_id)
+                    || self.primary_thread_id.is_none()
+                {
+                    self.enqueue_primary_thread_request(bridged_request).await
+                } else {
+                    self.enqueue_thread_request(thread_id, bridged_request)
+                        .await
+                };
+                if let Err(err) = result {
+                    self.reject_failed_legacy_approval_enqueue(
+                        app_server_client,
+                        request,
+                        err.to_string(),
+                    )
+                    .await;
+                }
+            }
+            Err(message) => {
+                tracing::warn!(request_id = ?request.id(), "{message}");
+                self.chat_widget.add_error_message(message.clone());
+                if let Err(err) = self
+                    .reject_app_server_request(app_server_client, request.id().clone(), message)
+                    .await
+                {
+                    tracing::warn!("{err}");
+                }
+            }
+        }
+
+        true
+    }
+
+    async fn reject_failed_legacy_approval_enqueue(
+        &mut self,
+        app_server_client: &AppServerSession,
+        request: &ServerRequest,
+        err: String,
+    ) {
+        let message = format!("failed to surface legacy exec approval: {err}");
+        let resolved = self
+            .pending_app_server_requests
+            .resolve_notification(request.id());
+        self.note_app_server_request_resolved(resolved).await;
+        self.chat_widget.add_error_message(message.clone());
+        if let Err(reject_err) = self
+            .reject_app_server_request(app_server_client, request.id().clone(), message)
+            .await
+        {
+            tracing::warn!("{reject_err}");
         }
     }
 
@@ -361,7 +470,7 @@ impl App {
     async fn reject_app_server_request(
         &self,
         app_server_client: &AppServerSession,
-        request_id: codex_app_server_protocol::RequestId,
+        request_id: RequestId,
         reason: String,
     ) -> std::result::Result<(), String> {
         app_server_client
@@ -375,6 +484,62 @@ impl App {
             )
             .await
             .map_err(|err| format!("failed to reject app-server request: {err}"))
+    }
+}
+
+/// Re-expresses legacy approval payloads as the v2 request variants the UI
+/// already knows how to render.
+///
+/// The bridged request keeps the original `request_id`, so later approval
+/// responses can still resolve the server request using the matching v1 or v2
+/// wire format recorded in `PendingAppServerRequests`.
+fn bridge_legacy_approval_request(
+    request: &ServerRequest,
+) -> Result<(ThreadId, ServerRequest), String> {
+    match request {
+        ServerRequest::ExecCommandApproval { request_id, params } => Ok((
+            params.conversation_id,
+            ServerRequest::CommandExecutionRequestApproval {
+                request_id: request_id.clone(),
+                params: CommandExecutionRequestApprovalParams {
+                    thread_id: params.conversation_id.to_string(),
+                    turn_id: String::new(),
+                    item_id: params.call_id.clone(),
+                    approval_id: params.approval_id.clone(),
+                    reason: params.reason.clone(),
+                    network_approval_context: None,
+                    command: Some(escape_command(&params.command)),
+                    cwd: Some(params.cwd.clone()),
+                    command_actions: Some(
+                        params
+                            .parsed_cmd
+                            .clone()
+                            .into_iter()
+                            .map(CommandAction::from)
+                            .collect(),
+                    ),
+                    additional_permissions: None,
+                    skill_metadata: None,
+                    proposed_execpolicy_amendment: None,
+                    proposed_network_policy_amendments: None,
+                    available_decisions: None,
+                },
+            },
+        )),
+        ServerRequest::ApplyPatchApproval { request_id, params } => Ok((
+            params.conversation_id,
+            ServerRequest::FileChangeRequestApproval {
+                request_id: request_id.clone(),
+                params: FileChangeRequestApprovalParams {
+                    thread_id: params.conversation_id.to_string(),
+                    turn_id: String::new(),
+                    item_id: params.call_id.clone(),
+                    reason: params.reason.clone(),
+                    grant_root: params.grant_root.clone(),
+                },
+            },
+        )),
+        _ => Err("expected legacy approval request".to_string()),
     }
 }
 
@@ -1290,28 +1455,38 @@ fn app_server_codex_error_info_to_core(
 #[cfg(test)]
 mod tests {
     use super::LegacyThreadNotification;
+    use super::ServerNotificationThreadTarget;
+    use super::bridge_legacy_approval_request;
     use super::command_execution_started_event;
     use super::legacy_thread_notification;
     use super::server_notification_thread_events;
+    use super::server_notification_thread_target;
     use super::thread_snapshot_events;
     use super::turn_snapshot_events;
     use codex_app_server_protocol::AgentMessageDeltaNotification;
+    use codex_app_server_protocol::ApplyPatchApprovalParams;
     use codex_app_server_protocol::CodexErrorInfo;
     use codex_app_server_protocol::CommandAction;
     use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
+    use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
     use codex_app_server_protocol::CommandExecutionSource;
     use codex_app_server_protocol::CommandExecutionStatus;
+    use codex_app_server_protocol::ExecCommandApprovalParams;
+    use codex_app_server_protocol::FileChangeRequestApprovalParams;
     use codex_app_server_protocol::ItemCompletedNotification;
     use codex_app_server_protocol::ItemStartedNotification;
     use codex_app_server_protocol::JSONRPCNotification;
     use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
+    use codex_app_server_protocol::RequestId as AppServerRequestId;
     use codex_app_server_protocol::ServerNotification;
+    use codex_app_server_protocol::ServerRequest;
     use codex_app_server_protocol::Thread;
     use codex_app_server_protocol::ThreadItem;
     use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
     use codex_app_server_protocol::TurnError;
+    use codex_app_server_protocol::TurnStartedNotification;
     use codex_app_server_protocol::TurnStatus;
     use codex_protocol::ThreadId;
     use codex_protocol::items::AgentMessageContent;
@@ -1325,6 +1500,7 @@ mod tests {
     use codex_protocol::protocol::TurnAbortedEvent;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::collections::HashMap;
     use std::path::PathBuf;
 
     #[test]
@@ -1372,6 +1548,101 @@ mod tests {
                 thread_id,
                 LegacyThreadNotification::Rollback { num_turns: 2 }
             ))
+        );
+    }
+
+    #[test]
+    fn thread_scoped_notification_with_invalid_thread_id_is_not_treated_as_global() {
+        let notification = ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: "not-a-thread-id".to_string(),
+            turn: Turn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: TurnStatus::InProgress,
+                error: None,
+            },
+        });
+
+        assert_eq!(
+            server_notification_thread_target(&notification),
+            ServerNotificationThreadTarget::InvalidThreadId("not-a-thread-id".to_string())
+        );
+    }
+
+    #[test]
+    fn bridges_legacy_remote_exec_approval_requests() {
+        let params = ExecCommandApprovalParams {
+            conversation_id: ThreadId::new(),
+            call_id: "call-2".to_string(),
+            approval_id: Some("approval-2".to_string()),
+            command: vec!["printf".to_string(), "hello world".to_string()],
+            cwd: "/tmp/project".into(),
+            reason: Some("Need shell".to_string()),
+            parsed_cmd: Vec::new(),
+        };
+        let request = ServerRequest::ExecCommandApproval {
+            request_id: AppServerRequestId::Integer(8),
+            params: params.clone(),
+        };
+
+        let (thread_id, bridged_request) =
+            bridge_legacy_approval_request(&request).expect("request should bridge");
+
+        assert_eq!(thread_id, params.conversation_id);
+        assert_eq!(
+            bridged_request,
+            ServerRequest::CommandExecutionRequestApproval {
+                request_id: AppServerRequestId::Integer(8),
+                params: CommandExecutionRequestApprovalParams {
+                    thread_id: params.conversation_id.to_string(),
+                    turn_id: String::new(),
+                    item_id: "call-2".to_string(),
+                    approval_id: Some("approval-2".to_string()),
+                    reason: Some("Need shell".to_string()),
+                    network_approval_context: None,
+                    command: Some("printf 'hello world'".to_string()),
+                    cwd: Some("/tmp/project".into()),
+                    command_actions: Some(Vec::new()),
+                    additional_permissions: None,
+                    skill_metadata: None,
+                    proposed_execpolicy_amendment: None,
+                    proposed_network_policy_amendments: None,
+                    available_decisions: None,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn bridges_legacy_patch_approval_requests() {
+        let params = ApplyPatchApprovalParams {
+            conversation_id: ThreadId::new(),
+            call_id: "patch-1".to_string(),
+            file_changes: HashMap::new(),
+            reason: Some("Need write access".to_string()),
+            grant_root: Some("/tmp/project".into()),
+        };
+        let request = ServerRequest::ApplyPatchApproval {
+            request_id: AppServerRequestId::Integer(9),
+            params: params.clone(),
+        };
+
+        let (thread_id, bridged_request) =
+            bridge_legacy_approval_request(&request).expect("request should bridge");
+
+        assert_eq!(thread_id, params.conversation_id);
+        assert_eq!(
+            bridged_request,
+            ServerRequest::FileChangeRequestApproval {
+                request_id: AppServerRequestId::Integer(9),
+                params: FileChangeRequestApprovalParams {
+                    thread_id: params.conversation_id.to_string(),
+                    turn_id: String::new(),
+                    item_id: "patch-1".to_string(),
+                    reason: Some("Need write access".to_string()),
+                    grant_root: Some("/tmp/project".into()),
+                },
+            }
         );
     }
 

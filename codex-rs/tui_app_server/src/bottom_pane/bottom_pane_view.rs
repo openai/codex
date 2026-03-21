@@ -70,6 +70,12 @@ pub(crate) trait BottomPaneView: Renderable {
         Some(request)
     }
 
+    /// Remove any live exec approval prompts that have already been resolved
+    /// by the server. Returns true when the view changed.
+    fn remove_resolved_exec_approvals(&mut self, _approval_ids: &[String]) -> bool {
+        false
+    }
+
     /// Try to handle request_user_input; return the original value if not
     /// consumed.
     fn try_consume_user_input_request(

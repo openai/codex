@@ -139,6 +139,7 @@ mod pending_interactive_replay;
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
+use self::app_server_requests::ResolvedAppServerRequest;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
@@ -467,7 +468,6 @@ enum ThreadBufferedEvent {
     LegacyWarning(String),
     LegacyRollback { num_turns: u32 },
 }
-
 #[derive(Debug)]
 struct ThreadEventStore {
     session: Option<ThreadSessionState>,
@@ -685,6 +685,34 @@ impl ThreadEventChannel {
             ))),
         }
     }
+}
+
+fn requeue_retained_thread_events(
+    thread_id: ThreadId,
+    sender: mpsc::Sender<ThreadBufferedEvent>,
+    retained_events: Vec<ThreadBufferedEvent>,
+) -> bool {
+    let mut pending_events = retained_events.into_iter();
+    while let Some(event) = pending_events.next() {
+        match sender.try_send(event) {
+            Ok(()) => {}
+            Err(TrySendError::Full(event)) => {
+                let remaining_events: Vec<_> =
+                    std::iter::once(event).chain(pending_events).collect();
+                tokio::spawn(async move {
+                    for event in remaining_events {
+                        if let Err(err) = sender.send(event).await {
+                            tracing::warn!("thread {thread_id} event channel closed: {err}");
+                            break;
+                        }
+                    }
+                });
+                return true;
+            }
+            Err(TrySendError::Closed(_)) => return false,
+        }
+    }
+    true
 }
 
 fn should_show_model_migration_prompt(
@@ -1582,6 +1610,151 @@ impl App {
         self.note_thread_outbound_op(thread_id, op).await;
     }
 
+    /// Clears any queued or visible exec approval that is no longer backed by
+    /// a live app-server request.
+    ///
+    /// Legacy approvals can be buffered in several places at once: the primary
+    /// pre-session queue, the active/inactive per-thread receivers, replay
+    /// state, and the live modal stack. Cleanup has to touch all of them so a
+    /// resolved approval cannot reappear after a thread switch or replay.
+    async fn note_app_server_request_resolved(&mut self, resolved: ResolvedAppServerRequest) {
+        if resolved.exec_approval_ids.is_empty() {
+            return;
+        }
+
+        self.pending_primary_events.retain(|event| {
+            let ThreadBufferedEvent::Request(ServerRequest::CommandExecutionRequestApproval {
+                params,
+                ..
+            }) = event
+            else {
+                return true;
+            };
+            let approval_id = params
+                .approval_id
+                .clone()
+                .unwrap_or_else(|| params.item_id.clone());
+            !resolved.exec_approval_ids.contains(&approval_id)
+        });
+        self.remove_resolved_exec_approvals_from_active_queue(&resolved.exec_approval_ids)
+            .await;
+        self.remove_resolved_exec_approvals_from_inactive_queues(&resolved.exec_approval_ids);
+        self.chat_widget
+            .remove_resolved_exec_approvals(&resolved.exec_approval_ids);
+
+        for channel in self.thread_event_channels.values() {
+            let mut store = channel.store.lock().await;
+            for approval_id in &resolved.exec_approval_ids {
+                store
+                    .pending_interactive_replay
+                    .note_exec_approval_resolved(approval_id);
+            }
+        }
+
+        self.refresh_pending_thread_approvals().await;
+    }
+
+    /// Drains the active receiver, filters resolved exec approvals, then
+    /// restores unrelated events in their existing queue order.
+    async fn remove_resolved_exec_approvals_from_active_queue(&mut self, approval_ids: &[String]) {
+        let Some(thread_id) = self.active_thread_id else {
+            return;
+        };
+        let Some(mut rx) = self.active_thread_rx.take() else {
+            return;
+        };
+        let Some(channel) = self.thread_event_channels.get(&thread_id) else {
+            self.active_thread_rx = Some(rx);
+            return;
+        };
+
+        let sender = channel.sender.clone();
+        let mut disconnected = false;
+        let mut retained_events = Vec::new();
+
+        loop {
+            match rx.try_recv() {
+                Ok(event) => {
+                    let ThreadBufferedEvent::Request(
+                        ServerRequest::CommandExecutionRequestApproval { params, .. },
+                    ) = &event
+                    else {
+                        retained_events.push(event);
+                        continue;
+                    };
+                    let approval_id = params
+                        .approval_id
+                        .clone()
+                        .unwrap_or_else(|| params.item_id.clone());
+                    if !approval_ids.contains(&approval_id) {
+                        retained_events.push(event);
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
+            }
+        }
+
+        if disconnected {
+            self.clear_active_thread().await;
+            return;
+        }
+
+        self.active_thread_rx = Some(rx);
+
+        if retained_events.is_empty() {
+            return;
+        }
+
+        if !requeue_retained_thread_events(thread_id, sender, retained_events) {
+            self.clear_active_thread().await;
+        }
+    }
+
+    /// Applies the same resolved-approval filtering to stored receivers for
+    /// inactive threads so stale prompts do not resurface after reactivation.
+    fn remove_resolved_exec_approvals_from_inactive_queues(&mut self, approval_ids: &[String]) {
+        let active_thread_id = self.active_thread_id;
+
+        for (&thread_id, channel) in &mut self.thread_event_channels {
+            if Some(thread_id) == active_thread_id {
+                continue;
+            }
+            let Some(mut rx) = channel.receiver.take() else {
+                continue;
+            };
+
+            let mut retained_events = Vec::new();
+            while let Ok(event) = rx.try_recv() {
+                let ThreadBufferedEvent::Request(ServerRequest::CommandExecutionRequestApproval {
+                    params,
+                    ..
+                }) = &event
+                else {
+                    retained_events.push(event);
+                    continue;
+                };
+                let approval_id = params
+                    .approval_id
+                    .clone()
+                    .unwrap_or_else(|| params.item_id.clone());
+                if !approval_ids.contains(&approval_id) {
+                    retained_events.push(event);
+                }
+            }
+
+            channel.receiver = Some(rx);
+            if retained_events.is_empty() {
+                continue;
+            }
+            let sender = channel.sender.clone();
+            let _ = requeue_retained_thread_events(thread_id, sender, retained_events);
+        }
+    }
+
     async fn active_turn_id_for_thread(&self, thread_id: ThreadId) -> Option<String> {
         let channel = self.thread_event_channels.get(&thread_id)?;
         let store = channel.store.lock().await;
@@ -1962,7 +2135,6 @@ impl App {
             _ => Ok(false),
         }
     }
-
     async fn try_submit_active_thread_op_via_app_server(
         &mut self,
         app_server: &mut AppServerSession,
@@ -2101,7 +2273,7 @@ impl App {
     ) -> Result<bool> {
         let Some(resolution) = self
             .pending_app_server_requests
-            .take_resolution(op)
+            .prepare_resolution(op)
             .map_err(|err| color_eyre::eyre::eyre!(err))?
         else {
             return Ok(false);
@@ -2112,6 +2284,7 @@ impl App {
             .await
         {
             Ok(()) => {
+                self.pending_app_server_requests.commit_resolution(op);
                 if ThreadEventStore::op_can_change_pending_replay_state(op) {
                     self.note_thread_outbound_op(thread_id, op).await;
                     self.refresh_pending_thread_approvals().await;
@@ -4808,6 +4981,9 @@ impl App {
                     .handle_server_notification(notification, /*replay_kind*/ None);
             }
             ThreadBufferedEvent::Request(request) => {
+                if self.should_drop_stale_exec_approval_request(&request) {
+                    return;
+                }
                 self.chat_widget
                     .handle_server_request(request, /*replay_kind*/ None);
             }
@@ -4832,9 +5008,13 @@ impl App {
             ThreadBufferedEvent::Notification(notification) => self
                 .chat_widget
                 .handle_server_notification(notification, Some(ReplayKind::ThreadSnapshot)),
-            ThreadBufferedEvent::Request(request) => self
-                .chat_widget
-                .handle_server_request(request, Some(ReplayKind::ThreadSnapshot)),
+            ThreadBufferedEvent::Request(request) => {
+                if self.should_drop_stale_exec_approval_request(&request) {
+                    return;
+                }
+                self.chat_widget
+                    .handle_server_request(request, Some(ReplayKind::ThreadSnapshot));
+            }
             ThreadBufferedEvent::HistoryEntryResponse(event) => {
                 self.chat_widget.handle_history_entry_response(event)
             }
@@ -4846,6 +5026,19 @@ impl App {
                 self.chat_widget.handle_thread_rolled_back();
             }
         }
+    }
+
+    fn should_drop_stale_exec_approval_request(&self, request: &ServerRequest) -> bool {
+        let ServerRequest::CommandExecutionRequestApproval { params, .. } = request else {
+            return false;
+        };
+        let approval_id = params
+            .approval_id
+            .clone()
+            .unwrap_or_else(|| params.item_id.clone());
+        !self
+            .pending_app_server_requests
+            .has_pending_exec_approval(&approval_id)
     }
 
     /// Handles an event emitted by the currently active thread.
@@ -5567,6 +5760,11 @@ mod tests {
         let thread_id = ThreadId::new();
         let approval_request = exec_approval_request(thread_id, "turn-1", "call-1", None);
 
+        assert_eq!(
+            app.pending_app_server_requests
+                .note_server_request(&approval_request),
+            None
+        );
         app.enqueue_primary_thread_request(approval_request).await?;
         app.enqueue_primary_thread_session(
             test_thread_session(thread_id, PathBuf::from("/tmp/project")),
@@ -5607,6 +5805,127 @@ mod tests {
         }
 
         panic!("expected approval action to submit a thread-scoped op");
+    }
+
+    #[tokio::test]
+    async fn resolved_buffered_primary_exec_approval_does_not_replay_after_session_configured()
+    -> Result<()> {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let approval_request = exec_approval_request(thread_id, "", "call-1", Some("approval-1"));
+
+        app.enqueue_primary_thread_request(approval_request).await?;
+        app.note_app_server_request_resolved(ResolvedAppServerRequest {
+            exec_approval_ids: vec!["approval-1".to_string()],
+        })
+        .await;
+        app.enqueue_primary_thread_session(
+            test_thread_session(thread_id, PathBuf::from("/tmp/project")),
+            Vec::new(),
+        )
+        .await?;
+
+        let rx = app
+            .active_thread_rx
+            .as_mut()
+            .expect("primary thread receiver should be active");
+        assert!(
+            time::timeout(Duration::from_millis(50), rx.recv())
+                .await
+                .is_err(),
+            "resolved buffered approval should not replay after session configured"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resolved_active_exec_approval_is_removed_from_active_thread_queue() -> Result<()> {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+
+        app.enqueue_primary_thread_session(
+            test_thread_session(thread_id, PathBuf::from("/tmp/project")),
+            Vec::new(),
+        )
+        .await?;
+        app.enqueue_primary_thread_request(exec_approval_request(
+            thread_id,
+            "",
+            "call-1",
+            Some("approval-1"),
+        ))
+        .await?;
+
+        app.note_app_server_request_resolved(ResolvedAppServerRequest {
+            exec_approval_ids: vec!["approval-1".to_string()],
+        })
+        .await;
+
+        let rx = app
+            .active_thread_rx
+            .as_mut()
+            .expect("primary thread receiver should be active");
+        assert!(
+            time::timeout(Duration::from_millis(50), rx.recv())
+                .await
+                .is_err(),
+            "resolved active approval should be removed from the live queue"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stale_exec_approval_request_is_dropped_at_consume_time() -> Result<()> {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let request = exec_approval_request(thread_id, "", "call-1", Some("approval-1"));
+
+        assert_eq!(app.chat_widget.has_active_view(), false);
+
+        app.handle_thread_event_now(ThreadBufferedEvent::Request(request));
+
+        assert_eq!(app.chat_widget.has_active_view(), false);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resolved_exec_approval_is_removed_from_inactive_thread_queue() -> Result<()> {
+        let mut app = make_test_app().await;
+        let thread_id = ThreadId::new();
+
+        app.enqueue_primary_thread_session(
+            test_thread_session(thread_id, PathBuf::from("/tmp/project")),
+            Vec::new(),
+        )
+        .await?;
+        app.enqueue_primary_thread_request(exec_approval_request(
+            thread_id,
+            "",
+            "call-1",
+            Some("approval-1"),
+        ))
+        .await?;
+
+        app.store_active_thread_receiver().await;
+        app.active_thread_id = None;
+
+        app.note_app_server_request_resolved(ResolvedAppServerRequest {
+            exec_approval_ids: vec!["approval-1".to_string()],
+        })
+        .await;
+
+        let rx = app
+            .thread_event_channels
+            .get_mut(&thread_id)
+            .expect("thread channel should exist")
+            .receiver
+            .as_mut()
+            .expect("inactive receiver should be stored");
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+
+        Ok(())
     }
 
     #[tokio::test]

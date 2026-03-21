@@ -252,6 +252,19 @@ impl PendingInteractiveReplayState {
         }
     }
 
+    pub(super) fn note_exec_approval_resolved(&mut self, approval_id: &str) {
+        self.exec_approval_call_ids.remove(approval_id);
+        Self::remove_call_id_from_turn_map(
+            &mut self.exec_approval_call_ids_by_turn_id,
+            approval_id,
+        );
+        self.pending_requests_by_request_id.retain(
+            |_, pending| {
+                !matches!(pending, PendingInteractiveRequest::ExecApproval { approval_id: pending_id, .. } if pending_id == approval_id)
+            },
+        );
+    }
+
     pub(super) fn note_server_notification(&mut self, notification: &ServerNotification) {
         match notification {
             ServerNotification::ItemStarted(notification) => match &notification.item {
