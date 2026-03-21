@@ -3590,24 +3590,6 @@ impl ChatComposer {
 
     fn mention_items(&self) -> Vec<MentionItem> {
         let mut mentions = Vec::new();
-        let plugin_namespaces: HashSet<String> =
-            self.plugins.as_ref().map_or_else(HashSet::new, |plugins| {
-                plugins
-                    .iter()
-                    .filter_map(|plugin| {
-                        let (plugin_name, _) = plugin
-                            .config_name
-                            .split_once('@')
-                            .unwrap_or((plugin.config_name.as_str(), ""));
-                        let plugin_name = plugin_name.trim();
-                        if plugin_name.is_empty() {
-                            None
-                        } else {
-                            Some(plugin_name.to_ascii_lowercase())
-                        }
-                    })
-                    .collect()
-            });
         let plugin_display_names: HashSet<String> =
             self.plugins.as_ref().map_or_else(HashSet::new, |plugins| {
                 plugins
@@ -3618,13 +3600,6 @@ impl ChatComposer {
 
         if let Some(skills) = self.skills.as_ref() {
             for skill in skills {
-                let is_plugin_namespaced_skill =
-                    skill.name.split_once(':').is_some_and(|(namespace, _)| {
-                        plugin_namespaces.contains(&namespace.to_ascii_lowercase())
-                    });
-                if is_plugin_namespaced_skill {
-                    continue;
-                }
                 let display_name = skill_display_name(skill).to_string();
                 let description = skill_description(skill);
                 let skill_name = skill.name.clone();
@@ -5431,6 +5406,93 @@ mod tests {
             .expect("expected plugin mention to be selected");
         assert_eq!(mention.insert_text, "$sample".to_string());
         assert_eq!(mention.path, Some("plugin://sample@test".to_string()));
+    }
+
+    #[test]
+    fn mention_items_keep_plugin_owned_skills_but_hide_duplicate_apps() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_connectors_enabled(true);
+        composer.set_text_content("$goog".to_string(), Vec::new(), Vec::new());
+        composer.set_skill_mentions(Some(vec![SkillMetadata {
+            name: "google-calendar:availability".to_string(),
+            description: "Find availability and plan event changes".to_string(),
+            short_description: None,
+            interface: Some(codex_core::skills::model::SkillInterface {
+                display_name: Some("Google Calendar".to_string()),
+                short_description: None,
+                icon_small: None,
+                icon_large: None,
+                brand_color: None,
+                default_prompt: None,
+            }),
+            dependencies: None,
+            policy: None,
+            permission_profile: None,
+            managed_network_override: None,
+            path_to_skills_md: PathBuf::from("/tmp/repo/google-calendar/SKILL.md"),
+            scope: codex_protocol::protocol::SkillScope::Repo,
+        }]));
+        composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
+            config_name: "google-calendar@debug".to_string(),
+            display_name: "Google Calendar".to_string(),
+            description: Some(
+                "Connect Google Calendar for scheduling, availability, and event management."
+                    .to_string(),
+            ),
+            has_skills: true,
+            mcp_server_names: vec!["google-calendar".to_string()],
+            app_connector_ids: vec![codex_core::plugins::AppConnectorId(
+                "google_calendar".to_string(),
+            )],
+        }]));
+        composer.set_connector_mentions(Some(ConnectorsSnapshot {
+            connectors: vec![AppInfo {
+                id: "google_calendar".to_string(),
+                name: "Google Calendar".to_string(),
+                description: Some("Look up events and availability".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/google-calendar".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: vec!["Google Calendar".to_string()],
+            }],
+        }));
+
+        let mut mention_summaries: Vec<_> = composer
+            .mention_items()
+            .into_iter()
+            .map(|mention| (mention.display_name, mention.category_tag, mention.path))
+            .collect();
+        mention_summaries.sort();
+
+        assert_eq!(
+            mention_summaries,
+            vec![
+                (
+                    "Google Calendar".to_string(),
+                    Some("[Plugin]".to_string()),
+                    Some("plugin://google-calendar@debug".to_string()),
+                ),
+                (
+                    "Google Calendar".to_string(),
+                    Some("[Skill]".to_string()),
+                    Some("/tmp/repo/google-calendar/SKILL.md".to_string()),
+                ),
+            ]
+        );
     }
 
     #[test]
