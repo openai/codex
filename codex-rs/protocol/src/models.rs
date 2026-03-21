@@ -544,7 +544,9 @@ impl DeveloperInstructions {
             ),
         };
 
-        let text = if approvals_reviewer == ApprovalsReviewer::GuardianSubagent {
+        let text = if approvals_reviewer == ApprovalsReviewer::GuardianSubagent
+            && approval_policy != AskForApproval::Never
+        {
             format!("{text}\n\n{GUARDIAN_SUBAGENT_APPROVAL_SUFFIX}")
         } else {
             text
@@ -2110,6 +2112,20 @@ mod tests {
 
         assert!(text.contains("`approvals_reviewer` is `guardian_subagent`"));
         assert!(text.contains("materially safer alternative"));
+    }
+
+    #[test]
+    fn guardian_subagent_approvals_omit_guardian_specific_guidance_when_approval_is_never() {
+        let text = DeveloperInstructions::from(
+            AskForApproval::Never,
+            ApprovalsReviewer::GuardianSubagent,
+            &Policy::empty(),
+            false,
+            false,
+        )
+        .into_text();
+
+        assert!(!text.contains("`approvals_reviewer` is `guardian_subagent`"));
     }
 
     fn granular_categories_section(title: &str, categories: &[&str]) -> String {
