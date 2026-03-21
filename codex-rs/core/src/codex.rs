@@ -3351,8 +3351,13 @@ impl Session {
         items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
     ) {
-        let mut state = self.state.lock().await;
-        state.replace_history(items, reference_context_item);
+        {
+            let mut state = self.state.lock().await;
+            state.replace_history(items, reference_context_item);
+        }
+        self.guardian_review_session
+            .set_parent_history_boundary(None)
+            .await;
     }
 
     pub(crate) async fn replace_compacted_history(
