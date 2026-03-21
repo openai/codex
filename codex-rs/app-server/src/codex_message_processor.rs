@@ -5995,6 +5995,15 @@ impl CodexMessageProcessor {
         let collaboration_mode = params.collaboration_mode.map(|mode| {
             self.normalize_turn_start_collaboration_mode(mode, collaboration_modes_config)
         });
+        let config_snapshot = thread.config_snapshot().await;
+        let collaboration_mode = match collaboration_mode {
+            Some(mode) => mode,
+            None => config_snapshot.collaboration_mode.with_updates(
+                params.model.clone(),
+                params.effort.map(Some),
+                /*developer_instructions*/ None,
+            ),
+        };
 
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> = params
@@ -6003,50 +6012,34 @@ impl CodexMessageProcessor {
             .map(V2UserInput::into_core)
             .collect();
 
-        let has_any_overrides = params.cwd.is_some()
-            || params.approval_policy.is_some()
-            || params.approvals_reviewer.is_some()
-            || params.sandbox_policy.is_some()
-            || params.model.is_some()
-            || params.service_tier.is_some()
-            || params.effort.is_some()
-            || params.summary.is_some()
-            || collaboration_mode.is_some()
-            || params.personality.is_some();
-
-        // If any overrides are provided, update the session turn context first.
-        if has_any_overrides {
-            let _ = self
-                .submit_core_op(
-                    &request_id,
-                    thread.as_ref(),
-                    Op::OverrideTurnContext {
-                        cwd: params.cwd,
-                        approval_policy: params.approval_policy.map(AskForApproval::to_core),
-                        approvals_reviewer: params
-                            .approvals_reviewer
-                            .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
-                        sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
-                        windows_sandbox_level: None,
-                        model: params.model,
-                        effort: params.effort.map(Some),
-                        summary: params.summary,
-                        service_tier: params.service_tier,
-                        collaboration_mode,
-                        personality: params.personality,
-                    },
-                )
-                .await;
-        }
-
-        // Start the turn by submitting the user input. Return its submission id as turn_id.
         let turn_id = self
             .submit_core_op(
                 &request_id,
                 thread.as_ref(),
-                Op::UserInput {
+                Op::UserTurn {
                     items: mapped_items,
+                    cwd: params.cwd.unwrap_or(config_snapshot.cwd),
+                    approval_policy: params
+                        .approval_policy
+                        .map(AskForApproval::to_core)
+                        .unwrap_or(config_snapshot.approval_policy),
+                    approvals_reviewer: Some(
+                        params
+                            .approvals_reviewer
+                            .map(codex_app_server_protocol::ApprovalsReviewer::to_core)
+                            .unwrap_or(config_snapshot.approvals_reviewer),
+                    ),
+                    sandbox_policy: params
+                        .sandbox_policy
+                        .map(|policy| policy.to_core())
+                        .unwrap_or(config_snapshot.sandbox_policy),
+                    model: collaboration_mode.model().to_string(),
+                    effort: collaboration_mode.reasoning_effort(),
+                    summary: params.summary,
+                    service_tier: params.service_tier,
                     final_output_json_schema: params.output_schema,
+                    collaboration_mode: Some(collaboration_mode),
+                    personality: params.personality,
                 },
             )
             .await;
@@ -8353,6 +8346,8 @@ mod tests {
     use anyhow::Result;
     use codex_app_server_protocol::ServerRequestPayload;
     use codex_app_server_protocol::ToolRequestUserInputParams;
+    use codex_protocol::config_types::ModeKind;
+    use codex_protocol::config_types::Settings;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
@@ -8475,6 +8470,14 @@ mod tests {
             cwd: PathBuf::from("/tmp"),
             ephemeral: false,
             reasoning_effort: None,
+            collaboration_mode: CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: "gpt-5".to_string(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            },
             personality: None,
             session_source: SessionSource::Cli,
         };
