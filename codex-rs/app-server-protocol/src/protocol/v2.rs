@@ -4344,9 +4344,8 @@ impl From<CoreGuardianRiskLevel> for GuardianRiskLevel {
     }
 }
 
-/// [UNSTABLE] Temporary guardian approval review payload used by
-/// `item/autoApprovalReview/*` notifications. This shape is expected to change
-/// soon.
+/// [UNSTABLE] Temporary guardian approval review payload used by guardian
+/// approval review notifications.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -4829,8 +4828,91 @@ pub struct ItemStartedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+/// [UNSTABLE] Temporary notification payload for guardian approval review on a
+/// command execution item.
+pub struct CommandExecutionGuardianApprovalReviewStartedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub review: GuardianApprovalReview,
+    pub action: Option<JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Temporary notification payload for guardian approval review on a
+/// command execution item.
+pub struct CommandExecutionGuardianApprovalReviewCompletedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub review: GuardianApprovalReview,
+    pub action: Option<JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Temporary notification payload for guardian approval review on a
+/// file change item.
+pub struct FileChangeGuardianApprovalReviewStartedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub review: GuardianApprovalReview,
+    pub action: Option<JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Temporary notification payload for guardian approval review on a
+/// file change item.
+pub struct FileChangeGuardianApprovalReviewCompletedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub review: GuardianApprovalReview,
+    pub action: Option<JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Temporary notification payload for guardian approval review on
+/// an MCP tool call item.
+pub struct McpToolCallGuardianApprovalReviewStartedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub review: GuardianApprovalReview,
+    pub action: Option<JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Temporary notification payload for guardian approval review on
+/// an MCP tool call item.
+pub struct McpToolCallGuardianApprovalReviewCompletedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub review: GuardianApprovalReview,
+    pub action: Option<JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// Deprecated when app-server also emits the parent item-specific
+/// `item/*/guardianApprovalReview/*` notification for the same review.
+/// Continue handling this payload as a fallback for review kinds that are not
+/// yet parent-scoped (for example, network approvals / `network_access`).
+///
 /// [UNSTABLE] Temporary notification payload for guardian automatic approval
-/// review. This shape is expected to change soon.
+/// review.
 ///
 /// TODO(ccunningham): Attach guardian review state to the reviewed tool item's
 /// lifecycle instead of sending separate standalone review notifications so the
@@ -4846,8 +4928,13 @@ pub struct ItemGuardianApprovalReviewStartedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+/// Deprecated when app-server also emits the parent item-specific
+/// `item/*/guardianApprovalReview/*` notification for the same review.
+/// Continue handling this payload as a fallback for review kinds that are not
+/// yet parent-scoped (for example, network approvals / `network_access`).
+///
 /// [UNSTABLE] Temporary notification payload for guardian automatic approval
-/// review. This shape is expected to change soon.
+/// review.
 ///
 /// TODO(ccunningham): Attach guardian review state to the reviewed tool item's
 /// lifecycle instead of sending separate standalone review notifications so the

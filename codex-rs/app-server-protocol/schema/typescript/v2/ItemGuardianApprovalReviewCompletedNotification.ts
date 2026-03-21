@@ -5,8 +5,13 @@ import type { JsonValue } from "../serde_json/JsonValue";
 import type { GuardianApprovalReview } from "./GuardianApprovalReview";
 
 /**
+ * Deprecated when app-server also emits the parent item-specific
+ * `item/*/guardianApprovalReview/*` notification for the same review.
+ * Continue handling this payload as a fallback for review kinds that are not
+ * yet parent-scoped (for example, network approvals / `network_access`).
+ *
  * [UNSTABLE] Temporary notification payload for guardian automatic approval
- * review. This shape is expected to change soon.
+ * review.
  *
  * TODO(ccunningham): Attach guardian review state to the reviewed tool item's
  * lifecycle instead of sending separate standalone review notifications so the

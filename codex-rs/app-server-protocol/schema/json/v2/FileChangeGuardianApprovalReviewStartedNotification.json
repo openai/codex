@@ -57,14 +57,14 @@
       "type": "string"
     }
   },
-  "description": "Deprecated when app-server also emits the parent item-specific `item/*/guardianApprovalReview/*` notification for the same review. Continue handling this payload as a fallback for review kinds that are not yet parent-scoped (for example, network approvals / `network_access`).\n\n[UNSTABLE] Temporary notification payload for guardian automatic approval review.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
+  "description": "[UNSTABLE] Temporary notification payload for guardian approval review on a file change item.",
   "properties": {
     "action": true,
+    "itemId": {
+      "type": "string"
+    },
     "review": {
       "$ref": "#/definitions/GuardianApprovalReview"
-    },
-    "targetItemId": {
-      "type": "string"
     },
     "threadId": {
       "type": "string"
@@ -74,11 +74,11 @@
     }
   },
   "required": [
+    "itemId",
     "review",
-    "targetItemId",
     "threadId",
     "turnId"
   ],
-  "title": "ItemGuardianApprovalReviewCompletedNotification",
+  "title": "FileChangeGuardianApprovalReviewStartedNotification",
   "type": "object"
 }

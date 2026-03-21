@@ -725,6 +725,56 @@
         }
       ]
     },
+    "CommandExecutionGuardianApprovalReviewCompletedNotification": {
+      "description": "[UNSTABLE] Temporary notification payload for guardian approval review on a command execution item.",
+      "properties": {
+        "action": true,
+        "itemId": {
+          "type": "string"
+        },
+        "review": {
+          "$ref": "#/definitions/GuardianApprovalReview"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "itemId",
+        "review",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
+    "CommandExecutionGuardianApprovalReviewStartedNotification": {
+      "description": "[UNSTABLE] Temporary notification payload for guardian approval review on a command execution item.",
+      "properties": {
+        "action": true,
+        "itemId": {
+          "type": "string"
+        },
+        "review": {
+          "$ref": "#/definitions/GuardianApprovalReview"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "itemId",
+        "review",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
     "CommandExecutionOutputDeltaNotification": {
       "properties": {
         "delta": {
@@ -934,6 +984,56 @@
       ],
       "type": "object"
     },
+    "FileChangeGuardianApprovalReviewCompletedNotification": {
+      "description": "[UNSTABLE] Temporary notification payload for guardian approval review on a file change item.",
+      "properties": {
+        "action": true,
+        "itemId": {
+          "type": "string"
+        },
+        "review": {
+          "$ref": "#/definitions/GuardianApprovalReview"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "itemId",
+        "review",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
+    "FileChangeGuardianApprovalReviewStartedNotification": {
+      "description": "[UNSTABLE] Temporary notification payload for guardian approval review on a file change item.",
+      "properties": {
+        "action": true,
+        "itemId": {
+          "type": "string"
+        },
+        "review": {
+          "$ref": "#/definitions/GuardianApprovalReview"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "itemId",
+        "review",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
     "FileChangeOutputDeltaNotification": {
       "properties": {
         "delta": {
@@ -1081,7 +1181,7 @@
       "type": "object"
     },
     "GuardianApprovalReview": {
-      "description": "[UNSTABLE] Temporary guardian approval review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
+      "description": "[UNSTABLE] Temporary guardian approval review payload used by guardian approval review notifications.",
       "properties": {
         "rationale": {
           "type": [
@@ -1349,7 +1449,7 @@
       "type": "object"
     },
     "ItemGuardianApprovalReviewCompletedNotification": {
-      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
+      "description": "Deprecated when app-server also emits the parent item-specific `item/*/guardianApprovalReview/*` notification for the same review. Continue handling this payload as a fallback for review kinds that are not yet parent-scoped (for example, network approvals / `network_access`).\n\n[UNSTABLE] Temporary notification payload for guardian automatic approval review.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
       "properties": {
         "action": true,
         "review": {
@@ -1374,7 +1474,7 @@
       "type": "object"
     },
     "ItemGuardianApprovalReviewStartedNotification": {
-      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
+      "description": "Deprecated when app-server also emits the parent item-specific `item/*/guardianApprovalReview/*` notification for the same review. Continue handling this payload as a fallback for review kinds that are not yet parent-scoped (for example, network approvals / `network_access`).\n\n[UNSTABLE] Temporary notification payload for guardian automatic approval review.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
       "properties": {
         "action": true,
         "review": {
@@ -1476,6 +1576,56 @@
       },
       "required": [
         "message"
+      ],
+      "type": "object"
+    },
+    "McpToolCallGuardianApprovalReviewCompletedNotification": {
+      "description": "[UNSTABLE] Temporary notification payload for guardian approval review on an MCP tool call item.",
+      "properties": {
+        "action": true,
+        "itemId": {
+          "type": "string"
+        },
+        "review": {
+          "$ref": "#/definitions/GuardianApprovalReview"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "itemId",
+        "review",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
+    "McpToolCallGuardianApprovalReviewStartedNotification": {
+      "description": "[UNSTABLE] Temporary notification payload for guardian approval review on an MCP tool call item.",
+      "properties": {
+        "action": true,
+        "itemId": {
+          "type": "string"
+        },
+        "review": {
+          "$ref": "#/definitions/GuardianApprovalReview"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "itemId",
+        "review",
+        "threadId",
+        "turnId"
       ],
       "type": "object"
     },
@@ -4046,6 +4196,127 @@
       "properties": {
         "method": {
           "enum": [
+            "item/commandExecution/guardianApprovalReview/started"
+          ],
+          "title": "Item/commandExecution/guardianApprovalReview/startedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/CommandExecutionGuardianApprovalReviewStartedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Item/commandExecution/guardianApprovalReview/startedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "item/commandExecution/guardianApprovalReview/completed"
+          ],
+          "title": "Item/commandExecution/guardianApprovalReview/completedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/CommandExecutionGuardianApprovalReviewCompletedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Item/commandExecution/guardianApprovalReview/completedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "item/fileChange/guardianApprovalReview/started"
+          ],
+          "title": "Item/fileChange/guardianApprovalReview/startedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/FileChangeGuardianApprovalReviewStartedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Item/fileChange/guardianApprovalReview/startedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "item/fileChange/guardianApprovalReview/completed"
+          ],
+          "title": "Item/fileChange/guardianApprovalReview/completedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/FileChangeGuardianApprovalReviewCompletedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Item/fileChange/guardianApprovalReview/completedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "item/mcpToolCall/guardianApprovalReview/started"
+          ],
+          "title": "Item/mcpToolCall/guardianApprovalReview/startedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/McpToolCallGuardianApprovalReviewStartedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Item/mcpToolCall/guardianApprovalReview/startedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "item/mcpToolCall/guardianApprovalReview/completed"
+          ],
+          "title": "Item/mcpToolCall/guardianApprovalReview/completedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/McpToolCallGuardianApprovalReviewCompletedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Item/mcpToolCall/guardianApprovalReview/completedNotification",
+      "type": "object"
+    },
+    {
+      "description": "Deprecated when app-server also emits the parent item-specific `item/*/guardianApprovalReview/*` notification for the same review. Continue handling this alias as a fallback for review kinds that are not yet parent-scoped (for example, network approvals / `network_access`).",
+      "properties": {
+        "method": {
+          "enum": [
             "item/autoApprovalReview/started"
           ],
           "title": "Item/autoApprovalReview/startedNotificationMethod",
@@ -4063,6 +4334,7 @@
       "type": "object"
     },
     {
+      "description": "Deprecated when app-server also emits the parent item-specific `item/*/guardianApprovalReview/*` notification for the same review. Continue handling this alias as a fallback for review kinds that are not yet parent-scoped (for example, network approvals / `network_access`).",
       "properties": {
         "method": {
           "enum": [

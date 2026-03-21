@@ -5,8 +5,7 @@ import type { GuardianApprovalReviewStatus } from "./GuardianApprovalReviewStatu
 import type { GuardianRiskLevel } from "./GuardianRiskLevel";
 
 /**
- * [UNSTABLE] Temporary guardian approval review payload used by
- * `item/autoApprovalReview/*` notifications. This shape is expected to change
- * soon.
+ * [UNSTABLE] Temporary guardian approval review payload used by guardian
+ * approval review notifications.
  */
 export type GuardianApprovalReview = { status: GuardianApprovalReviewStatus, riskScore: number | null, riskLevel: GuardianRiskLevel | null, rationale: string | null, };

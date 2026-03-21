@@ -23,6 +23,8 @@ use codex_app_server_protocol::CollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus as V2CollabToolCallStatus;
 use codex_app_server_protocol::CommandAction as V2ParsedCommand;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
+use codex_app_server_protocol::CommandExecutionGuardianApprovalReviewCompletedNotification;
+use codex_app_server_protocol::CommandExecutionGuardianApprovalReviewStartedNotification;
 use codex_app_server_protocol::CommandExecutionOutputDeltaNotification;
 use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
@@ -39,6 +41,8 @@ use codex_app_server_protocol::ExecCommandApprovalParams;
 use codex_app_server_protocol::ExecCommandApprovalResponse;
 use codex_app_server_protocol::ExecPolicyAmendment as V2ExecPolicyAmendment;
 use codex_app_server_protocol::FileChangeApprovalDecision;
+use codex_app_server_protocol::FileChangeGuardianApprovalReviewCompletedNotification;
+use codex_app_server_protocol::FileChangeGuardianApprovalReviewStartedNotification;
 use codex_app_server_protocol::FileChangeOutputDeltaNotification;
 use codex_app_server_protocol::FileChangeRequestApprovalParams;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
@@ -60,6 +64,8 @@ use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 use codex_app_server_protocol::McpToolCallError;
+use codex_app_server_protocol::McpToolCallGuardianApprovalReviewCompletedNotification;
+use codex_app_server_protocol::McpToolCallGuardianApprovalReviewStartedNotification;
 use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::ModelReroutedNotification;
@@ -160,6 +166,13 @@ struct CommandExecutionCompletionItem {
     command_actions: Vec<V2ParsedCommand>,
 }
 
+#[derive(Clone, Copy)]
+enum GuardianApprovalReviewItemKind {
+    CommandExecution,
+    FileChange,
+    McpToolCall,
+}
+
 async fn resolve_server_request_on_thread_listener(
     thread_state: &Arc<Mutex<ThreadState>>,
     request_id: RequestId,
@@ -192,20 +205,21 @@ async fn resolve_server_request_on_thread_listener(
     }
 }
 
-fn guardian_auto_approval_review_notification(
-    conversation_id: &ThreadId,
+fn guardian_approval_review_turn_id(
     event_turn_id: &str,
     assessment: &GuardianAssessmentEvent,
-) -> ServerNotification {
-    // TODO(ccunningham): Attach guardian review state to the reviewed tool
-    // item's lifecycle instead of sending standalone review notifications so
-    // the app-server API can persist and replay review state via `thread/read`.
-    let turn_id = if assessment.turn_id.is_empty() {
+) -> String {
+    if assessment.turn_id.is_empty() {
         event_turn_id.to_string()
     } else {
         assessment.turn_id.clone()
-    };
-    let review = GuardianApprovalReview {
+    }
+}
+
+fn guardian_approval_review_payload(
+    assessment: &GuardianAssessmentEvent,
+) -> GuardianApprovalReview {
+    GuardianApprovalReview {
         status: match assessment.status {
             codex_protocol::protocol::GuardianAssessmentStatus::InProgress => {
                 GuardianApprovalReviewStatus::InProgress
@@ -223,7 +237,31 @@ fn guardian_auto_approval_review_notification(
         risk_score: assessment.risk_score,
         risk_level: assessment.risk_level.map(Into::into),
         rationale: assessment.rationale.clone(),
-    };
+    }
+}
+
+fn guardian_approval_review_item_kind(
+    action: Option<&JsonValue>,
+) -> Option<GuardianApprovalReviewItemKind> {
+    match action
+        .and_then(|value| value.get("tool"))
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("shell") | Some("exec_command") => {
+            Some(GuardianApprovalReviewItemKind::CommandExecution)
+        }
+        Some("apply_patch") => Some(GuardianApprovalReviewItemKind::FileChange),
+        Some("mcp_tool_call") => Some(GuardianApprovalReviewItemKind::McpToolCall),
+        Some(_) | None => None,
+    }
+}
+
+fn legacy_guardian_approval_review_notification(
+    conversation_id: &ThreadId,
+    turn_id: String,
+    assessment: &GuardianAssessmentEvent,
+    review: GuardianApprovalReview,
+) -> ServerNotification {
     match assessment.status {
         codex_protocol::protocol::GuardianAssessmentStatus::InProgress => {
             ServerNotification::ItemGuardianApprovalReviewStarted(
@@ -250,6 +288,137 @@ fn guardian_auto_approval_review_notification(
             )
         }
     }
+}
+
+fn parent_guardian_approval_review_notification(
+    conversation_id: &ThreadId,
+    turn_id: String,
+    assessment: &GuardianAssessmentEvent,
+    review: GuardianApprovalReview,
+) -> Option<ServerNotification> {
+    let item_kind = guardian_approval_review_item_kind(assessment.action.as_ref())?;
+    let thread_id = conversation_id.to_string();
+    let item_id = assessment.id.clone();
+    let action = assessment.action.clone();
+
+    match (item_kind, assessment.status) {
+        (
+            GuardianApprovalReviewItemKind::CommandExecution,
+            codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
+        ) => Some(
+            ServerNotification::CommandExecutionGuardianApprovalReviewStarted(
+                CommandExecutionGuardianApprovalReviewStartedNotification {
+                    thread_id,
+                    turn_id,
+                    item_id,
+                    review,
+                    action,
+                },
+            ),
+        ),
+        (
+            GuardianApprovalReviewItemKind::CommandExecution,
+            codex_protocol::protocol::GuardianAssessmentStatus::Approved
+            | codex_protocol::protocol::GuardianAssessmentStatus::Denied
+            | codex_protocol::protocol::GuardianAssessmentStatus::Aborted,
+        ) => Some(
+            ServerNotification::CommandExecutionGuardianApprovalReviewCompleted(
+                CommandExecutionGuardianApprovalReviewCompletedNotification {
+                    thread_id,
+                    turn_id,
+                    item_id,
+                    review,
+                    action,
+                },
+            ),
+        ),
+        (
+            GuardianApprovalReviewItemKind::FileChange,
+            codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
+        ) => Some(ServerNotification::FileChangeGuardianApprovalReviewStarted(
+            FileChangeGuardianApprovalReviewStartedNotification {
+                thread_id,
+                turn_id,
+                item_id,
+                review,
+                action,
+            },
+        )),
+        (
+            GuardianApprovalReviewItemKind::FileChange,
+            codex_protocol::protocol::GuardianAssessmentStatus::Approved
+            | codex_protocol::protocol::GuardianAssessmentStatus::Denied
+            | codex_protocol::protocol::GuardianAssessmentStatus::Aborted,
+        ) => Some(
+            ServerNotification::FileChangeGuardianApprovalReviewCompleted(
+                FileChangeGuardianApprovalReviewCompletedNotification {
+                    thread_id,
+                    turn_id,
+                    item_id,
+                    review,
+                    action,
+                },
+            ),
+        ),
+        (
+            GuardianApprovalReviewItemKind::McpToolCall,
+            codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
+        ) => Some(
+            ServerNotification::McpToolCallGuardianApprovalReviewStarted(
+                McpToolCallGuardianApprovalReviewStartedNotification {
+                    thread_id,
+                    turn_id,
+                    item_id,
+                    review,
+                    action,
+                },
+            ),
+        ),
+        (
+            GuardianApprovalReviewItemKind::McpToolCall,
+            codex_protocol::protocol::GuardianAssessmentStatus::Approved
+            | codex_protocol::protocol::GuardianAssessmentStatus::Denied
+            | codex_protocol::protocol::GuardianAssessmentStatus::Aborted,
+        ) => Some(
+            ServerNotification::McpToolCallGuardianApprovalReviewCompleted(
+                McpToolCallGuardianApprovalReviewCompletedNotification {
+                    thread_id,
+                    turn_id,
+                    item_id,
+                    review,
+                    action,
+                },
+            ),
+        ),
+    }
+}
+
+fn guardian_approval_review_notifications(
+    conversation_id: &ThreadId,
+    event_turn_id: &str,
+    assessment: &GuardianAssessmentEvent,
+) -> Vec<ServerNotification> {
+    let turn_id = guardian_approval_review_turn_id(event_turn_id, assessment);
+    let review = guardian_approval_review_payload(assessment);
+    let mut notifications = Vec::new();
+
+    if let Some(notification) = parent_guardian_approval_review_notification(
+        conversation_id,
+        turn_id.clone(),
+        assessment,
+        review.clone(),
+    ) {
+        notifications.push(notification);
+    }
+
+    notifications.push(legacy_guardian_approval_review_notification(
+        conversation_id,
+        turn_id,
+        assessment,
+        review,
+    ));
+
+    notifications
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -344,12 +513,14 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::Warning(_warning_event) => {}
         EventMsg::GuardianAssessment(assessment) => {
             if let ApiVersion::V2 = api_version {
-                let notification = guardian_auto_approval_review_notification(
+                let notifications = guardian_approval_review_notifications(
                     &conversation_id,
                     &event_turn_id,
                     &assessment,
                 );
-                outgoing.send_server_notification(notification).await;
+                for notification in notifications {
+                    outgoing.send_server_notification(notification).await;
+                }
             }
         }
         EventMsg::ModelReroute(event) => {
@@ -2907,13 +3078,13 @@ mod tests {
     }
 
     #[test]
-    fn guardian_assessment_started_uses_event_turn_id_fallback() {
+    fn guardian_assessment_started_emits_command_execution_and_legacy_notifications() {
         let conversation_id = ThreadId::new();
         let action = json!({
             "tool": "shell",
             "command": "rm -rf /tmp/example.sqlite",
         });
-        let notification = guardian_auto_approval_review_notification(
+        let notifications = guardian_approval_review_notifications(
             &conversation_id,
             "turn-from-event",
             &GuardianAssessmentEvent {
@@ -2926,33 +3097,51 @@ mod tests {
                 action: Some(action.clone()),
             },
         );
+        assert_eq!(notifications.len(), 2);
 
-        match notification {
-            ServerNotification::ItemGuardianApprovalReviewStarted(payload) => {
-                assert_eq!(payload.thread_id, conversation_id.to_string());
-                assert_eq!(payload.turn_id, "turn-from-event");
-                assert_eq!(payload.target_item_id, "item-1");
+        match (&notifications[0], &notifications[1]) {
+            (
+                ServerNotification::CommandExecutionGuardianApprovalReviewStarted(parent),
+                ServerNotification::ItemGuardianApprovalReviewStarted(legacy),
+            ) => {
+                assert_eq!(parent.thread_id, conversation_id.to_string());
+                assert_eq!(parent.turn_id, "turn-from-event");
+                assert_eq!(parent.item_id, "item-1");
                 assert_eq!(
-                    payload.review.status,
+                    parent.review.status,
                     GuardianApprovalReviewStatus::InProgress
                 );
-                assert_eq!(payload.review.risk_score, None);
-                assert_eq!(payload.review.risk_level, None);
-                assert_eq!(payload.review.rationale, None);
-                assert_eq!(payload.action, Some(action));
+                assert_eq!(parent.review.risk_score, None);
+                assert_eq!(parent.review.risk_level, None);
+                assert_eq!(parent.review.rationale, None);
+                assert_eq!(parent.action, Some(action.clone()));
+
+                assert_eq!(legacy.thread_id, conversation_id.to_string());
+                assert_eq!(legacy.turn_id, "turn-from-event");
+                assert_eq!(legacy.target_item_id, "item-1");
+                assert_eq!(
+                    legacy.review.status,
+                    GuardianApprovalReviewStatus::InProgress
+                );
+                assert_eq!(legacy.review.risk_score, None);
+                assert_eq!(legacy.review.risk_level, None);
+                assert_eq!(legacy.review.rationale, None);
+                assert_eq!(legacy.action, Some(action));
             }
-            other => panic!("unexpected notification: {other:?}"),
+            other => panic!("unexpected notifications: {other:?}"),
         }
     }
 
     #[test]
-    fn guardian_assessment_completed_emits_review_payload() {
+    fn guardian_assessment_completed_emits_file_change_and_legacy_notifications() {
         let conversation_id = ThreadId::new();
         let action = json!({
-            "tool": "shell",
-            "command": "rm -rf /tmp/example.sqlite",
+            "tool": "apply_patch",
+            "cwd": "/tmp/project",
+            "files": ["/tmp/project/src/main.rs"],
+            "change_count": 1,
         });
-        let notification = guardian_auto_approval_review_notification(
+        let notifications = guardian_approval_review_notifications(
             &conversation_id,
             "turn-from-event",
             &GuardianAssessmentEvent {
@@ -2965,37 +3154,109 @@ mod tests {
                 action: Some(action.clone()),
             },
         );
+        assert_eq!(notifications.len(), 2);
 
-        match notification {
-            ServerNotification::ItemGuardianApprovalReviewCompleted(payload) => {
-                assert_eq!(payload.thread_id, conversation_id.to_string());
-                assert_eq!(payload.turn_id, "turn-from-assessment");
-                assert_eq!(payload.target_item_id, "item-2");
-                assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
-                assert_eq!(payload.review.risk_score, Some(91));
+        match (&notifications[0], &notifications[1]) {
+            (
+                ServerNotification::FileChangeGuardianApprovalReviewCompleted(parent),
+                ServerNotification::ItemGuardianApprovalReviewCompleted(legacy),
+            ) => {
+                assert_eq!(parent.thread_id, conversation_id.to_string());
+                assert_eq!(parent.turn_id, "turn-from-assessment");
+                assert_eq!(parent.item_id, "item-2");
+                assert_eq!(parent.review.status, GuardianApprovalReviewStatus::Denied);
+                assert_eq!(parent.review.risk_score, Some(91));
                 assert_eq!(
-                    payload.review.risk_level,
+                    parent.review.risk_level,
                     Some(codex_app_server_protocol::GuardianRiskLevel::High)
                 );
-                assert_eq!(payload.review.rationale.as_deref(), Some("too risky"));
-                assert_eq!(payload.action, Some(action));
+                assert_eq!(parent.review.rationale.as_deref(), Some("too risky"));
+                assert_eq!(parent.action, Some(action.clone()));
+
+                assert_eq!(legacy.thread_id, conversation_id.to_string());
+                assert_eq!(legacy.turn_id, "turn-from-assessment");
+                assert_eq!(legacy.target_item_id, "item-2");
+                assert_eq!(legacy.review.status, GuardianApprovalReviewStatus::Denied);
+                assert_eq!(legacy.review.risk_score, Some(91));
+                assert_eq!(
+                    legacy.review.risk_level,
+                    Some(codex_app_server_protocol::GuardianRiskLevel::High)
+                );
+                assert_eq!(legacy.review.rationale.as_deref(), Some("too risky"));
+                assert_eq!(legacy.action, Some(action));
             }
-            other => panic!("unexpected notification: {other:?}"),
+            other => panic!("unexpected notifications: {other:?}"),
         }
     }
 
     #[test]
-    fn guardian_assessment_aborted_emits_completed_review_payload() {
+    fn guardian_assessment_completed_emits_mcp_and_legacy_notifications() {
+        let conversation_id = ThreadId::new();
+        let action = json!({
+            "tool": "mcp_tool_call",
+            "server": "github",
+            "tool_name": "create_issue",
+        });
+        let notifications = guardian_approval_review_notifications(
+            &conversation_id,
+            "turn-from-event",
+            &GuardianAssessmentEvent {
+                id: "item-3".to_string(),
+                turn_id: "turn-from-assessment".to_string(),
+                status: codex_protocol::protocol::GuardianAssessmentStatus::Approved,
+                risk_score: Some(12),
+                risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::Low),
+                rationale: Some("safe enough".to_string()),
+                action: Some(action.clone()),
+            },
+        );
+        assert_eq!(notifications.len(), 2);
+
+        match (&notifications[0], &notifications[1]) {
+            (
+                ServerNotification::McpToolCallGuardianApprovalReviewCompleted(parent),
+                ServerNotification::ItemGuardianApprovalReviewCompleted(legacy),
+            ) => {
+                assert_eq!(parent.thread_id, conversation_id.to_string());
+                assert_eq!(parent.turn_id, "turn-from-assessment");
+                assert_eq!(parent.item_id, "item-3");
+                assert_eq!(parent.review.status, GuardianApprovalReviewStatus::Approved);
+                assert_eq!(parent.review.risk_score, Some(12));
+                assert_eq!(
+                    parent.review.risk_level,
+                    Some(codex_app_server_protocol::GuardianRiskLevel::Low)
+                );
+                assert_eq!(parent.review.rationale.as_deref(), Some("safe enough"));
+                assert_eq!(parent.action, Some(action.clone()));
+
+                assert_eq!(legacy.thread_id, conversation_id.to_string());
+                assert_eq!(legacy.turn_id, "turn-from-assessment");
+                assert_eq!(legacy.target_item_id, "item-3");
+                assert_eq!(legacy.review.status, GuardianApprovalReviewStatus::Approved);
+                assert_eq!(legacy.review.risk_score, Some(12));
+                assert_eq!(
+                    legacy.review.risk_level,
+                    Some(codex_app_server_protocol::GuardianRiskLevel::Low)
+                );
+                assert_eq!(legacy.review.rationale.as_deref(), Some("safe enough"));
+                assert_eq!(legacy.action, Some(action));
+            }
+            other => panic!("unexpected notifications: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn guardian_assessment_aborted_emits_legacy_notification_for_unmapped_tool() {
         let conversation_id = ThreadId::new();
         let action = json!({
             "tool": "network_access",
             "target": "api.openai.com:443",
         });
-        let notification = guardian_auto_approval_review_notification(
+        let notifications = guardian_approval_review_notifications(
             &conversation_id,
             "turn-from-event",
             &GuardianAssessmentEvent {
-                id: "item-3".to_string(),
+                id: "item-4".to_string(),
                 turn_id: "turn-from-assessment".to_string(),
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Aborted,
                 risk_score: None,
@@ -3004,12 +3265,13 @@ mod tests {
                 action: Some(action.clone()),
             },
         );
+        assert_eq!(notifications.len(), 1);
 
-        match notification {
+        match &notifications[0] {
             ServerNotification::ItemGuardianApprovalReviewCompleted(payload) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-assessment");
-                assert_eq!(payload.target_item_id, "item-3");
+                assert_eq!(payload.target_item_id, "item-4");
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Aborted);
                 assert_eq!(payload.review.risk_score, None);
                 assert_eq!(payload.review.risk_level, None);

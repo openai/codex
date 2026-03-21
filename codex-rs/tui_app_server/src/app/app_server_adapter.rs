@@ -322,6 +322,24 @@ fn server_notification_thread_target(
         ServerNotification::TurnDiffUpdated(notification) => Some(notification.thread_id.as_str()),
         ServerNotification::TurnPlanUpdated(notification) => Some(notification.thread_id.as_str()),
         ServerNotification::ItemStarted(notification) => Some(notification.thread_id.as_str()),
+        ServerNotification::CommandExecutionGuardianApprovalReviewStarted(notification) => {
+            Some(notification.thread_id.as_str())
+        }
+        ServerNotification::CommandExecutionGuardianApprovalReviewCompleted(notification) => {
+            Some(notification.thread_id.as_str())
+        }
+        ServerNotification::FileChangeGuardianApprovalReviewStarted(notification) => {
+            Some(notification.thread_id.as_str())
+        }
+        ServerNotification::FileChangeGuardianApprovalReviewCompleted(notification) => {
+            Some(notification.thread_id.as_str())
+        }
+        ServerNotification::McpToolCallGuardianApprovalReviewStarted(notification) => {
+            Some(notification.thread_id.as_str())
+        }
+        ServerNotification::McpToolCallGuardianApprovalReviewCompleted(notification) => {
+            Some(notification.thread_id.as_str())
+        }
         ServerNotification::ItemGuardianApprovalReviewStarted(notification) => {
             Some(notification.thread_id.as_str())
         }

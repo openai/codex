@@ -51,6 +51,8 @@ export type { CommandExecTerminateResponse } from "./CommandExecTerminateRespons
 export type { CommandExecWriteParams } from "./CommandExecWriteParams";
 export type { CommandExecWriteResponse } from "./CommandExecWriteResponse";
 export type { CommandExecutionApprovalDecision } from "./CommandExecutionApprovalDecision";
+export type { CommandExecutionGuardianApprovalReviewCompletedNotification } from "./CommandExecutionGuardianApprovalReviewCompletedNotification";
+export type { CommandExecutionGuardianApprovalReviewStartedNotification } from "./CommandExecutionGuardianApprovalReviewStartedNotification";
 export type { CommandExecutionOutputDeltaNotification } from "./CommandExecutionOutputDeltaNotification";
 export type { CommandExecutionRequestApprovalParams } from "./CommandExecutionRequestApprovalParams";
 export type { CommandExecutionRequestApprovalResponse } from "./CommandExecutionRequestApprovalResponse";
@@ -93,6 +95,8 @@ export type { ExternalAgentConfigMigrationItemType } from "./ExternalAgentConfig
 export type { FeedbackUploadParams } from "./FeedbackUploadParams";
 export type { FeedbackUploadResponse } from "./FeedbackUploadResponse";
 export type { FileChangeApprovalDecision } from "./FileChangeApprovalDecision";
+export type { FileChangeGuardianApprovalReviewCompletedNotification } from "./FileChangeGuardianApprovalReviewCompletedNotification";
+export type { FileChangeGuardianApprovalReviewStartedNotification } from "./FileChangeGuardianApprovalReviewStartedNotification";
 export type { FileChangeOutputDeltaNotification } from "./FileChangeOutputDeltaNotification";
 export type { FileChangeRequestApprovalParams } from "./FileChangeRequestApprovalParams";
 export type { FileChangeRequestApprovalResponse } from "./FileChangeRequestApprovalResponse";
@@ -175,6 +179,8 @@ export type { McpServerStartupState } from "./McpServerStartupState";
 export type { McpServerStatus } from "./McpServerStatus";
 export type { McpServerStatusUpdatedNotification } from "./McpServerStatusUpdatedNotification";
 export type { McpToolCallError } from "./McpToolCallError";
+export type { McpToolCallGuardianApprovalReviewCompletedNotification } from "./McpToolCallGuardianApprovalReviewCompletedNotification";
+export type { McpToolCallGuardianApprovalReviewStartedNotification } from "./McpToolCallGuardianApprovalReviewStartedNotification";
 export type { McpToolCallProgressNotification } from "./McpToolCallProgressNotification";
 export type { McpToolCallResult } from "./McpToolCallResult";
 export type { McpToolCallStatus } from "./McpToolCallStatus";

@@ -889,7 +889,39 @@ server_notification_definitions! {
     TurnDiffUpdated => "turn/diff/updated" (v2::TurnDiffUpdatedNotification),
     TurnPlanUpdated => "turn/plan/updated" (v2::TurnPlanUpdatedNotification),
     ItemStarted => "item/started" (v2::ItemStartedNotification),
+    #[experimental("item/commandExecution/guardianApprovalReview/started")]
+    CommandExecutionGuardianApprovalReviewStarted =>
+        "item/commandExecution/guardianApprovalReview/started"
+        (v2::CommandExecutionGuardianApprovalReviewStartedNotification),
+    #[experimental("item/commandExecution/guardianApprovalReview/completed")]
+    CommandExecutionGuardianApprovalReviewCompleted =>
+        "item/commandExecution/guardianApprovalReview/completed"
+        (v2::CommandExecutionGuardianApprovalReviewCompletedNotification),
+    #[experimental("item/fileChange/guardianApprovalReview/started")]
+    FileChangeGuardianApprovalReviewStarted =>
+        "item/fileChange/guardianApprovalReview/started"
+        (v2::FileChangeGuardianApprovalReviewStartedNotification),
+    #[experimental("item/fileChange/guardianApprovalReview/completed")]
+    FileChangeGuardianApprovalReviewCompleted =>
+        "item/fileChange/guardianApprovalReview/completed"
+        (v2::FileChangeGuardianApprovalReviewCompletedNotification),
+    #[experimental("item/mcpToolCall/guardianApprovalReview/started")]
+    McpToolCallGuardianApprovalReviewStarted =>
+        "item/mcpToolCall/guardianApprovalReview/started"
+        (v2::McpToolCallGuardianApprovalReviewStartedNotification),
+    #[experimental("item/mcpToolCall/guardianApprovalReview/completed")]
+    McpToolCallGuardianApprovalReviewCompleted =>
+        "item/mcpToolCall/guardianApprovalReview/completed"
+        (v2::McpToolCallGuardianApprovalReviewCompletedNotification),
+    /// Deprecated when app-server also emits the parent item-specific
+    /// `item/*/guardianApprovalReview/*` notification for the same review.
+    /// Continue handling this alias as a fallback for review kinds that are not
+    /// yet parent-scoped (for example, network approvals / `network_access`).
     ItemGuardianApprovalReviewStarted => "item/autoApprovalReview/started" (v2::ItemGuardianApprovalReviewStartedNotification),
+    /// Deprecated when app-server also emits the parent item-specific
+    /// `item/*/guardianApprovalReview/*` notification for the same review.
+    /// Continue handling this alias as a fallback for review kinds that are not
+    /// yet parent-scoped (for example, network approvals / `network_access`).
     ItemGuardianApprovalReviewCompleted => "item/autoApprovalReview/completed" (v2::ItemGuardianApprovalReviewCompletedNotification),
     ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
     /// This event is internal-only. Used by Codex Cloud.
