@@ -1056,10 +1056,20 @@ The client must respond with content items. Use `inputText` for text and `inputI
       { "type": "inputText", "text": "Ticket ABC-123 is open." },
       { "type": "inputImage", "imageUrl": "data:image/png;base64,AAA" }
     ],
-    "success": true
+    "success": true,
+    "approvedArguments": { "id": "ABC-456" }
   }
 }
 ```
+
+`approvedArguments` is optional. When omitted or `null`, the original model-proposed `arguments` remain authoritative. When present, it must be a full replacement object/value that still matches the same registered dynamic-tool schema; clients cannot rename the tool or change its schema.
+
+Event semantics stay narrow:
+
+1. `item/started` and `item/tool/call` always show the model-proposed arguments.
+2. If the client returns valid `approvedArguments`, Codex treats them as the authoritative executed arguments.
+3. `item/completed` uses the authoritative final arguments.
+4. When the authoritative arguments differ from the proposed ones, Codex records a developer-role note so the next model step reasons from the approved arguments instead of the earlier proposal.
 
 ## Skills
 
