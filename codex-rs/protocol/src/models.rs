@@ -493,6 +493,14 @@ const SANDBOX_MODE_READ_ONLY: &str = include_str!("prompts/permissions/sandbox_m
 const REALTIME_START_INSTRUCTIONS: &str = include_str!("prompts/realtime/realtime_start.md");
 const REALTIME_END_INSTRUCTIONS: &str = include_str!("prompts/realtime/realtime_end.md");
 
+struct PermissionsPromptConfig<'a> {
+    approval_policy: AskForApproval,
+    approvals_reviewer: ApprovalsReviewer,
+    exec_policy: &'a Policy,
+    exec_permission_approvals_enabled: bool,
+    request_permissions_tool_enabled: bool,
+}
+
 impl DeveloperInstructions {
     pub fn new<T: Into<String>>(text: T) -> Self {
         Self { text: text.into() }
@@ -626,12 +634,14 @@ impl DeveloperInstructions {
         DeveloperInstructions::from_permissions_with_network(
             sandbox_mode,
             network_access,
-            approval_policy,
-            approvals_reviewer,
-            exec_policy,
+            PermissionsPromptConfig {
+                approval_policy,
+                approvals_reviewer,
+                exec_policy,
+                exec_permission_approvals_enabled,
+                request_permissions_tool_enabled,
+            },
             writable_roots,
-            exec_permission_approvals_enabled,
-            request_permissions_tool_enabled,
         )
     }
 
@@ -652,12 +662,8 @@ impl DeveloperInstructions {
     fn from_permissions_with_network(
         sandbox_mode: SandboxMode,
         network_access: NetworkAccess,
-        approval_policy: AskForApproval,
-        approvals_reviewer: ApprovalsReviewer,
-        exec_policy: &Policy,
+        config: PermissionsPromptConfig<'_>,
         writable_roots: Option<Vec<WritableRoot>>,
-        exec_permission_approvals_enabled: bool,
-        request_permissions_tool_enabled: bool,
     ) -> Self {
         let start_tag = DeveloperInstructions::new("<permissions instructions>");
         let end_tag = DeveloperInstructions::new("</permissions instructions>");
@@ -667,11 +673,11 @@ impl DeveloperInstructions {
                 network_access,
             ))
             .concat(DeveloperInstructions::from(
-                approval_policy,
-                approvals_reviewer,
-                exec_policy,
-                exec_permission_approvals_enabled,
-                request_permissions_tool_enabled,
+                config.approval_policy,
+                config.approvals_reviewer,
+                config.exec_policy,
+                config.exec_permission_approvals_enabled,
+                config.request_permissions_tool_enabled,
             ))
             .concat(DeveloperInstructions::from_writable_roots(writable_roots))
             .concat(end_tag)
@@ -1938,12 +1944,14 @@ mod tests {
         let instructions = DeveloperInstructions::from_permissions_with_network(
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
-            AskForApproval::OnRequest,
-            ApprovalsReviewer::User,
-            &Policy::empty(),
+            PermissionsPromptConfig {
+                approval_policy: AskForApproval::OnRequest,
+                approvals_reviewer: ApprovalsReviewer::User,
+                exec_policy: &Policy::empty(),
+                exec_permission_approvals_enabled: false,
+                request_permissions_tool_enabled: false,
+            },
             None,
-            false,
-            false,
         );
 
         let text = instructions.into_text();
@@ -1993,12 +2001,14 @@ mod tests {
         let instructions = DeveloperInstructions::from_permissions_with_network(
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
-            AskForApproval::OnRequest,
-            ApprovalsReviewer::User,
-            &exec_policy,
+            PermissionsPromptConfig {
+                approval_policy: AskForApproval::OnRequest,
+                approvals_reviewer: ApprovalsReviewer::User,
+                exec_policy: &exec_policy,
+                exec_permission_approvals_enabled: false,
+                request_permissions_tool_enabled: false,
+            },
             None,
-            false,
-            false,
         );
 
         let text = instructions.into_text();
@@ -2012,12 +2022,14 @@ mod tests {
         let instructions = DeveloperInstructions::from_permissions_with_network(
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
-            AskForApproval::UnlessTrusted,
-            ApprovalsReviewer::User,
-            &Policy::empty(),
+            PermissionsPromptConfig {
+                approval_policy: AskForApproval::UnlessTrusted,
+                approvals_reviewer: ApprovalsReviewer::User,
+                exec_policy: &Policy::empty(),
+                exec_permission_approvals_enabled: false,
+                request_permissions_tool_enabled: true,
+            },
             None,
-            false,
-            true,
         );
 
         let text = instructions.into_text();
@@ -2030,12 +2042,14 @@ mod tests {
         let instructions = DeveloperInstructions::from_permissions_with_network(
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
-            AskForApproval::OnFailure,
-            ApprovalsReviewer::User,
-            &Policy::empty(),
+            PermissionsPromptConfig {
+                approval_policy: AskForApproval::OnFailure,
+                approvals_reviewer: ApprovalsReviewer::User,
+                exec_policy: &Policy::empty(),
+                exec_permission_approvals_enabled: false,
+                request_permissions_tool_enabled: true,
+            },
             None,
-            false,
-            true,
         );
 
         let text = instructions.into_text();
@@ -2048,12 +2062,14 @@ mod tests {
         let instructions = DeveloperInstructions::from_permissions_with_network(
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
-            AskForApproval::OnRequest,
-            ApprovalsReviewer::User,
-            &Policy::empty(),
+            PermissionsPromptConfig {
+                approval_policy: AskForApproval::OnRequest,
+                approvals_reviewer: ApprovalsReviewer::User,
+                exec_policy: &Policy::empty(),
+                exec_permission_approvals_enabled: true,
+                request_permissions_tool_enabled: false,
+            },
             None,
-            true,
-            false,
         );
 
         let text = instructions.into_text();
@@ -2066,12 +2082,14 @@ mod tests {
         let instructions = DeveloperInstructions::from_permissions_with_network(
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
-            AskForApproval::OnRequest,
-            ApprovalsReviewer::User,
-            &Policy::empty(),
+            PermissionsPromptConfig {
+                approval_policy: AskForApproval::OnRequest,
+                approvals_reviewer: ApprovalsReviewer::User,
+                exec_policy: &Policy::empty(),
+                exec_permission_approvals_enabled: false,
+                request_permissions_tool_enabled: true,
+            },
             None,
-            false,
-            true,
         );
 
         let text = instructions.into_text();
@@ -2086,12 +2104,14 @@ mod tests {
         let instructions = DeveloperInstructions::from_permissions_with_network(
             SandboxMode::WorkspaceWrite,
             NetworkAccess::Enabled,
-            AskForApproval::OnRequest,
-            ApprovalsReviewer::User,
-            &Policy::empty(),
+            PermissionsPromptConfig {
+                approval_policy: AskForApproval::OnRequest,
+                approvals_reviewer: ApprovalsReviewer::User,
+                exec_policy: &Policy::empty(),
+                exec_permission_approvals_enabled: true,
+                request_permissions_tool_enabled: true,
+            },
             None,
-            true,
-            true,
         );
 
         let text = instructions.into_text();
