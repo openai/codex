@@ -64,9 +64,7 @@ struct GuardianReviewExecutionResult {
 
 enum GuardianTrunkState {
     Ready(Arc<GuardianReviewSession>),
-    NeedsSpawn {
-        stale_trunk_to_shutdown: Option<Arc<GuardianReviewSession>>,
-    },
+    NeedsSpawn,
     ShutdownStarted,
 }
 
@@ -324,7 +322,7 @@ impl GuardianReviewSessionManager {
             Ok(GuardianTrunkState::ShutdownStarted) => {
                 return GuardianReviewSessionOutcome::Aborted;
             }
-            Ok(GuardianTrunkState::NeedsSpawn { .. }) => {
+            Ok(GuardianTrunkState::NeedsSpawn) => {
                 return self
                     .run_forked_review(
                         params,
@@ -437,11 +435,7 @@ impl GuardianReviewSessionManager {
             Err(GuardianReviewSessionOutcome::Completed(_)) => unreachable!(),
         };
 
-        if let GuardianTrunkState::NeedsSpawn {
-            stale_trunk_to_shutdown,
-        } = self.install_spawned_trunk(review_session).await
-        {
-            shutdown_stale_trunk_in_background(stale_trunk_to_shutdown);
+        if self.install_spawned_trunk(review_session).await.is_none() {
             warn!("guardian review session was not available after eager initialization");
         }
     }
@@ -458,11 +452,7 @@ impl GuardianReviewSessionManager {
                 state @ (GuardianTrunkState::Ready(_) | GuardianTrunkState::ShutdownStarted) => {
                     return Ok(state);
                 }
-                GuardianTrunkState::NeedsSpawn {
-                    stale_trunk_to_shutdown,
-                } => {
-                    shutdown_stale_trunk_in_background(stale_trunk_to_shutdown);
-                }
+                GuardianTrunkState::NeedsSpawn => {}
             }
 
             let spawn_guard =
@@ -478,11 +468,7 @@ impl GuardianReviewSessionManager {
                     drop(spawn_guard);
                     return Ok(state);
                 }
-                GuardianTrunkState::NeedsSpawn {
-                    stale_trunk_to_shutdown,
-                } => {
-                    shutdown_stale_trunk_in_background(stale_trunk_to_shutdown);
-                }
+                GuardianTrunkState::NeedsSpawn => {}
             }
 
             let spawn_cancel_token = CancellationToken::new();
@@ -511,17 +497,11 @@ impl GuardianReviewSessionManager {
                 }
             };
 
-            let trunk_state = self.install_spawned_trunk(review_session).await;
+            let trunk = self.install_spawned_trunk(review_session).await;
             drop(spawn_guard);
-            match trunk_state {
-                state @ (GuardianTrunkState::Ready(_) | GuardianTrunkState::ShutdownStarted) => {
-                    return Ok(state);
-                }
-                GuardianTrunkState::NeedsSpawn {
-                    stale_trunk_to_shutdown,
-                } => {
-                    shutdown_stale_trunk_in_background(stale_trunk_to_shutdown);
-                }
+            match trunk {
+                Some(trunk) => return Ok(GuardianTrunkState::Ready(trunk)),
+                None => return Ok(GuardianTrunkState::ShutdownStarted),
             }
         }
     }
@@ -530,25 +510,24 @@ impl GuardianReviewSessionManager {
         &self,
         next_reuse_key: &GuardianReviewSessionReuseKey,
     ) -> GuardianTrunkState {
-        let mut state = self.state.lock().await;
-        if state.shutdown_started {
-            return GuardianTrunkState::ShutdownStarted;
-        }
-        if let Some(trunk) = state.trunk.as_ref()
-            && trunk.reuse_key != *next_reuse_key
-            && trunk.review_lock.try_lock().is_ok()
-        {
-            return GuardianTrunkState::NeedsSpawn {
-                stale_trunk_to_shutdown: state.trunk.take(),
-            };
-        }
-        if let Some(trunk) = state.trunk.as_ref() {
-            GuardianTrunkState::Ready(Arc::clone(trunk))
-        } else {
-            GuardianTrunkState::NeedsSpawn {
-                stale_trunk_to_shutdown: None,
+        let (trunk_state, stale_trunk_to_shutdown) = {
+            let mut state = self.state.lock().await;
+            if state.shutdown_started {
+                return GuardianTrunkState::ShutdownStarted;
             }
-        }
+            if let Some(trunk) = state.trunk.as_ref()
+                && trunk.reuse_key != *next_reuse_key
+                && trunk.review_lock.try_lock().is_ok()
+            {
+                (GuardianTrunkState::NeedsSpawn, state.trunk.take())
+            } else if let Some(trunk) = state.trunk.as_ref() {
+                (GuardianTrunkState::Ready(Arc::clone(trunk)), None)
+            } else {
+                (GuardianTrunkState::NeedsSpawn, None)
+            }
+        };
+        shutdown_stale_trunk_in_background(stale_trunk_to_shutdown);
+        trunk_state
     }
 
     async fn prepare_trunk_for_eager_init(&self) -> bool {
@@ -562,21 +541,21 @@ impl GuardianReviewSessionManager {
     async fn install_spawned_trunk(
         &self,
         review_session: Arc<GuardianReviewSession>,
-    ) -> GuardianTrunkState {
+    ) -> Option<Arc<GuardianReviewSession>> {
         let mut state = self.state.lock().await;
         if state.shutdown_started {
             drop(state);
             review_session.shutdown().await;
-            return GuardianTrunkState::ShutdownStarted;
+            return None;
         }
         if let Some(trunk) = state.trunk.as_ref() {
             let trunk = Arc::clone(trunk);
             drop(state);
             review_session.shutdown_in_background();
-            return GuardianTrunkState::Ready(trunk);
+            return Some(trunk);
         }
         state.trunk = Some(Arc::clone(&review_session));
-        GuardianTrunkState::Ready(review_session)
+        Some(review_session)
     }
 
     #[cfg(test)]
@@ -1126,9 +1105,9 @@ mod tests {
         let (review_session, child_shutdown_rx) =
             guardian_review_session_with_shutdown_signal().await;
 
-        let trunk_state = manager.install_spawned_trunk(review_session).await;
+        let trunk = manager.install_spawned_trunk(review_session).await;
 
-        assert!(matches!(trunk_state, GuardianTrunkState::ShutdownStarted));
+        assert!(trunk.is_none());
         tokio::time::timeout(Duration::from_millis(10), child_shutdown_rx)
             .await
             .expect("install_spawned_trunk should wait for guardian shutdown")
