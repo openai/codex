@@ -1,8 +1,55 @@
 ---
 source: tui/src/resume_picker.rs
-expression: snapshot
+assertion_line: 1627
+expression: "format!(\"{buf:?}\")"
 ---
-  Created at      Updated at      Branch  CWD  Conversation
-  16 minutes ago  42 seconds ago  -       -    Fix resume picker timestamps
-> 1 hour ago      35 minutes ago  -       -    Investigate lazy pagination cap
-  2 hours ago     2 hours ago     -       -    Explain the codebase
+Buffer {
+    area: Rect { x: 0, y: 0, width: 80, height: 6 },
+    content: [
+        "  Created at      Updated at      Branch  CWD  Conversation                     ",
+        "  16 minutes ago  42 seconds ago  -       -    Fix resume picker timestamps     ",
+        "› 1 hour ago      35 minutes ago  -       -    Investigate lazy pagination cap  ",
+        "  2 hours ago     2 hours ago     -       -    Explain the codebase             ",
+        "                                                                                ",
+        "                                                                                ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 16, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 18, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 32, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 34, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 40, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 42, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 45, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 47, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 59, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 16, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 18, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 32, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 34, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 40, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 42, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 45, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 2, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 2, y: 2, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD | DIM,
+        x: 16, y: 2, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 18, y: 2, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD | DIM,
+        x: 32, y: 2, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 34, y: 2, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD | DIM,
+        x: 40, y: 2, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 42, y: 2, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD | DIM,
+        x: 45, y: 2, fg: Cyan, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 78, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 16, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 18, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 32, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 34, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 40, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 42, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 45, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}
