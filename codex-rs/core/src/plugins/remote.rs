@@ -1,6 +1,7 @@
 use crate::auth::CodexAuth;
 use crate::config::Config;
 use crate::default_client::build_reqwest_client;
+use codex_protocol::protocol::Product;
 use serde::Deserialize;
 use std::time::Duration;
 use url::Url;
@@ -162,13 +163,14 @@ pub(crate) async fn fetch_remote_plugin_status(
 pub async fn fetch_remote_featured_plugin_ids(
     config: &Config,
     auth: Option<&CodexAuth>,
+    product: Option<Product>,
 ) -> Result<Vec<String>, RemotePluginFetchError> {
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/plugins/featured");
     let client = build_reqwest_client();
     let mut request = client
         .get(&url)
-        .query(&[("platform", "codex")])
+        .query(&[("platform", product.unwrap_or(Product::Codex).as_str())])
         .timeout(REMOTE_FEATURED_PLUGIN_FETCH_TIMEOUT);
 
     if let Some(auth) = auth.filter(|auth| auth.is_chatgpt_auth()) {

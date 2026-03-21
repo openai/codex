@@ -2978,6 +2978,14 @@ pub enum Product {
     Atlas,
 }
 impl Product {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Chatgpt => "chatgpt",
+            Self::Codex => "codex",
+            Self::Atlas => "atlas",
+        }
+    }
+
     pub fn from_session_source_name(value: &str) -> Option<Self> {
         let normalized = value.trim().to_ascii_lowercase();
         match normalized.as_str() {
