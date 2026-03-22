@@ -5677,7 +5677,7 @@ approvals_reviewer = "guardian_subagent"
 }
 
 #[tokio::test]
-async fn smart_approvals_alias_is_migrated_to_guardian_approval() -> std::io::Result<()> {
+async fn smart_approvals_alias_is_ignored() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -5692,23 +5692,19 @@ smart_approvals = true
         .build()
         .await?;
 
-    assert!(config.features.enabled(Feature::GuardianApproval));
-    assert_eq!(config.features.legacy_feature_usages().count(), 0);
-    assert_eq!(
-        config.approvals_reviewer,
-        ApprovalsReviewer::GuardianSubagent
-    );
+    assert!(!config.features.enabled(Feature::GuardianApproval));
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
 
     let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
-    assert!(serialized.contains("guardian_approval = true"));
-    assert!(serialized.contains("approvals_reviewer = \"guardian_subagent\""));
-    assert!(!serialized.contains("smart_approvals"));
+    assert!(serialized.contains("smart_approvals = true"));
+    assert!(!serialized.contains("guardian_approval"));
+    assert!(!serialized.contains("approvals_reviewer"));
 
     Ok(())
 }
 
 #[tokio::test]
-async fn smart_approvals_alias_is_migrated_in_profiles() -> std::io::Result<()> {
+async fn smart_approvals_alias_is_ignored_in_profiles() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -5725,113 +5721,14 @@ smart_approvals = true
         .build()
         .await?;
 
-    assert!(config.features.enabled(Feature::GuardianApproval));
-    assert_eq!(config.features.legacy_feature_usages().count(), 0);
-    assert_eq!(
-        config.approvals_reviewer,
-        ApprovalsReviewer::GuardianSubagent
-    );
-
-    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
-    assert!(serialized.contains("[profiles.guardian.features]"));
-    assert!(serialized.contains("guardian_approval = true"));
-    assert!(serialized.contains("approvals_reviewer = \"guardian_subagent\""));
-    assert!(!serialized.contains("smart_approvals"));
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn smart_approvals_alias_migration_preserves_disabled_profile_override() -> std::io::Result<()>
-{
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"[features]
-guardian_approval = true
-
-[profiles.guardian.features]
-smart_approvals = false
-"#,
-    )?;
-
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .harness_overrides(ConfigOverrides {
-            config_profile: Some("guardian".to_string()),
-            ..Default::default()
-        })
-        .build()
-        .await?;
-
-    assert!(!config.features.enabled(Feature::GuardianApproval));
-    assert_eq!(config.features.legacy_feature_usages().count(), 0);
-    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
-
-    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
-    assert!(serialized.contains("[profiles.guardian.features]"));
-    assert!(serialized.contains("guardian_approval = false"));
-    assert!(!serialized.contains("smart_approvals"));
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn smart_approvals_alias_migration_preserves_existing_approvals_reviewer()
--> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"approvals_reviewer = "user"
-
-[features]
-smart_approvals = true
-"#,
-    )?;
-
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
-
-    assert!(config.features.enabled(Feature::GuardianApproval));
-    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
-
-    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
-    assert!(serialized.contains("guardian_approval = true"));
-    assert!(serialized.contains("approvals_reviewer = \"user\""));
-    assert!(!serialized.contains("smart_approvals"));
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn smart_approvals_alias_migration_does_not_override_canonical_disabled_flag()
--> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"[features]
-guardian_approval = false
-smart_approvals = true
-"#,
-    )?;
-
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
-
     assert!(!config.features.enabled(Feature::GuardianApproval));
     assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
 
     let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
-    assert!(serialized.contains("guardian_approval = false"));
-    assert!(!serialized.contains("approvals_reviewer = \"guardian_subagent\""));
-    assert!(!serialized.contains("smart_approvals"));
+    assert!(serialized.contains("[profiles.guardian.features]"));
+    assert!(serialized.contains("smart_approvals = true"));
+    assert!(!serialized.contains("guardian_approval"));
+    assert!(!serialized.contains("approvals_reviewer"));
 
     Ok(())
 }
