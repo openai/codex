@@ -30,6 +30,8 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::fs;
+use std::process::Command;
 
 const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 2] = [
     "You have access to all the tools of the following apps/connectors",
@@ -84,6 +86,15 @@ fn tool_search_output_tools(request: &ResponsesRequest, call_id: &str) -> Vec<Va
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default()
+}
+
+fn json_rpc_method(request: &wiremock::Request) -> Option<String> {
+    request
+        .body_json::<Value>()
+        .ok()?
+        .get("method")
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 fn configure_apps(config: &mut Config, apps_base_url: &str) {
@@ -530,6 +541,196 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
             .iter()
             .any(|name| name == CALENDAR_CREATE_TOOL),
         "post-tool follow-up should still rely on tool_search_output history, not tool injection: {third_request_tools:?}"
+    );
+
+    let mcp_requests = server
+        .received_requests()
+        .await
+        .expect("failed to fetch recorded requests");
+    let tools_list_request = mcp_requests
+        .iter()
+        .find(|request| json_rpc_method(request).as_deref() == Some("tools/list"))
+        .expect("tools/list MCP request");
+    assert!(
+        tools_list_request
+            .headers
+            .get("x-codex-turn-metadata")
+            .is_none(),
+        "tools/list should not include per-turn MCP headers"
+    );
+
+    let tools_call_request = mcp_requests
+        .iter()
+        .find(|request| json_rpc_method(request).as_deref() == Some("tools/call"))
+        .expect("tools/call MCP request");
+    let session_id_header = tools_call_request
+        .headers
+        .get("session_id")
+        .expect("tools/call session_id header");
+    let request_id_header = tools_call_request
+        .headers
+        .get("x-client-request-id")
+        .expect("tools/call x-client-request-id header");
+    let turn_metadata_header = tools_call_request
+        .headers
+        .get("x-codex-turn-metadata")
+        .expect("tools/call turn metadata header");
+    assert_eq!(
+        session_id_header
+            .to_str()
+            .expect("session_id header to be utf8"),
+        request_id_header
+            .to_str()
+            .expect("x-client-request-id header to be utf8")
+    );
+    assert!(
+        turn_metadata_header
+            .to_str()
+            .expect("turn metadata header to be utf8")
+            .contains("\"turn_id\""),
+        "expected turn metadata header to contain serialized turn metadata"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apps_mcp_tool_call_uses_enriched_turn_metadata_header() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount_searchable(&server).await?;
+    let call_id = "tool-search-git-metadata";
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_tool_search_call(
+                    call_id,
+                    &json!({
+                        "query": "create calendar event",
+                        "limit": 1,
+                    }),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "function_call",
+                        "call_id": "calendar-call-git-metadata",
+                        "name": SEARCH_CALENDAR_CREATE_TOOL,
+                        "namespace": SEARCH_CALENDAR_NAMESPACE,
+                        "arguments": serde_json::to_string(&json!({
+                            "title": "Lunch",
+                            "starts_at": "2026-03-10T12:00:00Z"
+                        })).expect("serialize calendar args")
+                    }
+                }),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = configured_builder(apps_server.chatgpt_base_url.clone());
+    let test = builder.build(&server).await?;
+
+    let cwd = test.cwd_path().to_path_buf();
+    assert!(
+        Command::new("git")
+            .arg("init")
+            .current_dir(&cwd)
+            .status()?
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .args(["config", "user.name", "Codex Test"])
+            .current_dir(&cwd)
+            .status()?
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .args(["config", "user.email", "codex@example.com"])
+            .current_dir(&cwd)
+            .status()?
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .args(["remote", "add", "origin", "https://example.test/repo.git"])
+            .current_dir(&cwd)
+            .status()?
+            .success()
+    );
+    for idx in 0..400 {
+        fs::write(
+            cwd.join(format!("file-{idx:04}.txt")),
+            format!("fixture file {idx}\n"),
+        )?;
+    }
+    assert!(
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(&cwd)
+            .status()?
+            .success()
+    );
+    assert!(
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(&cwd)
+            .status()?
+            .success()
+    );
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "Find the calendar create tool".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let _requests = mock.requests();
+    let mcp_requests = server
+        .received_requests()
+        .await
+        .expect("failed to fetch recorded requests");
+    let tools_call_request = mcp_requests
+        .iter()
+        .find(|request| json_rpc_method(request).as_deref() == Some("tools/call"))
+        .expect("tools/call MCP request");
+    let turn_metadata_header = tools_call_request
+        .headers
+        .get("x-codex-turn-metadata")
+        .expect("tools/call turn metadata header")
+        .to_str()
+        .expect("turn metadata header to be utf8");
+    let parsed: Value = serde_json::from_str(turn_metadata_header)?;
+    assert!(
+        parsed
+            .get("workspaces")
+            .and_then(Value::as_object)
+            .is_some_and(|workspaces| !workspaces.is_empty()),
+        "expected enriched MCP turn metadata header with workspace git metadata, got {parsed:#?}"
     );
 
     Ok(())

@@ -4,6 +4,7 @@ use codex_protocol::protocol::McpAuthStatus;
 use rmcp::model::JsonObject;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use tempfile::tempdir;
 
 fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
@@ -413,6 +414,7 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
+            request_headers: Arc::new(StdMutex::new(None)),
             startup_snapshot: Some(startup_tools),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
@@ -438,6 +440,7 @@ async fn list_all_tools_blocks_while_client_is_pending_without_startup_snapshot(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
+            request_headers: Arc::new(StdMutex::new(None)),
             startup_snapshot: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
@@ -460,6 +463,7 @@ async fn list_all_tools_does_not_block_when_startup_snapshot_cache_hit_is_empty(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
+            request_headers: Arc::new(StdMutex::new(None)),
             startup_snapshot: Some(Vec::new()),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
@@ -492,6 +496,7 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: failed_client,
+            request_headers: Arc::new(StdMutex::new(None)),
             startup_snapshot: Some(startup_tools),
             startup_complete,
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),

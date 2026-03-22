@@ -230,6 +230,14 @@ impl TurnMetadataState {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_enriched_header_for_tests(&self, header: Option<String>) {
+        *self
+            .enriched_header
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = header;
+    }
+
     async fn fetch_workspace_git_metadata(&self) -> WorkspaceGitMetadata {
         let (latest_git_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
             get_head_commit_hash(&self.cwd),

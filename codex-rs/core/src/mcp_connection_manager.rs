@@ -423,6 +423,7 @@ impl ManagedClient {
 #[derive(Clone)]
 struct AsyncManagedClient {
     client: Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>,
+    request_headers: Arc<StdMutex<Option<reqwest::header::HeaderMap>>>,
     startup_snapshot: Option<Vec<ToolInfo>>,
     startup_complete: Arc<AtomicBool>,
     tool_plugin_provenance: Arc<ToolPluginProvenance>,
@@ -448,17 +449,26 @@ impl AsyncManagedClient {
             codex_apps_tools_cache_context.as_ref(),
         )
         .map(|tools| filter_tools(tools, &tool_filter));
+        let request_headers = Arc::new(StdMutex::new(None));
         let startup_tool_filter = tool_filter;
         let startup_complete = Arc::new(AtomicBool::new(false));
         let startup_complete_for_fut = Arc::clone(&startup_complete);
+        let request_headers_for_client = Arc::clone(&request_headers);
         let fut = async move {
             let outcome = async {
                 if let Err(error) = validate_mcp_server_name(&server_name) {
                     return Err(error.into());
                 }
 
-                let client =
-                    Arc::new(make_rmcp_client(&server_name, config.transport, store_mode).await?);
+                let client = Arc::new(
+                    make_rmcp_client(
+                        &server_name,
+                        config.transport,
+                        store_mode,
+                        request_headers_for_client,
+                    )
+                    .await?,
+                );
                 match start_server_task(
                     server_name,
                     client,
@@ -495,6 +505,7 @@ impl AsyncManagedClient {
 
         Self {
             client,
+            request_headers,
             startup_snapshot,
             startup_complete,
             tool_plugin_provenance,
@@ -576,6 +587,14 @@ impl AsyncManagedClient {
         let managed = self.client().await?;
         managed.notify_sandbox_state_change(sandbox_state).await
     }
+
+    fn set_request_headers(&self, request_headers: Option<reqwest::header::HeaderMap>) {
+        let mut guard = self
+            .request_headers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = request_headers;
+    }
 }
 
 pub const MCP_SANDBOX_STATE_CAPABILITY: &str = "codex/sandbox-state";
@@ -615,6 +634,40 @@ impl McpConnectionManager {
         approval_policy: &Constrained<AskForApproval>,
     ) -> Self {
         Self::new_uninitialized(approval_policy)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn register_test_server_for_request_headers(&mut self, server_name: &str) {
+        let failed_client = futures::future::ready::<Result<ManagedClient, StartupOutcomeError>>(
+            Err(StartupOutcomeError::Failed {
+                error: "test request headers stub".to_string(),
+            }),
+        )
+        .boxed()
+        .shared();
+        self.clients.insert(
+            server_name.to_string(),
+            AsyncManagedClient {
+                client: failed_client,
+                request_headers: Arc::new(StdMutex::new(None)),
+                startup_snapshot: None,
+                startup_complete: Arc::new(AtomicBool::new(true)),
+                tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            },
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn request_headers_for_server(
+        &self,
+        server_name: &str,
+    ) -> Option<reqwest::header::HeaderMap> {
+        let client = self.clients.get(server_name)?;
+        client
+            .request_headers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     pub(crate) fn has_servers(&self) -> bool {
@@ -1046,6 +1099,16 @@ impl McpConnectionManager {
         })
     }
 
+    pub(crate) fn set_request_headers_for_server(
+        &self,
+        server_name: &str,
+        request_headers: Option<reqwest::header::HeaderMap>,
+    ) {
+        if let Some(client) = self.clients.get(server_name) {
+            client.set_request_headers(request_headers);
+        }
+    }
+
     /// List resources from the specified server.
     pub async fn list_resources(
         &self,
@@ -1429,6 +1492,7 @@ async fn make_rmcp_client(
     server_name: &str,
     transport: McpServerTransportConfig,
     store_mode: OAuthCredentialsStoreMode,
+    request_headers: Arc<StdMutex<Option<reqwest::header::HeaderMap>>>,
 ) -> Result<RmcpClient, StartupOutcomeError> {
     match transport {
         McpServerTransportConfig::Stdio {
@@ -1462,6 +1526,7 @@ async fn make_rmcp_client(
                 http_headers,
                 env_http_headers,
                 store_mode,
+                request_headers,
             )
             .await
             .map_err(StartupOutcomeError::from)

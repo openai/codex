@@ -28,6 +28,8 @@ use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile;
+use codex_protocol::user_input::UserInput;
+use reqwest::header::HeaderValue;
 use tracing::Span;
 
 use crate::protocol::CompactedItem;
@@ -58,6 +60,7 @@ use crate::tools::handlers::UnifiedExecHandler;
 use crate::tools::registry::ToolHandler;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use async_trait::async_trait;
 use codex_app_server_protocol::AppInfo;
 use codex_execpolicy::Decision;
 use codex_execpolicy::NetworkRuleProtocol;
@@ -79,7 +82,10 @@ use opentelemetry::trace::TraceContextExt;
 use opentelemetry::trace::TraceId;
 use std::path::Path;
 use std::time::Duration;
+use tokio::sync::Notify;
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use codex_protocol::mcp::CallToolResult as McpCallToolResult;
@@ -2720,6 +2726,99 @@ async fn request_permissions_is_auto_denied_when_granular_policy_blocks_tool_req
             .await
             .is_err(),
         "request_permissions should not emit an event when granular.request_permissions is false"
+    );
+}
+
+struct NoopTask;
+
+#[async_trait]
+impl SessionTask for NoopTask {
+    fn kind(&self) -> TaskKind {
+        TaskKind::Regular
+    }
+
+    fn span_name(&self) -> &'static str {
+        "noop"
+    }
+
+    async fn run(
+        self: Arc<Self>,
+        _ctx: Arc<SessionTaskContext>,
+        _turn_context: Arc<TurnContext>,
+        _input: Vec<UserInput>,
+        _cancellation_token: CancellationToken,
+    ) -> Option<String> {
+        None
+    }
+}
+
+#[tokio::test]
+async fn call_tool_refreshes_codex_apps_request_headers_from_active_turn() {
+    let (session, turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+
+    session
+        .services
+        .mcp_connection_manager
+        .write()
+        .await
+        .register_test_server_for_request_headers(CODEX_APPS_MCP_SERVER_NAME);
+
+    session
+        .sync_mcp_request_headers_for_turn(turn_context.as_ref())
+        .await;
+    let base_header = turn_context
+        .turn_metadata_state
+        .current_header_value()
+        .expect("base turn metadata header");
+
+    let updated_header = serde_json::json!({
+        "turn_id": turn_context.sub_id,
+        "sandbox": "test",
+        "workspaces": {
+            "/tmp/repo": {
+                "has_changes": true
+            }
+        }
+    })
+    .to_string();
+    turn_context
+        .turn_metadata_state
+        .set_enriched_header_for_tests(Some(updated_header.clone()));
+
+    let mut active_turn = ActiveTurn::default();
+    let handle = tokio::spawn(async {});
+    active_turn.add_task(crate::state::RunningTask {
+        done: Arc::new(Notify::new()),
+        kind: TaskKind::Regular,
+        task: Arc::new(NoopTask),
+        cancellation_token: CancellationToken::new(),
+        handle: Arc::new(AbortOnDropHandle::new(handle)),
+        turn_context: Arc::clone(&turn_context),
+        _timer: None,
+    });
+    *session.active_turn.lock().await = Some(active_turn);
+
+    let _err = session
+        .call_tool(CODEX_APPS_MCP_SERVER_NAME, "echo", None, None)
+        .await
+        .expect_err("test server is not initialized");
+
+    let headers = session
+        .services
+        .mcp_connection_manager
+        .read()
+        .await
+        .request_headers_for_server(CODEX_APPS_MCP_SERVER_NAME)
+        .expect("request headers should be tracked for codex apps");
+    assert_eq!(
+        headers.get(crate::X_CODEX_TURN_METADATA_HEADER),
+        Some(&HeaderValue::from_str(&updated_header).expect("valid enriched header")),
+    );
+    assert_ne!(
+        headers.get(crate::X_CODEX_TURN_METADATA_HEADER),
+        Some(&HeaderValue::from_str(&base_header).expect("valid base header")),
     );
 }
 
