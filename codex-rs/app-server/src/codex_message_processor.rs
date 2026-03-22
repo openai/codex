@@ -5524,11 +5524,18 @@ impl CodexMessageProcessor {
 
         let config_for_marketplace_listing = config.clone();
         let plugins_manager_for_marketplace_listing = plugins_manager.clone();
-        let data = match tokio::task::spawn_blocking(move || {
-            let marketplaces = plugins_manager_for_marketplace_listing
+        let (data, marketplace_load_errors) = match tokio::task::spawn_blocking(move || {
+            let outcome = plugins_manager_for_marketplace_listing
                 .list_marketplaces_for_config(&config_for_marketplace_listing, &roots)?;
-            Ok::<Vec<PluginMarketplaceEntry>, MarketplaceError>(
-                marketplaces
+            Ok::<
+                (
+                    Vec<PluginMarketplaceEntry>,
+                    Vec<codex_app_server_protocol::MarketplaceLoadErrorInfo>,
+                ),
+                MarketplaceError,
+            >((
+                outcome
+                    .marketplaces
                     .into_iter()
                     .map(|marketplace| PluginMarketplaceEntry {
                         name: marketplace.name,
@@ -5552,11 +5559,19 @@ impl CodexMessageProcessor {
                             .collect(),
                     })
                     .collect(),
-            )
+                outcome
+                    .errors
+                    .into_iter()
+                    .map(|err| codex_app_server_protocol::MarketplaceLoadErrorInfo {
+                        marketplace_path: err.path,
+                        message: err.message,
+                    })
+                    .collect(),
+            ))
         })
         .await
         {
-            Ok(Ok(data)) => data,
+            Ok(Ok(outcome)) => outcome,
             Ok(Err(err)) => {
                 self.send_marketplace_error(request_id, err, "list marketplace plugins")
                     .await;
@@ -5598,6 +5613,7 @@ impl CodexMessageProcessor {
                 request_id,
                 PluginListResponse {
                     marketplaces: data,
+                    marketplace_load_errors,
                     remote_sync_error,
                     featured_plugin_ids,
                 },

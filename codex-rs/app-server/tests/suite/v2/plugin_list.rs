@@ -11,6 +11,9 @@ use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
+use codex_app_server_protocol::PluginMarketplaceEntry;
+use codex_app_server_protocol::PluginSource;
+use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::RequestId;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::config::set_project_trust_level;
@@ -41,16 +44,15 @@ plugins = true
 }
 
 #[tokio::test]
-async fn plugin_list_skips_invalid_marketplace_file() -> Result<()> {
+async fn plugin_list_skips_invalid_marketplace_file_and_reports_error() -> Result<()> {
     let codex_home = TempDir::new()?;
     let repo_root = TempDir::new()?;
     std::fs::create_dir_all(repo_root.path().join(".git"))?;
     std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
     write_plugins_enabled_config(codex_home.path())?;
-    std::fs::write(
-        repo_root.path().join(".agents/plugins/marketplace.json"),
-        "{not json",
-    )?;
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
+    std::fs::write(marketplace_path.as_path(), "{not json")?;
 
     let home = codex_home.path().to_string_lossy().into_owned();
     let mut mcp = McpProcess::new_with_env(
@@ -78,14 +80,23 @@ async fn plugin_list_skips_invalid_marketplace_file() -> Result<()> {
     let response: PluginListResponse = to_response(response)?;
 
     assert!(
-        response.marketplaces.iter().all(|marketplace| {
-            marketplace.path
-                != AbsolutePathBuf::try_from(
-                    repo_root.path().join(".agents/plugins/marketplace.json"),
-                )
-                .expect("absolute marketplace path")
-        }),
+        response
+            .marketplaces
+            .iter()
+            .all(|marketplace| { marketplace.path != marketplace_path }),
         "invalid marketplace should be skipped"
+    );
+    assert_eq!(response.marketplace_load_errors.len(), 1);
+    assert_eq!(
+        response.marketplace_load_errors[0].marketplace_path,
+        marketplace_path
+    );
+    assert!(
+        response.marketplace_load_errors[0]
+            .message
+            .contains("invalid marketplace file"),
+        "unexpected error: {:?}",
+        response.marketplace_load_errors
     );
     Ok(())
 }
@@ -113,6 +124,124 @@ async fn plugin_list_rejects_relative_cwds() -> Result<()> {
 
     assert_eq!(err.error.code, -32600);
     assert!(err.error.message.contains("Invalid request"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_list_keeps_valid_marketplaces_when_another_marketplace_fails_to_load() -> Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let valid_repo_root = TempDir::new()?;
+    let invalid_repo_root = TempDir::new()?;
+    std::fs::create_dir_all(valid_repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(valid_repo_root.path().join(".agents/plugins"))?;
+    std::fs::create_dir_all(
+        valid_repo_root
+            .path()
+            .join("plugins/valid-plugin/.codex-plugin"),
+    )?;
+    std::fs::create_dir_all(invalid_repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(invalid_repo_root.path().join(".agents/plugins"))?;
+    write_plugins_enabled_config(codex_home.path())?;
+
+    let valid_marketplace_path = AbsolutePathBuf::try_from(
+        valid_repo_root
+            .path()
+            .join(".agents/plugins/marketplace.json"),
+    )?;
+    let invalid_marketplace_path = AbsolutePathBuf::try_from(
+        invalid_repo_root
+            .path()
+            .join(".agents/plugins/marketplace.json"),
+    )?;
+    let valid_plugin_path =
+        AbsolutePathBuf::try_from(valid_repo_root.path().join("plugins/valid-plugin"))?;
+
+    std::fs::write(
+        valid_marketplace_path.as_path(),
+        r#"{
+  "name": "valid-marketplace",
+  "plugins": [
+    {
+      "name": "valid-plugin",
+      "source": {
+        "source": "local",
+        "path": "./plugins/valid-plugin"
+      }
+    }
+  ]
+}"#,
+    )?;
+    std::fs::write(
+        valid_repo_root
+            .path()
+            .join("plugins/valid-plugin/.codex-plugin/plugin.json"),
+        r#"{"name":"valid-plugin"}"#,
+    )?;
+    std::fs::write(invalid_marketplace_path.as_path(), "{not json")?;
+
+    let home = codex_home.path().to_string_lossy().into_owned();
+    let mut mcp = McpProcess::new_with_env(
+        codex_home.path(),
+        &[
+            ("HOME", Some(home.as_str())),
+            ("USERPROFILE", Some(home.as_str())),
+        ],
+    )
+    .await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: Some(vec![
+                AbsolutePathBuf::try_from(valid_repo_root.path())?,
+                AbsolutePathBuf::try_from(invalid_repo_root.path())?,
+            ]),
+            force_remote_sync: false,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginListResponse = to_response(response)?;
+
+    assert_eq!(
+        response.marketplaces,
+        vec![PluginMarketplaceEntry {
+            name: "valid-marketplace".to_string(),
+            path: valid_marketplace_path,
+            interface: None,
+            plugins: vec![PluginSummary {
+                id: "valid-plugin@valid-marketplace".to_string(),
+                name: "valid-plugin".to_string(),
+                source: PluginSource::Local {
+                    path: valid_plugin_path,
+                },
+                installed: false,
+                enabled: false,
+                install_policy: PluginInstallPolicy::Available,
+                auth_policy: PluginAuthPolicy::OnInstall,
+                interface: None,
+            }],
+        }]
+    );
+    assert_eq!(response.marketplace_load_errors.len(), 1);
+    assert_eq!(
+        response.marketplace_load_errors[0].marketplace_path,
+        invalid_marketplace_path
+    );
+    assert!(
+        response.marketplace_load_errors[0]
+            .message
+            .contains("invalid marketplace file"),
+        "unexpected error: {:?}",
+        response.marketplace_load_errors
+    );
+    assert_eq!(response.remote_sync_error, None);
+    assert!(response.featured_plugin_ids.is_empty());
     Ok(())
 }
 

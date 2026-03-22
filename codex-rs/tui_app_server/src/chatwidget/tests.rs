@@ -7759,6 +7759,7 @@ fn plugins_test_repo_marketplace(plugins: Vec<PluginSummary>) -> PluginMarketpla
 fn plugins_test_response(marketplaces: Vec<PluginMarketplaceEntry>) -> PluginListResponse {
     PluginListResponse {
         marketplaces,
+        marketplace_load_errors: Vec::new(),
         remote_sync_error: None,
         featured_plugin_ids: Vec::new(),
     }
