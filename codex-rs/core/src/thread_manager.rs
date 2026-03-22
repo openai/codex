@@ -12,7 +12,6 @@ use crate::config::Config;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::file_watcher::FileWatcher;
-use crate::file_watcher::FileWatcherEvent;
 use crate::mcp::McpManager;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::ModelsManager;
@@ -24,6 +23,8 @@ use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillsManager;
+use crate::skills_watcher::SkillsWatcher;
+use crate::skills_watcher::SkillsWatcherEvent;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelPreset;
@@ -76,32 +77,33 @@ impl Drop for TempCodexHomeGuard {
     }
 }
 
-fn build_file_watcher(codex_home: PathBuf, skills_manager: Arc<SkillsManager>) -> Arc<FileWatcher> {
+fn build_skills_watcher(skills_manager: Arc<SkillsManager>) -> Arc<SkillsWatcher> {
     if should_use_test_thread_manager_behavior()
         && let Ok(handle) = Handle::try_current()
         && handle.runtime_flavor() == RuntimeFlavor::CurrentThread
     {
         // The real watcher spins background tasks that can starve the
         // current-thread test runtime and cause event waits to time out.
-        warn!("using noop file watcher under current-thread test runtime");
-        return Arc::new(FileWatcher::noop());
+        warn!("using noop skills watcher under current-thread test runtime");
+        return Arc::new(SkillsWatcher::noop());
     }
 
-    let file_watcher = match FileWatcher::new(codex_home) {
+    let file_watcher = match FileWatcher::new() {
         Ok(file_watcher) => Arc::new(file_watcher),
         Err(err) => {
             warn!("failed to initialize file watcher: {err}");
             Arc::new(FileWatcher::noop())
         }
     };
+    let skills_watcher = Arc::new(SkillsWatcher::new(&file_watcher));
 
-    let mut rx = file_watcher.subscribe();
+    let mut rx = skills_watcher.subscribe();
     let skills_manager = Arc::clone(&skills_manager);
     if let Ok(handle) = Handle::try_current() {
         handle.spawn(async move {
             loop {
                 match rx.recv().await {
-                    Ok(FileWatcherEvent::SkillsChanged { .. }) => {
+                    Ok(SkillsWatcherEvent::SkillsChanged { .. }) => {
                         skills_manager.clear_cache();
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
@@ -110,10 +112,10 @@ fn build_file_watcher(codex_home: PathBuf, skills_manager: Arc<SkillsManager>) -
             }
         });
     } else {
-        warn!("file watcher listener skipped: no Tokio runtime available");
+        warn!("skills watcher listener skipped: no Tokio runtime available");
     }
 
-    file_watcher
+    skills_watcher
 }
 
 /// Represents a newly created Codex thread (formerly called a conversation), including the first event
@@ -155,7 +157,7 @@ pub(crate) struct ThreadManagerState {
     skills_manager: Arc<SkillsManager>,
     plugins_manager: Arc<PluginsManager>,
     mcp_manager: Arc<McpManager>,
-    file_watcher: Arc<FileWatcher>,
+    skills_watcher: Arc<SkillsWatcher>,
     session_source: SessionSource,
     // Captures submitted ops for testing purpose when test mode is enabled.
     ops_log: Option<SharedCapturedOps>,
@@ -187,7 +189,7 @@ impl ThreadManager {
             config.bundled_skills_enabled(),
             restriction_product,
         ));
-        let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
+        let skills_watcher = build_skills_watcher(Arc::clone(&skills_manager));
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -202,7 +204,7 @@ impl ThreadManager {
                 skills_manager,
                 plugins_manager,
                 mcp_manager,
-                file_watcher,
+                skills_watcher,
                 auth_manager,
                 session_source,
                 ops_log: should_use_test_thread_manager_behavior()
@@ -253,7 +255,7 @@ impl ThreadManager {
             /*bundled_skills_enabled*/ true,
             restriction_product,
         ));
-        let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
+        let skills_watcher = build_skills_watcher(Arc::clone(&skills_manager));
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -266,7 +268,7 @@ impl ThreadManager {
                 skills_manager,
                 plugins_manager,
                 mcp_manager,
-                file_watcher,
+                skills_watcher,
                 auth_manager,
                 session_source: SessionSource::Exec,
                 ops_log: should_use_test_thread_manager_behavior()
@@ -294,10 +296,6 @@ impl ThreadManager {
 
     pub fn mcp_manager(&self) -> Arc<McpManager> {
         self.state.mcp_manager.clone()
-    }
-
-    pub fn subscribe_file_watcher(&self) -> broadcast::Receiver<FileWatcherEvent> {
-        self.state.file_watcher.subscribe()
     }
 
     pub fn get_models_manager(&self) -> Arc<ModelsManager> {
@@ -760,7 +758,7 @@ impl ThreadManagerState {
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         let watch_registration = self
-            .file_watcher
+            .skills_watcher
             .register_config(&config, self.skills_manager.as_ref());
         let CodexSpawnOk {
             codex, thread_id, ..
@@ -771,7 +769,7 @@ impl ThreadManagerState {
             skills_manager: Arc::clone(&self.skills_manager),
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),
-            file_watcher: Arc::clone(&self.file_watcher),
+            skills_watcher: Arc::clone(&self.skills_watcher),
             conversation_history: initial_history,
             session_source,
             agent_control,
