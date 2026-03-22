@@ -102,7 +102,9 @@ pub(crate) enum AppEvent {
     OpenResumePicker,
 
     /// Fork the current session into a new thread.
-    ForkCurrentSession,
+    ForkCurrentSession {
+        placement: Option<ForkPanePlacement>,
+    },
 
     /// Request to exit the application.
     ///
@@ -498,6 +500,15 @@ pub(crate) enum AppEvent {
     SyntaxThemeSelected {
         name: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ForkPanePlacement {
+    Left,
+    Right,
+    Up,
+    Down,
+    Float,
 }
 
 /// The exit strategy requested by the UI layer.
