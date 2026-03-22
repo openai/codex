@@ -105,6 +105,18 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     /// Returns the logical lines for the main chat viewport.
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
 
+    /// Returns logical line groups for the main chat viewport.
+    ///
+    /// By default, each display line is its own group. Cells with
+    /// wrapped logical lines can override this to preserve line
+    /// boundaries when a tall active cell is clipped to the viewport.
+    fn display_line_groups(&self, width: u16) -> Vec<Vec<Line<'static>>> {
+        self.display_lines(width)
+            .into_iter()
+            .map(|line| vec![line])
+            .collect()
+    }
+
     /// Returns the number of viewport rows needed to render this cell.
     ///
     /// The default delegates to `Paragraph::line_count` with
@@ -113,11 +125,13 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     /// for lines containing URL-like tokens that are wider than the
     /// terminal — the logical line count would undercount.
     fn desired_height(&self, width: u16) -> u16 {
-        Paragraph::new(Text::from(self.display_lines(width)))
-            .wrap(Wrap { trim: false })
-            .line_count(width)
-            .try_into()
-            .unwrap_or(0)
+        Paragraph::new(Text::from(normalize_whitespace_only_lines(
+            self.display_lines(width),
+        )))
+        .wrap(Wrap { trim: false })
+        .line_count(width)
+        .try_into()
+        .unwrap_or(0)
     }
 
     /// Returns lines for the transcript overlay (`Ctrl+T`).
@@ -132,26 +146,16 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     /// Returns the number of viewport rows for the transcript overlay.
     ///
     /// Uses the same `Paragraph::line_count` measurement as
-    /// `desired_height`. Contains a workaround for a ratatui bug where
-    /// a single whitespace-only line reports 2 rows instead of 1.
+    /// `desired_height`, but normalizes whitespace-only lines to empty
+    /// lines so ratatui does not double-count them.
     fn desired_transcript_height(&self, width: u16) -> u16 {
-        let lines = self.transcript_lines(width);
-        // Workaround: ratatui's line_count returns 2 for a single
-        // whitespace-only line. Clamp to 1 in that case.
-        if let [line] = &lines[..]
-            && line
-                .spans
-                .iter()
-                .all(|s| s.content.chars().all(char::is_whitespace))
-        {
-            return 1;
-        }
-
-        Paragraph::new(Text::from(lines))
-            .wrap(Wrap { trim: false })
-            .line_count(width)
-            .try_into()
-            .unwrap_or(0)
+        Paragraph::new(Text::from(normalize_whitespace_only_lines(
+            self.transcript_lines(width),
+        )))
+        .wrap(Wrap { trim: false })
+        .line_count(width)
+        .try_into()
+        .unwrap_or(0)
     }
 
     fn is_stream_continuation(&self) -> bool {
@@ -175,21 +179,89 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
 
 impl Renderable for Box<dyn HistoryCell> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let lines = self.display_lines(area.width);
-        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
-        let y = if area.height == 0 {
-            0
-        } else {
-            let overflow = paragraph
-                .line_count(area.width)
-                .saturating_sub(usize::from(area.height));
-            u16::try_from(overflow).unwrap_or(u16::MAX)
-        };
-        paragraph.scroll((y, 0)).render(area, buf);
+        let groups = self
+            .display_line_groups(area.width)
+            .into_iter()
+            .map(normalize_whitespace_only_lines)
+            .collect();
+        let (lines, scroll_y) = visible_history_lines_for_area(groups, area);
+        Paragraph::new(Text::from(lines))
+            .wrap(Wrap { trim: false })
+            .scroll((scroll_y, 0))
+            .render(area, buf);
     }
     fn desired_height(&self, width: u16) -> u16 {
         HistoryCell::desired_height(self.as_ref(), width)
     }
+}
+
+fn normalize_whitespace_only_lines(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .map(|line| {
+            if line
+                .spans
+                .iter()
+                .all(|span| span.content.chars().all(char::is_whitespace))
+            {
+                Line::default()
+            } else {
+                line
+            }
+        })
+        .collect()
+}
+
+fn line_group_wrapped_height(lines: &[Line<'static>], width: u16) -> u16 {
+    Paragraph::new(Text::from(lines.to_vec()))
+        .wrap(Wrap { trim: false })
+        .line_count(width)
+        .try_into()
+        .unwrap_or(u16::MAX)
+}
+
+fn visible_history_lines_for_area(
+    groups: Vec<Vec<Line<'static>>>,
+    area: Rect,
+) -> (Vec<Line<'static>>, u16) {
+    if area.height == 0 || groups.is_empty() {
+        return (Vec::new(), 0);
+    }
+
+    let heights: Vec<u16> = groups
+        .iter()
+        .map(|group| line_group_wrapped_height(group, area.width))
+        .collect();
+    let total_height: u16 = heights.iter().copied().sum();
+    if total_height <= area.height {
+        return (groups.into_iter().flatten().collect(), 0);
+    }
+
+    let mut kept_indices = Vec::new();
+    let mut used_height = 0u16;
+    for index in (0..groups.len()).rev() {
+        let height = heights[index];
+        if kept_indices.is_empty() || used_height.saturating_add(height) <= area.height {
+            kept_indices.push(index);
+            used_height = used_height.saturating_add(height);
+        } else {
+            break;
+        }
+    }
+    kept_indices.reverse();
+
+    if let [single_index] = kept_indices.as_slice()
+        && heights[*single_index] > area.height
+    {
+        let overflow = heights[*single_index].saturating_sub(area.height);
+        return (groups[*single_index].clone(), overflow);
+    }
+
+    let lines = kept_indices
+        .into_iter()
+        .flat_map(|index| groups[index].clone())
+        .collect();
+    (lines, 0)
 }
 
 impl dyn HistoryCell {
@@ -469,6 +541,25 @@ impl HistoryCell for AgentMessageCell {
                 })
                 .subsequent_indent("  ".into()),
         )
+    }
+
+    fn display_line_groups(&self, width: u16) -> Vec<Vec<Line<'static>>> {
+        self.lines
+            .iter()
+            .enumerate()
+            .map(|(index, line)| {
+                adaptive_wrap_lines(
+                    vec![line.clone()],
+                    RtOptions::new(width as usize)
+                        .initial_indent(if self.is_first_line && index == 0 {
+                            "• ".dim().into()
+                        } else {
+                            "  ".into()
+                        })
+                        .subsequent_indent("  ".into()),
+                )
+            })
+            .collect()
     }
 
     fn is_stream_continuation(&self) -> bool {
@@ -2825,6 +2916,35 @@ mod tests {
         render_lines(&cell.transcript_lines(u16::MAX))
     }
 
+    fn render_boxed_cell_rows(
+        renderable: Box<dyn HistoryCell>,
+        width: u16,
+        height: u16,
+    ) -> Vec<String> {
+        let height = height.max(1);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        renderable.render(area, &mut buf);
+        (0..area.height)
+            .map(|y| {
+                let mut row = (0..area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>();
+                while row.ends_with(' ') {
+                    row.pop();
+                }
+                row
+            })
+            .collect()
+    }
+
+    fn render_cell_rows(cell: &dyn HistoryCell, width: u16) -> Vec<String> {
+        let height = cell.desired_height(width).max(1);
+        let renderable =
+            Box::new(PlainHistoryCell::new(cell.display_lines(width))) as Box<dyn HistoryCell>;
+        render_boxed_cell_rows(renderable, width, height)
+    }
+
     fn image_block(data: &str) -> serde_json::Value {
         serde_json::to_value(Content::image(data.to_string(), "image/png"))
             .expect("image content should serialize")
@@ -3269,6 +3389,54 @@ mod tests {
         let cell = AgentMessageCell::new(vec![Line::default()], false);
         assert_eq!(cell.transcript_lines(80), vec![Line::from("  ")]);
         assert_eq!(cell.desired_transcript_height(80), 1);
+    }
+
+    #[test]
+    fn agent_message_render_does_not_double_blank_paragraph_lines() {
+        let cell = AgentMessageCell::new(
+            vec![
+                Line::from("first paragraph"),
+                Line::default(),
+                Line::from("second paragraph"),
+            ],
+            false,
+        );
+
+        assert_eq!(
+            render_lines(&cell.display_lines(80)),
+            vec!["  first paragraph", "  ", "  second paragraph"]
+        );
+        assert_eq!(
+            render_cell_rows(&cell, 80),
+            vec!["  first paragraph", "", "  second paragraph"]
+        );
+    }
+
+    #[test]
+    fn render_clips_from_logical_line_boundaries_for_wrapped_suffixes() {
+        let cell = AgentMessageCell::new(
+            vec![
+                Line::from(
+                    "I split the repo into four parallel passes and merged them into one map.",
+                ),
+                Line::from("The top-level modules are fairly cleanly separated:"),
+                Line::from(
+                    "- mstore: core data layer, tenant-aware Store, persistence abstraction, entities/providers/secrets/users, and embedded runtimes for scripts/providers.",
+                ),
+                Line::from("Module exports: src/lib.rs"),
+            ],
+            true,
+        );
+
+        let rows = render_boxed_cell_rows(Box::new(cell), 135, 3);
+        let first_non_empty = rows
+            .into_iter()
+            .find(|row| !row.trim().is_empty())
+            .expect("expected non-empty rendered rows");
+        assert!(
+            first_non_empty.starts_with("  - ") || first_non_empty.starts_with("  Module"),
+            "expected clipped active render to start on a logical line boundary, got: {first_non_empty:?}"
+        );
     }
 
     #[test]
@@ -4446,9 +4614,11 @@ mod tests {
 
         let logical_height = cell.display_lines(width).len() as u16;
         let wrapped_height = cell.desired_height(width);
-        let expected_wrapped_height = Paragraph::new(Text::from(cell.display_lines(width)))
-            .wrap(Wrap { trim: false })
-            .line_count(width) as u16;
+        let expected_wrapped_height = Paragraph::new(Text::from(normalize_whitespace_only_lines(
+            cell.display_lines(width),
+        )))
+        .wrap(Wrap { trim: false })
+        .line_count(width) as u16;
         assert_eq!(wrapped_height, expected_wrapped_height);
         assert!(
             wrapped_height >= logical_height,

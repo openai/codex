@@ -530,4 +530,19 @@ mod tests {
             );
         }
     }
+
+    #[tokio::test]
+    async fn controller_soft_line_break_snapshots_match_full_render() {
+        let cases: [(&str, [&str; 2]); 3] = [
+            ("newline stays with prior chunk", ["line1\n", "line2\n"]),
+            ("newline starts next chunk", ["line1", "\nline2\n"]),
+            ("newline split into its own chunk", ["line1\n", "\nline2\n"]),
+        ];
+
+        for (label, deltas) in cases {
+            for display_width in [18usize, 24, 80] {
+                assert_controller_matches_full(label, &deltas, display_width);
+            }
+        }
+    }
 }

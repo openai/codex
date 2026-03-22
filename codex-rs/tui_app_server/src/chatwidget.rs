@@ -214,7 +214,9 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
@@ -1143,6 +1145,11 @@ pub(crate) enum ReplayKind {
     ThreadSnapshot,
 }
 
+enum CompletedAssistantMessageSource {
+    LegacyEvent,
+    CompletedItem,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ThreadItemRenderSource {
     Live,
@@ -1946,7 +1953,41 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    fn completed_agent_message_cell(&self, message: &str) -> Option<Box<dyn HistoryCell>> {
+        let mut controller = StreamController::new(
+            self.last_rendered_width.get().map(|w| w.saturating_sub(2)),
+            &self.config.cwd,
+        );
+        let _ = controller.push(message);
+        controller.finalize()
+    }
+
     fn finalize_completed_assistant_message(&mut self, message: Option<&str>) {
+        self.finalize_completed_assistant_message_with_source(
+            message,
+            CompletedAssistantMessageSource::LegacyEvent,
+        );
+    }
+
+    fn finalize_completed_assistant_message_with_source(
+        &mut self,
+        message: Option<&str>,
+        source: CompletedAssistantMessageSource,
+    ) {
+        if matches!(source, CompletedAssistantMessageSource::CompletedItem)
+            && let Some(message) = message
+            && !message.is_empty()
+        {
+            self.stream_controller = None;
+            self.adaptive_chunking.reset();
+            self.app_event_tx.send(AppEvent::StopCommitAnimation);
+            if let Some(cell) = self.completed_agent_message_cell(message) {
+                self.add_boxed_history(cell);
+            }
+            self.handle_stream_finished();
+            self.request_redraw();
+            return;
+        }
         // If we have a stream_controller, the finalized message payload is redundant because the
         // visible content has already been accumulated through deltas.
         if self.stream_controller.is_none()
@@ -1968,9 +2009,6 @@ impl ChatWidget {
         if let Some(item_id) = item_id
             && self.live_agent_message_item_id.as_deref() != Some(item_id.as_str())
         {
-            if self.live_agent_message_item_id.is_some() {
-                self.flush_answer_stream_with_separator();
-            }
             self.live_agent_message_item_id = Some(item_id);
         }
         self.handle_streaming_delta(delta);
@@ -3647,8 +3685,9 @@ impl ChatWidget {
                 AgentMessageContent::Text { text } => message.push_str(text),
             }
         }
-        self.finalize_completed_assistant_message(
+        self.finalize_completed_assistant_message_with_source(
             (!message.is_empty()).then_some(message.as_str()),
+            CompletedAssistantMessageSource::CompletedItem,
         );
         self.pending_status_indicator_restore = match item.phase {
             // Models that don't support preambles only output AgentMessageItems on turn completion.
@@ -10486,6 +10525,7 @@ impl Drop for ChatWidget {
 
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        Clear.render(area, buf);
         self.as_renderable().render(area, buf);
         self.last_rendered_width.set(Some(area.width as usize));
     }

@@ -170,7 +170,9 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
@@ -733,10 +735,10 @@ pub(crate) struct ChatWidget {
     pending_status_indicator_restore: bool,
     // Tracks the live assistant message item currently streaming into `stream_controller`.
     live_agent_message_item_id: Option<String>,
-    // Core emits item-scoped content deltas plus a back-compat legacy delta immediately after.
-    // Keep the last item-scoped chunk so the live path can ignore the echoed legacy event while
-    // still accepting legacy-only producers.
-    pending_live_agent_message_legacy_echo: Option<String>,
+    // Core emits item-scoped content deltas plus a back-compat legacy delta for the same chunk.
+    // Track the last appended chunk source so the live path can dedupe either arrival order while
+    // still accepting legacy-only producers and ignoring stale late echoes.
+    pending_live_agent_message_duplicate: Option<(LiveAgentMessageDeltaSource, String)>,
     // Older thread snapshots may lack a final `AgentMessageItem` and only preserve
     // `TurnComplete.last_agent_message`. Track whether the replayed turn already produced a
     // final assistant item, plus the latest replayed assistant item text, so replay can fall
@@ -1119,6 +1121,17 @@ fn merge_user_messages(messages: Vec<UserMessage>) -> UserMessage {
 enum ReplayKind {
     ResumeInitialMessages,
     ThreadSnapshot,
+}
+
+enum CompletedAssistantMessageSource {
+    LegacyEvent,
+    CompletedItem,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LiveAgentMessageDeltaSource {
+    Legacy,
+    ItemContent,
 }
 
 impl ChatWidget {
@@ -1609,8 +1622,10 @@ impl ChatWidget {
         &mut self,
         message: Option<&str>,
         replay_kind: Option<ReplayKind>,
+        source: CompletedAssistantMessageSource,
     ) {
-        if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
+        if (matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
+            || matches!(source, CompletedAssistantMessageSource::CompletedItem))
             && let Some(message) = message
             && !message.is_empty()
         {
@@ -1639,7 +1654,11 @@ impl ChatWidget {
     }
 
     fn on_agent_message(&mut self, message: String) {
-        self.finalize_completed_assistant_message(Some(&message), None);
+        self.finalize_completed_assistant_message(
+            Some(&message),
+            None,
+            CompletedAssistantMessageSource::LegacyEvent,
+        );
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
@@ -1648,12 +1667,20 @@ impl ChatWidget {
 
     fn on_agent_message_content_delta(&mut self, item_id: String, delta: String) {
         if self.live_agent_message_item_id.as_deref() != Some(item_id.as_str()) {
-            if self.live_agent_message_item_id.is_some() {
-                self.flush_answer_stream_with_separator();
-            }
             self.live_agent_message_item_id = Some(item_id);
         }
-        self.pending_live_agent_message_legacy_echo = Some(delta.clone());
+        if self
+            .pending_live_agent_message_duplicate
+            .as_ref()
+            .is_some_and(|(source, previous)| {
+                *source == LiveAgentMessageDeltaSource::Legacy && previous == &delta
+            })
+        {
+            self.pending_live_agent_message_duplicate = None;
+            return;
+        }
+        self.pending_live_agent_message_duplicate =
+            Some((LiveAgentMessageDeltaSource::ItemContent, delta.clone()));
         self.handle_streaming_delta(delta);
     }
 
@@ -1803,7 +1830,7 @@ impl ChatWidget {
         self.retry_status_header = None;
         self.pending_status_indicator_restore = false;
         self.live_agent_message_item_id = None;
-        self.pending_live_agent_message_legacy_echo = None;
+        self.pending_live_agent_message_duplicate = None;
         self.thread_snapshot_replay_saw_final_agent_message_item = false;
         self.thread_snapshot_replay_last_agent_message_item = None;
         self.bottom_pane
@@ -1888,7 +1915,7 @@ impl ChatWidget {
             .set_turn_running(/*turn_running*/ false);
         self.update_task_running_state();
         self.live_agent_message_item_id = None;
-        self.pending_live_agent_message_legacy_echo = None;
+        self.pending_live_agent_message_duplicate = None;
         self.thread_snapshot_replay_agent_deltas_active = false;
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
@@ -3177,11 +3204,12 @@ impl ChatWidget {
         }
         if replay_kind.is_none() {
             self.live_agent_message_item_id = None;
-            self.pending_live_agent_message_legacy_echo = None;
+            self.pending_live_agent_message_duplicate = None;
         }
         self.finalize_completed_assistant_message(
             (!message.is_empty()).then_some(message.as_str()),
             replay_kind,
+            CompletedAssistantMessageSource::CompletedItem,
         );
         self.pending_status_indicator_restore = match item.phase {
             // Models that don't support preambles only output AgentMessageItems on turn completion.
@@ -3793,7 +3821,7 @@ impl ChatWidget {
             retry_status_header: None,
             pending_status_indicator_restore: false,
             live_agent_message_item_id: None,
-            pending_live_agent_message_legacy_echo: None,
+            pending_live_agent_message_duplicate: None,
             thread_snapshot_replay_saw_final_agent_message_item: false,
             thread_snapshot_replay_last_agent_message_item: None,
             thread_snapshot_replay_agent_delta_turn_id: None,
@@ -3997,7 +4025,7 @@ impl ChatWidget {
             retry_status_header: None,
             pending_status_indicator_restore: false,
             live_agent_message_item_id: None,
-            pending_live_agent_message_legacy_echo: None,
+            pending_live_agent_message_duplicate: None,
             thread_snapshot_replay_saw_final_agent_message_item: false,
             thread_snapshot_replay_last_agent_message_item: None,
             thread_snapshot_replay_agent_delta_turn_id: None,
@@ -4193,7 +4221,7 @@ impl ChatWidget {
             retry_status_header: None,
             pending_status_indicator_restore: false,
             live_agent_message_item_id: None,
-            pending_live_agent_message_legacy_echo: None,
+            pending_live_agent_message_duplicate: None,
             thread_snapshot_replay_saw_final_agent_message_item: false,
             thread_snapshot_replay_last_agent_message_item: None,
             thread_snapshot_replay_agent_delta_turn_id: None,
@@ -5493,7 +5521,11 @@ impl ChatWidget {
                 self.on_agent_message(message)
             }
             EventMsg::AgentMessage(AgentMessageEvent { .. }) => {}
-            EventMsg::AgentMessageContentDelta(event) if !from_replay => {
+            EventMsg::AgentMessageContentDelta(event)
+                if !from_replay
+                    || (matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
+                        && self.thread_snapshot_replay_agent_deltas_active) =>
+            {
                 self.on_agent_message_content_delta(event.item_id, event.delta)
             }
             EventMsg::AgentMessageContentDelta(_) => {}
@@ -5501,11 +5533,25 @@ impl ChatWidget {
                 if !matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
                     || self.thread_snapshot_replay_agent_deltas_active =>
             {
-                if !from_replay
-                    && self.pending_live_agent_message_legacy_echo.as_deref()
-                        == Some(delta.as_str())
+                if !from_replay {
+                    if self
+                        .pending_live_agent_message_duplicate
+                        .as_ref()
+                        .is_some_and(|(source, previous)| {
+                            *source == LiveAgentMessageDeltaSource::ItemContent
+                                && previous == &delta
+                        })
+                        || self.live_agent_message_item_id.is_some()
+                    {
+                        self.pending_live_agent_message_duplicate = None;
+                    } else {
+                        self.pending_live_agent_message_duplicate =
+                            Some((LiveAgentMessageDeltaSource::Legacy, delta.clone()));
+                        self.on_agent_message_delta(delta);
+                    }
+                } else if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
+                    && self.live_agent_message_item_id.is_some()
                 {
-                    self.pending_live_agent_message_legacy_echo = None;
                 } else {
                     self.on_agent_message_delta(delta)
                 }
@@ -5752,7 +5798,9 @@ impl ChatWidget {
                     self.on_plan_item_completed(plan_item.text.clone());
                 }
                 if let codex_protocol::items::TurnItem::AgentMessage(item) = item {
-                    if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot)) {
+                    if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
+                        && matches!(item.phase, Some(MessagePhase::FinalAnswer) | None)
+                    {
                         self.thread_snapshot_replay_agent_deltas_active = false;
                     }
                     if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
@@ -9388,6 +9436,7 @@ impl Drop for ChatWidget {
 
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        Clear.render(area, buf);
         self.as_renderable().render(area, buf);
         self.last_rendered_width.set(Some(area.width as usize));
     }

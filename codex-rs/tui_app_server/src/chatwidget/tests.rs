@@ -4610,6 +4610,105 @@ async fn live_app_server_stream_recovery_restores_previous_status_header() {
 }
 
 #[tokio::test]
+async fn live_app_server_agent_message_delta_keeps_stream_contiguous_across_item_handoff() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: AppServerTurn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::InProgress,
+                error: None,
+            },
+        }),
+        None,
+    );
+    drain_insert_history(&mut rx);
+
+    chat.handle_server_notification(
+        ServerNotification::AgentMessageDelta(
+            codex_app_server_protocol::AgentMessageDeltaNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "item-1".to_string(),
+                delta: "line1\n".to_string(),
+            },
+        ),
+        None,
+    );
+    chat.on_commit_tick();
+
+    chat.handle_server_notification(
+        ServerNotification::AgentMessageDelta(
+            codex_app_server_protocol::AgentMessageDeltaNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "item-2".to_string(),
+                delta: "line2\n".to_string(),
+            },
+        ),
+        None,
+    );
+    chat.on_commit_tick();
+
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    let active = chat
+        .active_cell_transcript_lines(u16::MAX)
+        .expect("expected active streamed cell");
+    assert_eq!(
+        lines_to_single_string(&active).trim_end(),
+        "• line1\n  line2"
+    );
+}
+
+#[tokio::test]
+async fn live_app_server_agent_message_item_completed_prefers_completed_payload_over_stream_state()
+{
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_server_notification(
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: AppServerTurn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::InProgress,
+                error: None,
+            },
+        }),
+        None,
+    );
+    drain_insert_history(&mut rx);
+
+    chat.on_agent_message_delta(None, "stale live reconstruction".to_string());
+    chat.on_commit_tick();
+    assert!(drain_insert_history(&mut rx).is_empty());
+
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::AgentMessage {
+                id: "msg-1".to_string(),
+                text: "authoritative completed payload".to_string(),
+                phase: Some(MessagePhase::Commentary),
+                memory_citation: None,
+            },
+        }),
+        None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(rendered.contains("authoritative completed payload"));
+    assert!(!rendered.contains("stale live reconstruction"));
+}
+
+#[tokio::test]
 async fn live_app_server_server_overloaded_error_renders_warning() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 

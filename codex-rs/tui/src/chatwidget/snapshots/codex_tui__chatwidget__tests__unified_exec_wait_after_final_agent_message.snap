@@ -2,6 +2,6 @@
 source: tui/src/chatwidget/tests.rs
 expression: combined
 ---
-• Waited for background terminal · cargo test -p codex-core
-
 • Final response.
+
+• Waited for background terminal · cargo test -p codex-core
