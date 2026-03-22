@@ -64,38 +64,29 @@ fn merge_surviving_segment_turn_context_state(
     segment_turn_context_state: ReferenceTurnContextState,
     counts_as_user_turn: bool,
 ) {
-    // Only real user turns should backfill "previous turn settings". Standalone task turns may
-    // carry lifecycle events, but they must not become the latest real turn context.
-    if counts_as_user_turn
-        && reference_turn_context_state
-            .latest_turn_context_item()
-            .is_none()
-        && let Some(turn_context_item) = segment_turn_context_state.latest_turn_context_item()
-    {
-        reference_turn_context_state.set_latest_turn_context_item(Some(turn_context_item));
-    }
-
-    // A compaction seen in this segment hides older reference baselines, but it must not erase a
-    // newer stored reference baseline we already captured from a later surviving user turn.
+    // A compaction seen in this segment shadows any older stored turn context, but it must not
+    // erase a newer stored turn context we already captured from a later surviving user turn.
     if segment_turn_context_state.compacted_since_model_saw_reference_turn_context()
         && reference_turn_context_state
-            .stored_reference_turn_context_item()
+            .stored_turn_context_item()
             .is_none()
     {
         reference_turn_context_state.note_compaction();
     }
 
-    // The model-visible reference baseline comes from the newest surviving user turn that both
-    // carries a stored baseline and has not been hidden by a later surviving compaction.
+    // Only real user turns should establish the stored turn context. Standalone task turns may
+    // carry lifecycle events, but they must not become the source of `previous_turn_settings()`
+    // or the reference baseline.
+    //
+    // This stores the newest surviving real turn context, while preserving any later compaction
+    // shadow we already learned about from newer surviving segments.
     if counts_as_user_turn
-        && !reference_turn_context_state.compacted_since_model_saw_reference_turn_context()
         && reference_turn_context_state
-            .stored_reference_turn_context_item()
+            .stored_turn_context_item()
             .is_none()
-        && let Some(turn_context_item) =
-            segment_turn_context_state.stored_reference_turn_context_item()
+        && let Some(turn_context_item) = segment_turn_context_state.stored_turn_context_item()
     {
-        reference_turn_context_state.set_reference_context_item(Some(turn_context_item));
+        reference_turn_context_state.note_turn_context_during_reverse_replay(&turn_context_item);
     }
 }
 
@@ -213,7 +204,7 @@ impl Session {
             if base_replacement_history.is_some()
                 && pending_rollback_turns == 0
                 && reference_turn_context_state
-                    .latest_turn_context_item()
+                    .stored_turn_context_item()
                     .is_some()
             {
                 // At this point the replay-derived metadata and replacement-history base for the

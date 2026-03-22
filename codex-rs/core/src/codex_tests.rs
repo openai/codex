@@ -1033,7 +1033,7 @@ async fn record_initial_history_reconstructs_forked_transcript() {
 }
 
 #[tokio::test]
-async fn record_initial_history_forked_hydrates_previous_turn_settings() {
+async fn record_initial_history_forked_advances_previous_turn_settings_to_current_baseline() {
     let (session, turn_context) = make_session_and_context().await;
     let previous_model = "forked-rollout-model";
     let previous_context_item = TurnContextItem {
@@ -1092,7 +1092,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
     assert_eq!(
         session.previous_turn_settings().await,
         Some(PreviousTurnSettings {
-            model: previous_model.to_string(),
+            model: turn_context.model_info.slug.clone(),
             realtime_active: Some(turn_context.realtime_active),
         })
     );
@@ -3786,7 +3786,7 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
 }
 
 #[tokio::test]
-async fn record_context_updates_and_set_reference_context_item_persists_baseline_without_emitting_diffs()
+async fn record_context_updates_and_set_reference_context_item_emits_model_switch_for_stored_baseline()
  {
     let (session, previous_context) = make_session_and_context().await;
     let next_model = if previous_context.model_info.slug == "gpt-5.1" {
@@ -3827,7 +3827,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
     let update_items = session
         .build_settings_update_items(Some(&previous_context_item), &turn_context)
         .await;
-    assert_eq!(update_items, Vec::new());
+    assert!(!update_items.is_empty());
 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
@@ -3835,7 +3835,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
 
     assert_eq!(
         session.clone_history().await.raw_items().to_vec(),
-        Vec::new()
+        update_items
     );
     assert_eq!(
         serde_json::to_value(session.reference_context_item().await)

@@ -3621,9 +3621,9 @@ impl Session {
         self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item.clone())])
             .await;
 
-        // Advance the in-memory turn-context tracker even when this turn emitted no model-visible
-        // context items. Regular turns become both the latest turn-settings source and the active
-        // model-visible reference baseline for subsequent diffing.
+        // Advance the stored turn-context snapshot even when this turn emitted no model-visible
+        // context items. Regular turns become both the `previous_turn_settings()` source and the
+        // active model-visible reference baseline for subsequent diffing.
         self.record_regular_turn_context(turn_context_item).await;
     }
 
