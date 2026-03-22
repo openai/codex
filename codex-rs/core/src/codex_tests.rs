@@ -1250,7 +1250,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
 }
 
 #[tokio::test]
-async fn record_initial_history_forked_preserves_previous_turn_settings_until_first_turn() {
+async fn record_initial_history_forked_clears_reference_context_item_until_first_turn() {
     let (session, turn_context) = make_session_and_context().await;
     let previous_model = "forked-rollout-model";
     let previous_context_item = TurnContextItem {
@@ -1313,25 +1313,21 @@ async fn record_initial_history_forked_preserves_previous_turn_settings_until_fi
             realtime_active: Some(turn_context.realtime_active),
         })
     );
-    assert_eq!(
-        serde_json::to_value(session.reference_context_item().await)
-            .expect("serialize forked reference context item"),
-        serde_json::to_value(Some(previous_context_item.clone()))
-            .expect("serialize expected forked reference context item")
+    assert!(
+        session.reference_context_item().await.is_none(),
+        "fork startup should defer model-visible context reinjection until the first forked turn"
     );
 
     let history_before_update = session.clone_history().await.raw_items().to_vec();
-    let update_items = session
-        .build_settings_update_items(Some(&previous_context_item), &turn_context)
-        .await;
-    assert!(!update_items.is_empty());
+    let initial_context = session.build_initial_context(&turn_context).await;
+    assert!(!initial_context.is_empty());
 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
         .await;
 
     let mut expected_history = history_before_update;
-    expected_history.extend(update_items);
+    expected_history.extend(initial_context);
     assert_eq!(
         session.clone_history().await.raw_items().to_vec(),
         expected_history
@@ -1339,7 +1335,7 @@ async fn record_initial_history_forked_preserves_previous_turn_settings_until_fi
     assert_eq!(
         session.previous_turn_settings().await,
         Some(PreviousTurnSettings {
-            model: turn_context.model_info.slug.clone(),
+            model: previous_model.to_string(),
             realtime_active: Some(turn_context.realtime_active),
         })
     );

@@ -2166,6 +2166,13 @@ impl Session {
             InitialHistory::Forked(rollout_items) => {
                 self.apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
+                // Keep the reconstructed previous-turn settings from the source thread, but force
+                // the first real turn in the fork to reinject the current session's full initial
+                // context instead of diffing against the source thread baseline.
+                {
+                    let mut state = self.state.lock().await;
+                    state.set_reference_context_item(/*item*/ None);
+                }
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.

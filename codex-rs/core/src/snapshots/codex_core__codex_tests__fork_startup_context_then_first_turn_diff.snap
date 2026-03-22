@@ -12,4 +12,5 @@ Scenario: First request after fork when fork startup changes approval policy and
 03:message/developer[2]:
     [01] <permissions instructions>\nFilesystem sandboxing defines which files can be read or written. `sandbox_mode` is `read-only`: The sandbox only permits reading files. Network access is restricted.\nApproval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.\n</permissions instructions>
     [02] <collaboration_mode>Fork turn collaboration instructions.</collaboration_mode>
-04:message/user:after fork
+04:message/user:<environment_context>\n  <cwd><CWD></cwd>\n  <shell><SHELL></shell>\n  <current_date><CURRENT_DATE></current_date>\n  <timezone><TIMEZONE></timezone>\n</environment_context>
+05:message/user:after fork
