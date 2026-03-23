@@ -6413,6 +6413,7 @@ impl CodexMessageProcessor {
         if let Some(review_model) = &config.review_model {
             config.model = Some(review_model.clone());
         }
+
         let NewThread {
             thread_id,
             thread: review_thread,
