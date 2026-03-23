@@ -11,6 +11,7 @@ use crate::hook_runtime::run_pre_tool_use_hooks;
 use crate::memories::usage::emit_metric_for_tool_read;
 use crate::protocol::SandboxPolicy;
 use crate::sandbox_tags::sandbox_tag;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -349,6 +350,16 @@ impl ToolRegistry {
                 outcome.additional_contexts.clone(),
             )
             .await;
+
+            if let Some(feedback_message) = &outcome.feedback_message {
+                let mut guard = response_cell.lock().await;
+                if let Some(result) = guard.as_mut() {
+                    result.result = Box::new(FunctionToolOutput::from_text(
+                        feedback_message.clone(),
+                        None,
+                    ));
+                }
+            }
         }
 
         match result {

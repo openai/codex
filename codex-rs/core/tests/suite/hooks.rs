@@ -1450,7 +1450,7 @@ async fn post_tool_use_records_additional_context_for_shell_command() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn post_tool_use_block_decision_preserves_shell_command_output() -> Result<()> {
+async fn post_tool_use_block_decision_replaces_shell_command_output_with_reason() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1500,20 +1500,18 @@ async fn post_tool_use_block_decision_preserves_shell_command_output() -> Result
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
-    assert!(
-        requests[1]
-            .message_input_texts("developer")
-            .contains(&reason.to_string()),
-        "follow-up request should include the post tool use feedback",
-    );
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
         .expect("shell command output string");
-    assert!(
-        output.contains("blocked-output"),
-        "post tool use block decision should preserve the tool output",
+    assert_eq!(output, reason);
+
+    let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(
+        hook_inputs[0]["tool_response"],
+        Value::String("blocked-output".to_string())
     );
 
     Ok(())
@@ -1594,7 +1592,7 @@ async fn post_tool_use_records_additional_context_for_local_shell() -> Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn post_tool_use_exit_two_preserves_exec_command_output() -> Result<()> {
+async fn post_tool_use_exit_two_replaces_exec_command_output_with_feedback() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1656,21 +1654,12 @@ async fn post_tool_use_exit_two_preserves_exec_command_output() -> Result<()> {
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
-    assert!(
-        requests[1]
-            .message_input_texts("developer")
-            .contains(&"blocked by post hook".to_string()),
-        "follow-up request should include the exit-2 post hook feedback",
-    );
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
         .expect("exec command output string");
-    assert!(
-        output.contains("post-hook-output"),
-        "post tool use exit code 2 should preserve the executed tool output",
-    );
+    assert_eq!(output, "blocked by post hook");
     assert!(
         marker.exists(),
         "post tool use should run after command execution"
