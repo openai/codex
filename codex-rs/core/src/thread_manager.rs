@@ -144,10 +144,10 @@ pub enum ForkSnapshot {
     ///
     /// When `n` is within range, this cuts before that 0-based user-message
     /// boundary. When `n` is out of range and the source thread is currently
-    /// mid-turn, this instead cuts before the last user message so the fork
-    /// drops the unfinished turn suffix. When `n` is out of range and the
-    /// source thread is already at a turn boundary, this returns the full
-    /// committed history unchanged.
+    /// mid-turn, this instead cuts before the active turn's opening boundary
+    /// so the fork drops the unfinished turn suffix. When `n` is out of range
+    /// and the source thread is already at a turn boundary, this returns the
+    /// full committed history unchanged.
     TruncateBeforeNthUserMessage(usize),
 
     /// Fork the current persisted history as if the source thread had been
@@ -158,6 +158,14 @@ pub enum ForkSnapshot {
     /// already at a turn boundary, this returns the current persisted history
     /// unchanged.
     Interrupted,
+}
+
+/// Preserve legacy `fork_thread(usize, ...)` callsites by mapping them to the
+/// existing truncate-before-nth-user-message snapshot mode.
+impl From<usize> for ForkSnapshot {
+    fn from(value: usize) -> Self {
+        Self::TruncateBeforeNthUserMessage(value)
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -579,23 +587,23 @@ impl ThreadManager {
     /// `snapshot` and starting a new thread with identical configuration
     /// (unless overridden by the caller's `config`). The new thread will have
     /// a fresh id.
-    pub async fn fork_thread(
+    pub async fn fork_thread<S>(
         &self,
-        snapshot: ForkSnapshot,
+        snapshot: S,
         config: Config,
         path: PathBuf,
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
-    ) -> CodexResult<NewThread> {
+    ) -> CodexResult<NewThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
+        let snapshot = snapshot.into();
         let history = RolloutRecorder::get_rollout_history(&path).await?;
         let snapshot_state = snapshot_turn_state(&history);
         let history = match snapshot {
             ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
-                truncate_before_nth_user_message(
-                    history,
-                    nth_user_message,
-                    snapshot_state.ends_mid_turn,
-                )
+                truncate_before_nth_user_message(history, nth_user_message, &snapshot_state)
             }
             ForkSnapshot::Interrupted => {
                 let history = match history {
@@ -885,17 +893,21 @@ impl ThreadManagerState {
 /// Return a fork snapshot cut strictly before the nth user message (0-based).
 ///
 /// Out-of-range values keep the full committed history at a turn boundary, but
-/// fall back to cutting before the last user message when the source thread is
-/// currently mid-turn so the fork omits the unfinished suffix.
+/// when the source thread is currently mid-turn they fall back to cutting
+/// before the active turn's opening boundary so the fork omits the unfinished
+/// suffix entirely.
 fn truncate_before_nth_user_message(
     history: InitialHistory,
     n: usize,
-    snapshot_mid_turn: bool,
+    snapshot_state: &SnapshotTurnState,
 ) -> InitialHistory {
     let items: Vec<RolloutItem> = history.get_rollout_items();
     let user_positions = truncation::user_message_positions_in_rollout(&items);
-    let rolled = if snapshot_mid_turn && n >= user_positions.len() {
-        if let Some(cut_idx) = user_positions.last().copied() {
+    let rolled = if snapshot_state.ends_mid_turn && n >= user_positions.len() {
+        if let Some(cut_idx) = snapshot_state
+            .active_turn_start_index
+            .or_else(|| user_positions.last().copied())
+        {
             items[..cut_idx].to_vec()
         } else {
             items
@@ -915,6 +927,7 @@ fn truncate_before_nth_user_message(
 struct SnapshotTurnState {
     ends_mid_turn: bool,
     active_turn_id: Option<String>,
+    active_turn_start_index: Option<usize>,
 }
 
 fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
@@ -932,12 +945,14 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
             return SnapshotTurnState {
                 ends_mid_turn: false,
                 active_turn_id: None,
+                active_turn_start_index: None,
             };
         }
 
         return SnapshotTurnState {
             ends_mid_turn: true,
             active_turn_id: builder.active_turn_id_if_explicit(),
+            active_turn_start_index: builder.active_turn_start_index(),
         };
     }
 
@@ -948,6 +963,7 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
         return SnapshotTurnState {
             ends_mid_turn: false,
             active_turn_id: None,
+            active_turn_start_index: None,
         };
     };
 
@@ -962,6 +978,7 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
             )
         }),
         active_turn_id: None,
+        active_turn_start_index: None,
     }
 }
 
