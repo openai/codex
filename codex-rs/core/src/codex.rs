@@ -3537,7 +3537,18 @@ impl Session {
             }
         }
         if turn_context.apps_enabled() {
-            developer_sections.push(render_apps_section());
+            let accessible_connectors = {
+                let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
+                connectors::with_app_enabled_state(
+                    connectors::accessible_connectors_from_mcp_tools(
+                        &mcp_connection_manager.list_all_tools().await,
+                    ),
+                    &turn_context.config,
+                )
+            };
+            if let Some(apps_section) = render_apps_section(&accessible_connectors) {
+                developer_sections.push(apps_section);
+            }
         }
         let implicit_skills = turn_context
             .turn_skills

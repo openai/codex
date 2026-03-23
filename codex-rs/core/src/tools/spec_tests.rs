@@ -1964,6 +1964,7 @@ fn tool_suggest_is_not_registered_without_feature_flag() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
+    features.enable(Feature::Plugins);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
@@ -1992,6 +1993,52 @@ fn tool_suggest_is_not_registered_without_feature_flag() {
             .iter()
             .any(|tool| tool_name(&tool.spec) == TOOL_SUGGEST_TOOL_NAME)
     );
+}
+
+#[test]
+fn tool_suggest_requires_apps_and_plugins_features() {
+    let model_info = search_capable_model_info();
+    let discoverable_tools = Some(vec![discoverable_connector(
+        "connector_2128aebfecb84f64a069897515042a44",
+        "Google Calendar",
+        "Plan events and schedules.",
+    )]);
+    let available_models = Vec::new();
+
+    for disabled_feature in [Feature::Apps, Feature::Plugins] {
+        let mut features = Features::with_defaults();
+        features.enable(Feature::ToolSuggest);
+        for feature in [Feature::Apps, Feature::Plugins] {
+            if feature != disabled_feature {
+                features.enable(feature);
+            }
+        }
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+            sandbox_policy: &SandboxPolicy::DangerFullAccess,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+        });
+        let (tools, _) = build_specs_with_discoverable_tools(
+            &tools_config,
+            None,
+            None,
+            discoverable_tools.clone(),
+            &[],
+        )
+        .build();
+
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == TOOL_SUGGEST_TOOL_NAME),
+            "tool_suggest should be absent when {disabled_feature:?} is disabled"
+        );
+    }
 }
 
 #[test]
@@ -2138,6 +2185,7 @@ fn tool_suggest_description_lists_discoverable_tools() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
+    features.enable(Feature::Plugins);
     features.enable(Feature::ToolSuggest);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
