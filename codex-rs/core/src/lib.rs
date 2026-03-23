@@ -64,6 +64,7 @@ pub mod mention_syntax;
 mod mentions;
 pub mod message_history;
 mod model_provider_info;
+mod model_visible_context;
 pub mod path_utils;
 pub mod personality_migration;
 pub mod plugins;
