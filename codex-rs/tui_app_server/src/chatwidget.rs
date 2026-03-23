@@ -199,6 +199,8 @@ use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
+use codex_terminal_detection::Multiplexer;
+use codex_terminal_detection::TerminalInfo;
 use codex_terminal_detection::TerminalName;
 use codex_terminal_detection::terminal_info;
 use codex_utils_sleep_inhibitor::SleepInhibitor;
@@ -238,14 +240,21 @@ const APP_SERVER_TUI_STUB_MESSAGE: &str = "Not available in app-server TUI yet."
 /// Choose the keybinding used to edit the most-recently queued message.
 ///
 /// Apple Terminal, Warp, and VSCode integrated terminals intercept or silently
-/// swallow Alt+Up, so users in those environments would never be able to trigger
-/// the edit action.  We fall back to Shift+Left for those terminals while
-/// keeping the more discoverable Alt+Up everywhere else.
+/// swallow Alt+Up, and tmux does not reliably pass that chord through. We fall
+/// back to Shift+Left for those environments while keeping the more discoverable
+/// Alt+Up everywhere else.
 ///
 /// The match is exhaustive so that adding a new `TerminalName` variant forces
 /// an explicit decision about which binding that terminal should use.
-fn queued_message_edit_binding_for_terminal(terminal_name: TerminalName) -> KeyBinding {
-    match terminal_name {
+fn queued_message_edit_binding_for_terminal(terminal_info: TerminalInfo) -> KeyBinding {
+    if matches!(
+        terminal_info.multiplexer.as_ref(),
+        Some(Multiplexer::Tmux { .. })
+    ) {
+        return key_hint::shift(KeyCode::Left);
+    }
+
+    match terminal_info.name {
         TerminalName::AppleTerminal | TerminalName::WarpTerminal | TerminalName::VsCode => {
             key_hint::shift(KeyCode::Left)
         }
@@ -4170,8 +4179,7 @@ impl ChatWidget {
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
 
         let current_cwd = Some(config.cwd.clone());
-        let queued_message_edit_binding =
-            queued_message_edit_binding_for_terminal(terminal_info().name);
+        let queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_info());
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),

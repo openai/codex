@@ -120,6 +120,8 @@ use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
+use codex_terminal_detection::Multiplexer;
+use codex_terminal_detection::TerminalInfo;
 use codex_terminal_detection::TerminalName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::builtin_approval_presets;
@@ -3756,10 +3758,10 @@ async fn alt_up_edits_most_recent_queued_message() {
 }
 
 async fn assert_shift_left_edits_most_recent_queued_message_for_terminal(
-    terminal_name: TerminalName,
+    terminal_info: TerminalInfo,
 ) {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_name);
+    chat.queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_info);
     chat.bottom_pane
         .set_queued_message_edit_binding(chat.queued_message_edit_binding);
 
@@ -3791,37 +3793,102 @@ async fn assert_shift_left_edits_most_recent_queued_message_for_terminal(
 
 #[tokio::test]
 async fn shift_left_edits_most_recent_queued_message_in_apple_terminal() {
-    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::AppleTerminal)
-        .await;
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalInfo {
+        name: TerminalName::AppleTerminal,
+        term_program: None,
+        version: None,
+        term: None,
+        multiplexer: None,
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn shift_left_edits_most_recent_queued_message_in_warp_terminal() {
-    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::WarpTerminal)
-        .await;
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalInfo {
+        name: TerminalName::WarpTerminal,
+        term_program: None,
+        version: None,
+        term: None,
+        multiplexer: None,
+    })
+    .await;
 }
 
 #[tokio::test]
 async fn shift_left_edits_most_recent_queued_message_in_vscode_terminal() {
-    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalName::VsCode).await;
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalInfo {
+        name: TerminalName::VsCode,
+        term_program: None,
+        version: None,
+        term: None,
+        multiplexer: None,
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn shift_left_edits_most_recent_queued_message_in_tmux() {
+    assert_shift_left_edits_most_recent_queued_message_for_terminal(TerminalInfo {
+        name: TerminalName::Iterm2,
+        term_program: None,
+        version: None,
+        term: None,
+        multiplexer: Some(Multiplexer::Tmux { version: None }),
+    })
+    .await;
 }
 
 #[test]
-fn queued_message_edit_binding_mapping_covers_special_terminals() {
+fn queued_message_edit_binding_mapping_covers_special_terminals_and_tmux() {
     assert_eq!(
-        queued_message_edit_binding_for_terminal(TerminalName::AppleTerminal),
+        queued_message_edit_binding_for_terminal(TerminalInfo {
+            name: TerminalName::AppleTerminal,
+            term_program: None,
+            version: None,
+            term: None,
+            multiplexer: None,
+        }),
         crate::key_hint::shift(KeyCode::Left)
     );
     assert_eq!(
-        queued_message_edit_binding_for_terminal(TerminalName::WarpTerminal),
+        queued_message_edit_binding_for_terminal(TerminalInfo {
+            name: TerminalName::WarpTerminal,
+            term_program: None,
+            version: None,
+            term: None,
+            multiplexer: None,
+        }),
         crate::key_hint::shift(KeyCode::Left)
     );
     assert_eq!(
-        queued_message_edit_binding_for_terminal(TerminalName::VsCode),
+        queued_message_edit_binding_for_terminal(TerminalInfo {
+            name: TerminalName::VsCode,
+            term_program: None,
+            version: None,
+            term: None,
+            multiplexer: None,
+        }),
         crate::key_hint::shift(KeyCode::Left)
     );
     assert_eq!(
-        queued_message_edit_binding_for_terminal(TerminalName::Iterm2),
+        queued_message_edit_binding_for_terminal(TerminalInfo {
+            name: TerminalName::Iterm2,
+            term_program: None,
+            version: None,
+            term: None,
+            multiplexer: Some(Multiplexer::Tmux { version: None }),
+        }),
+        crate::key_hint::shift(KeyCode::Left)
+    );
+    assert_eq!(
+        queued_message_edit_binding_for_terminal(TerminalInfo {
+            name: TerminalName::Iterm2,
+            term_program: None,
+            version: None,
+            term: None,
+            multiplexer: None,
+        }),
         crate::key_hint::alt(KeyCode::Up)
     );
 }
