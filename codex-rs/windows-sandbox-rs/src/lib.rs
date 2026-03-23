@@ -93,6 +93,8 @@ pub use cap::workspace_cap_sid_for_cwd;
 #[cfg(target_os = "windows")]
 pub use conpty::spawn_conpty_process_as_user;
 #[cfg(target_os = "windows")]
+pub use desktop::LaunchDesktop;
+#[cfg(target_os = "windows")]
 pub use dpapi::protect as dpapi_protect;
 #[cfg(target_os = "windows")]
 pub use dpapi::unprotect as dpapi_unprotect;
