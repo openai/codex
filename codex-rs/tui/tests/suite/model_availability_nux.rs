@@ -176,8 +176,16 @@ trust_level = "trusted"
             anyhow::bail!("timed out waiting for codex resume to exit");
         }
     };
+    let interrupt_only_output = {
+        let trimmed_output = String::from_utf8_lossy(&output);
+        let trimmed_output = trimmed_output.trim();
+        !trimmed_output.is_empty()
+            && trimmed_output
+                .chars()
+                .all(|character| character == '^' || character == 'C' || character.is_whitespace())
+    };
     anyhow::ensure!(
-        exit_code == 0 || exit_code == 130,
+        exit_code == 0 || exit_code == 130 || (exit_code == 1 && interrupt_only_output),
         "unexpected exit code from codex resume: {exit_code}; output: {}",
         String::from_utf8_lossy(&output)
     );
