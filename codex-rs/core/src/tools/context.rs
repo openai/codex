@@ -84,6 +84,10 @@ pub trait ToolOutput: Send {
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem;
 
+    fn post_tool_use_response(&self, call_id: &str, payload: &ToolPayload) -> Option<JsonValue> {
+        response_item_to_post_tool_use_response(self.to_response_item(call_id, payload))
+    }
+
     fn code_mode_result(&self, payload: &ToolPayload) -> JsonValue {
         response_input_to_code_mode_result(self.to_response_item("", payload))
     }
@@ -158,6 +162,7 @@ impl ToolOutput for ToolSearchOutput {
 pub struct FunctionToolOutput {
     pub body: Vec<FunctionCallOutputContentItem>,
     pub success: Option<bool>,
+    pub post_tool_use_response: Option<JsonValue>,
 }
 
 impl FunctionToolOutput {
@@ -165,6 +170,7 @@ impl FunctionToolOutput {
         Self {
             body: vec![FunctionCallOutputContentItem::InputText { text }],
             success,
+            post_tool_use_response: None,
         }
     }
 
@@ -175,6 +181,7 @@ impl FunctionToolOutput {
         Self {
             body: content,
             success,
+            post_tool_use_response: None,
         }
     }
 
@@ -196,6 +203,12 @@ impl ToolOutput for FunctionToolOutput {
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
         function_tool_response(call_id, payload, self.body.clone(), self.success)
+    }
+
+    fn post_tool_use_response(&self, call_id: &str, payload: &ToolPayload) -> Option<JsonValue> {
+        self.post_tool_use_response.clone().or_else(|| {
+            response_item_to_post_tool_use_response(self.to_response_item(call_id, payload))
+        })
     }
 }
 
@@ -305,6 +318,10 @@ impl ToolOutput for ExecCommandToolOutput {
         )
     }
 
+    fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
+        Some(JsonValue::String(self.truncated_output()))
+    }
+
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
         #[derive(Serialize)]
         struct UnifiedExecCodeModeResult {
@@ -375,6 +392,15 @@ impl ExecCommandToolOutput {
         sections.push(self.truncated_output());
 
         sections.join("\n")
+    }
+}
+
+fn response_item_to_post_tool_use_response(response_item: ResponseInputItem) -> Option<JsonValue> {
+    match response_item {
+        ResponseInputItem::FunctionCallOutput { output, .. } => serde_json::to_value(output).ok(),
+        ResponseInputItem::McpToolCallOutput { output, .. } => serde_json::to_value(output).ok(),
+        ResponseInputItem::ToolSearchOutput { tools, .. } => Some(JsonValue::Array(tools)),
+        _ => None,
     }
 }
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -134,4 +135,36 @@ fn post_tool_use_payload_uses_function_call_output_wire_value() {
         post_payload.tool_response,
         serde_json::json!("shell output")
     );
+}
+
+#[test]
+fn post_tool_use_payload_uses_exec_command_raw_output() {
+    let payload = ToolPayload::Function {
+        arguments: serde_json::json!({ "cmd": "echo three" }).to_string(),
+    };
+    let result = AnyToolResult {
+        call_id: "call-43".to_string(),
+        payload,
+        result: Box::new(ExecCommandToolOutput {
+            event_call_id: "event-43".to_string(),
+            chunk_id: "chunk-1".to_string(),
+            wall_time: std::time::Duration::from_millis(498),
+            raw_output: b"three".to_vec(),
+            max_output_tokens: None,
+            process_id: None,
+            exit_code: Some(0),
+            original_token_count: None,
+            session_command: Some(vec![
+                "/bin/zsh".to_string(),
+                "-lc".to_string(),
+                "echo three".to_string(),
+            ]),
+        }),
+    };
+
+    let post_payload =
+        post_tool_use_payload("exec_command", &result).expect("post tool use payload");
+
+    assert_eq!(post_payload.command, "echo three".to_string());
+    assert_eq!(post_payload.tool_response, serde_json::json!("three"));
 }

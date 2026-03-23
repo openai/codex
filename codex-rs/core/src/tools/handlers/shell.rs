@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
+use serde_json::Value as JsonValue;
 use std::sync::Arc;
 
 use crate::codex::TurnContext;
@@ -492,8 +493,25 @@ impl ShellHandler {
             &call_id,
             /*turn_diff_tracker*/ None,
         );
-        let content = emitter.finish(event_ctx, out).await?;
-        Ok(FunctionToolOutput::from_text(content, Some(true)))
+        let (content, post_tool_use_response) = match out {
+            Ok(output) => {
+                let post_tool_use_response =
+                    crate::tools::format_exec_output_str(&output, turn.truncation_policy);
+                let content = emitter.finish(event_ctx, Ok(output)).await?;
+                (content, Some(JsonValue::String(post_tool_use_response)))
+            }
+            Err(error) => {
+                let content = emitter.finish(event_ctx, Err(error)).await?;
+                (content, None)
+            }
+        };
+        Ok(FunctionToolOutput {
+            body: vec![
+                codex_protocol::models::FunctionCallOutputContentItem::InputText { text: content },
+            ],
+            success: Some(true),
+            post_tool_use_response,
+        })
     }
 }
 

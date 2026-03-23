@@ -501,15 +501,9 @@ struct PostToolUsePayload {
 
 fn post_tool_use_payload(tool_name: &str, result: &AnyToolResult) -> Option<PostToolUsePayload> {
     let command = pre_tool_use_command(tool_name, &result.payload)?;
-    let response_item = result
+    let tool_response = result
         .result
-        .to_response_item(&result.call_id, &result.payload);
-    let tool_response = match response_item {
-        ResponseInputItem::FunctionCallOutput { output, .. } => {
-            serde_json::to_value(output).ok()?
-        }
-        _ => return None,
-    };
+        .post_tool_use_response(&result.call_id, &result.payload)?;
     Some(PostToolUsePayload {
         command,
         tool_response,

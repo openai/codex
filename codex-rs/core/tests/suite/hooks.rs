@@ -1425,10 +1425,9 @@ async fn post_tool_use_records_additional_context_for_shell_command() -> Result<
     assert_eq!(hook_inputs[0]["tool_name"], "Bash");
     assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
-    assert!(
-        hook_inputs[0]["tool_response"]
-            .as_str()
-            .is_some_and(|output| output.contains("post-tool-output")),
+    assert_eq!(
+        hook_inputs[0]["tool_response"],
+        Value::String("post-tool-output".to_string())
     );
     let transcript_path = hook_inputs[0]["transcript_path"]
         .as_str()
@@ -1586,10 +1585,9 @@ async fn post_tool_use_records_additional_context_for_local_shell() -> Result<()
         hook_inputs[0]["tool_input"]["command"],
         codex_shell_command::parse_command::shlex_join(&command),
     );
-    assert!(
-        hook_inputs[0]["tool_response"]
-            .as_str()
-            .is_some_and(|output| output.contains("local-post-tool-output")),
+    assert_eq!(
+        hook_inputs[0]["tool_response"],
+        Value::String("local-post-tool-output".to_string()),
     );
 
     Ok(())
@@ -1682,10 +1680,9 @@ async fn post_tool_use_exit_two_preserves_exec_command_output() -> Result<()> {
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
     assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
-    assert!(
-        hook_inputs[0]["tool_response"]
-            .as_str()
-            .is_some_and(|output| output.contains("post-hook-output")),
+    assert_eq!(
+        hook_inputs[0]["tool_response"],
+        Value::String("post-hook-output".to_string())
     );
 
     Ok(())
