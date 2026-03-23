@@ -369,7 +369,7 @@ impl AppServerSession {
         self.client
             .request_typed(ClientRequest::ThreadLoadedList { request_id, params })
             .await
-            .wrap_err("thread/loaded/list failed during TUI session lookup")
+            .wrap_err("failed to list loaded threads from app server")
     }
 
     pub(crate) async fn thread_read(
