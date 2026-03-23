@@ -13,6 +13,7 @@ use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::skills::SkillMetadata;
+use crate::state::ApprovalOutcomeMetadata;
 use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::SandboxAttempt;
@@ -26,6 +27,7 @@ use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
 use codex_features::Feature;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::ApprovalSourceMetadata;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -359,6 +361,26 @@ fn execve_prompt_is_rejected_by_policy(
     }
 }
 
+fn approval_source_for_policy_resolved_decision(
+    approval_policy: AskForApproval,
+    decision: Decision,
+    decision_source: &DecisionSource,
+) -> Option<ApprovalSourceMetadata> {
+    match decision {
+        Decision::Allow | Decision::Forbidden
+            if matches!(decision_source, DecisionSource::PrefixRule) =>
+        {
+            Some(ApprovalSourceMetadata::Policy)
+        }
+        Decision::Prompt
+            if execve_prompt_is_rejected_by_policy(approval_policy, decision_source).is_some() =>
+        {
+            Some(ApprovalSourceMetadata::Policy)
+        }
+        _ => None,
+    }
+}
+
 impl CoreShellActionProvider {
     fn decision_driven_by_policy(matched_rules: &[RuleMatch], decision: Decision) -> bool {
         matched_rules.iter().any(|rule_match| {
@@ -522,12 +544,16 @@ impl CoreShellActionProvider {
     ) -> anyhow::Result<EscalationDecision> {
         let action = match decision {
             Decision::Forbidden => {
+                self.record_policy_approval_outcome_if_needed(decision, &decision_source)
+                    .await;
                 EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
             }
             Decision::Prompt => {
                 if execve_prompt_is_rejected_by_policy(self.approval_policy, &decision_source)
                     .is_some()
                 {
+                    self.record_policy_approval_outcome_if_needed(decision, &decision_source)
+                        .await;
                     EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
                 } else {
                     match self
@@ -600,6 +626,8 @@ impl CoreShellActionProvider {
                 }
             }
             Decision::Allow => {
+                self.record_policy_approval_outcome_if_needed(decision, &decision_source)
+                    .await;
                 if needs_escalation {
                     EscalationDecision::escalate(escalation_execution)
                 } else {
@@ -611,6 +639,27 @@ impl CoreShellActionProvider {
             "Policy decision for command {program:?} is {decision:?}, leading to escalation action {action:?}",
         );
         Ok(action)
+    }
+
+    async fn record_policy_approval_outcome_if_needed(
+        &self,
+        decision: Decision,
+        decision_source: &DecisionSource,
+    ) {
+        if approval_source_for_policy_resolved_decision(
+            self.approval_policy,
+            decision,
+            decision_source,
+        )
+        .is_some()
+        {
+            self.session
+                .record_call_approval_outcome(
+                    self.call_id.clone(),
+                    ApprovalOutcomeMetadata::policy(),
+                )
+                .await;
+        }
     }
 }
 

@@ -29,6 +29,7 @@ use codex_execpolicy::PolicyParser;
 use codex_execpolicy::RuleMatch;
 #[cfg(target_os = "macos")]
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::ApprovalSourceMetadata;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::MacOsPreferencesPermission;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
@@ -163,6 +164,60 @@ fn execve_prompt_rejection_keeps_unmatched_commands_on_sandbox_flag() {
             &super::DecisionSource::UnmatchedCommandFallback,
         ),
         Some("approval required by policy, but AskForApproval::Granular.sandbox_approval is false"),
+    );
+}
+
+#[test]
+fn policy_resolved_approval_source_marks_rule_driven_allow_as_policy() {
+    assert_eq!(
+        super::approval_source_for_policy_resolved_decision(
+            AskForApproval::OnRequest,
+            Decision::Allow,
+            &super::DecisionSource::PrefixRule,
+        ),
+        Some(ApprovalSourceMetadata::Policy),
+    );
+}
+
+#[test]
+fn policy_resolved_approval_source_marks_rule_driven_forbidden_as_policy() {
+    assert_eq!(
+        super::approval_source_for_policy_resolved_decision(
+            AskForApproval::OnRequest,
+            Decision::Forbidden,
+            &super::DecisionSource::PrefixRule,
+        ),
+        Some(ApprovalSourceMetadata::Policy),
+    );
+}
+
+#[test]
+fn policy_resolved_approval_source_marks_prompt_rejected_by_policy_as_policy() {
+    assert_eq!(
+        super::approval_source_for_policy_resolved_decision(
+            AskForApproval::Granular(GranularApprovalConfig {
+                sandbox_approval: false,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
+            }),
+            Decision::Prompt,
+            &super::DecisionSource::UnmatchedCommandFallback,
+        ),
+        Some(ApprovalSourceMetadata::Policy),
+    );
+}
+
+#[test]
+fn policy_resolved_approval_source_does_not_mark_fallback_allow_as_policy() {
+    assert_eq!(
+        super::approval_source_for_policy_resolved_decision(
+            AskForApproval::OnRequest,
+            Decision::Allow,
+            &super::DecisionSource::UnmatchedCommandFallback,
+        ),
+        None,
     );
 }
 

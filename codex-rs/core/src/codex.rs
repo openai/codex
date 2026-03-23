@@ -93,6 +93,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::models::ApprovalSourceMetadata;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItemMessageMetadata;
@@ -214,6 +215,7 @@ use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
 use crate::git_info::get_git_repo_root;
 use crate::guardian::GuardianReviewSessionManager;
+use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
@@ -1009,6 +1011,13 @@ fn local_time_context() -> (String, String) {
     }
 }
 
+fn approval_source_for_turn(turn_context: &TurnContext) -> ApprovalSourceMetadata {
+    if routes_approval_to_guardian(turn_context) {
+        ApprovalSourceMetadata::Guardian
+    } else {
+        ApprovalSourceMetadata::User
+    }
+}
 #[derive(Clone, Debug, Default)]
 struct ToolApprovalMetadataSnapshot {
     approval_outcomes_by_call_id: HashMap<String, ApprovalOutcomeMetadata>,
@@ -1038,10 +1047,12 @@ fn stamp_tool_approval_metadata_with_snapshot(
         Some(outcome) => {
             metadata.is_tool_call_escalated = Some(true);
             metadata.review_decision = outcome.review_decision;
+            metadata.approval_source = Some(outcome.approval_source);
         }
         None if !has_pending_approval => {
             metadata.is_tool_call_escalated = Some(false);
             metadata.review_decision = None;
+            metadata.approval_source = None;
         }
         None => {
             return stamp_tool_metadata_on_response_item(response_item, metadata);
@@ -2920,6 +2931,7 @@ impl Session {
                         effective_approval_id.clone(),
                         PendingApprovalMetadata {
                             call_id: call_id.clone(),
+                            approval_source: approval_source_for_turn(turn_context),
                         },
                     );
                     ts.insert_pending_approval(effective_approval_id.clone(), tx_approve)
@@ -2991,6 +3003,7 @@ impl Session {
                         approval_id.clone(),
                         PendingApprovalMetadata {
                             call_id: call_id.clone(),
+                            approval_source: approval_source_for_turn(turn_context),
                         },
                     );
                     ts.insert_pending_approval(approval_id.clone(), tx_approve)
@@ -3288,12 +3301,13 @@ impl Session {
             .remove_pending_approval_call_id(approval_id)
             .unwrap_or_else(|| PendingApprovalMetadata {
                 call_id: approval_id.to_string(),
+                approval_source: ApprovalSourceMetadata::Unknown,
             });
         drop(ts);
         drop(active);
         self.record_call_approval_outcome(
             pending_approval.call_id,
-            ApprovalOutcomeMetadata::reviewed(decision),
+            ApprovalOutcomeMetadata::reviewed(decision, pending_approval.approval_source),
         )
         .await;
     }
