@@ -2917,6 +2917,7 @@ impl App {
         };
 
         let mut threads = Vec::new();
+        let mut had_read_error = false;
         for thread_id in loaded_thread_ids {
             let Ok(thread_id) = ThreadId::from_string(&thread_id) else {
                 tracing::warn!("ignoring loaded thread with invalid id during subagent backfill");
@@ -2933,6 +2934,7 @@ impl App {
             {
                 Ok(thread) => threads.push(thread),
                 Err(err) => {
+                    had_read_error = true;
                     tracing::warn!(thread_id = %thread_id, %err, "failed to read loaded thread");
                 }
             }
@@ -2948,7 +2950,7 @@ impl App {
             );
         }
 
-        true
+        !had_read_error
     }
 
     /// Returns the adjacent thread id for keyboard navigation, backfilling from the server if the
