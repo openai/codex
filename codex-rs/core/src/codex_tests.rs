@@ -1216,7 +1216,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
         "First request after fork when fork startup changes approval policy and the first forked turn changes approval policy again and enters plan mode.",
         &[("First Forked Turn Request", &request)],
         &ContextSnapshotOptions::default()
-            .render_mode(ContextSnapshotRenderMode::FullText)
+            .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 96 })
             .strip_capability_instructions()
             .strip_agents_md_user_context(),
     );
