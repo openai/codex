@@ -9,6 +9,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::protocol::TurnCompleteEvent;
 use core_test_support::responses::mount_models_once;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
@@ -229,8 +230,10 @@ fn interrupted_fork_snapshot_appends_interrupt_boundary() {
         InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("hello"))]);
 
     assert_eq!(
-        serde_json::to_value(append_interrupted_boundary(committed_history).get_rollout_items())
-            .expect("serialize interrupted fork history"),
+        serde_json::to_value(
+            append_interrupted_boundary(committed_history, /*turn_id*/ None).get_rollout_items()
+        )
+        .expect("serialize interrupted fork history"),
         serde_json::to_value(vec![
             RolloutItem::ResponseItem(user_msg("hello")),
             RolloutItem::ResponseItem(interrupted_turn_history_marker()),
@@ -242,8 +245,10 @@ fn interrupted_fork_snapshot_appends_interrupt_boundary() {
         .expect("serialize expected interrupted fork history"),
     );
     assert_eq!(
-        serde_json::to_value(append_interrupted_boundary(InitialHistory::New).get_rollout_items())
-            .expect("serialize interrupted empty fork history"),
+        serde_json::to_value(
+            append_interrupted_boundary(InitialHistory::New, /*turn_id*/ None).get_rollout_items()
+        )
+        .expect("serialize interrupted empty fork history"),
         serde_json::to_value(vec![
             RolloutItem::ResponseItem(interrupted_turn_history_marker()),
             RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
@@ -252,6 +257,104 @@ fn interrupted_fork_snapshot_appends_interrupt_boundary() {
             })),
         ])
         .expect("serialize expected interrupted empty history"),
+    );
+}
+
+#[tokio::test]
+async fn interrupted_fork_snapshot_uses_live_turn_hint_for_unpersisted_active_turn() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config();
+    config.codex_home = temp_dir.path().join("codex-home");
+    config.cwd = config.codex_home.clone();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager.clone(),
+        SessionSource::Exec,
+        CollaborationModesConfig::default(),
+    );
+
+    let source = manager
+        .resume_thread_with_history(
+            config.clone(),
+            InitialHistory::Forked(vec![
+                RolloutItem::ResponseItem(user_msg("hello")),
+                RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                    turn_id: "turn-finished".to_string(),
+                    last_agent_message: None,
+                })),
+            ]),
+            auth_manager,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("create source thread from completed history");
+    let source_path = source
+        .thread
+        .rollout_path()
+        .expect("source rollout path should exist");
+    let source_history = RolloutRecorder::get_rollout_history(&source_path)
+        .await
+        .expect("read source rollout history");
+    assert!(!snapshot_ends_mid_turn(&source_history));
+
+    let forked = manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            config,
+            source_path,
+            /*persist_extended_history*/ false,
+            /*source_active_turn_id*/ Some("turn-live".to_string()),
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("fork interrupted snapshot from live hint");
+    let forked_path = forked
+        .thread
+        .rollout_path()
+        .expect("forked rollout path should exist");
+    let history = RolloutRecorder::get_rollout_history(&forked_path)
+        .await
+        .expect("read forked rollout history");
+    assert!(!snapshot_ends_mid_turn(&history));
+    let rollout_items: Vec<_> = history
+        .get_rollout_items()
+        .into_iter()
+        .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
+        .collect();
+    let interrupted_marker_json =
+        serde_json::to_value(RolloutItem::ResponseItem(interrupted_turn_history_marker()))
+            .expect("serialize interrupted marker");
+    let interrupted_abort_json = serde_json::to_value(RolloutItem::EventMsg(
+        EventMsg::TurnAborted(TurnAbortedEvent {
+            turn_id: Some("turn-live".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    ))
+    .expect("serialize interrupted abort event");
+    assert_eq!(
+        rollout_items
+            .iter()
+            .filter(|item| {
+                serde_json::to_value(item).expect("serialize rollout item")
+                    == interrupted_marker_json
+            })
+            .count(),
+        1,
+    );
+    assert_eq!(
+        rollout_items
+            .iter()
+            .filter(|item| {
+                serde_json::to_value(item).expect("serialize rollout item")
+                    == interrupted_abort_json
+            })
+            .count(),
+        1,
     );
 }
 
@@ -301,6 +404,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
             config.clone(),
             source_path,
             /*persist_extended_history*/ false,
+            /*source_active_turn_id*/ None,
             /*parent_trace*/ None,
         )
         .await
@@ -340,6 +444,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
             config,
             forked_path,
             /*persist_extended_history*/ false,
+            /*source_active_turn_id*/ None,
             /*parent_trace*/ None,
         )
         .await

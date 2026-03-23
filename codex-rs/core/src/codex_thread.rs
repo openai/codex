@@ -90,6 +90,10 @@ impl CodexThread {
         self.codex.steer_input(input, expected_turn_id).await
     }
 
+    pub(crate) async fn active_turn_id(&self) -> Option<String> {
+        self.codex.session.active_turn_id().await
+    }
+
     pub async fn set_app_server_client_name(
         &self,
         app_server_client_name: Option<String>,

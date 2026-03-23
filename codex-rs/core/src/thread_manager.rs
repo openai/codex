@@ -584,10 +584,16 @@ impl ThreadManager {
         config: Config,
         path: PathBuf,
         persist_extended_history: bool,
+        source_active_turn_id: Option<String>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
         let history = RolloutRecorder::get_rollout_history(&path).await?;
-        let snapshot_mid_turn = snapshot_ends_mid_turn(&history);
+        // A live source thread can have an active turn that has not emitted any
+        // persisted rollout items yet. When the caller knows that turn id,
+        // trust it instead of re-deriving mid-turn state from the persisted
+        // history alone.
+        let snapshot_mid_turn =
+            source_active_turn_id.is_some() || snapshot_ends_mid_turn(&history);
         let history = match snapshot {
             ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
                 truncate_before_nth_user_message(history, nth_user_message, snapshot_mid_turn)
@@ -599,7 +605,7 @@ impl ThreadManager {
                     InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
                 };
                 if snapshot_mid_turn {
-                    append_interrupted_boundary(history)
+                    append_interrupted_boundary(history, source_active_turn_id)
                 } else {
                     history
                 }
@@ -621,6 +627,15 @@ impl ThreadManager {
 
     pub(crate) fn agent_control(&self) -> AgentControl {
         AgentControl::new(Arc::downgrade(&self.state))
+    }
+
+    /// Return the currently active turn id for a live thread, if one exists.
+    ///
+    /// Fork callers can use this to preserve the real interrupted turn id
+    /// without reconstructing it from the persisted rollout file.
+    pub async fn active_turn_id(&self, thread_id: ThreadId) -> Option<String> {
+        let thread = self.state.get_thread(thread_id).await.ok()?;
+        thread.active_turn_id().await
     }
 
     #[cfg(test)]
@@ -937,19 +952,7 @@ fn snapshot_ends_mid_turn(history: &InitialHistory) -> bool {
 /// Append the same persisted interrupt boundary used by the live interrupt path
 /// to an existing fork snapshot after the source thread has been confirmed to
 /// be mid-turn.
-fn append_interrupted_boundary(history: InitialHistory) -> InitialHistory {
-    let turn_id = {
-        let rollout_items = history.get_rollout_items();
-        let mut builder = ThreadHistoryBuilder::new();
-        for item in &rollout_items {
-            builder.handle_rollout_item(item);
-        }
-        if builder.has_active_turn() {
-            builder.active_turn_snapshot().map(|turn| turn.id)
-        } else {
-            None
-        }
-    };
+fn append_interrupted_boundary(history: InitialHistory, turn_id: Option<String>) -> InitialHistory {
     let aborted_event = RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
         turn_id,
         reason: TurnAbortReason::Interrupted,
