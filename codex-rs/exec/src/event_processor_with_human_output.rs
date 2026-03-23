@@ -9,6 +9,7 @@ use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::TurnStatus;
 use codex_core::config::Config;
+use codex_protocol::num_format::format_with_separators;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use owo_colors::OwoColorize;
@@ -53,18 +54,6 @@ impl EventProcessorWithHumanOutput {
             final_message: None,
             final_message_rendered: false,
             last_total_token_usage: None,
-        }
-    }
-
-    fn print_usage(&self) {
-        if let Some(usage) = &self.last_total_token_usage {
-            eprintln!(
-                "{} input={} cached={} output={}",
-                "usage:".style(self.dimmed),
-                usage.total.input_tokens,
-                usage.total.cached_input_tokens,
-                usage.total.output_tokens
-            );
         }
     }
 
@@ -319,7 +308,6 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                             rendered_message.as_deref() == Some(final_message.as_str());
                         self.final_message = Some(final_message);
                     }
-                    self.print_usage();
                     CodexStatus::InitiateShutdown
                 }
                 TurnStatus::Failed => {
@@ -365,6 +353,14 @@ impl EventProcessor for EventProcessorWithHumanOutput {
     fn print_final_output(&mut self) {
         if let Some(path) = self.last_message_path.as_deref() {
             handle_last_message(self.final_message.as_deref(), path);
+        }
+
+        if let Some(usage) = &self.last_total_token_usage {
+            eprintln!(
+                "{}\n{}",
+                "tokens used".style(self.dimmed),
+                format_with_separators(blended_total(usage))
+            );
         }
 
         #[allow(clippy::print_stdout)]
@@ -418,6 +414,12 @@ fn final_message_from_turn_items(items: &[ThreadItem]) -> Option<String> {
                 _ => None,
             })
         })
+}
+
+fn blended_total(usage: &ThreadTokenUsage) -> i64 {
+    let cached_input = usage.total.cached_input_tokens.max(0);
+    let non_cached_input = (usage.total.input_tokens - cached_input).max(0);
+    (non_cached_input + usage.total.output_tokens.max(0)).max(0)
 }
 
 fn should_print_final_message_to_stdout(
