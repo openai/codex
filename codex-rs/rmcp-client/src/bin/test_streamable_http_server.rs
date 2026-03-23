@@ -38,6 +38,7 @@ use rmcp::model::ResourceTemplate;
 use rmcp::model::ServerCapabilities;
 use rmcp::model::ServerInfo;
 use rmcp::model::Tool;
+use rmcp::model::ToolAnnotations;
 use rmcp::transport::StreamableHttpServerConfig;
 use rmcp::transport::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
@@ -84,11 +85,13 @@ impl TestToolServer {
         }))
         .expect("echo tool schema should deserialize");
 
-        Tool::new(
+        let mut tool = Tool::new(
             Cow::Borrowed("echo"),
             Cow::Borrowed("Echo back the provided message and include environment data."),
             Arc::new(schema),
-        )
+        );
+        tool.annotations = Some(ToolAnnotations::new().read_only(true));
+        tool
     }
 
     fn memo_resource() -> Resource {
