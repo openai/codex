@@ -27,6 +27,8 @@ use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
@@ -352,6 +354,17 @@ impl AppServerSession {
             .request_typed(ClientRequest::ThreadList { request_id, params })
             .await
             .wrap_err("thread/list failed during TUI session lookup")
+    }
+
+    pub(crate) async fn thread_loaded_list(
+        &mut self,
+        params: ThreadLoadedListParams,
+    ) -> Result<ThreadLoadedListResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadLoadedList { request_id, params })
+            .await
+            .wrap_err("thread/loaded/list failed during TUI session lookup")
     }
 
     pub(crate) async fn thread_read(

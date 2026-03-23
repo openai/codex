@@ -2043,6 +2043,7 @@ async fn make_chatwidget_manual(
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
         last_copyable_output: None,
         running_commands: HashMap::new(),
+        collab_agent_metadata: HashMap::new(),
         pending_collab_spawn_requests: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
         skills_all: Vec::new(),
@@ -4674,6 +4675,16 @@ async fn live_app_server_collab_wait_items_render_history() {
         ThreadId::from_string("019cff70-2599-75e2-af72-b958ce5dc1cc").expect("valid thread id");
     let other_receiver_thread_id =
         ThreadId::from_string("019cff70-2599-75e2-af72-b96db334332d").expect("valid thread id");
+    chat.set_collab_agent_metadata(
+        receiver_thread_id,
+        Some("Robie".to_string()),
+        Some("explorer".to_string()),
+    );
+    chat.set_collab_agent_metadata(
+        other_receiver_thread_id,
+        Some("Ada".to_string()),
+        Some("reviewer".to_string()),
+    );
 
     chat.handle_server_notification(
         ServerNotification::ItemStarted(ItemStartedNotification {
