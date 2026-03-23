@@ -628,7 +628,6 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                                 }
                             }
                         }
-                        OutgoingMessage::Notification(_notification) => {}
                     }
                 }
             }
