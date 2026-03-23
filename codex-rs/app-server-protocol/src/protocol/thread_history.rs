@@ -111,6 +111,13 @@ impl ThreadHistoryBuilder {
         self.current_turn.is_some()
     }
 
+    pub fn active_turn_id_if_explicit(&self) -> Option<String> {
+        self.current_turn
+            .as_ref()
+            .filter(|turn| turn.opened_explicitly)
+            .map(|turn| turn.id.clone())
+    }
+
     /// Shared reducer for persisted rollout replay and in-memory current-turn
     /// tracking used by running thread resume/rejoin.
     ///

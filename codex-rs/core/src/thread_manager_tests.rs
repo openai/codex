@@ -9,6 +9,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::protocol::TurnStartedEvent;
 use core_test_support::responses::mount_models_once;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
@@ -281,7 +282,7 @@ fn interrupted_snapshot_is_not_mid_turn() {
 }
 
 #[tokio::test]
-async fn interrupted_fork_snapshot_preserves_persisted_turn_id() {
+async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_history() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config();
     config.codex_home = temp_dir.path().join("codex-home");
@@ -320,7 +321,7 @@ async fn interrupted_fork_snapshot_preserves_persisted_turn_id() {
     let source_snapshot_state = snapshot_turn_state(&source_history);
     assert!(source_snapshot_state.ends_mid_turn);
     let expected_turn_id = source_snapshot_state.active_turn_id.clone();
-    assert!(expected_turn_id.is_some());
+    assert_eq!(expected_turn_id, None);
 
     let forked = manager
         .fork_thread(
@@ -375,6 +376,91 @@ async fn interrupted_fork_snapshot_preserves_persisted_turn_id() {
             .count(),
         1,
     );
+}
+
+#[tokio::test]
+async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config();
+    config.codex_home = temp_dir.path().join("codex-home");
+    config.cwd = config.codex_home.clone();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager.clone(),
+        SessionSource::Exec,
+        CollaborationModesConfig::default(),
+    );
+
+    let source = manager
+        .resume_thread_with_history(
+            config.clone(),
+            InitialHistory::Forked(vec![
+                RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                    turn_id: "turn-explicit".to_string(),
+                    model_context_window: None,
+                    collaboration_mode_kind: Default::default(),
+                })),
+                RolloutItem::ResponseItem(user_msg("hello")),
+                RolloutItem::ResponseItem(assistant_msg("partial")),
+            ]),
+            auth_manager,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("create source thread from explicit partial history");
+    let source_path = source
+        .thread
+        .rollout_path()
+        .expect("source rollout path should exist");
+    let source_history = RolloutRecorder::get_rollout_history(&source_path)
+        .await
+        .expect("read source rollout history");
+    let source_snapshot_state = snapshot_turn_state(&source_history);
+    assert_eq!(
+        source_snapshot_state,
+        SnapshotTurnState {
+            ends_mid_turn: true,
+            active_turn_id: Some("turn-explicit".to_string()),
+        },
+    );
+
+    let forked = manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            config,
+            source_path,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("fork interrupted snapshot");
+    let forked_path = forked
+        .thread
+        .rollout_path()
+        .expect("forked rollout path should exist");
+    let history = RolloutRecorder::get_rollout_history(&forked_path)
+        .await
+        .expect("read forked rollout history");
+    let rollout_items: Vec<_> = history
+        .get_rollout_items()
+        .into_iter()
+        .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
+        .collect();
+
+    assert!(rollout_items.iter().any(|item| {
+        matches!(
+            item,
+            RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id: Some(turn_id),
+                reason: TurnAbortReason::Interrupted,
+            })) if turn_id == "turn-explicit"
+        )
+    }));
 }
 
 #[tokio::test]
