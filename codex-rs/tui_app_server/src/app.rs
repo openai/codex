@@ -48,7 +48,9 @@ use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::AppServerRequestHandle;
+use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
@@ -63,6 +65,7 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::Turn;
+use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -965,6 +968,18 @@ fn normalize_harness_overrides_for_cwd(
     }
     overrides.additional_writable_roots = normalized;
     Ok(overrides)
+}
+
+fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<AppServerTurnError> {
+    let TypedRequestError::Server { source, .. } = error else {
+        return None;
+    };
+    let turn_error: AppServerTurnError = serde_json::from_value(source.data.clone()?).ok()?;
+    matches!(
+        turn_error.codex_error_info,
+        Some(AppServerCodexErrorInfo::ActiveTurnNotSteerable { .. })
+    )
+    .then_some(turn_error)
 }
 
 impl App {
@@ -1950,9 +1965,21 @@ impl App {
                 personality,
             } => {
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
-                    app_server
+                    match app_server
                         .turn_steer(thread_id, turn_id, items.to_vec())
-                        .await?;
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(error) => {
+                            if let Some(turn_error) = active_turn_not_steerable_turn_error(&error) {
+                                if !self.chat_widget.enqueue_rejected_steer() {
+                                    self.chat_widget.add_error_message(turn_error.message);
+                                }
+                            } else {
+                                return Err(error.into());
+                            }
+                        }
+                    }
                 } else {
                     app_server
                         .turn_start(
@@ -5170,10 +5197,12 @@ mod tests {
     use codex_app_server_protocol::AgentMessageDeltaNotification;
     use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
     use codex_app_server_protocol::ConfigWarningNotification;
+    use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::NetworkApprovalContext as AppServerNetworkApprovalContext;
     use codex_app_server_protocol::NetworkApprovalProtocol as AppServerNetworkApprovalProtocol;
     use codex_app_server_protocol::NetworkPolicyAmendment as AppServerNetworkPolicyAmendment;
     use codex_app_server_protocol::NetworkPolicyRuleAction as AppServerNetworkPolicyRuleAction;
+    use codex_app_server_protocol::NonSteerableTurnKind as AppServerNonSteerableTurnKind;
     use codex_app_server_protocol::RequestId as AppServerRequestId;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::ServerRequest;
@@ -5186,6 +5215,7 @@ mod tests {
     use codex_app_server_protocol::TokenUsageBreakdown;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
+    use codex_app_server_protocol::TurnError as AppServerTurnError;
     use codex_app_server_protocol::TurnStartedNotification;
     use codex_app_server_protocol::TurnStatus;
     use codex_app_server_protocol::UserInput as AppServerUserInput;
@@ -5735,7 +5765,7 @@ mod tests {
         app.chat_widget
             .apply_external_edit("queued follow-up".to_string());
         app.chat_widget
-            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         let input_state = app
             .chat_widget
             .capture_thread_input_state()
@@ -5785,7 +5815,7 @@ mod tests {
         app.chat_widget
             .apply_external_edit("queued follow-up".to_string());
         app.chat_widget
-            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         let input_state = app
             .chat_widget
             .capture_thread_input_state()
@@ -5834,7 +5864,7 @@ mod tests {
         app.chat_widget
             .apply_external_edit("queued follow-up".to_string());
         app.chat_widget
-            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         let input_state = app
             .chat_widget
             .capture_thread_input_state()
@@ -5881,7 +5911,7 @@ mod tests {
         app.chat_widget
             .apply_external_edit("queued follow-up".to_string());
         app.chat_widget
-            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         let input_state = app
             .chat_widget
             .capture_thread_input_state()
@@ -5951,7 +5981,7 @@ mod tests {
         app.chat_widget
             .apply_external_edit("queued follow-up".to_string());
         app.chat_widget
-            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         let input_state = app
             .chat_widget
             .capture_thread_input_state()
@@ -8014,6 +8044,30 @@ guardian_approval = true
                 model_slug: "gpt-5.2".to_string(),
                 message: "gpt-5.2 is available".to_string(),
             })
+        );
+    }
+
+    #[test]
+    fn active_turn_not_steerable_turn_error_extracts_structured_server_error() {
+        let turn_error = AppServerTurnError {
+            message: "cannot steer a review turn".to_string(),
+            codex_error_info: Some(AppServerCodexErrorInfo::ActiveTurnNotSteerable {
+                turn_kind: AppServerNonSteerableTurnKind::Review,
+            }),
+            additional_details: None,
+        };
+        let error = TypedRequestError::Server {
+            method: "turn/steer".to_string(),
+            source: JSONRPCErrorError {
+                code: -32602,
+                message: turn_error.message.clone(),
+                data: Some(serde_json::to_value(&turn_error).expect("turn error should serialize")),
+            },
+        };
+
+        assert_eq!(
+            active_turn_not_steerable_turn_error(&error),
+            Some(turn_error)
         );
     }
 
