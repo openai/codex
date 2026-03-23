@@ -4,6 +4,7 @@
 //! are used to preserve compatibility when older payloads omit newly introduced attributes.
 
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -46,6 +47,15 @@ pub enum ReasoningEffort {
     Medium,
     High,
     XHigh,
+}
+
+impl FromStr for ReasoningEffort {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_value(serde_json::Value::String(s.to_string()))
+            .map_err(|_| format!("invalid reasoning_effort: {s}"))
+    }
 }
 
 /// Canonical user-input modality tags advertised by a model.
@@ -274,14 +284,13 @@ pub struct ModelInfo {
     /// Input modalities accepted by the backend for this model.
     #[serde(default = "default_input_modalities")]
     pub input_modalities: Vec<InputModality>,
-    /// When true, this model should use websocket transport even when websocket features are off.
-    #[serde(default)]
-    pub prefer_websockets: bool,
     /// Internal-only marker set by core when a model slug resolved to fallback metadata.
     #[serde(default, skip_serializing, skip_deserializing)]
     #[schemars(skip)]
     #[ts(skip)]
     pub used_fallback_model_metadata: bool,
+    #[serde(default)]
+    pub supports_search_tool: bool,
 }
 
 impl ModelInfo {
@@ -536,8 +545,8 @@ mod tests {
             effective_context_window_percent: 95,
             experimental_supported_tools: vec![],
             input_modalities: default_input_modalities(),
-            prefer_websockets: false,
             used_fallback_model_metadata: false,
+            supports_search_tool: false,
         }
     }
 
@@ -547,6 +556,20 @@ mod tests {
             personality_friendly: Some("friendly".to_string()),
             personality_pragmatic: Some("pragmatic".to_string()),
         }
+    }
+
+    #[test]
+    fn reasoning_effort_from_str_accepts_known_values() {
+        assert_eq!("high".parse(), Ok(ReasoningEffort::High));
+        assert_eq!("minimal".parse(), Ok(ReasoningEffort::Minimal));
+    }
+
+    #[test]
+    fn reasoning_effort_from_str_rejects_unknown_values() {
+        assert_eq!(
+            "unsupported".parse::<ReasoningEffort>(),
+            Err("invalid reasoning_effort: unsupported".to_string())
+        );
     }
 
     #[test]
@@ -724,14 +747,14 @@ mod tests {
             "auto_compact_token_limit": null,
             "effective_context_window_percent": 95,
             "experimental_supported_tools": [],
-            "input_modalities": ["text", "image"],
-            "prefer_websockets": false
+            "input_modalities": ["text", "image"]
         }))
         .expect("deserialize model info");
 
         assert_eq!(model.availability_nux, None);
         assert!(!model.supports_image_detail_original);
         assert_eq!(model.web_search_tool_type, WebSearchToolType::Text);
+        assert!(!model.supports_search_tool);
     }
 
     #[test]

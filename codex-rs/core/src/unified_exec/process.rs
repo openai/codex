@@ -26,6 +26,15 @@ use super::UnifiedExecError;
 use super::head_tail_buffer::HeadTailBuffer;
 
 pub(crate) trait SpawnLifecycle: std::fmt::Debug + Send + Sync {
+    /// Returns file descriptors that must stay open across the child `exec()`.
+    ///
+    /// The returned descriptors must already be valid in the parent process and
+    /// stay valid until `after_spawn()` runs, which is the first point where
+    /// the parent may release its copies.
+    fn inherited_fds(&self) -> Vec<i32> {
+        Vec::new()
+    }
+
     fn after_spawn(&mut self) {}
 }
 

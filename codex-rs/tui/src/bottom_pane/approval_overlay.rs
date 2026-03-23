@@ -16,10 +16,11 @@ use crate::key_hint::KeyBinding;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
-use codex_core::features::Features;
+use codex_features::Features;
 use codex_protocol::ThreadId;
 use codex_protocol::mcp::RequestId;
 use codex_protocol::models::MacOsAutomationPermission;
+use codex_protocol::models::MacOsContactsPermission;
 use codex_protocol::models::MacOsPreferencesPermission;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ElicitationAction;
@@ -28,6 +29,8 @@ use codex_protocol::protocol::NetworkApprovalContext;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::request_permissions::PermissionGrantScope;
+use codex_protocol::request_permissions::RequestPermissionProfile;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -58,7 +61,7 @@ pub(crate) enum ApprovalRequest {
         thread_label: Option<String>,
         call_id: String,
         reason: Option<String>,
-        permissions: PermissionProfile,
+        permissions: RequestPermissionProfile,
     },
     ApplyPatch {
         thread_id: ThreadId,
@@ -253,7 +256,11 @@ impl ApprovalOverlay {
             return;
         };
         if request.thread_label().is_none() {
-            let cell = history_cell::new_approval_decision_cell(command.to_vec(), decision.clone());
+            let cell = history_cell::new_approval_decision_cell(
+                command.to_vec(),
+                decision.clone(),
+                history_cell::ApprovalDecisionActor::User,
+            );
             self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
         }
         let thread_id = request.thread_id();
@@ -270,7 +277,7 @@ impl ApprovalOverlay {
     fn handle_permissions_decision(
         &self,
         call_id: &str,
-        permissions: &PermissionProfile,
+        permissions: &RequestPermissionProfile,
         decision: ReviewDecision,
     ) {
         let Some(request) = self.current_request.as_ref() else {
@@ -282,9 +289,16 @@ impl ApprovalOverlay {
             ReviewDecision::ApprovedExecpolicyAmendment { .. }
             | ReviewDecision::NetworkPolicyAmendment { .. } => Default::default(),
         };
+        let scope = if matches!(decision, ReviewDecision::ApprovedForSession) {
+            PermissionGrantScope::Session
+        } else {
+            PermissionGrantScope::Turn
+        };
         if request.thread_label().is_none() {
             let message = if granted_permissions.is_empty() {
                 "You did not grant additional permissions"
+            } else if matches!(scope, PermissionGrantScope::Session) {
+                "You granted additional permissions for this session"
             } else {
                 "You granted additional permissions"
             };
@@ -299,6 +313,7 @@ impl ApprovalOverlay {
                 id: call_id.to_string(),
                 response: codex_protocol::request_permissions::RequestPermissionsResponse {
                     permissions: granted_permissions,
+                    scope,
                 },
             },
         });
@@ -557,7 +572,7 @@ fn build_header(request: &ApprovalRequest) -> Box<dyn Renderable> {
                 header.push(Line::from(vec!["Reason: ".into(), reason.clone().italic()]));
                 header.push(Line::from(""));
             }
-            if let Some(rule_line) = format_additional_permissions_rule(permissions) {
+            if let Some(rule_line) = format_requested_permissions_rule(permissions) {
                 header.push(Line::from(vec![
                     "Permission rule: ".into(),
                     rule_line.cyan(),
@@ -791,6 +806,17 @@ pub(crate) fn format_additional_permissions_rule(
         if macos.macos_calendar {
             parts.push("macOS calendar".to_string());
         }
+        if macos.macos_reminders {
+            parts.push("macOS reminders".to_string());
+        }
+        if !matches!(macos.macos_contacts, MacOsContactsPermission::None) {
+            let value = match macos.macos_contacts {
+                MacOsContactsPermission::None => "none",
+                MacOsContactsPermission::ReadOnly => "readonly",
+                MacOsContactsPermission::ReadWrite => "readwrite",
+            };
+            parts.push(format!("macOS contacts {value}"));
+        }
     }
 
     if parts.is_empty() {
@@ -798,6 +824,12 @@ pub(crate) fn format_additional_permissions_rule(
     } else {
         Some(parts.join("; "))
     }
+}
+
+pub(crate) fn format_requested_permissions_rule(
+    permissions: &RequestPermissionProfile,
+) -> Option<String> {
+    format_additional_permissions_rule(&permissions.clone().into())
 }
 
 fn patch_options() -> Vec<ApprovalOption> {
@@ -830,6 +862,12 @@ fn permissions_options() -> Vec<ApprovalOption> {
             decision: ApprovalDecision::Review(ReviewDecision::Approved),
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('y'))],
+        },
+        ApprovalOption {
+            label: "Yes, grant these permissions for this session".to_string(),
+            decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
+            display_shortcut: None,
+            additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
         },
         ApprovalOption {
             label: "No, continue without permissions".to_string(),
@@ -930,7 +968,7 @@ mod tests {
             thread_label: None,
             call_id: "test".to_string(),
             reason: Some("need workspace access".to_string()),
-            permissions: PermissionProfile {
+            permissions: RequestPermissionProfile {
                 network: Some(NetworkPermissions {
                     enabled: Some(true),
                 }),
@@ -938,7 +976,6 @@ mod tests {
                     read: Some(vec![absolute_path("/tmp/readme.txt")]),
                     write: Some(vec![absolute_path("/tmp/out.txt")]),
                 }),
-                ..Default::default()
             },
         }
     }
@@ -1244,8 +1281,36 @@ mod tests {
             labels,
             vec![
                 "Yes, grant these permissions".to_string(),
+                "Yes, grant these permissions for this session".to_string(),
                 "No, continue without permissions".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn permissions_session_shortcut_submits_session_scope() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view =
+            ApprovalOverlay::new(make_permissions_request(), tx, Features::with_defaults());
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+
+        let mut saw_op = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let AppEvent::SubmitThreadOp {
+                op: Op::RequestPermissionsResponse { response, .. },
+                ..
+            } = ev
+            {
+                assert_eq!(response.scope, PermissionGrantScope::Session);
+                saw_op = true;
+                break;
+            }
+        }
+        assert!(
+            saw_op,
+            "expected permission approval decision to emit a session-scoped response"
         );
     }
 
@@ -1358,8 +1423,11 @@ mod tests {
                         "com.apple.Calendar".to_string(),
                         "com.apple.Notes".to_string(),
                     ]),
+                    macos_launch_services: false,
                     macos_accessibility: true,
                     macos_calendar: true,
+                    macos_reminders: true,
+                    macos_contacts: MacOsContactsPermission::None,
                 }),
                 ..Default::default()
             }),
@@ -1436,7 +1504,11 @@ mod tests {
             "-lc".into(),
             "git add tui/src/render/mod.rs tui/src/render/renderable.rs".into(),
         ];
-        let cell = history_cell::new_approval_decision_cell(command, ReviewDecision::Approved);
+        let cell = history_cell::new_approval_decision_cell(
+            command,
+            ReviewDecision::Approved,
+            history_cell::ApprovalDecisionActor::User,
+        );
         let lines = cell.display_lines(28);
         let rendered: Vec<String> = lines
             .iter()

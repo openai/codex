@@ -24,7 +24,10 @@ use std::path::Path;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
 
+pub use codex_config::AppRequirementToml;
+pub use codex_config::AppsRequirementsToml;
 pub use codex_config::CloudRequirementsLoadError;
+pub use codex_config::CloudRequirementsLoadErrorCode;
 pub use codex_config::CloudRequirementsLoader;
 pub use codex_config::ConfigError;
 pub use codex_config::ConfigLayerEntry;
@@ -206,7 +209,7 @@ pub async fn load_config_layers_state(
                     return Err(io_error_from_config_error(
                         io::ErrorKind::InvalidData,
                         config_error,
-                        None,
+                        /*source*/ None,
                     ));
                 }
                 return Err(err);
@@ -850,15 +853,20 @@ async fn load_project_layers(
                             &dot_codex_abs,
                             &layer_dir,
                             TomlValue::Table(toml::map::Map::new()),
-                            true,
+                            /*config_toml_exists*/ true,
                         ));
                         continue;
                     }
                 };
                 let config =
                     resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
-                let entry =
-                    project_layer_entry(trust_context, &dot_codex_abs, &layer_dir, config, true);
+                let entry = project_layer_entry(
+                    trust_context,
+                    &dot_codex_abs,
+                    &layer_dir,
+                    config,
+                    /*config_toml_exists*/ true,
+                );
                 layers.push(entry);
             }
             Err(err) => {
@@ -871,7 +879,7 @@ async fn load_project_layers(
                         &dot_codex_abs,
                         &layer_dir,
                         TomlValue::Table(toml::map::Map::new()),
-                        false,
+                        /*config_toml_exists*/ false,
                     ));
                 } else {
                     let config_file_display = config_file.as_path().display();

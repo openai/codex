@@ -1,6 +1,7 @@
+use codex_otel::AuthEnvTelemetryMetadata;
+use codex_otel::OtelProvider;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
-use codex_otel::otel_provider::OtelProvider;
 use opentelemetry::KeyValue;
 use opentelemetry::logs::AnyValue;
 use opentelemetry::trace::TracerProvider as _;
@@ -18,6 +19,9 @@ use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::layer::SubscriberExt;
 
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
 
@@ -74,6 +78,17 @@ fn find_span_event_by_name_attr<'a>(
                 .is_some_and(|value| value == event_name)
         })
         .unwrap_or_else(|| panic!("missing span event: {event_name}"))
+}
+
+fn auth_env_metadata() -> AuthEnvTelemetryMetadata {
+    AuthEnvTelemetryMetadata {
+        openai_api_key_env_present: true,
+        codex_api_key_env_present: false,
+        codex_api_key_env_enabled: true,
+        provider_env_key_name: Some("configured".to_string()),
+        provider_env_key_present: Some(true),
+        refresh_token_url_override_present: true,
+    }
 }
 
 #[test]
@@ -296,4 +311,542 @@ fn otel_export_routing_policy_routes_tool_result_log_and_trace_events() {
     assert!(!tool_trace_attrs.contains_key("output"));
     assert!(!tool_trace_attrs.contains_key("mcp_server"));
     assert!(!tool_trace_attrs.contains_key("mcp_server_origin"));
+}
+
+#[test]
+fn otel_export_routing_policy_routes_auth_recovery_log_and_trace_events() {
+    let log_exporter = InMemoryLogExporter::default();
+    let logger_provider = SdkLoggerProvider::builder()
+        .with_simple_exporter(log_exporter.clone())
+        .build();
+    let span_exporter = InMemorySpanExporter::default();
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(span_exporter.clone())
+        .build();
+    let tracer = tracer_provider.tracer("sink-split-test");
+
+    let subscriber = tracing_subscriber::registry()
+        .with(
+            opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(
+                &logger_provider,
+            )
+            .with_filter(filter_fn(OtelProvider::log_export_filter)),
+        )
+        .with(
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer)
+                .with_filter(filter_fn(OtelProvider::trace_export_filter)),
+        );
+
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        let manager = SessionTelemetry::new(
+            ThreadId::new(),
+            "gpt-5.1",
+            "gpt-5.1",
+            Some("account-id".to_string()),
+            Some("engineer@example.com".to_string()),
+            Some(TelemetryAuthMode::Chatgpt),
+            "codex_exec".to_string(),
+            true,
+            "tty".to_string(),
+            SessionSource::Cli,
+        );
+        let root_span = tracing::info_span!("root");
+        let _root_guard = root_span.enter();
+        manager.record_auth_recovery(
+            "managed",
+            "reload",
+            "recovery_succeeded",
+            Some("req-401"),
+            Some("ray-401"),
+            Some("missing_authorization_header"),
+            Some("token_expired"),
+            None,
+            Some(true),
+        );
+    });
+
+    logger_provider.force_flush().expect("flush logs");
+    tracer_provider.force_flush().expect("flush traces");
+
+    let logs = log_exporter.get_emitted_logs().expect("log export");
+    let recovery_log = find_log_by_event_name(&logs, "codex.auth_recovery");
+    let recovery_log_attrs = log_attributes(&recovery_log.record);
+    assert_eq!(
+        recovery_log_attrs.get("auth.mode").map(String::as_str),
+        Some("managed")
+    );
+    assert_eq!(
+        recovery_log_attrs.get("auth.step").map(String::as_str),
+        Some("reload")
+    );
+    assert_eq!(
+        recovery_log_attrs.get("auth.outcome").map(String::as_str),
+        Some("recovery_succeeded")
+    );
+    assert_eq!(
+        recovery_log_attrs
+            .get("auth.request_id")
+            .map(String::as_str),
+        Some("req-401")
+    );
+    assert_eq!(
+        recovery_log_attrs.get("auth.cf_ray").map(String::as_str),
+        Some("ray-401")
+    );
+    assert_eq!(
+        recovery_log_attrs.get("auth.error").map(String::as_str),
+        Some("missing_authorization_header")
+    );
+    assert_eq!(
+        recovery_log_attrs
+            .get("auth.error_code")
+            .map(String::as_str),
+        Some("token_expired")
+    );
+    assert_eq!(
+        recovery_log_attrs
+            .get("auth.state_changed")
+            .map(String::as_str),
+        Some("true")
+    );
+
+    let spans = span_exporter.get_finished_spans().expect("span export");
+    assert_eq!(spans.len(), 1);
+    let span_events = &spans[0].events.events;
+    assert_eq!(span_events.len(), 1);
+
+    let recovery_trace_event = find_span_event_by_name_attr(span_events, "codex.auth_recovery");
+    let recovery_trace_attrs = span_event_attributes(recovery_trace_event);
+    assert_eq!(
+        recovery_trace_attrs.get("auth.mode").map(String::as_str),
+        Some("managed")
+    );
+    assert_eq!(
+        recovery_trace_attrs.get("auth.step").map(String::as_str),
+        Some("reload")
+    );
+    assert_eq!(
+        recovery_trace_attrs.get("auth.outcome").map(String::as_str),
+        Some("recovery_succeeded")
+    );
+    assert_eq!(
+        recovery_trace_attrs
+            .get("auth.request_id")
+            .map(String::as_str),
+        Some("req-401")
+    );
+    assert_eq!(
+        recovery_trace_attrs.get("auth.cf_ray").map(String::as_str),
+        Some("ray-401")
+    );
+    assert_eq!(
+        recovery_trace_attrs.get("auth.error").map(String::as_str),
+        Some("missing_authorization_header")
+    );
+    assert_eq!(
+        recovery_trace_attrs
+            .get("auth.error_code")
+            .map(String::as_str),
+        Some("token_expired")
+    );
+    assert_eq!(
+        recovery_trace_attrs
+            .get("auth.state_changed")
+            .map(String::as_str),
+        Some("true")
+    );
+}
+
+#[test]
+fn otel_export_routing_policy_routes_api_request_auth_observability() {
+    let log_exporter = InMemoryLogExporter::default();
+    let logger_provider = SdkLoggerProvider::builder()
+        .with_simple_exporter(log_exporter.clone())
+        .build();
+    let span_exporter = InMemorySpanExporter::default();
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(span_exporter.clone())
+        .build();
+    let tracer = tracer_provider.tracer("sink-split-test");
+
+    let subscriber = tracing_subscriber::registry()
+        .with(
+            opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(
+                &logger_provider,
+            )
+            .with_filter(filter_fn(OtelProvider::log_export_filter)),
+        )
+        .with(
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer)
+                .with_filter(filter_fn(OtelProvider::trace_export_filter)),
+        );
+
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        let manager = SessionTelemetry::new(
+            ThreadId::new(),
+            "gpt-5.1",
+            "gpt-5.1",
+            Some("account-id".to_string()),
+            Some("engineer@example.com".to_string()),
+            Some(TelemetryAuthMode::Chatgpt),
+            "codex_exec".to_string(),
+            true,
+            "tty".to_string(),
+            SessionSource::Cli,
+        )
+        .with_auth_env(auth_env_metadata());
+        let root_span = tracing::info_span!("root");
+        let _root_guard = root_span.enter();
+        manager.conversation_starts(
+            "openai",
+            None,
+            ReasoningSummary::Auto,
+            None,
+            None,
+            AskForApproval::Never,
+            SandboxPolicy::DangerFullAccess,
+            Vec::new(),
+            None,
+        );
+        manager.record_api_request(
+            1,
+            Some(401),
+            Some("http 401"),
+            std::time::Duration::from_millis(42),
+            true,
+            Some("authorization"),
+            true,
+            Some("managed"),
+            Some("refresh_token"),
+            "/responses",
+            Some("req-401"),
+            Some("ray-401"),
+            Some("missing_authorization_header"),
+            Some("token_expired"),
+        );
+    });
+
+    logger_provider.force_flush().expect("flush logs");
+    tracer_provider.force_flush().expect("flush traces");
+
+    let logs = log_exporter.get_emitted_logs().expect("log export");
+    let conversation_log = find_log_by_event_name(&logs, "codex.conversation_starts");
+    let conversation_log_attrs = log_attributes(&conversation_log.record);
+    assert_eq!(
+        conversation_log_attrs
+            .get("auth.env_openai_api_key_present")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        conversation_log_attrs
+            .get("auth.env_provider_key_name")
+            .map(String::as_str),
+        Some("configured")
+    );
+    let request_log = find_log_by_event_name(&logs, "codex.api_request");
+    let request_log_attrs = log_attributes(&request_log.record);
+    assert_eq!(
+        request_log_attrs
+            .get("auth.header_attached")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        request_log_attrs
+            .get("auth.header_name")
+            .map(String::as_str),
+        Some("authorization")
+    );
+    assert_eq!(
+        request_log_attrs
+            .get("auth.retry_after_unauthorized")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        request_log_attrs
+            .get("auth.recovery_mode")
+            .map(String::as_str),
+        Some("managed")
+    );
+    assert_eq!(
+        request_log_attrs
+            .get("auth.recovery_phase")
+            .map(String::as_str),
+        Some("refresh_token")
+    );
+    assert_eq!(
+        request_log_attrs.get("endpoint").map(String::as_str),
+        Some("/responses")
+    );
+    assert_eq!(
+        request_log_attrs.get("auth.error").map(String::as_str),
+        Some("missing_authorization_header")
+    );
+    assert_eq!(
+        request_log_attrs
+            .get("auth.env_codex_api_key_enabled")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        request_log_attrs
+            .get("auth.env_refresh_token_url_override_present")
+            .map(String::as_str),
+        Some("true")
+    );
+
+    let spans = span_exporter.get_finished_spans().expect("span export");
+    let conversation_trace_event =
+        find_span_event_by_name_attr(&spans[0].events.events, "codex.conversation_starts");
+    let conversation_trace_attrs = span_event_attributes(conversation_trace_event);
+    assert_eq!(
+        conversation_trace_attrs
+            .get("auth.env_provider_key_present")
+            .map(String::as_str),
+        Some("true")
+    );
+    let request_trace_event =
+        find_span_event_by_name_attr(&spans[0].events.events, "codex.api_request");
+    let request_trace_attrs = span_event_attributes(request_trace_event);
+    assert_eq!(
+        request_trace_attrs
+            .get("auth.header_attached")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        request_trace_attrs
+            .get("auth.header_name")
+            .map(String::as_str),
+        Some("authorization")
+    );
+    assert_eq!(
+        request_trace_attrs
+            .get("auth.retry_after_unauthorized")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        request_trace_attrs.get("endpoint").map(String::as_str),
+        Some("/responses")
+    );
+    assert_eq!(
+        request_trace_attrs
+            .get("auth.env_openai_api_key_present")
+            .map(String::as_str),
+        Some("true")
+    );
+}
+
+#[test]
+fn otel_export_routing_policy_routes_websocket_connect_auth_observability() {
+    let log_exporter = InMemoryLogExporter::default();
+    let logger_provider = SdkLoggerProvider::builder()
+        .with_simple_exporter(log_exporter.clone())
+        .build();
+    let span_exporter = InMemorySpanExporter::default();
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(span_exporter.clone())
+        .build();
+    let tracer = tracer_provider.tracer("sink-split-test");
+
+    let subscriber = tracing_subscriber::registry()
+        .with(
+            opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(
+                &logger_provider,
+            )
+            .with_filter(filter_fn(OtelProvider::log_export_filter)),
+        )
+        .with(
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer)
+                .with_filter(filter_fn(OtelProvider::trace_export_filter)),
+        );
+
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        let manager = SessionTelemetry::new(
+            ThreadId::new(),
+            "gpt-5.1",
+            "gpt-5.1",
+            Some("account-id".to_string()),
+            Some("engineer@example.com".to_string()),
+            Some(TelemetryAuthMode::Chatgpt),
+            "codex_exec".to_string(),
+            true,
+            "tty".to_string(),
+            SessionSource::Cli,
+        )
+        .with_auth_env(auth_env_metadata());
+        let root_span = tracing::info_span!("root");
+        let _root_guard = root_span.enter();
+        manager.record_websocket_connect(
+            std::time::Duration::from_millis(17),
+            Some(401),
+            Some("http 401"),
+            true,
+            Some("authorization"),
+            true,
+            Some("managed"),
+            Some("reload"),
+            "/responses",
+            false,
+            Some("req-ws-401"),
+            Some("ray-ws-401"),
+            Some("missing_authorization_header"),
+            Some("token_expired"),
+        );
+    });
+
+    logger_provider.force_flush().expect("flush logs");
+    tracer_provider.force_flush().expect("flush traces");
+
+    let logs = log_exporter.get_emitted_logs().expect("log export");
+    let connect_log = find_log_by_event_name(&logs, "codex.websocket_connect");
+    let connect_log_attrs = log_attributes(&connect_log.record);
+    assert_eq!(
+        connect_log_attrs
+            .get("auth.header_attached")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        connect_log_attrs
+            .get("auth.header_name")
+            .map(String::as_str),
+        Some("authorization")
+    );
+    assert_eq!(
+        connect_log_attrs.get("auth.error").map(String::as_str),
+        Some("missing_authorization_header")
+    );
+    assert_eq!(
+        connect_log_attrs.get("endpoint").map(String::as_str),
+        Some("/responses")
+    );
+    assert_eq!(
+        connect_log_attrs
+            .get("auth.connection_reused")
+            .map(String::as_str),
+        Some("false")
+    );
+    assert_eq!(
+        connect_log_attrs
+            .get("auth.env_provider_key_name")
+            .map(String::as_str),
+        Some("configured")
+    );
+
+    let spans = span_exporter.get_finished_spans().expect("span export");
+    let connect_trace_event =
+        find_span_event_by_name_attr(&spans[0].events.events, "codex.websocket_connect");
+    let connect_trace_attrs = span_event_attributes(connect_trace_event);
+    assert_eq!(
+        connect_trace_attrs
+            .get("auth.recovery_phase")
+            .map(String::as_str),
+        Some("reload")
+    );
+    assert_eq!(
+        connect_trace_attrs
+            .get("auth.env_refresh_token_url_override_present")
+            .map(String::as_str),
+        Some("true")
+    );
+}
+
+#[test]
+fn otel_export_routing_policy_routes_websocket_request_transport_observability() {
+    let log_exporter = InMemoryLogExporter::default();
+    let logger_provider = SdkLoggerProvider::builder()
+        .with_simple_exporter(log_exporter.clone())
+        .build();
+    let span_exporter = InMemorySpanExporter::default();
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(span_exporter.clone())
+        .build();
+    let tracer = tracer_provider.tracer("sink-split-test");
+
+    let subscriber = tracing_subscriber::registry()
+        .with(
+            opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(
+                &logger_provider,
+            )
+            .with_filter(filter_fn(OtelProvider::log_export_filter)),
+        )
+        .with(
+            tracing_opentelemetry::layer()
+                .with_tracer(tracer)
+                .with_filter(filter_fn(OtelProvider::trace_export_filter)),
+        );
+
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        let manager = SessionTelemetry::new(
+            ThreadId::new(),
+            "gpt-5.1",
+            "gpt-5.1",
+            Some("account-id".to_string()),
+            Some("engineer@example.com".to_string()),
+            Some(TelemetryAuthMode::Chatgpt),
+            "codex_exec".to_string(),
+            true,
+            "tty".to_string(),
+            SessionSource::Cli,
+        )
+        .with_auth_env(auth_env_metadata());
+        let root_span = tracing::info_span!("root");
+        let _root_guard = root_span.enter();
+        manager.record_websocket_request(
+            std::time::Duration::from_millis(23),
+            Some("stream error"),
+            true,
+        );
+    });
+
+    logger_provider.force_flush().expect("flush logs");
+    tracer_provider.force_flush().expect("flush traces");
+
+    let logs = log_exporter.get_emitted_logs().expect("log export");
+    let request_log = find_log_by_event_name(&logs, "codex.websocket_request");
+    let request_log_attrs = log_attributes(&request_log.record);
+    assert_eq!(
+        request_log_attrs
+            .get("auth.connection_reused")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        request_log_attrs.get("error.message").map(String::as_str),
+        Some("stream error")
+    );
+    assert_eq!(
+        request_log_attrs
+            .get("auth.env_openai_api_key_present")
+            .map(String::as_str),
+        Some("true")
+    );
+
+    let spans = span_exporter.get_finished_spans().expect("span export");
+    let request_trace_event =
+        find_span_event_by_name_attr(&spans[0].events.events, "codex.websocket_request");
+    let request_trace_attrs = span_event_attributes(request_trace_event);
+    assert_eq!(
+        request_trace_attrs
+            .get("auth.connection_reused")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        request_trace_attrs
+            .get("auth.env_provider_key_present")
+            .map(String::as_str),
+        Some("true")
+    );
 }

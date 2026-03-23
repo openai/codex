@@ -43,7 +43,7 @@ pub fn assess_patch_safety(
         AskForApproval::OnFailure
         | AskForApproval::Never
         | AskForApproval::OnRequest
-        | AskForApproval::Reject(_) => {
+        | AskForApproval::Granular(_) => {
             // Continue to see if this can be auto-approved.
         }
         // TODO(ragona): I'm not sure this is actually correct? I believe in this case
@@ -56,7 +56,7 @@ pub fn assess_patch_safety(
     let rejects_sandbox_approval = matches!(policy, AskForApproval::Never)
         || matches!(
             policy,
-            AskForApproval::Reject(reject_config) if reject_config.sandbox_approval
+            AskForApproval::Granular(granular_config) if !granular_config.sandbox_approval
         );
 
     // Even though the patch appears to be constrained to writable paths, it is
@@ -143,9 +143,6 @@ fn is_write_patch_constrained_to_writable_paths(
         Some(out)
     }
 
-    let unreadable_roots = file_system_sandbox_policy.get_unreadable_roots_with_cwd(cwd);
-    let writable_roots = file_system_sandbox_policy.get_writable_roots_with_cwd(cwd);
-
     // Determine whether `path` is inside **any** writable root. Both `path`
     // and roots are converted to absolute, normalized forms before the
     // prefix check.
@@ -156,20 +153,7 @@ fn is_write_patch_constrained_to_writable_paths(
             None => return false,
         };
 
-        if unreadable_roots
-            .iter()
-            .any(|root| abs.starts_with(root.as_path()))
-        {
-            return false;
-        }
-
-        if file_system_sandbox_policy.has_full_disk_write_access() {
-            return true;
-        }
-
-        writable_roots
-            .iter()
-            .any(|writable_root| writable_root.is_path_writable(&abs))
+        file_system_sandbox_policy.can_write_path_with_cwd(&abs, cwd)
     };
 
     for (path, change) in action.changes() {
@@ -196,211 +180,5 @@ fn is_write_patch_constrained_to_writable_paths(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use codex_protocol::protocol::FileSystemAccessMode;
-    use codex_protocol::protocol::FileSystemPath;
-    use codex_protocol::protocol::FileSystemSandboxEntry;
-    use codex_protocol::protocol::FileSystemSpecialPath;
-    use codex_protocol::protocol::RejectConfig;
-    use codex_utils_absolute_path::AbsolutePathBuf;
-    use tempfile::TempDir;
-
-    #[test]
-    fn test_writable_roots_constraint() {
-        // Use a temporary directory as our workspace to avoid touching
-        // the real current working directory.
-        let tmp = TempDir::new().unwrap();
-        let cwd = tmp.path().to_path_buf();
-        let parent = cwd.parent().unwrap().to_path_buf();
-
-        // Helper to build a single‑entry patch that adds a file at `p`.
-        let make_add_change = |p: PathBuf| ApplyPatchAction::new_add_for_test(&p, "".to_string());
-
-        let add_inside = make_add_change(cwd.join("inner.txt"));
-        let add_outside = make_add_change(parent.join("outside.txt"));
-
-        // Policy limited to the workspace only; exclude system temp roots so
-        // only `cwd` is writable by default.
-        let policy_workspace_only = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
-            read_only_access: Default::default(),
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        };
-
-        assert!(is_write_patch_constrained_to_writable_paths(
-            &add_inside,
-            &FileSystemSandboxPolicy::from(&policy_workspace_only),
-            &cwd,
-        ));
-
-        assert!(!is_write_patch_constrained_to_writable_paths(
-            &add_outside,
-            &FileSystemSandboxPolicy::from(&policy_workspace_only),
-            &cwd,
-        ));
-
-        // With the parent dir explicitly added as a writable root, the
-        // outside write should be permitted.
-        let policy_with_parent = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![AbsolutePathBuf::try_from(parent).unwrap()],
-            read_only_access: Default::default(),
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        };
-        assert!(is_write_patch_constrained_to_writable_paths(
-            &add_outside,
-            &FileSystemSandboxPolicy::from(&policy_with_parent),
-            &cwd,
-        ));
-    }
-
-    #[test]
-    fn external_sandbox_auto_approves_in_on_request() {
-        let tmp = TempDir::new().unwrap();
-        let cwd = tmp.path().to_path_buf();
-        let add_inside = ApplyPatchAction::new_add_for_test(&cwd.join("inner.txt"), "".to_string());
-
-        let policy = SandboxPolicy::ExternalSandbox {
-            network_access: codex_protocol::protocol::NetworkAccess::Enabled,
-        };
-
-        assert_eq!(
-            assess_patch_safety(
-                &add_inside,
-                AskForApproval::OnRequest,
-                &policy,
-                &FileSystemSandboxPolicy::from(&policy),
-                &cwd,
-                WindowsSandboxLevel::Disabled
-            ),
-            SafetyCheck::AutoApprove {
-                sandbox_type: SandboxType::None,
-                user_explicitly_approved: false,
-            }
-        );
-    }
-
-    #[test]
-    fn reject_with_all_flags_false_matches_on_request_for_out_of_root_patch() {
-        let tmp = TempDir::new().unwrap();
-        let cwd = tmp.path().to_path_buf();
-        let parent = cwd.parent().unwrap().to_path_buf();
-        let add_outside =
-            ApplyPatchAction::new_add_for_test(&parent.join("outside.txt"), "".to_string());
-        let policy_workspace_only = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
-            read_only_access: Default::default(),
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        };
-
-        assert_eq!(
-            assess_patch_safety(
-                &add_outside,
-                AskForApproval::OnRequest,
-                &policy_workspace_only,
-                &FileSystemSandboxPolicy::from(&policy_workspace_only),
-                &cwd,
-                WindowsSandboxLevel::Disabled,
-            ),
-            SafetyCheck::AskUser,
-        );
-        assert_eq!(
-            assess_patch_safety(
-                &add_outside,
-                AskForApproval::Reject(RejectConfig {
-                    sandbox_approval: false,
-                    rules: false,
-                    mcp_elicitations: false,
-                }),
-                &policy_workspace_only,
-                &FileSystemSandboxPolicy::from(&policy_workspace_only),
-                &cwd,
-                WindowsSandboxLevel::Disabled,
-            ),
-            SafetyCheck::AskUser,
-        );
-    }
-
-    #[test]
-    fn reject_sandbox_approval_rejects_out_of_root_patch() {
-        let tmp = TempDir::new().unwrap();
-        let cwd = tmp.path().to_path_buf();
-        let parent = cwd.parent().unwrap().to_path_buf();
-        let add_outside =
-            ApplyPatchAction::new_add_for_test(&parent.join("outside.txt"), "".to_string());
-        let policy_workspace_only = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
-            read_only_access: Default::default(),
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        };
-
-        assert_eq!(
-            assess_patch_safety(
-                &add_outside,
-                AskForApproval::Reject(RejectConfig {
-                    sandbox_approval: true,
-                    rules: false,
-                    mcp_elicitations: false,
-                }),
-                &policy_workspace_only,
-                &FileSystemSandboxPolicy::from(&policy_workspace_only),
-                &cwd,
-                WindowsSandboxLevel::Disabled,
-            ),
-            SafetyCheck::Reject {
-                reason: "writing outside of the project; rejected by user approval settings"
-                    .to_string(),
-            },
-        );
-    }
-    #[test]
-    fn explicit_unreadable_paths_prevent_auto_approval_for_external_sandbox() {
-        let tmp = TempDir::new().unwrap();
-        let cwd = tmp.path().to_path_buf();
-        let blocked_path = cwd.join("blocked.txt");
-        let blocked_absolute = AbsolutePathBuf::from_absolute_path(blocked_path.clone()).unwrap();
-        let action = ApplyPatchAction::new_add_for_test(&blocked_path, "".to_string());
-        let sandbox_policy = SandboxPolicy::ExternalSandbox {
-            network_access: codex_protocol::protocol::NetworkAccess::Restricted,
-        };
-        let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
-            FileSystemSandboxEntry {
-                path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::Root,
-                },
-                access: FileSystemAccessMode::Write,
-            },
-            FileSystemSandboxEntry {
-                path: FileSystemPath::Path {
-                    path: blocked_absolute,
-                },
-                access: FileSystemAccessMode::None,
-            },
-        ]);
-
-        assert!(!is_write_patch_constrained_to_writable_paths(
-            &action,
-            &file_system_sandbox_policy,
-            &cwd,
-        ));
-        assert_eq!(
-            assess_patch_safety(
-                &action,
-                AskForApproval::OnRequest,
-                &sandbox_policy,
-                &file_system_sandbox_policy,
-                &cwd,
-                WindowsSandboxLevel::Disabled,
-            ),
-            SafetyCheck::AskUser,
-        );
-    }
-}
+#[path = "safety_tests.rs"]
+mod tests;

@@ -23,7 +23,10 @@ use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::contextual_user_message::TURN_ABORTED_OPEN_TAG;
-use crate::event_mapping::parse_turn_item;
+use crate::hook_runtime::PendingInputHookDisposition;
+use crate::hook_runtime::inspect_pending_input;
+use crate::hook_runtime::record_additional_contexts;
+use crate::hook_runtime::record_pending_input;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
 use crate::protocol::TokenUsage;
@@ -33,17 +36,18 @@ use crate::protocol::TurnCompleteEvent;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use codex_otel::SessionTelemetry;
 use codex_otel::metrics::names::TURN_E2E_DURATION_METRIC;
+use codex_otel::metrics::names::TURN_NETWORK_PROXY_METRIC;
 use codex_otel::metrics::names::TURN_TOKEN_USAGE_METRIC;
 use codex_otel::metrics::names::TURN_TOOL_CALL_METRIC;
-use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 
-use crate::features::Feature;
+use codex_features::Feature;
 pub(crate) use compact::CompactTask;
 pub(crate) use ghost_snapshot::GhostSnapshotTask;
 pub(crate) use regular::RegularTask;
@@ -54,7 +58,24 @@ pub(crate) use user_shell::UserShellCommandTask;
 pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
-const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes were terminated. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
+const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
+
+fn emit_turn_network_proxy_metric(
+    session_telemetry: &SessionTelemetry,
+    network_proxy_active: bool,
+    tmp_mem: (&str, &str),
+) {
+    let active = if network_proxy_active {
+        "true"
+    } else {
+        "false"
+    };
+    session_telemetry.counter(
+        TURN_NETWORK_PROXY_METRIC,
+        /*inc*/ 1,
+        &[("active", active), tmp_mem],
+    );
+}
 
 /// Thin wrapper that exposes the parts of [`Session`] task runners need.
 #[derive(Clone)]
@@ -212,9 +233,6 @@ impl Session {
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             active_turn.clear_pending().await;
         }
-        if reason == TurnAbortReason::Interrupted {
-            self.close_unified_exec_processes().await;
-        }
     }
 
     pub async fn on_task_finished(
@@ -245,27 +263,16 @@ impl Session {
         }
         drop(active);
         if !pending_input.is_empty() {
-            let pending_response_items = pending_input
-                .into_iter()
-                .map(ResponseItem::from)
-                .collect::<Vec<_>>();
-            for response_item in pending_response_items {
-                if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
-                    // Keep leftover user input on the same persistence + lifecycle path as the
-                    // normal pre-sampling drain. This helper records the response item once, then
-                    // emits ItemStarted/UserMessage and ItemCompleted/UserMessage for clients.
-                    self.record_user_prompt_and_emit_turn_item(
-                        turn_context.as_ref(),
-                        &user_message.content,
-                        response_item,
-                    )
-                    .await;
-                } else {
-                    self.record_conversation_items(
-                        turn_context.as_ref(),
-                        std::slice::from_ref(&response_item),
-                    )
-                    .await;
+            for pending_input_item in pending_input {
+                match inspect_pending_input(self, &turn_context, pending_input_item).await {
+                    PendingInputHookDisposition::Accepted(pending_input) => {
+                        record_pending_input(self, &turn_context, *pending_input).await;
+                    }
+                    PendingInputHookDisposition::Blocked {
+                        additional_contexts,
+                    } => {
+                        record_additional_contexts(self, &turn_context, additional_contexts).await;
+                    }
                 }
             }
         }
@@ -279,6 +286,25 @@ impl Session {
                 } else {
                     "false"
                 },
+            );
+            let network_proxy_active = match self.services.network_proxy.as_ref() {
+                Some(started_network_proxy) => {
+                    match started_network_proxy.proxy().current_cfg().await {
+                        Ok(config) => config.network.enabled,
+                        Err(err) => {
+                            warn!(
+                                "failed to read managed network proxy state for turn metrics: {err:#}"
+                            );
+                            false
+                        }
+                    }
+                }
+                None => false,
+            };
+            emit_turn_network_proxy_metric(
+                &self.services.session_telemetry,
+                network_proxy_active,
+                tmp_mem,
             );
             self.services.session_telemetry.histogram(
                 TURN_TOOL_CALL_METRIC,
@@ -349,7 +375,6 @@ impl Session {
         turn.add_task(task);
         *active = Some(turn);
     }
-
     async fn take_active_turn(&self) -> Option<ActiveTurn> {
         let mut active = self.active_turn.lock().await;
         active.take()
@@ -360,6 +385,14 @@ impl Session {
             .unified_exec_manager
             .terminate_all_processes()
             .await;
+    }
+
+    pub(crate) async fn cleanup_after_interrupt(&self, turn_context: &Arc<TurnContext>) {
+        if let Some(manager) = turn_context.js_repl.manager_if_initialized()
+            && let Err(err) = manager.interrupt_turn_exec(&turn_context.sub_id).await
+        {
+            warn!("failed to interrupt js_repl kernel: {err}");
+        }
     }
 
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
@@ -391,6 +424,8 @@ impl Session {
             .await;
 
         if reason == TurnAbortReason::Interrupted {
+            self.cleanup_after_interrupt(&task.turn_context).await;
+
             let marker = ResponseItem::Message {
                 id: None,
                 role: "user".to_string(),
@@ -420,4 +455,5 @@ impl Session {
 }
 
 #[cfg(test)]
-mod tests {}
+#[path = "mod_tests.rs"]
+mod tests;

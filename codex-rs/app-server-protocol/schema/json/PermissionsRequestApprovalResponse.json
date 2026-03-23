@@ -39,59 +39,12 @@
       },
       "type": "object"
     },
-    "GrantedMacOsPermissions": {
-      "properties": {
-        "accessibility": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "automations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsAutomationPermission"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "calendar": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "preferences": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MacOsPreferencesPermission"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
-    },
     "GrantedPermissionProfile": {
       "properties": {
         "fileSystem": {
           "anyOf": [
             {
               "$ref": "#/definitions/AdditionalFileSystemPermissions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "macos": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/GrantedMacOsPermissions"
             },
             {
               "type": "null"
@@ -111,38 +64,10 @@
       },
       "type": "object"
     },
-    "MacOsAutomationPermission": {
-      "oneOf": [
-        {
-          "enum": [
-            "none",
-            "all"
-          ],
-          "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "bundle_ids": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            }
-          },
-          "required": [
-            "bundle_ids"
-          ],
-          "title": "BundleIdsMacOsAutomationPermission",
-          "type": "object"
-        }
-      ]
-    },
-    "MacOsPreferencesPermission": {
+    "PermissionGrantScope": {
       "enum": [
-        "none",
-        "read_only",
-        "read_write"
+        "turn",
+        "session"
       ],
       "type": "string"
     }
@@ -150,6 +75,14 @@
   "properties": {
     "permissions": {
       "$ref": "#/definitions/GrantedPermissionProfile"
+    },
+    "scope": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/PermissionGrantScope"
+        }
+      ],
+      "default": "turn"
     }
   },
   "required": [

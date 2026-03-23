@@ -37,9 +37,8 @@ fn derive_for_struct(input: &DeriveInput, data: &DataStruct) -> TokenStream {
             let mut experimental_fields = Vec::new();
             let mut registrations = Vec::new();
             for field in &named.named {
-                let reason = experimental_reason(&field.attrs);
-                if let Some(reason) = reason {
-                    let expr = experimental_presence_expr(field, false);
+                if let Some(reason) = experimental_reason(&field.attrs) {
+                    let expr = experimental_presence_expr(field, /*tuple_struct*/ false);
                     checks.push(quote! {
                         if #expr {
                             return Some(#reason);
@@ -65,6 +64,17 @@ fn derive_for_struct(input: &DeriveInput, data: &DataStruct) -> TokenStream {
                             }
                         });
                     }
+                } else if has_nested_experimental(field) {
+                    let Some(ident) = field.ident.as_ref() else {
+                        continue;
+                    };
+                    checks.push(quote! {
+                        if let Some(reason) =
+                            crate::experimental_api::ExperimentalApi::experimental_reason(&self.#ident)
+                        {
+                            return Some(reason);
+                        }
+                    });
                 }
             }
             (checks, experimental_fields, registrations)
@@ -74,8 +84,7 @@ fn derive_for_struct(input: &DeriveInput, data: &DataStruct) -> TokenStream {
             let mut experimental_fields = Vec::new();
             let mut registrations = Vec::new();
             for (index, field) in unnamed.unnamed.iter().enumerate() {
-                let reason = experimental_reason(&field.attrs);
-                if let Some(reason) = reason {
+                if let Some(reason) = experimental_reason(&field.attrs) {
                     let expr = index_presence_expr(index, &field.ty);
                     checks.push(quote! {
                         if #expr {
@@ -98,6 +107,15 @@ fn derive_for_struct(input: &DeriveInput, data: &DataStruct) -> TokenStream {
                                 field_name: #field_name_lit,
                                 reason: #reason,
                             }
+                        }
+                    });
+                } else if has_nested_experimental(field) {
+                    let index = syn::Index::from(index);
+                    checks.push(quote! {
+                        if let Some(reason) =
+                            crate::experimental_api::ExperimentalApi::experimental_reason(&self.#index)
+                        {
+                            return Some(reason);
                         }
                     });
                 }
@@ -175,10 +193,28 @@ fn derive_for_enum(input: &DeriveInput, data: &DataEnum) -> TokenStream {
 }
 
 fn experimental_reason(attrs: &[Attribute]) -> Option<LitStr> {
-    let attr = attrs
-        .iter()
-        .find(|attr| attr.path().is_ident("experimental"))?;
+    attrs.iter().find_map(experimental_reason_attr)
+}
+
+fn experimental_reason_attr(attr: &Attribute) -> Option<LitStr> {
+    if !attr.path().is_ident("experimental") {
+        return None;
+    }
+
     attr.parse_args::<LitStr>().ok()
+}
+
+fn has_nested_experimental(field: &Field) -> bool {
+    field.attrs.iter().any(experimental_nested_attr)
+}
+
+fn experimental_nested_attr(attr: &Attribute) -> bool {
+    if !attr.path().is_ident("experimental") {
+        return false;
+    }
+
+    attr.parse_args::<Ident>()
+        .is_ok_and(|ident| ident == "nested")
 }
 
 fn field_serialized_name(field: &Field) -> Option<String> {

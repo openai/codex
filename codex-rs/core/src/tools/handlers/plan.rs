@@ -11,13 +11,43 @@ use crate::tools::registry::ToolKind;
 use crate::tools::spec::JsonSchema;
 use async_trait::async_trait;
 use codex_protocol::config_types::ModeKind;
-use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::EventMsg;
+use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 pub struct PlanHandler;
+
+pub struct PlanToolOutput;
+
+const PLAN_UPDATED_MESSAGE: &str = "Plan updated";
+
+impl ToolOutput for PlanToolOutput {
+    fn log_preview(&self) -> String {
+        PLAN_UPDATED_MESSAGE.to_string()
+    }
+
+    fn success_for_logging(&self) -> bool {
+        true
+    }
+
+    fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
+        let mut output = FunctionCallOutputPayload::from_text(PLAN_UPDATED_MESSAGE.to_string());
+        output.success = Some(true);
+
+        ResponseInputItem::FunctionCallOutput {
+            call_id: call_id.to_string(),
+            output,
+        }
+    }
+
+    fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
+        JsonValue::Object(serde_json::Map::new())
+    }
+}
 
 pub static PLAN_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut plan_item_props = BTreeMap::new();
@@ -53,21 +83,25 @@ At most one step can be in_progress at a time.
 "#
         .to_string(),
         strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["plan".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 });
 
 #[async_trait]
 impl ToolHandler for PlanHandler {
+    type Output = PlanToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -85,13 +119,9 @@ impl ToolHandler for PlanHandler {
             }
         };
 
-        let content =
-            handle_update_plan(session.as_ref(), turn.as_ref(), arguments, call_id).await?;
+        handle_update_plan(session.as_ref(), turn.as_ref(), arguments, call_id).await?;
 
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
-            success: Some(true),
-        })
+        Ok(PlanToolOutput)
     }
 }
 

@@ -1,45 +1,49 @@
 module(name = "codex")
 
+bazel_dep(name = "bazel_skylib", version = "1.8.2")
 bazel_dep(name = "platforms", version = "1.0.0")
-bazel_dep(name = "llvm", version = "0.6.1")
-single_version_override(
-    module_name = "llvm",
-    patch_strip = 1,
-    patches = [
-        "//patches:toolchains_llvm_bootstrapped_resource_dir.patch",
-    ],
-)
+bazel_dep(name = "llvm", version = "0.6.8")
 
 register_toolchains("@llvm//toolchain:all")
 
 osx = use_extension("@llvm//extensions:osx.bzl", "osx")
-osx.framework(name = "ApplicationServices")
-osx.framework(name = "AppKit")
-osx.framework(name = "ColorSync")
-osx.framework(name = "CoreFoundation")
-osx.framework(name = "CoreGraphics")
-osx.framework(name = "CoreServices")
-osx.framework(name = "CoreText")
-osx.framework(name = "AudioToolbox")
-osx.framework(name = "CFNetwork")
-osx.framework(name = "FontServices")
-osx.framework(name = "AudioUnit")
-osx.framework(name = "CoreAudio")
-osx.framework(name = "CoreAudioTypes")
-osx.framework(name = "Foundation")
-osx.framework(name = "ImageIO")
-osx.framework(name = "IOKit")
-osx.framework(name = "Kernel")
-osx.framework(name = "OSLog")
-osx.framework(name = "Security")
-osx.framework(name = "SystemConfiguration")
+osx.from_archive(
+    sha256 = "6a4922f89487a96d7054ec6ca5065bfddd9f1d017c74d82f1d79cecf7feb8228",
+    strip_prefix = "Payload/Library/Developer/CommandLineTools/SDKs/MacOSX26.2.sdk",
+    type = "pkg",
+    urls = [
+        "https://swcdn.apple.com/content/downloads/26/44/047-81934-A_28TPKM5SD1/ps6pk6dk4x02vgfa5qsctq6tgf23t5f0w2/CLTools_macOSNMOS_SDK.pkg",
+    ],
+)
+osx.frameworks(names = [
+    "ApplicationServices",
+    "AppKit",
+    "ColorSync",
+    "CoreFoundation",
+    "CoreGraphics",
+    "CoreServices",
+    "CoreText",
+    "AudioToolbox",
+    "CFNetwork",
+    "FontServices",
+    "AudioUnit",
+    "CoreAudio",
+    "CoreAudioTypes",
+    "Foundation",
+    "ImageIO",
+    "IOKit",
+    "Kernel",
+    "OSLog",
+    "Security",
+    "SystemConfiguration",
+])
 use_repo(osx, "macos_sdk")
 
 # Needed to disable xcode...
 bazel_dep(name = "apple_support", version = "2.1.0")
 bazel_dep(name = "rules_cc", version = "0.2.16")
 bazel_dep(name = "rules_platform", version = "0.1.0")
-bazel_dep(name = "rules_rs", version = "0.0.40")
+bazel_dep(name = "rules_rs", version = "0.0.43")
 
 rules_rust = use_extension("@rules_rs//rs/experimental:rules_rust.bzl", "rules_rust")
 use_repo(rules_rust, "rules_rust")
@@ -91,7 +95,6 @@ crate.annotation(
 inject_repo(crate, "zstd")
 
 bazel_dep(name = "bzip2", version = "1.0.8.bcr.3")
-bazel_dep(name = "libcap", version = "2.27.bcr.1")
 
 crate.annotation(
     crate = "bzip2-sys",
@@ -140,6 +143,35 @@ crate.annotation(
     workspace_cargo_toml = "rust/runfiles/Cargo.toml",
 )
 
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+new_local_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:local.bzl", "new_local_repository")
+
+new_local_repository(
+    name = "v8_targets",
+    build_file = "//third_party/v8:BUILD.bazel",
+    path = "third_party/v8",
+)
+
+crate.annotation(
+    build_script_data = [
+        "@v8_targets//:rusty_v8_archive_for_target",
+        "@v8_targets//:rusty_v8_binding_for_target",
+    ],
+    build_script_env = {
+        "RUSTY_V8_ARCHIVE": "$(execpath @v8_targets//:rusty_v8_archive_for_target)",
+        "RUSTY_V8_SRC_BINDING_PATH": "$(execpath @v8_targets//:rusty_v8_binding_for_target)",
+    },
+    crate = "v8",
+    gen_build_script = "on",
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:rusty_v8_prebuilt_out_dir.patch",
+    ],
+)
+
+inject_repo(crate, "v8_targets")
+
 llvm = use_extension("@llvm//extensions:llvm.bzl", "llvm")
 use_repo(llvm, "llvm-project")
 
@@ -149,13 +181,13 @@ crate.annotation(
         "@macos_sdk//sysroot",
     ],
     build_script_env = {
-        "BINDGEN_EXTRA_CLANG_ARGS": "-isystem $(location @llvm//:builtin_headers)",
+        "BINDGEN_EXTRA_CLANG_ARGS": "-Xclang -internal-isystem -Xclang $(location @llvm//:builtin_resource_dir)/include",
         "COREAUDIO_SDK_PATH": "$(location @macos_sdk//sysroot)",
         "LIBCLANG_PATH": "$(location @llvm-project//clang:libclang_interface_output)",
     },
     build_script_tools = [
         "@llvm-project//clang:libclang_interface_output",
-        "@llvm//:builtin_headers",
+        "@llvm//:builtin_resource_dir",
     ],
     crate = "coreaudio-sys",
     gen_build_script = "on",
@@ -182,7 +214,112 @@ crate.annotation(
 
 inject_repo(crate, "alsa_lib")
 
+bazel_dep(name = "v8", version = "14.6.202.9")
+archive_override(
+    module_name = "v8",
+    integrity = "sha256-JphDwLAzsd9KvgRZ7eQvNtPU6qGd3XjFt/a/1QITAJU=",
+    patch_strip = 3,
+    patches = [
+        "//patches:v8_module_deps.patch",
+        "//patches:v8_bazel_rules.patch",
+        "//patches:v8_source_portability.patch",
+    ],
+    strip_prefix = "v8-14.6.202.9",
+    urls = ["https://github.com/v8/v8/archive/refs/tags/14.6.202.9.tar.gz"],
+)
+
+http_archive(
+    name = "v8_crate_146_4_0",
+    build_file = "//third_party/v8:v8_crate.BUILD.bazel",
+    sha256 = "d97bcac5cdc5a195a4813f1855a6bc658f240452aac36caa12fd6c6f16026ab1",
+    strip_prefix = "v8-146.4.0",
+    type = "tar.gz",
+    urls = ["https://static.crates.io/crates/v8/v8-146.4.0.crate"],
+)
+
+http_file(
+    name = "rusty_v8_146_4_0_aarch64_apple_darwin_archive",
+    downloaded_file_path = "librusty_v8_release_aarch64-apple-darwin.a.gz",
+    urls = [
+        "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/librusty_v8_release_aarch64-apple-darwin.a.gz",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_146_4_0_aarch64_unknown_linux_gnu_archive",
+    downloaded_file_path = "librusty_v8_release_aarch64-unknown-linux-gnu.a.gz",
+    urls = [
+        "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/librusty_v8_release_aarch64-unknown-linux-gnu.a.gz",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_146_4_0_aarch64_pc_windows_msvc_archive",
+    downloaded_file_path = "rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
+    urls = [
+        "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_146_4_0_x86_64_apple_darwin_archive",
+    downloaded_file_path = "librusty_v8_release_x86_64-apple-darwin.a.gz",
+    urls = [
+        "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/librusty_v8_release_x86_64-apple-darwin.a.gz",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_146_4_0_x86_64_unknown_linux_gnu_archive",
+    downloaded_file_path = "librusty_v8_release_x86_64-unknown-linux-gnu.a.gz",
+    urls = [
+        "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/librusty_v8_release_x86_64-unknown-linux-gnu.a.gz",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_146_4_0_x86_64_pc_windows_msvc_archive",
+    downloaded_file_path = "rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
+    urls = [
+        "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_146_4_0_aarch64_unknown_linux_musl_archive",
+    downloaded_file_path = "librusty_v8_release_aarch64-unknown-linux-musl.a.gz",
+    urls = [
+        "https://github.com/openai/codex/releases/download/rusty-v8-v146.4.0/librusty_v8_release_aarch64-unknown-linux-musl.a.gz",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_146_4_0_aarch64_unknown_linux_musl_binding",
+    downloaded_file_path = "src_binding_release_aarch64-unknown-linux-musl.rs",
+    urls = [
+        "https://github.com/openai/codex/releases/download/rusty-v8-v146.4.0/src_binding_release_aarch64-unknown-linux-musl.rs",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_146_4_0_x86_64_unknown_linux_musl_archive",
+    downloaded_file_path = "librusty_v8_release_x86_64-unknown-linux-musl.a.gz",
+    urls = [
+        "https://github.com/openai/codex/releases/download/rusty-v8-v146.4.0/librusty_v8_release_x86_64-unknown-linux-musl.a.gz",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_146_4_0_x86_64_unknown_linux_musl_binding",
+    downloaded_file_path = "src_binding_release_x86_64-unknown-linux-musl.rs",
+    urls = [
+        "https://github.com/openai/codex/releases/download/rusty-v8-v146.4.0/src_binding_release_x86_64-unknown-linux-musl.rs",
+    ],
+)
+
 use_repo(crate, "crates")
+
+bazel_dep(name = "libcap", version = "2.27.bcr.1")
 
 rbe_platform_repository = use_repo_rule("//:rbe.bzl", "rbe_platform_repository")
 

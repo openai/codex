@@ -41,7 +41,9 @@ pub use cli::Cli;
 /// A single match result returned from the search.
 ///
 /// * `score` – Relevance score returned by `nucleo`.
-/// * `path`  – Path to the matched file (relative to the search directory).
+/// * `path`  – Path to the matched entry (file or directory), relative to the
+///   search directory.
+/// * `match_type` – Whether this match is a file or directory.
 /// * `indices` – Optional list of character indices that matched the query.
 ///   These are only filled when the caller of [`run`] sets
 ///   `options.compute_indices` to `true`. The indices vector follows the
@@ -52,9 +54,17 @@ pub use cli::Cli;
 pub struct FileMatch {
     pub score: u32,
     pub path: PathBuf,
+    pub match_type: MatchType,
     pub root: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub indices: Option<Vec<u32>>, // Sorted & deduplicated when present
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MatchType {
+    File,
+    Directory,
 }
 
 impl FileMatch {
@@ -261,7 +271,7 @@ pub async fn run_main<T: Reporter>(
             compute_indices,
             respect_gitignore: true,
         },
-        None,
+        /*cancel_flag*/ None,
     )?;
     let match_count = matches.len();
     let matches_truncated = total_match_count > match_count;
@@ -386,7 +396,7 @@ fn get_file_path<'a>(path: &'a Path, search_directories: &[PathBuf]) -> Option<(
     rel_path.to_str().map(|p| (root_idx, p))
 }
 
-/// Walks the search directories and feeds discovered file paths into `nucleo`
+/// Walks the search directories and feeds discovered paths into `nucleo`
 /// via the injector.
 ///
 /// The walker uses `require_git(true)` to match git's own ignore semantics:
@@ -448,9 +458,6 @@ fn walker_worker(
                 Ok(entry) => entry,
                 Err(_) => return ignore::WalkState::Continue,
             };
-            if entry.file_type().is_some_and(|ft| ft.is_dir()) {
-                return ignore::WalkState::Continue;
-            }
             let path = entry.path();
             let Some(full_path) = path.to_str() else {
                 return ignore::WalkState::Continue;
@@ -552,9 +559,15 @@ fn matcher_worker(
                             } else {
                                 None
                             };
+                            let match_type = if Path::new(full_path).is_dir() {
+                                MatchType::Directory
+                            } else {
+                                MatchType::File
+                            };
                             Some(FileMatch {
                                 score: match_.score,
                                 path: PathBuf::from(relative_path),
+                                match_type,
                                 root: inner.search_directories[root_idx].clone(),
                                 indices,
                             })
@@ -959,6 +972,33 @@ mod tests {
                 .iter()
                 .any(|m| m.path.to_string_lossy().contains("file-0000.txt"))
         );
+    }
+
+    #[test]
+    fn run_returns_directory_matches_for_query() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("docs/guides")).unwrap();
+        fs::write(dir.path().join("docs/guides/intro.md"), "intro").unwrap();
+        fs::write(dir.path().join("docs/readme.md"), "readme").unwrap();
+
+        let results = run(
+            "guides",
+            vec![dir.path().to_path_buf()],
+            FileSearchOptions {
+                limit: NonZero::new(20).unwrap(),
+                exclude: Vec::new(),
+                threads: NonZero::new(2).unwrap(),
+                compute_indices: false,
+                respect_gitignore: true,
+            },
+            None,
+        )
+        .expect("run ok");
+
+        assert!(results.matches.iter().any(|m| {
+            m.path == std::path::Path::new("docs").join("guides")
+                && m.match_type == MatchType::Directory
+        }));
     }
 
     #[test]

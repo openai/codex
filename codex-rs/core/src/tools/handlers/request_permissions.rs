@@ -1,18 +1,17 @@
 use async_trait::async_trait;
-use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::request_permissions::RequestPermissionsArgs;
 
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::normalize_additional_permissions;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
 pub(crate) fn request_permissions_tool_description() -> String {
-    "Request additional permissions from the user and wait for the client to grant a subset of the requested permission profile. Granted permissions apply automatically to later shell-like commands in the current turn."
+    "Request additional filesystem or network permissions from the user and wait for the client to grant a subset of the requested permission profile. Granted permissions apply automatically to later shell-like commands in the current turn, or for the rest of the session if the client approves them at session scope."
         .to_string()
 }
 
@@ -20,11 +19,13 @@ pub struct RequestPermissionsHandler;
 
 #[async_trait]
 impl ToolHandler for RequestPermissionsHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -44,7 +45,8 @@ impl ToolHandler for RequestPermissionsHandler {
 
         let mut args: RequestPermissionsArgs =
             parse_arguments_with_base_path(&arguments, turn.cwd.as_path())?;
-        args.permissions = normalize_additional_permissions(args.permissions)
+        args.permissions = normalize_additional_permissions(args.permissions.into())
+            .map(codex_protocol::request_permissions::RequestPermissionProfile::from)
             .map_err(FunctionCallError::RespondToModel)?;
         if args.permissions.is_empty() {
             return Err(FunctionCallError::RespondToModel(
@@ -67,9 +69,6 @@ impl ToolHandler for RequestPermissionsHandler {
             ))
         })?;
 
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
-            success: Some(true),
-        })
+        Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }

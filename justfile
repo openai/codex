@@ -30,7 +30,7 @@ fmt:
 fix *args:
     cargo clippy --fix --tests --allow-dirty "$@"
 
-clippy:
+clippy *args:
     cargo clippy --tests "$@"
 
 install:
@@ -81,6 +81,19 @@ write-config-schema:
 # Regenerate vendored app-server protocol schema artifacts.
 write-app-server-schema *args:
     cargo run -p codex-app-server-protocol --bin write_schema_fixtures -- "$@"
+
+[no-cd]
+write-hooks-schema:
+    cargo run --manifest-path ./codex-rs/Cargo.toml -p codex-hooks --bin write_hooks_schema_fixtures
+
+# Run the argument-comment Dylint checks across codex-rs.
+[no-cd]
+argument-comment-lint *args:
+    ./tools/argument-comment-lint/run-prebuilt-linter.sh "$@"
+
+[no-cd]
+argument-comment-lint-from-source *args:
+    ./tools/argument-comment-lint/run.sh "$@"
 
 # Tail logs from the state SQLite database
 log *args:

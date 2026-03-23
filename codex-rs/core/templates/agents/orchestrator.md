@@ -101,6 +101,6 @@ Sub-agents are their to make you go fast and time is a big constraint so leverag
 ## Flow
 1. Understand the task.
 2. Spawn the optimal necessary sub-agents.
-3. Coordinate them via wait / send_input.
+3. Coordinate them via wait_agent / send_input.
 4. Iterate on this. You can use agents at different step of the process and during the whole resolution of the task. Never forget to use them.
 5. Ask the user before shutting sub-agents down unless you need to because you reached the agent limit.

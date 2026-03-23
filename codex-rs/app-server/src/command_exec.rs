@@ -201,7 +201,9 @@ impl CommandExecManager {
             let sessions = Arc::clone(&self.sessions);
             tokio::spawn(async move {
                 let _started_network_proxy = started_network_proxy;
-                match codex_core::sandboxing::execute_env(exec_request, None).await {
+                match codex_core::sandboxing::execute_env(exec_request, /*stdout_stream*/ None)
+                    .await
+                {
                     Ok(output) => {
                         outgoing
                             .send_response(
@@ -731,8 +733,10 @@ mod tests {
             env: HashMap::new(),
             network: None,
             expiration: ExecExpiration::DefaultTimeout,
+            capture_policy: codex_core::exec::ExecCapturePolicy::ShellTool,
             sandbox: SandboxType::WindowsRestrictedToken,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
             sandbox_permissions: codex_core::sandboxing::SandboxPermissions::UseDefault,
             sandbox_policy: sandbox_policy.clone(),
             file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
@@ -842,8 +846,10 @@ mod tests {
                     env: HashMap::new(),
                     network: None,
                     expiration: ExecExpiration::Cancellation(CancellationToken::new()),
+                    capture_policy: codex_core::exec::ExecCapturePolicy::ShellTool,
                     sandbox: SandboxType::None,
                     windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                    windows_sandbox_private_desktop: false,
                     sandbox_permissions: codex_core::sandboxing::SandboxPermissions::UseDefault,
                     sandbox_policy: sandbox_policy.clone(),
                     file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),

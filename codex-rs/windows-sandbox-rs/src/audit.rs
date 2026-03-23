@@ -81,7 +81,7 @@ unsafe fn path_has_world_write_allow(path: &Path) -> Result<bool> {
     let mut world = world_sid()?;
     let psid_world = world.as_mut_ptr() as *mut c_void;
     let write_mask = FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES;
-    path_mask_allows(path, &[psid_world], write_mask, false)
+    path_mask_allows(path, &[psid_world], write_mask, /*require_all_bits*/ false)
 }
 
 pub fn audit_everyone_writable(

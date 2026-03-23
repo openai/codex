@@ -73,6 +73,7 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
 fn custom_tool_call_output(call_id: &str, output: &str) -> ResponseItem {
     ResponseItem::CustomToolCallOutput {
         call_id: call_id.to_string(),
+        name: None,
         output: FunctionCallOutputPayload::from_text(output.to_string()),
     }
 }
@@ -271,6 +272,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
         ResponseItem::FunctionCall {
             id: None,
             name: "view_image".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
         },
@@ -295,6 +297,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
         },
         ResponseItem::CustomToolCallOutput {
             call_id: "tool-1".to_string(),
+            name: None,
             output: FunctionCallOutputPayload::from_content_items(vec![
                 FunctionCallOutputContentItem::InputText {
                     text: "js repl result".to_string(),
@@ -332,6 +335,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
         ResponseItem::FunctionCall {
             id: None,
             name: "view_image".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
         },
@@ -356,6 +360,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
         },
         ResponseItem::CustomToolCallOutput {
             call_id: "tool-1".to_string(),
+            name: None,
             output: FunctionCallOutputPayload::from_content_items(vec![
                 FunctionCallOutputContentItem::InputText {
                     text: "js repl result".to_string(),
@@ -396,7 +401,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
 }
 
 #[test]
-fn for_prompt_rewrites_image_generation_calls_when_images_are_supported() {
+fn for_prompt_preserves_image_generation_calls_when_images_are_supported() {
     let history = create_history_with_items(vec![
         ResponseItem::ImageGenerationCall {
             id: "ig_123".to_string(),
@@ -418,28 +423,11 @@ fn for_prompt_rewrites_image_generation_calls_when_images_are_supported() {
     assert_eq!(
         history.for_prompt(&default_input_modalities()),
         vec![
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![
-                    ContentItem::InputText {
-                        text: "Image Generation Call".to_string(),
-                    },
-                    ContentItem::InputText {
-                        text: "Image ID: ig_123".to_string(),
-                    },
-                    ContentItem::InputText {
-                        text: "Prompt: lobster".to_string(),
-                    },
-                    ContentItem::InputImage {
-                        image_url: "data:image/png;base64,Zm9v".to_string(),
-                    },
-                    ContentItem::InputText {
-                        text: "Saved to: CWD".to_string(),
-                    },
-                ],
-                end_turn: None,
-                phase: None,
+            ResponseItem::ImageGenerationCall {
+                id: "ig_123".to_string(),
+                status: "generating".to_string(),
+                revised_prompt: Some("lobster".to_string()),
+                result: "Zm9v".to_string(),
             },
             ResponseItem::Message {
                 id: None,
@@ -455,7 +443,7 @@ fn for_prompt_rewrites_image_generation_calls_when_images_are_supported() {
 }
 
 #[test]
-fn for_prompt_rewrites_image_generation_calls_when_images_are_unsupported() {
+fn for_prompt_clears_image_generation_result_when_images_are_unsupported() {
     let history = create_history_with_items(vec![
         ResponseItem::Message {
             id: None,
@@ -486,29 +474,11 @@ fn for_prompt_rewrites_image_generation_calls_when_images_are_unsupported() {
                 end_turn: None,
                 phase: None,
             },
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![
-                    ContentItem::InputText {
-                        text: "Image Generation Call".to_string(),
-                    },
-                    ContentItem::InputText {
-                        text: "Image ID: ig_123".to_string(),
-                    },
-                    ContentItem::InputText {
-                        text: "Prompt: lobster".to_string(),
-                    },
-                    ContentItem::InputText {
-                        text: "image content omitted because you do not support image input"
-                            .to_string(),
-                    },
-                    ContentItem::InputText {
-                        text: "Saved to: CWD".to_string(),
-                    },
-                ],
-                end_turn: None,
-                phase: None,
+            ResponseItem::ImageGenerationCall {
+                id: "ig_123".to_string(),
+                status: "completed".to_string(),
+                revised_prompt: Some("lobster".to_string()),
+                result: String::new(),
             },
         ]
     );
@@ -553,6 +523,7 @@ fn remove_first_item_removes_matching_output_for_function_call() {
         ResponseItem::FunctionCall {
             id: None,
             name: "do_it".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
         },
@@ -576,6 +547,7 @@ fn remove_first_item_removes_matching_call_for_output() {
         ResponseItem::FunctionCall {
             id: None,
             name: "do_it".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-2".to_string(),
         },
@@ -592,6 +564,7 @@ fn remove_last_item_removes_matching_call_for_output() {
         ResponseItem::FunctionCall {
             id: None,
             name: "do_it".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-delete-last".to_string(),
         },
@@ -836,6 +809,7 @@ fn remove_first_item_handles_custom_tool_pair() {
         },
         ResponseItem::CustomToolCallOutput {
             call_id: "tool-1".to_string(),
+            name: None,
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
         },
     ];
@@ -915,6 +889,7 @@ fn record_items_truncates_custom_tool_call_output_content() {
     let long_output = line.repeat(2_500);
     let item = ResponseItem::CustomToolCallOutput {
         call_id: "tool-200".to_string(),
+        name: None,
         output: FunctionCallOutputPayload::from_text(long_output.clone()),
     };
 
@@ -1065,6 +1040,7 @@ fn normalize_adds_missing_output_for_function_call() {
     let items = vec![ResponseItem::FunctionCall {
         id: None,
         name: "do_it".to_string(),
+        namespace: None,
         arguments: "{}".to_string(),
         call_id: "call-x".to_string(),
     }];
@@ -1078,6 +1054,7 @@ fn normalize_adds_missing_output_for_function_call() {
             ResponseItem::FunctionCall {
                 id: None,
                 name: "do_it".to_string(),
+                namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call-x".to_string(),
             },
@@ -1115,6 +1092,7 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
             },
             ResponseItem::CustomToolCallOutput {
                 call_id: "tool-x".to_string(),
+                name: None,
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
             },
         ]
@@ -1182,6 +1160,7 @@ fn normalize_removes_orphan_function_call_output() {
 fn normalize_removes_orphan_custom_tool_call_output() {
     let items = vec![ResponseItem::CustomToolCallOutput {
         call_id: "orphan-2".to_string(),
+        name: None,
         output: FunctionCallOutputPayload::from_text("ok".to_string()),
     }];
     let mut h = create_history_with_items(items);
@@ -1199,6 +1178,7 @@ fn normalize_mixed_inserts_and_removals() {
         ResponseItem::FunctionCall {
             id: None,
             name: "f1".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "c1".to_string(),
         },
@@ -1239,6 +1219,7 @@ fn normalize_mixed_inserts_and_removals() {
             ResponseItem::FunctionCall {
                 id: None,
                 name: "f1".to_string(),
+                namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "c1".to_string(),
             },
@@ -1255,6 +1236,7 @@ fn normalize_mixed_inserts_and_removals() {
             },
             ResponseItem::CustomToolCallOutput {
                 call_id: "t1".to_string(),
+                name: None,
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
             },
             ResponseItem::LocalShellCall {
@@ -1282,6 +1264,7 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
     let items = vec![ResponseItem::FunctionCall {
         id: None,
         name: "do_it".to_string(),
+        namespace: None,
         arguments: "{}".to_string(),
         call_id: "call-x".to_string(),
     }];
@@ -1293,12 +1276,46 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
             ResponseItem::FunctionCall {
                 id: None,
                 name: "do_it".to_string(),
+                namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call-x".to_string(),
             },
             ResponseItem::FunctionCallOutput {
                 call_id: "call-x".to_string(),
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
+            },
+        ]
+    );
+}
+
+#[test]
+fn normalize_adds_missing_output_for_tool_search_call() {
+    let items = vec![ResponseItem::ToolSearchCall {
+        id: None,
+        call_id: Some("search-call-x".to_string()),
+        status: Some("completed".to_string()),
+        execution: "client".to_string(),
+        arguments: "{}".into(),
+    }];
+    let mut h = create_history_with_items(items);
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(
+        h.raw_items(),
+        vec![
+            ResponseItem::ToolSearchCall {
+                id: None,
+                call_id: Some("search-call-x".to_string()),
+                status: Some("completed".to_string()),
+                execution: "client".to_string(),
+                arguments: "{}".into(),
+            },
+            ResponseItem::ToolSearchOutput {
+                call_id: Some("search-call-x".to_string()),
+                status: "completed".to_string(),
+                execution: "client".to_string(),
+                tools: Vec::new(),
             },
         ]
     );
@@ -1357,10 +1374,64 @@ fn normalize_removes_orphan_function_call_output_panics_in_debug() {
 fn normalize_removes_orphan_custom_tool_call_output_panics_in_debug() {
     let items = vec![ResponseItem::CustomToolCallOutput {
         call_id: "orphan-2".to_string(),
+        name: None,
         output: FunctionCallOutputPayload::from_text("ok".to_string()),
     }];
     let mut h = create_history_with_items(items);
     h.normalize_history(&default_input_modalities());
+}
+
+#[cfg(not(debug_assertions))]
+#[test]
+fn normalize_removes_orphan_client_tool_search_output() {
+    let items = vec![ResponseItem::ToolSearchOutput {
+        call_id: Some("orphan-search".to_string()),
+        status: "completed".to_string(),
+        execution: "client".to_string(),
+        tools: Vec::new(),
+    }];
+    let mut h = create_history_with_items(items);
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(h.raw_items(), vec![]);
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic]
+fn normalize_removes_orphan_client_tool_search_output_panics_in_debug() {
+    let items = vec![ResponseItem::ToolSearchOutput {
+        call_id: Some("orphan-search".to_string()),
+        status: "completed".to_string(),
+        execution: "client".to_string(),
+        tools: Vec::new(),
+    }];
+    let mut h = create_history_with_items(items);
+    h.normalize_history(&default_input_modalities());
+}
+
+#[test]
+fn normalize_keeps_server_tool_search_output_without_matching_call() {
+    let items = vec![ResponseItem::ToolSearchOutput {
+        call_id: Some("server-search".to_string()),
+        status: "completed".to_string(),
+        execution: "server".to_string(),
+        tools: Vec::new(),
+    }];
+    let mut h = create_history_with_items(items);
+
+    h.normalize_history(&default_input_modalities());
+
+    assert_eq!(
+        h.raw_items(),
+        vec![ResponseItem::ToolSearchOutput {
+            call_id: Some("server-search".to_string()),
+            status: "completed".to_string(),
+            execution: "server".to_string(),
+            tools: Vec::new(),
+        }]
+    );
 }
 
 #[cfg(debug_assertions)]
@@ -1371,6 +1442,7 @@ fn normalize_mixed_inserts_and_removals_panics_in_debug() {
         ResponseItem::FunctionCall {
             id: None,
             name: "f1".to_string(),
+            namespace: None,
             arguments: "{}".to_string(),
             call_id: "c1".to_string(),
         },
@@ -1469,6 +1541,7 @@ fn image_data_url_payload_does_not_dominate_custom_tool_call_output_estimate() {
     let image_url = format!("data:image/png;base64,{payload}");
     let item = ResponseItem::CustomToolCallOutput {
         call_id: "call-js-repl".to_string(),
+        name: None,
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputText {
                 text: "Screenshot captured".to_string(),

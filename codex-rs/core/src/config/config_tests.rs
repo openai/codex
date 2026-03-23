@@ -1,6 +1,8 @@
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
+use crate::config::types::ApprovalsReviewer;
+use crate::config::types::BundledSkillsConfig;
 use crate::config::types::FeedbackConfigToml;
 use crate::config::types::HistoryPersistence;
 use crate::config::types::McpServerTransportConfig;
@@ -9,14 +11,18 @@ use crate::config::types::MemoriesToml;
 use crate::config::types::ModelAvailabilityNuxConfig;
 use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
+use crate::config::types::ToolSuggestDiscoverableType;
 use crate::config_loader::RequirementSource;
-use crate::features::Feature;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
+use codex_features::Feature;
+use codex_features::FeaturesToml;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use serde::Deserialize;
 use tempfile::tempdir;
 
@@ -26,6 +32,7 @@ use pretty_assertions::assert_eq;
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 
@@ -156,6 +163,63 @@ consolidation_model = "gpt-5"
 }
 
 #[test]
+fn parses_bundled_skills_config() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[skills.bundled]
+enabled = false
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.skills,
+        Some(SkillsConfig {
+            bundled: Some(BundledSkillsConfig { enabled: false }),
+            config: Vec::new(),
+        })
+    );
+}
+
+#[test]
+fn tools_web_search_true_deserializes_to_none() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[tools]
+web_search = true
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.tools,
+        Some(ToolsToml {
+            web_search: None,
+            view_image: None,
+        })
+    );
+}
+
+#[test]
+fn tools_web_search_false_deserializes_to_none() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[tools]
+web_search = false
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.tools,
+        Some(ToolsToml {
+            web_search: None,
+            view_image: None,
+        })
+    );
+}
+
+#[test]
 fn config_toml_deserializes_model_availability_nux() {
     let toml = r#"
 [tui.model_availability_nux]
@@ -174,6 +238,7 @@ fn config_toml_deserializes_model_availability_nux() {
             show_tooltips: true,
             alternate_screen: AltScreenMode::default(),
             status_line: None,
+            terminal_title: None,
             theme: None,
             model_availability_nux: ModelAvailabilityNuxConfig {
                 shown_count: HashMap::from([
@@ -574,6 +639,156 @@ fn permissions_profiles_reject_nested_entries_for_non_project_roots() -> std::io
     Ok(())
 }
 
+fn load_workspace_permission_profile(profile: PermissionProfileToml) -> std::io::Result<Config> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+
+    Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some("workspace".to_string()),
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([("workspace".to_string(), profile)]),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+    )
+}
+
+#[test]
+fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<()> {
+    let config = load_workspace_permission_profile(PermissionProfileToml {
+        filesystem: Some(FilesystemPermissionsToml {
+            entries: BTreeMap::from([(
+                ":future_special_path".to_string(),
+                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+            )]),
+        }),
+        network: None,
+    })?;
+
+    assert_eq!(
+        config.permissions.file_system_sandbox_policy,
+        FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::unknown(":future_special_path", None),
+            },
+            access: FileSystemAccessMode::Read,
+        }]),
+    );
+    assert_eq!(
+        config.permissions.sandbox_policy.get(),
+        &SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: Vec::new(),
+            },
+            network_access: false,
+        }
+    );
+    assert!(
+        config.startup_warnings.iter().any(|warning| warning.contains(
+            "Configured filesystem path `:future_special_path` is not recognized by this version of Codex and will be ignored."
+        )),
+        "{:?}",
+        config.startup_warnings
+    );
+    Ok(())
+}
+
+#[test]
+fn permissions_profiles_allow_unknown_special_paths_with_nested_entries() -> std::io::Result<()> {
+    let config = load_workspace_permission_profile(PermissionProfileToml {
+        filesystem: Some(FilesystemPermissionsToml {
+            entries: BTreeMap::from([(
+                ":future_special_path".to_string(),
+                FilesystemPermissionToml::Scoped(BTreeMap::from([(
+                    "docs".to_string(),
+                    FileSystemAccessMode::Read,
+                )])),
+            )]),
+        }),
+        network: None,
+    })?;
+
+    assert_eq!(
+        config.permissions.file_system_sandbox_policy,
+        FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::unknown(":future_special_path", Some("docs".into())),
+            },
+            access: FileSystemAccessMode::Read,
+        }]),
+    );
+    assert!(
+        config.startup_warnings.iter().any(|warning| warning.contains(
+            "Configured filesystem path `:future_special_path` with nested entry `docs` is not recognized by this version of Codex and will be ignored."
+        )),
+        "{:?}",
+        config.startup_warnings
+    );
+    Ok(())
+}
+
+#[test]
+fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io::Result<()> {
+    let config = load_workspace_permission_profile(PermissionProfileToml {
+        filesystem: None,
+        network: None,
+    })?;
+
+    assert_eq!(
+        config.permissions.file_system_sandbox_policy,
+        FileSystemSandboxPolicy::restricted(Vec::new())
+    );
+    assert_eq!(
+        config.permissions.sandbox_policy.get(),
+        &SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: false,
+                readable_roots: Vec::new(),
+            },
+            network_access: false,
+        }
+    );
+    assert!(
+        config.startup_warnings.iter().any(|warning| warning.contains(
+            "Permissions profile `workspace` does not define any recognized filesystem entries for this version of Codex."
+        )),
+        "{:?}",
+        config.startup_warnings
+    );
+    Ok(())
+}
+
+#[test]
+fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::Result<()> {
+    let config = load_workspace_permission_profile(PermissionProfileToml {
+        filesystem: Some(FilesystemPermissionsToml {
+            entries: BTreeMap::new(),
+        }),
+        network: None,
+    })?;
+
+    assert_eq!(
+        config.permissions.file_system_sandbox_policy,
+        FileSystemSandboxPolicy::restricted(Vec::new())
+    );
+    assert!(
+        config.startup_warnings.iter().any(|warning| warning.contains(
+            "Permissions profile `workspace` does not define any recognized filesystem entries for this version of Codex."
+        )),
+        "{:?}",
+        config.startup_warnings
+    );
+    Ok(())
+}
+
 #[test]
 fn permissions_profiles_reject_project_root_parent_traversal() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
@@ -708,6 +923,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             show_tooltips: true,
             alternate_screen: AltScreenMode::Auto,
             status_line: None,
+            terminal_title: None,
             theme: None,
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
         }
@@ -834,6 +1050,76 @@ trust_level = "trusted"
             }
         );
     }
+}
+
+#[test]
+fn legacy_sandbox_mode_config_builds_split_policies_without_drift() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let extra_root = test_absolute_path("/tmp/legacy-extra-root");
+    let cases = vec![
+        (
+            "danger-full-access".to_string(),
+            r#"sandbox_mode = "danger-full-access"
+"#
+            .to_string(),
+        ),
+        (
+            "read-only".to_string(),
+            r#"sandbox_mode = "read-only"
+"#
+            .to_string(),
+        ),
+        (
+            "workspace-write".to_string(),
+            format!(
+                r#"sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+writable_roots = [{}]
+exclude_tmpdir_env_var = true
+exclude_slash_tmp = true
+"#,
+                serde_json::json!(extra_root)
+            ),
+        ),
+    ];
+
+    for (name, config_toml) in cases {
+        let cfg = toml::from_str::<ConfigToml>(&config_toml)
+            .unwrap_or_else(|err| panic!("case `{name}` should parse: {err}"));
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+
+        let sandbox_policy = config.permissions.sandbox_policy.get();
+        assert_eq!(
+            config.permissions.file_system_sandbox_policy,
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy(sandbox_policy, cwd.path()),
+            "case `{name}` should preserve filesystem semantics from legacy config"
+        );
+        assert_eq!(
+            config.permissions.network_sandbox_policy,
+            NetworkSandboxPolicy::from(sandbox_policy),
+            "case `{name}` should preserve network semantics from legacy config"
+        );
+        assert_eq!(
+            config
+                .permissions
+                .file_system_sandbox_policy
+                .to_legacy_sandbox_policy(config.permissions.network_sandbox_policy, cwd.path())
+                .unwrap_or_else(|err| panic!("case `{name}` should round-trip: {err}")),
+            sandbox_policy.clone(),
+            "case `{name}` should round-trip through split policies without drift"
+        );
+    }
+
+    Ok(())
 }
 
 #[test]
@@ -1377,7 +1663,7 @@ fn feature_table_overrides_legacy_flags() -> std::io::Result<()> {
     let mut entries = BTreeMap::new();
     entries.insert("apply_patch_freeform".to_string(), false);
     let cfg = ConfigToml {
-        features: Some(crate::features::FeaturesToml { entries }),
+        features: Some(FeaturesToml { entries }),
         ..Default::default()
     };
 
@@ -1425,7 +1711,7 @@ fn responses_websocket_features_do_not_change_wire_api() -> std::io::Result<()> 
         let mut entries = BTreeMap::new();
         entries.insert(feature_key.to_string(), true);
         let cfg = ConfigToml {
-            features: Some(crate::features::FeaturesToml { entries }),
+            features: Some(FeaturesToml { entries }),
             ..Default::default()
         };
 
@@ -2520,6 +2806,123 @@ model = "gpt-5.1-codex"
     Ok(())
 }
 
+#[tokio::test]
+async fn set_feature_enabled_updates_profile() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    ConfigEditsBuilder::new(codex_home.path())
+        .with_profile(Some("dev"))
+        .set_feature_enabled("guardian_approval", true)
+        .apply()
+        .await?;
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    let parsed: ConfigToml = toml::from_str(&serialized)?;
+    let profile = parsed
+        .profiles
+        .get("dev")
+        .expect("profile should be created");
+
+    assert_eq!(
+        profile
+            .features
+            .as_ref()
+            .and_then(|features| features.entries.get("guardian_approval")),
+        Some(&true),
+    );
+    assert_eq!(
+        parsed
+            .features
+            .as_ref()
+            .and_then(|features| features.entries.get("guardian_approval")),
+        None,
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn set_feature_enabled_persists_default_false_feature_disable_in_profile()
+-> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    ConfigEditsBuilder::new(codex_home.path())
+        .with_profile(Some("dev"))
+        .set_feature_enabled("guardian_approval", true)
+        .apply()
+        .await?;
+
+    ConfigEditsBuilder::new(codex_home.path())
+        .with_profile(Some("dev"))
+        .set_feature_enabled("guardian_approval", false)
+        .apply()
+        .await?;
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    let parsed: ConfigToml = toml::from_str(&serialized)?;
+    let profile = parsed
+        .profiles
+        .get("dev")
+        .expect("profile should be created");
+
+    assert_eq!(
+        profile
+            .features
+            .as_ref()
+            .and_then(|features| features.entries.get("guardian_approval")),
+        Some(&false),
+    );
+    assert_eq!(
+        parsed
+            .features
+            .as_ref()
+            .and_then(|features| features.entries.get("guardian_approval")),
+        None,
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn set_feature_enabled_profile_disable_overrides_root_enable() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    ConfigEditsBuilder::new(codex_home.path())
+        .set_feature_enabled("guardian_approval", true)
+        .apply()
+        .await?;
+
+    ConfigEditsBuilder::new(codex_home.path())
+        .with_profile(Some("dev"))
+        .set_feature_enabled("guardian_approval", false)
+        .apply()
+        .await?;
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    let parsed: ConfigToml = toml::from_str(&serialized)?;
+    let profile = parsed
+        .profiles
+        .get("dev")
+        .expect("profile should be created");
+
+    assert_eq!(
+        parsed
+            .features
+            .as_ref()
+            .and_then(|features| features.entries.get("guardian_approval")),
+        Some(&true),
+    );
+    assert_eq!(
+        profile
+            .features
+            .as_ref()
+            .and_then(|features| features.entries.get("guardian_approval")),
+        Some(&false),
+    );
+
+    Ok(())
+}
+
 struct PrecedenceTestFixture {
     cwd: TempDir,
     codex_home: TempDir,
@@ -2595,6 +2998,67 @@ fn loads_compact_prompt_from_file() -> std::io::Result<()> {
 }
 
 #[test]
+fn load_config_uses_requirements_guardian_developer_instructions() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        Default::default(),
+        crate::config_loader::ConfigRequirementsToml {
+            guardian_developer_instructions: Some(
+                "  Use the workspace-managed guardian policy.  ".to_string(),
+            ),
+            ..Default::default()
+        },
+    )
+    .map_err(std::io::Error::other)?;
+
+    let config = Config::load_config_with_layer_stack(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+        config_layer_stack,
+    )?;
+
+    assert_eq!(
+        config.guardian_developer_instructions.as_deref(),
+        Some("Use the workspace-managed guardian policy.")
+    );
+
+    Ok(())
+}
+
+#[test]
+fn load_config_ignores_empty_requirements_guardian_developer_instructions() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config_layer_stack = ConfigLayerStack::new(
+        Vec::new(),
+        Default::default(),
+        crate::config_loader::ConfigRequirementsToml {
+            guardian_developer_instructions: Some("   ".to_string()),
+            ..Default::default()
+        },
+    )
+    .map_err(std::io::Error::other)?;
+
+    let config = Config::load_config_with_layer_stack(
+        ConfigToml::default(),
+        ConfigOverrides {
+            cwd: Some(codex_home.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+        config_layer_stack,
+    )?;
+
+    assert_eq!(config.guardian_developer_instructions, None);
+
+    Ok(())
+}
+
+#[test]
 fn load_config_rejects_missing_agent_role_config_file() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let missing_path = codex_home.path().join("agents").join("researcher.toml");
@@ -2639,7 +3103,11 @@ async fn agent_role_relative_config_file_resolves_against_config_toml() -> std::
             .expect("role config should have a parent directory"),
     )
     .await?;
-    tokio::fs::write(&role_config_path, "model = \"gpt-5\"").await?;
+    tokio::fs::write(
+        &role_config_path,
+        "developer_instructions = \"Research carefully\"\nmodel = \"gpt-5\"",
+    )
+    .await?;
     tokio::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"[agents.researcher]
@@ -2669,6 +3137,788 @@ nickname_candidates = ["Hypatia", "Noether"]
             .and_then(|role| role.nickname_candidates.as_ref())
             .map(|candidates| candidates.iter().map(String::as_str).collect::<Vec<_>>()),
         Some(vec!["Hypatia", "Noether"])
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn agent_role_file_metadata_overrides_config_toml_metadata() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let role_config_path = codex_home.path().join("agents").join("researcher.toml");
+    tokio::fs::create_dir_all(
+        role_config_path
+            .parent()
+            .expect("role config should have a parent directory"),
+    )
+    .await?;
+    tokio::fs::write(
+        &role_config_path,
+        r#"
+description = "Role metadata from file"
+nickname_candidates = ["Hypatia"]
+developer_instructions = "Research carefully"
+model = "gpt-5"
+"#,
+    )
+    .await?;
+    tokio::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[agents.researcher]
+description = "Research role from config"
+config_file = "./agents/researcher.toml"
+nickname_candidates = ["Noether"]
+"#,
+    )
+    .await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+    let role = config
+        .agent_roles
+        .get("researcher")
+        .expect("researcher role should load");
+    assert_eq!(role.description.as_deref(), Some("Role metadata from file"));
+    assert_eq!(role.config_file.as_ref(), Some(&role_config_path));
+    assert_eq!(
+        role.nickname_candidates
+            .as_ref()
+            .map(|candidates| candidates.iter().map(String::as_str).collect::<Vec<_>>()),
+        Some(vec!["Hypatia"])
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn agent_role_file_without_developer_instructions_is_dropped_with_warning()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    let nested_cwd = repo_root.path().join("packages").join("app");
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(&nested_cwd)?;
+
+    let workspace_key = repo_root.path().to_string_lossy().replace('\\', "\\\\");
+    tokio::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        format!(
+            r#"[projects."{workspace_key}"]
+trust_level = "trusted"
+"#
+        ),
+    )
+    .await?;
+
+    let standalone_agents_dir = repo_root.path().join(".codex").join("agents");
+    tokio::fs::create_dir_all(&standalone_agents_dir).await?;
+    tokio::fs::write(
+        standalone_agents_dir.join("researcher.toml"),
+        r#"
+name = "researcher"
+description = "Role metadata from file"
+model = "gpt-5"
+"#,
+    )
+    .await?;
+    tokio::fs::write(
+        standalone_agents_dir.join("reviewer.toml"),
+        r#"
+name = "reviewer"
+description = "Review role"
+developer_instructions = "Review carefully"
+model = "gpt-5"
+"#,
+    )
+    .await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(nested_cwd),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+    assert!(!config.agent_roles.contains_key("researcher"));
+    assert_eq!(
+        config
+            .agent_roles
+            .get("reviewer")
+            .and_then(|role| role.description.as_deref()),
+        Some("Review role")
+    );
+    assert!(
+        config
+            .startup_warnings
+            .iter()
+            .any(|warning| warning.contains("must define `developer_instructions`"))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn legacy_agent_role_config_file_allows_missing_developer_instructions() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let role_config_path = codex_home.path().join("agents").join("researcher.toml");
+    tokio::fs::create_dir_all(
+        role_config_path
+            .parent()
+            .expect("role config should have a parent directory"),
+    )
+    .await?;
+    tokio::fs::write(
+        &role_config_path,
+        r#"
+model = "gpt-5"
+model_reasoning_effort = "high"
+"#,
+    )
+    .await?;
+    tokio::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[agents.researcher]
+description = "Research role from config"
+config_file = "./agents/researcher.toml"
+"#,
+    )
+    .await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+    assert_eq!(
+        config
+            .agent_roles
+            .get("researcher")
+            .and_then(|role| role.description.as_deref()),
+        Some("Research role from config")
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("researcher")
+            .and_then(|role| role.config_file.as_ref()),
+        Some(&role_config_path)
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn agent_role_without_description_after_merge_is_dropped_with_warning() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let role_config_path = codex_home.path().join("agents").join("researcher.toml");
+    tokio::fs::create_dir_all(
+        role_config_path
+            .parent()
+            .expect("role config should have a parent directory"),
+    )
+    .await?;
+    tokio::fs::write(
+        &role_config_path,
+        r#"
+developer_instructions = "Research carefully"
+model = "gpt-5"
+"#,
+    )
+    .await?;
+    tokio::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[agents.researcher]
+config_file = "./agents/researcher.toml"
+
+[agents.reviewer]
+description = "Review role"
+"#,
+    )
+    .await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+    assert!(!config.agent_roles.contains_key("researcher"));
+    assert_eq!(
+        config
+            .agent_roles
+            .get("reviewer")
+            .and_then(|role| role.description.as_deref()),
+        Some("Review role")
+    );
+    assert!(
+        config
+            .startup_warnings
+            .iter()
+            .any(|warning| warning.contains("agent role `researcher` must define a description"))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn discovered_agent_role_file_without_name_is_dropped_with_warning() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    let nested_cwd = repo_root.path().join("packages").join("app");
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(&nested_cwd)?;
+
+    let workspace_key = repo_root.path().to_string_lossy().replace('\\', "\\\\");
+    tokio::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        format!(
+            r#"[projects."{workspace_key}"]
+trust_level = "trusted"
+"#
+        ),
+    )
+    .await?;
+
+    let standalone_agents_dir = repo_root.path().join(".codex").join("agents");
+    tokio::fs::create_dir_all(&standalone_agents_dir).await?;
+    tokio::fs::write(
+        standalone_agents_dir.join("researcher.toml"),
+        r#"
+description = "Role metadata from file"
+developer_instructions = "Research carefully"
+"#,
+    )
+    .await?;
+    tokio::fs::write(
+        standalone_agents_dir.join("reviewer.toml"),
+        r#"
+name = "reviewer"
+description = "Review role"
+developer_instructions = "Review carefully"
+"#,
+    )
+    .await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(nested_cwd),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+    assert!(!config.agent_roles.contains_key("researcher"));
+    assert_eq!(
+        config
+            .agent_roles
+            .get("reviewer")
+            .and_then(|role| role.description.as_deref()),
+        Some("Review role")
+    );
+    assert!(
+        config
+            .startup_warnings
+            .iter()
+            .any(|warning| warning.contains("must define a non-empty `name`"))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn agent_role_file_name_takes_precedence_over_config_key() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let role_config_path = codex_home.path().join("agents").join("researcher.toml");
+    tokio::fs::create_dir_all(
+        role_config_path
+            .parent()
+            .expect("role config should have a parent directory"),
+    )
+    .await?;
+    tokio::fs::write(
+        &role_config_path,
+        r#"
+name = "archivist"
+description = "Role metadata from file"
+developer_instructions = "Research carefully"
+model = "gpt-5"
+"#,
+    )
+    .await?;
+    tokio::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[agents.researcher]
+description = "Research role from config"
+config_file = "./agents/researcher.toml"
+"#,
+    )
+    .await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+    assert_eq!(config.agent_roles.contains_key("researcher"), false);
+    let role = config
+        .agent_roles
+        .get("archivist")
+        .expect("role should use file-provided name");
+    assert_eq!(role.description.as_deref(), Some("Role metadata from file"));
+    assert_eq!(role.config_file.as_ref(), Some(&role_config_path));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn loads_legacy_split_agent_roles_from_config_toml() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let researcher_path = codex_home.path().join("agents").join("researcher.toml");
+    let reviewer_path = codex_home.path().join("agents").join("reviewer.toml");
+    tokio::fs::create_dir_all(
+        researcher_path
+            .parent()
+            .expect("role config should have a parent directory"),
+    )
+    .await?;
+    tokio::fs::write(
+        &researcher_path,
+        "developer_instructions = \"Research carefully\"\nmodel = \"gpt-5\"",
+    )
+    .await?;
+    tokio::fs::write(
+        &reviewer_path,
+        "developer_instructions = \"Review carefully\"\nmodel = \"gpt-4.1\"",
+    )
+    .await?;
+    tokio::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[agents.researcher]
+description = "Research role"
+config_file = "./agents/researcher.toml"
+nickname_candidates = ["Hypatia", "Noether"]
+
+[agents.reviewer]
+description = "Review role"
+config_file = "./agents/reviewer.toml"
+nickname_candidates = ["Atlas"]
+"#,
+    )
+    .await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(
+        config
+            .agent_roles
+            .get("researcher")
+            .and_then(|role| role.description.as_deref()),
+        Some("Research role")
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("researcher")
+            .and_then(|role| role.config_file.as_ref()),
+        Some(&researcher_path)
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("researcher")
+            .and_then(|role| role.nickname_candidates.as_ref())
+            .map(|candidates| candidates.iter().map(String::as_str).collect::<Vec<_>>()),
+        Some(vec!["Hypatia", "Noether"])
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("reviewer")
+            .and_then(|role| role.description.as_deref()),
+        Some("Review role")
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("reviewer")
+            .and_then(|role| role.config_file.as_ref()),
+        Some(&reviewer_path)
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("reviewer")
+            .and_then(|role| role.nickname_candidates.as_ref())
+            .map(|candidates| candidates.iter().map(String::as_str).collect::<Vec<_>>()),
+        Some(vec!["Atlas"])
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn discovers_multiple_standalone_agent_role_files() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    let nested_cwd = repo_root.path().join("packages").join("app");
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(&nested_cwd)?;
+
+    let workspace_key = repo_root.path().to_string_lossy().replace('\\', "\\\\");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        format!(
+            r#"[projects."{workspace_key}"]
+trust_level = "trusted"
+"#
+        ),
+    )?;
+
+    let root_agent = repo_root
+        .path()
+        .join(".codex")
+        .join("agents")
+        .join("root.toml");
+    std::fs::create_dir_all(
+        root_agent
+            .parent()
+            .expect("root agent should have a parent directory"),
+    )?;
+    std::fs::write(
+        &root_agent,
+        r#"
+name = "researcher"
+description = "from root"
+developer_instructions = "Research carefully"
+"#,
+    )?;
+
+    let nested_agent = repo_root
+        .path()
+        .join("packages")
+        .join(".codex")
+        .join("agents")
+        .join("review")
+        .join("nested.toml");
+    std::fs::create_dir_all(
+        nested_agent
+            .parent()
+            .expect("nested agent should have a parent directory"),
+    )?;
+    std::fs::write(
+        &nested_agent,
+        r#"
+name = "reviewer"
+description = "from nested"
+nickname_candidates = ["Atlas"]
+developer_instructions = "Review carefully"
+"#,
+    )?;
+
+    let sibling_agent = repo_root
+        .path()
+        .join("packages")
+        .join(".codex")
+        .join("agents")
+        .join("writer.toml");
+    std::fs::create_dir_all(
+        sibling_agent
+            .parent()
+            .expect("sibling agent should have a parent directory"),
+    )?;
+    std::fs::write(
+        &sibling_agent,
+        r#"
+name = "writer"
+description = "from sibling"
+nickname_candidates = ["Sagan"]
+developer_instructions = "Write carefully"
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(nested_cwd),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    assert_eq!(
+        config
+            .agent_roles
+            .get("researcher")
+            .and_then(|role| role.description.as_deref()),
+        Some("from root")
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("reviewer")
+            .and_then(|role| role.description.as_deref()),
+        Some("from nested")
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("reviewer")
+            .and_then(|role| role.nickname_candidates.as_ref())
+            .map(|candidates| candidates.iter().map(String::as_str).collect::<Vec<_>>()),
+        Some(vec!["Atlas"])
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("writer")
+            .and_then(|role| role.description.as_deref()),
+        Some("from sibling")
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("writer")
+            .and_then(|role| role.nickname_candidates.as_ref())
+            .map(|candidates| candidates.iter().map(String::as_str).collect::<Vec<_>>()),
+        Some(vec!["Sagan"])
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn mixed_legacy_and_standalone_agent_role_sources_merge_with_precedence()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    let nested_cwd = repo_root.path().join("packages").join("app");
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(&nested_cwd)?;
+
+    let workspace_key = repo_root.path().to_string_lossy().replace('\\', "\\\\");
+    tokio::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        format!(
+            r#"[projects."{workspace_key}"]
+trust_level = "trusted"
+
+[agents.researcher]
+description = "Research role from config"
+config_file = "./agents/researcher.toml"
+nickname_candidates = ["Noether"]
+
+[agents.critic]
+description = "Critic role from config"
+config_file = "./agents/critic.toml"
+nickname_candidates = ["Ada"]
+"#
+        ),
+    )
+    .await?;
+
+    let home_agents_dir = codex_home.path().join("agents");
+    tokio::fs::create_dir_all(&home_agents_dir).await?;
+    tokio::fs::write(
+        home_agents_dir.join("researcher.toml"),
+        r#"
+developer_instructions = "Research carefully"
+model = "gpt-5"
+"#,
+    )
+    .await?;
+    tokio::fs::write(
+        home_agents_dir.join("critic.toml"),
+        r#"
+developer_instructions = "Critique carefully"
+model = "gpt-4.1"
+"#,
+    )
+    .await?;
+
+    let standalone_agents_dir = repo_root.path().join(".codex").join("agents");
+    tokio::fs::create_dir_all(&standalone_agents_dir).await?;
+    tokio::fs::write(
+        standalone_agents_dir.join("researcher.toml"),
+        r#"
+name = "researcher"
+description = "Research role from file"
+nickname_candidates = ["Hypatia"]
+developer_instructions = "Research from file"
+model = "gpt-5-mini"
+"#,
+    )
+    .await?;
+    tokio::fs::write(
+        standalone_agents_dir.join("writer.toml"),
+        r#"
+name = "writer"
+description = "Writer role from file"
+nickname_candidates = ["Sagan"]
+developer_instructions = "Write carefully"
+model = "gpt-5"
+"#,
+    )
+    .await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(nested_cwd),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    assert_eq!(
+        config
+            .agent_roles
+            .get("researcher")
+            .and_then(|role| role.description.as_deref()),
+        Some("Research role from file")
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("researcher")
+            .and_then(|role| role.config_file.as_ref()),
+        Some(&standalone_agents_dir.join("researcher.toml"))
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("researcher")
+            .and_then(|role| role.nickname_candidates.as_ref())
+            .map(|candidates| candidates.iter().map(String::as_str).collect::<Vec<_>>()),
+        Some(vec!["Hypatia"])
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("critic")
+            .and_then(|role| role.description.as_deref()),
+        Some("Critic role from config")
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("critic")
+            .and_then(|role| role.config_file.as_ref()),
+        Some(&home_agents_dir.join("critic.toml"))
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("critic")
+            .and_then(|role| role.nickname_candidates.as_ref())
+            .map(|candidates| candidates.iter().map(String::as_str).collect::<Vec<_>>()),
+        Some(vec!["Ada"])
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("writer")
+            .and_then(|role| role.description.as_deref()),
+        Some("Writer role from file")
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("writer")
+            .and_then(|role| role.nickname_candidates.as_ref())
+            .map(|candidates| candidates.iter().map(String::as_str).collect::<Vec<_>>()),
+        Some(vec!["Sagan"])
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn higher_precedence_agent_role_can_inherit_description_from_lower_layer()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    let nested_cwd = repo_root.path().join("packages").join("app");
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(&nested_cwd)?;
+
+    let workspace_key = repo_root.path().to_string_lossy().replace('\\', "\\\\");
+    tokio::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        format!(
+            r#"[projects."{workspace_key}"]
+trust_level = "trusted"
+
+[agents.researcher]
+description = "Research role from config"
+config_file = "./agents/researcher.toml"
+"#
+        ),
+    )
+    .await?;
+
+    let home_agents_dir = codex_home.path().join("agents");
+    tokio::fs::create_dir_all(&home_agents_dir).await?;
+    tokio::fs::write(
+        home_agents_dir.join("researcher.toml"),
+        r#"
+developer_instructions = "Research carefully"
+model = "gpt-5"
+"#,
+    )
+    .await?;
+
+    let standalone_agents_dir = repo_root.path().join(".codex").join("agents");
+    tokio::fs::create_dir_all(&standalone_agents_dir).await?;
+    tokio::fs::write(
+        standalone_agents_dir.join("researcher.toml"),
+        r#"
+name = "researcher"
+nickname_candidates = ["Hypatia"]
+developer_instructions = "Research from file"
+model = "gpt-5-mini"
+"#,
+    )
+    .await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(nested_cwd),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+
+    assert_eq!(
+        config
+            .agent_roles
+            .get("researcher")
+            .and_then(|role| role.description.as_deref()),
+        Some("Research role from config")
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("researcher")
+            .and_then(|role| role.config_file.as_ref()),
+        Some(&standalone_agents_dir.join("researcher.toml"))
+    );
+    assert_eq!(
+        config
+            .agent_roles
+            .get("researcher")
+            .and_then(|role| role.nickname_candidates.as_ref())
+            .map(|candidates| candidates.iter().map(String::as_str).collect::<Vec<_>>()),
+        Some(vec!["Hypatia"])
     );
 
     Ok(())
@@ -2892,6 +4142,7 @@ wire_api = "responses"
 request_max_retries = 4            # retry failed HTTP requests
 stream_max_retries = 10            # retry dropped SSE streams
 stream_idle_timeout_ms = 300000    # 5m idle timeout
+websocket_connect_timeout_ms = 15000
 
 [profiles.o3]
 model = "o3"
@@ -2946,11 +4197,12 @@ model_verbosity = "high"
         request_max_retries: Some(4),
         stream_max_retries: Some(10),
         stream_idle_timeout_ms: Some(300_000),
+        websocket_connect_timeout_ms: Some(15_000),
         requires_openai_auth: false,
         supports_websockets: false,
     };
     let model_provider_map = {
-        let mut model_provider_map = built_in_model_providers();
+        let mut model_provider_map = built_in_model_providers(/* openai_base_url */ None);
         model_provider_map.insert("openai-custom".to_string(), openai_custom_provider.clone());
         model_provider_map
     };
@@ -3016,8 +4268,10 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
                 allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
+                windows_sandbox_private_desktop: true,
                 macos_seatbelt_profile_extensions: None,
             },
+            approvals_reviewer: ApprovalsReviewer::User,
             enforce_residency: Constrained::allow_any(None),
             user_instructions: None,
             notify: None,
@@ -3059,13 +4313,17 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            experimental_exec_server_url: None,
             realtime_audio: RealtimeAudioConfig::default(),
+            experimental_realtime_start_instructions: None,
             experimental_realtime_ws_base_url: None,
             experimental_realtime_ws_model: None,
+            realtime: RealtimeConfig::default(),
             experimental_realtime_ws_backend_prompt: None,
             experimental_realtime_ws_startup_context: None,
             base_instructions: None,
             developer_instructions: None,
+            guardian_developer_instructions: None,
             compact_prompt: None,
             commit_attribution: None,
             forced_chatgpt_workspace_id: None,
@@ -3091,8 +4349,10 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             analytics_enabled: Some(true),
             feedback_enabled: true,
+            tool_suggest: ToolSuggestConfig::default(),
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            tui_terminal_title: None,
             tui_theme: None,
             otel: OtelConfig::default(),
         },
@@ -3151,8 +4411,10 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
+            windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
+        approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
         user_instructions: None,
         notify: None,
@@ -3194,13 +4456,17 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         model_verbosity: None,
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+        experimental_exec_server_url: None,
         realtime_audio: RealtimeAudioConfig::default(),
+        experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
+        realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
+        guardian_developer_instructions: None,
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
@@ -3226,8 +4492,10 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         analytics_enabled: Some(true),
         feedback_enabled: true,
+        tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_terminal_title: None,
         tui_theme: None,
         otel: OtelConfig::default(),
     };
@@ -3284,8 +4552,10 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
+            windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
+        approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
         user_instructions: None,
         notify: None,
@@ -3327,13 +4597,17 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         model_verbosity: None,
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+        experimental_exec_server_url: None,
         realtime_audio: RealtimeAudioConfig::default(),
+        experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
+        realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
+        guardian_developer_instructions: None,
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
@@ -3359,8 +4633,10 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         analytics_enabled: Some(false),
         feedback_enabled: true,
+        tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_terminal_title: None,
         tui_theme: None,
         otel: OtelConfig::default(),
     };
@@ -3403,8 +4679,10 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             windows_sandbox_mode: None,
+            windows_sandbox_private_desktop: true,
             macos_seatbelt_profile_extensions: None,
         },
+        approvals_reviewer: ApprovalsReviewer::User,
         enforce_residency: Constrained::allow_any(None),
         user_instructions: None,
         notify: None,
@@ -3446,13 +4724,17 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         model_verbosity: Some(Verbosity::High),
         personality: Some(Personality::Pragmatic),
         chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+        experimental_exec_server_url: None,
         realtime_audio: RealtimeAudioConfig::default(),
+        experimental_realtime_start_instructions: None,
         experimental_realtime_ws_base_url: None,
         experimental_realtime_ws_model: None,
+        realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
         base_instructions: None,
         developer_instructions: None,
+        guardian_developer_instructions: None,
         compact_prompt: None,
         commit_attribution: None,
         forced_chatgpt_workspace_id: None,
@@ -3478,8 +4760,10 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         model_availability_nux: ModelAvailabilityNuxConfig::default(),
         analytics_enabled: Some(true),
         feedback_enabled: true,
+        tool_suggest: ToolSuggestConfig::default(),
         tui_alternate_screen: AltScreenMode::Auto,
         tui_status_line: None,
+        tui_terminal_title: None,
         tui_theme: None,
         otel: OtelConfig::default(),
     };
@@ -3501,9 +4785,11 @@ fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() -> any
         ]),
         feature_requirements: None,
         mcp_servers: None,
+        apps: None,
         rules: None,
         enforce_residency: None,
         network: None,
+        guardian_developer_instructions: None,
     };
     let requirement_source = crate::config_loader::RequirementSource::Unknown;
     let requirement_source_for_error = requirement_source.clone();
@@ -4099,9 +5385,11 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         allowed_web_search_modes: None,
         feature_requirements: None,
         mcp_servers: None,
+        apps: None,
         rules: None,
         enforce_residency: None,
         network: None,
+        guardian_developer_instructions: None,
     };
 
     let config = ConfigBuilder::default()
@@ -4294,6 +5582,210 @@ shell_tool = true
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn system_bwrap_warning_reports_missing_system_bwrap() {
+    let warning = system_bwrap_warning_for_path(Path::new("/definitely/not/a/bwrap"))
+        .expect("missing system bwrap should emit a warning");
+
+    assert!(warning.contains("could not find system bubblewrap"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn system_bwrap_warning_reports_too_old_system_bwrap() {
+    let fake_bwrap = write_fake_bwrap(
+        r#"#!/bin/sh
+if [ "$1" = "--help" ]; then
+  echo 'usage: bwrap [OPTION...] COMMAND'
+  exit 0
+fi
+exit 1
+"#,
+    );
+    let fake_bwrap_path: &Path = fake_bwrap.as_ref();
+    let warning = system_bwrap_warning_for_path(fake_bwrap_path)
+        .expect("old system bwrap should emit a warning");
+
+    assert!(warning.contains("too old to support `--argv0`"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn system_bwrap_warning_skips_supported_system_bwrap() {
+    let fake_bwrap = write_fake_bwrap(
+        r#"#!/bin/sh
+if [ "$1" = "--help" ]; then
+  echo '  --argv0 PROGRAM'
+  exit 0
+fi
+exit 1
+"#,
+    );
+    let fake_bwrap_path: &Path = fake_bwrap.as_ref();
+
+    assert_eq!(system_bwrap_warning_for_path(fake_bwrap_path), None);
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn system_bwrap_warning_is_disabled_off_linux() {
+    assert!(system_bwrap_warning().is_none());
+}
+
+#[cfg(target_os = "linux")]
+fn write_fake_bwrap(contents: &str) -> tempfile::TempPath {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::NamedTempFile;
+
+    // Linux rejects exec-ing a file that is still open for writing.
+    let path = NamedTempFile::new().expect("temp file").into_temp_path();
+    fs::write(&path, contents).expect("write fake bwrap");
+    let permissions = fs::Permissions::from_mode(0o755);
+    fs::set_permissions(&path, permissions).expect("chmod fake bwrap");
+    path
+}
+
+#[tokio::test]
+async fn approvals_reviewer_defaults_to_manual_only_without_guardian_feature() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
+    Ok(())
+}
+
+#[tokio::test]
+async fn approvals_reviewer_stays_manual_only_when_guardian_feature_is_enabled()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+guardian_approval = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
+    Ok(())
+}
+
+#[tokio::test]
+async fn approvals_reviewer_can_be_set_in_config_without_guardian_approval() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"approvals_reviewer = "user"
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
+    Ok(())
+}
+
+#[tokio::test]
+async fn approvals_reviewer_can_be_set_in_profile_without_guardian_approval() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"profile = "guardian"
+
+[profiles.guardian]
+approvals_reviewer = "guardian_subagent"
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.approvals_reviewer,
+        ApprovalsReviewer::GuardianSubagent
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn smart_approvals_alias_is_ignored() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+smart_approvals = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert!(!config.features.enabled(Feature::GuardianApproval));
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    assert!(serialized.contains("smart_approvals = true"));
+    assert!(!serialized.contains("guardian_approval"));
+    assert!(!serialized.contains("approvals_reviewer"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn smart_approvals_alias_is_ignored_in_profiles() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"profile = "guardian"
+
+[profiles.guardian.features]
+smart_approvals = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert!(!config.features.enabled(Feature::GuardianApproval));
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    assert!(serialized.contains("[profiles.guardian.features]"));
+    assert!(serialized.contains("smart_approvals = true"));
+    assert!(!serialized.contains("guardian_approval"));
+    assert!(!serialized.contains("approvals_reviewer"));
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn feature_requirements_normalize_runtime_feature_mutations() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
@@ -4331,7 +5823,7 @@ async fn feature_requirements_normalize_runtime_feature_mutations() -> std::io::
 }
 
 #[tokio::test]
-async fn feature_requirements_reject_legacy_aliases() {
+async fn feature_requirements_reject_collab_legacy_alias() {
     let codex_home = TempDir::new().expect("tempdir");
 
     let err = ConfigBuilder::default()
@@ -4354,6 +5846,121 @@ async fn feature_requirements_reject_legacy_aliases() {
             .contains("use canonical feature key `multi_agent`"),
         "{err}"
     );
+}
+
+#[test]
+fn tool_suggest_discoverables_load_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[tool_suggest]
+discoverables = [
+  { type = "connector", id = "connector_alpha" },
+  { type = "plugin", id = "plugin_alpha@openai-curated" },
+  { type = "connector", id = "   " }
+]
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.tool_suggest,
+        Some(ToolSuggestConfig {
+            discoverables: vec![
+                ToolSuggestDiscoverable {
+                    kind: ToolSuggestDiscoverableType::Connector,
+                    id: "connector_alpha".to_string(),
+                },
+                ToolSuggestDiscoverable {
+                    kind: ToolSuggestDiscoverableType::Plugin,
+                    id: "plugin_alpha@openai-curated".to_string(),
+                },
+                ToolSuggestDiscoverable {
+                    kind: ToolSuggestDiscoverableType::Connector,
+                    id: "   ".to_string(),
+                },
+            ],
+        })
+    );
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.tool_suggest,
+        ToolSuggestConfig {
+            discoverables: vec![
+                ToolSuggestDiscoverable {
+                    kind: ToolSuggestDiscoverableType::Connector,
+                    id: "connector_alpha".to_string(),
+                },
+                ToolSuggestDiscoverable {
+                    kind: ToolSuggestDiscoverableType::Plugin,
+                    id: "plugin_alpha@openai-curated".to_string(),
+                },
+            ],
+        }
+    );
+    Ok(())
+}
+
+#[test]
+fn experimental_realtime_start_instructions_load_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+experimental_realtime_start_instructions = "start instructions from config"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.experimental_realtime_start_instructions.as_deref(),
+        Some("start instructions from config")
+    );
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.experimental_realtime_start_instructions.as_deref(),
+        Some("start instructions from config")
+    );
+    Ok(())
+}
+
+#[test]
+fn experimental_exec_server_url_loads_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+experimental_exec_server_url = "http://127.0.0.1:8080"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.experimental_exec_server_url.as_deref(),
+        Some("http://127.0.0.1:8080")
+    );
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.experimental_exec_server_url.as_deref(),
+        Some("http://127.0.0.1:8080")
+    );
+    Ok(())
 }
 
 #[test]
@@ -4464,6 +6071,42 @@ experimental_realtime_ws_model = "realtime-test-model"
     assert_eq!(
         config.experimental_realtime_ws_model.as_deref(),
         Some("realtime-test-model")
+    );
+    Ok(())
+}
+
+#[test]
+fn realtime_loads_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[realtime]
+version = "v2"
+type = "transcription"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.realtime,
+        Some(RealtimeToml {
+            version: Some(RealtimeWsVersion::V2),
+            session_type: Some(RealtimeWsMode::Transcription),
+        })
+    );
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.realtime,
+        RealtimeConfig {
+            version: RealtimeWsVersion::V2,
+            session_type: RealtimeWsMode::Transcription,
+        }
     );
     Ok(())
 }

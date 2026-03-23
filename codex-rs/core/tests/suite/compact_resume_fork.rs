@@ -494,6 +494,7 @@ async fn snapshot_rollback_past_compaction_replays_append_only_history() -> Resu
                 ("after rollback", &requests[3]),
             ],
             &ContextSnapshotOptions::default()
+                .strip_capability_instructions()
                 .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 64 }),
         )
     );
@@ -687,7 +688,7 @@ async fn resume_conversation(
     let auth_manager = codex_core::test_support::auth_manager_from_auth(
         codex_core::CodexAuth::from_api_key("dummy"),
     );
-    Box::pin(manager.resume_thread_from_rollout(config.clone(), path, auth_manager))
+    Box::pin(manager.resume_thread_from_rollout(config.clone(), path, auth_manager, None))
         .await
         .expect("resume conversation")
         .thread
@@ -700,7 +701,7 @@ async fn fork_thread(
     path: std::path::PathBuf,
     nth_user_message: usize,
 ) -> Arc<CodexThread> {
-    Box::pin(manager.fork_thread(nth_user_message, config.clone(), path, false))
+    Box::pin(manager.fork_thread(nth_user_message, config.clone(), path, false, None))
         .await
         .expect("fork conversation")
         .thread

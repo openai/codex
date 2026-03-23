@@ -22,6 +22,13 @@ pub const RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC: &str =
 pub const TURN_E2E_DURATION_METRIC: &str = "codex.turn.e2e_duration_ms";
 pub const TURN_TTFT_DURATION_METRIC: &str = "codex.turn.ttft.duration_ms";
 pub const TURN_TTFM_DURATION_METRIC: &str = "codex.turn.ttfm.duration_ms";
+pub const TURN_NETWORK_PROXY_METRIC: &str = "codex.turn.network_proxy";
 pub const TURN_TOOL_CALL_METRIC: &str = "codex.turn.tool.call";
 pub const TURN_TOKEN_USAGE_METRIC: &str = "codex.turn.token_usage";
+pub const PROFILE_USAGE_METRIC: &str = "codex.profile.usage";
+/// Total runtime of a startup prewarm attempt until it completes, tagged by final status.
+pub const STARTUP_PREWARM_DURATION_METRIC: &str = "codex.startup_prewarm.duration_ms";
+/// Age of the startup prewarm attempt when the first real turn resolves it, tagged by outcome.
+pub const STARTUP_PREWARM_AGE_AT_FIRST_TURN_METRIC: &str =
+    "codex.startup_prewarm.age_at_first_turn_ms";
 pub const THREAD_STARTED_METRIC: &str = "codex.thread.started";

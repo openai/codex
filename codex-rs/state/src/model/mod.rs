@@ -1,5 +1,6 @@
 mod agent_job;
 mod backfill_state;
+mod graph;
 mod log;
 mod memories;
 mod thread_metadata;
@@ -13,6 +14,7 @@ pub use agent_job::AgentJobProgress;
 pub use agent_job::AgentJobStatus;
 pub use backfill_state::BackfillState;
 pub use backfill_state::BackfillStatus;
+pub use graph::DirectionalThreadSpawnEdgeStatus;
 pub use log::LogEntry;
 pub use log::LogQuery;
 pub use log::LogRow;

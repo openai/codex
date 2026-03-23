@@ -11,6 +11,7 @@ use tokio::process::ChildStdout;
 
 use anyhow::Context;
 use codex_mcp_server::CodexToolCallParam;
+use codex_terminal_detection::user_agent;
 
 use pretty_assertions::assert_eq;
 use rmcp::model::CallToolRequestParams;
@@ -156,7 +157,7 @@ impl McpProcess {
             os_info.os_type(),
             os_info.version(),
             os_info.architecture().unwrap_or("unknown"),
-            codex_core::terminal::user_agent()
+            user_agent()
         );
         let JsonRpcMessage::Response(JsonRpcResponse {
             jsonrpc,

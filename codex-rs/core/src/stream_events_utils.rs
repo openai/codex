@@ -16,10 +16,12 @@ use crate::error::CodexErr;
 use crate::error::Result;
 use crate::function_tool::FunctionCallError;
 use crate::memories::citations::get_thread_id_from_citations;
+use crate::memories::citations::parse_memory_citation;
 use crate::parse_turn_item;
 use crate::state_db;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
+use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
@@ -29,6 +31,36 @@ use futures::Future;
 use tracing::debug;
 use tracing::instrument;
 
+const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
+
+pub(crate) fn image_generation_artifact_path(
+    codex_home: &Path,
+    session_id: &str,
+    call_id: &str,
+) -> PathBuf {
+    let sanitize = |value: &str| {
+        let mut sanitized: String = value
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                    ch
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        if sanitized.is_empty() {
+            sanitized = "generated_image".to_string();
+        }
+        sanitized
+    };
+
+    codex_home
+        .join(GENERATED_IMAGE_ARTIFACTS_DIR)
+        .join(sanitize(session_id))
+        .join(format!("{}.png", sanitize(call_id)))
+}
+
 fn strip_hidden_assistant_markup(text: &str, plan_mode: bool) -> String {
     let (without_citations, _) = strip_citations(text);
     if plan_mode {
@@ -36,6 +68,22 @@ fn strip_hidden_assistant_markup(text: &str, plan_mode: bool) -> String {
     } else {
         without_citations
     }
+}
+
+fn strip_hidden_assistant_markup_and_parse_memory_citation(
+    text: &str,
+    plan_mode: bool,
+) -> (
+    String,
+    Option<codex_protocol::memory_citation::MemoryCitation>,
+) {
+    let (without_citations, citations) = strip_citations(text);
+    let visible_text = if plan_mode {
+        strip_proposed_plan_blocks(&without_citations)
+    } else {
+        without_citations
+    };
+    (visible_text, parse_memory_citation(citations))
 }
 
 pub(crate) fn raw_assistant_output_text_from_item(item: &ResponseItem) -> Option<String> {
@@ -54,8 +102,9 @@ pub(crate) fn raw_assistant_output_text_from_item(item: &ResponseItem) -> Option
     None
 }
 
-async fn save_image_generation_result_to_cwd(
-    cwd: &Path,
+async fn save_image_generation_result(
+    codex_home: &std::path::Path,
+    session_id: &str,
     call_id: &str,
     result: &str,
 ) -> Result<PathBuf> {
@@ -64,20 +113,10 @@ async fn save_image_generation_result_to_cwd(
         .map_err(|err| {
             CodexErr::InvalidRequest(format!("invalid image generation payload: {err}"))
         })?;
-    let mut file_stem: String = call_id
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    if file_stem.is_empty() {
-        file_stem = "generated_image".to_string();
+    let path = image_generation_artifact_path(codex_home, session_id, call_id);
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
     }
-    let path = cwd.join(format!("{file_stem}.png"));
     tokio::fs::write(&path, bytes).await?;
     Ok(path)
 }
@@ -189,8 +228,13 @@ pub(crate) async fn handle_output_item_done(
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
-            if let Some(turn_item) =
-                handle_non_tool_response_item(&item, plan_mode, Some(&ctx.turn_context.cwd)).await
+            if let Some(turn_item) = handle_non_tool_response_item(
+                ctx.sess.as_ref(),
+                ctx.turn_context.as_ref(),
+                &item,
+                plan_mode,
+            )
+            .await
             {
                 if previously_active_item.is_none() {
                     let mut started_item = turn_item.clone();
@@ -209,7 +253,6 @@ pub(crate) async fn handle_output_item_done(
                     .emit_turn_item_completed(&ctx.turn_context, turn_item)
                     .await;
             }
-
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
                 .await;
             let last_agent_message = last_assistant_message_from_item(&item, plan_mode);
@@ -276,9 +319,10 @@ pub(crate) async fn handle_output_item_done(
 }
 
 pub(crate) async fn handle_non_tool_response_item(
+    sess: &Session,
+    turn_context: &TurnContext,
     item: &ResponseItem,
     plan_mode: bool,
-    image_output_cwd: Option<&Path>,
 ) -> Option<TurnItem> {
     debug!(?item, "Output item");
 
@@ -296,23 +340,58 @@ pub(crate) async fn handle_non_tool_response_item(
                         codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
                     })
                     .collect::<String>();
-                let stripped = strip_hidden_assistant_markup(&combined, plan_mode);
+                let (stripped, memory_citation) =
+                    strip_hidden_assistant_markup_and_parse_memory_citation(&combined, plan_mode);
                 agent_message.content =
                     vec![codex_protocol::items::AgentMessageContent::Text { text: stripped }];
+                agent_message.memory_citation = memory_citation;
             }
-            if let TurnItem::ImageGeneration(image_item) = &mut turn_item
-                && let Some(cwd) = image_output_cwd
-            {
-                match save_image_generation_result_to_cwd(cwd, &image_item.id, &image_item.result)
-                    .await
+            if let TurnItem::ImageGeneration(image_item) = &mut turn_item {
+                let session_id = sess.conversation_id.to_string();
+                match save_image_generation_result(
+                    turn_context.config.codex_home.as_path(),
+                    &session_id,
+                    &image_item.id,
+                    &image_item.result,
+                )
+                .await
                 {
                     Ok(path) => {
                         image_item.saved_path = Some(path.to_string_lossy().into_owned());
+                        let image_output_path = image_generation_artifact_path(
+                            turn_context.config.codex_home.as_path(),
+                            &session_id,
+                            "<image_id>",
+                        );
+                        let image_output_dir = image_output_path
+                            .parent()
+                            .unwrap_or(turn_context.config.codex_home.as_path());
+                        let message: ResponseItem = DeveloperInstructions::new(format!(
+                            "Generated images are saved to {} as {} by default.",
+                            image_output_dir.display(),
+                            image_output_path.display(),
+                        ))
+                        .into();
+                        let copy_message: ResponseItem = DeveloperInstructions::new(
+                            "If you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it."
+                                .to_string(),
+                        )
+                        .into();
+                        sess.record_conversation_items(turn_context, &[message, copy_message])
+                            .await;
                     }
                     Err(err) => {
+                        let output_path = image_generation_artifact_path(
+                            turn_context.config.codex_home.as_path(),
+                            &session_id,
+                            &image_item.id,
+                        );
+                        let output_dir = output_path
+                            .parent()
+                            .unwrap_or(turn_context.config.codex_home.as_path());
                         tracing::warn!(
                             call_id = %image_item.id,
-                            cwd = %cwd.display(),
+                            output_dir = %output_dir.display(),
                             "failed to save generated image: {err}"
                         );
                     }
@@ -320,7 +399,9 @@ pub(crate) async fn handle_non_tool_response_item(
             }
             Some(turn_item)
         }
-        ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. } => {
+        ResponseItem::FunctionCallOutput { .. }
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::ToolSearchOutput { .. } => {
             debug!("unexpected tool output from stream");
             None
         }
@@ -353,178 +434,37 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
                 output: output.clone(),
             })
         }
-        ResponseInputItem::CustomToolCallOutput { call_id, output } => {
-            Some(ResponseItem::CustomToolCallOutput {
-                call_id: call_id.clone(),
-                output: output.clone(),
-            })
-        }
-        ResponseInputItem::McpToolCallOutput { call_id, result } => {
-            let output = match result {
-                Ok(call_tool_result) => FunctionCallOutputPayload::from(call_tool_result),
-                Err(err) => FunctionCallOutputPayload {
-                    body: FunctionCallOutputBody::Text(err.clone()),
-                    success: Some(false),
-                },
-            };
+        ResponseInputItem::CustomToolCallOutput {
+            call_id,
+            name,
+            output,
+        } => Some(ResponseItem::CustomToolCallOutput {
+            call_id: call_id.clone(),
+            name: name.clone(),
+            output: output.clone(),
+        }),
+        ResponseInputItem::McpToolCallOutput { call_id, output } => {
+            let output = output.as_function_call_output_payload();
             Some(ResponseItem::FunctionCallOutput {
                 call_id: call_id.clone(),
                 output,
             })
         }
+        ResponseInputItem::ToolSearchOutput {
+            call_id,
+            status,
+            execution,
+            tools,
+        } => Some(ResponseItem::ToolSearchOutput {
+            call_id: Some(call_id.clone()),
+            status: status.clone(),
+            execution: execution.clone(),
+            tools: tools.clone(),
+        }),
         _ => None,
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::handle_non_tool_response_item;
-    use super::last_assistant_message_from_item;
-    use super::save_image_generation_result_to_cwd;
-    use crate::error::CodexErr;
-    use codex_protocol::items::TurnItem;
-    use codex_protocol::models::ContentItem;
-    use codex_protocol::models::ResponseItem;
-    use pretty_assertions::assert_eq;
-    use tempfile::tempdir;
-
-    fn assistant_output_text(text: &str) -> ResponseItem {
-        ResponseItem::Message {
-            id: Some("msg-1".to_string()),
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: text.to_string(),
-            }],
-            end_turn: Some(true),
-            phase: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn handle_non_tool_response_item_strips_citations_from_assistant_message() {
-        let item = assistant_output_text("hello<oai-mem-citation>doc1</oai-mem-citation> world");
-
-        let turn_item =
-            handle_non_tool_response_item(&item, false, Some(std::path::Path::new(".")))
-                .await
-                .expect("assistant message should parse");
-
-        let TurnItem::AgentMessage(agent_message) = turn_item else {
-            panic!("expected agent message");
-        };
-        let text = agent_message
-            .content
-            .iter()
-            .map(|entry| match entry {
-                codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
-            })
-            .collect::<String>();
-        assert_eq!(text, "hello world");
-    }
-
-    #[test]
-    fn last_assistant_message_from_item_strips_citations_and_plan_blocks() {
-        let item = assistant_output_text(
-            "before<oai-mem-citation>doc1</oai-mem-citation>\n<proposed_plan>\n- x\n</proposed_plan>\nafter",
-        );
-
-        let message = last_assistant_message_from_item(&item, true)
-            .expect("assistant text should remain after stripping");
-
-        assert_eq!(message, "before\nafter");
-    }
-
-    #[test]
-    fn last_assistant_message_from_item_returns_none_for_citation_only_message() {
-        let item = assistant_output_text("<oai-mem-citation>doc1</oai-mem-citation>");
-
-        assert_eq!(last_assistant_message_from_item(&item, false), None);
-    }
-
-    #[test]
-    fn last_assistant_message_from_item_returns_none_for_plan_only_hidden_message() {
-        let item = assistant_output_text("<proposed_plan>\n- x\n</proposed_plan>");
-
-        assert_eq!(last_assistant_message_from_item(&item, true), None);
-    }
-
-    #[tokio::test]
-    async fn save_image_generation_result_saves_base64_to_png_in_cwd() {
-        let dir = tempdir().expect("tempdir");
-
-        let saved_path = save_image_generation_result_to_cwd(dir.path(), "ig_123", "Zm9v")
-            .await
-            .expect("image should be saved");
-
-        assert_eq!(
-            saved_path.file_name().and_then(|v| v.to_str()),
-            Some("ig_123.png")
-        );
-        assert_eq!(std::fs::read(saved_path).expect("saved file"), b"foo");
-    }
-
-    #[tokio::test]
-    async fn save_image_generation_result_rejects_data_url_payload() {
-        let dir = tempdir().expect("tempdir");
-        let result = "data:image/jpeg;base64,Zm9v";
-
-        let err = save_image_generation_result_to_cwd(dir.path(), "ig_456", result)
-            .await
-            .expect_err("data url payload should error");
-        assert!(matches!(err, CodexErr::InvalidRequest(_)));
-    }
-
-    #[tokio::test]
-    async fn save_image_generation_result_overwrites_existing_file() {
-        let dir = tempdir().expect("tempdir");
-        let existing_path = dir.path().join("ig_123.png");
-        std::fs::write(&existing_path, b"existing").expect("seed existing image");
-
-        let saved_path = save_image_generation_result_to_cwd(dir.path(), "ig_123", "Zm9v")
-            .await
-            .expect("image should be saved");
-
-        assert_eq!(
-            saved_path.file_name().and_then(|v| v.to_str()),
-            Some("ig_123.png")
-        );
-        assert_eq!(std::fs::read(saved_path).expect("saved file"), b"foo");
-    }
-
-    #[tokio::test]
-    async fn save_image_generation_result_sanitizes_call_id_for_output_path() {
-        let dir = tempdir().expect("tempdir");
-
-        let saved_path = save_image_generation_result_to_cwd(dir.path(), "../ig/..", "Zm9v")
-            .await
-            .expect("image should be saved");
-
-        assert_eq!(saved_path.parent(), Some(dir.path()));
-        assert_eq!(
-            saved_path.file_name().and_then(|v| v.to_str()),
-            Some("___ig___.png")
-        );
-        assert_eq!(std::fs::read(saved_path).expect("saved file"), b"foo");
-    }
-
-    #[tokio::test]
-    async fn save_image_generation_result_rejects_non_standard_base64() {
-        let dir = tempdir().expect("tempdir");
-
-        let err = save_image_generation_result_to_cwd(dir.path(), "ig_urlsafe", "_-8")
-            .await
-            .expect_err("non-standard base64 should error");
-        assert!(matches!(err, CodexErr::InvalidRequest(_)));
-    }
-
-    #[tokio::test]
-    async fn save_image_generation_result_rejects_non_base64_data_urls() {
-        let dir = tempdir().expect("tempdir");
-
-        let err =
-            save_image_generation_result_to_cwd(dir.path(), "ig_svg", "data:image/svg+xml,<svg/>")
-                .await
-                .expect_err("non-base64 data url should error");
-        assert!(matches!(err, CodexErr::InvalidRequest(_)));
-    }
-}
+#[path = "stream_events_utils_tests.rs"]
+mod tests;

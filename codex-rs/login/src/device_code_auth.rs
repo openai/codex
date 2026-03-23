@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use crate::pkce::PkceCodes;
 use crate::server::ServerOptions;
+use codex_client::build_reqwest_client_with_custom_ca;
 use std::io;
 
 const ANSI_BLUE: &str = "\x1b[94m";
@@ -47,9 +48,7 @@ where
     D: Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?;
-    s.trim()
-        .parse::<u64>()
-        .map_err(|e| de::Error::custom(format!("invalid u64 string: {e}")))
+    s.trim().parse::<u64>().map_err(de::Error::custom)
 }
 
 #[derive(Deserialize)]
@@ -158,7 +157,7 @@ fn print_device_code_prompt(verification_url: &str, code: &str) {
 }
 
 pub async fn request_device_code(opts: &ServerOptions) -> std::io::Result<DeviceCode> {
-    let client = reqwest::Client::new();
+    let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
     let base_url = opts.issuer.trim_end_matches('/');
     let api_base_url = format!("{base_url}/api/accounts");
     let uc = request_user_code(&client, &api_base_url, &opts.client_id).await?;
@@ -175,7 +174,7 @@ pub async fn complete_device_code_login(
     opts: ServerOptions,
     device_code: DeviceCode,
 ) -> std::io::Result<()> {
-    let client = reqwest::Client::new();
+    let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
     let base_url = opts.issuer.trim_end_matches('/');
     let api_base_url = format!("{base_url}/api/accounts");
 
@@ -213,7 +212,7 @@ pub async fn complete_device_code_login(
 
     crate::server::persist_tokens_async(
         &opts.codex_home,
-        None,
+        /*api_key*/ None,
         tokens.id_token,
         tokens.access_token,
         tokens.refresh_token,
@@ -222,7 +221,6 @@ pub async fn complete_device_code_login(
     .await
 }
 
-/// Full device code login flow.
 pub async fn run_device_code_login(opts: ServerOptions) -> std::io::Result<()> {
     let device_code = request_device_code(&opts).await?;
     print_device_code_prompt(&device_code.verification_url, &device_code.user_code);

@@ -92,20 +92,23 @@ impl Default for ConfigRequirements {
         Self {
             approval_policy: ConstrainedWithSource::new(
                 Constrained::allow_any_from_default(),
-                None,
+                /*source*/ None,
             ),
             sandbox_policy: ConstrainedWithSource::new(
                 Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
-                None,
+                /*source*/ None,
             ),
             web_search_mode: ConstrainedWithSource::new(
                 Constrained::allow_any(WebSearchMode::Cached),
-                None,
+                /*source*/ None,
             ),
             feature_requirements: None,
             mcp_servers: None,
             exec_policy: None,
-            enforce_residency: ConstrainedWithSource::new(Constrained::allow_any(None), None),
+            enforce_residency: ConstrainedWithSource::new(
+                Constrained::allow_any(/*initial_value*/ None),
+                /*source*/ None,
+            ),
             network: None,
         }
     }
@@ -245,6 +248,43 @@ impl FeatureRequirementsToml {
     }
 }
 
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct AppRequirementToml {
+    pub enabled: Option<bool>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct AppsRequirementsToml {
+    #[serde(default, flatten)]
+    pub apps: BTreeMap<String, AppRequirementToml>,
+}
+
+impl AppsRequirementsToml {
+    pub fn is_empty(&self) -> bool {
+        self.apps.values().all(|app| app.enabled.is_none())
+    }
+}
+
+/// Merge `enabled` configs from a lower-precedence source into an existing higher-precedence set.
+/// This lets managed sources (for example Cloud/MDM) enforce setting disablement across layers.
+/// Implemented with AppsRequirementsToml for now, could be abstracted if we have more enablement-style configs in the future.
+pub(crate) fn merge_enablement_settings_descending(
+    base: &mut AppsRequirementsToml,
+    incoming: AppsRequirementsToml,
+) {
+    for (app_id, incoming_requirement) in incoming.apps {
+        let base_requirement = base.apps.entry(app_id).or_default();
+        let higher_precedence = base_requirement.enabled;
+        let lower_precedence = incoming_requirement.enabled;
+        base_requirement.enabled =
+            if higher_precedence == Some(false) || lower_precedence == Some(false) {
+                Some(false)
+            } else {
+                higher_precedence.or(lower_precedence)
+            };
+    }
+}
+
 /// Base config deserialized from system `requirements.toml` or MDM.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsToml {
@@ -254,10 +294,12 @@ pub struct ConfigRequirementsToml {
     #[serde(rename = "features", alias = "feature_requirements")]
     pub feature_requirements: Option<FeatureRequirementsToml>,
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
+    pub apps: Option<AppsRequirementsToml>,
     pub rules: Option<RequirementsExecPolicyToml>,
     pub enforce_residency: Option<ResidencyRequirement>,
     #[serde(rename = "experimental_network")]
     pub network: Option<NetworkRequirementsToml>,
+    pub guardian_developer_instructions: Option<String>,
 }
 
 /// Value paired with the requirement source it came from, for better error
@@ -289,9 +331,11 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
+    pub apps: Option<Sourced<AppsRequirementsToml>>,
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
     pub network: Option<Sourced<NetworkRequirementsToml>>,
+    pub guardian_developer_instructions: Option<Sourced<String>>,
 }
 
 impl ConfigRequirementsWithSources {
@@ -300,10 +344,6 @@ impl ConfigRequirementsWithSources {
         // in `self` is `None`, copy the value from `other` into `self`.
         macro_rules! fill_missing_take {
             ($base:expr, $other:expr, $source:expr, { $($field:ident),+ $(,)? }) => {
-                // Destructure without `..` so adding fields to `ConfigRequirementsToml`
-                // forces this merge logic to be updated.
-                let ConfigRequirementsToml { $($field: _,)+ } = &$other;
-
                 $(
                     if $base.$field.is_none()
                         && let Some(value) = $other.$field.take()
@@ -314,7 +354,29 @@ impl ConfigRequirementsWithSources {
             };
         }
 
+        // Destructure without `..` so adding fields to `ConfigRequirementsToml`
+        // forces this merge logic to be updated.
+        let ConfigRequirementsToml {
+            allowed_approval_policies: _,
+            allowed_sandbox_modes: _,
+            allowed_web_search_modes: _,
+            feature_requirements: _,
+            mcp_servers: _,
+            apps: _,
+            rules: _,
+            enforce_residency: _,
+            network: _,
+            guardian_developer_instructions: _,
+        } = &other;
+
         let mut other = other;
+        if other
+            .guardian_developer_instructions
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            other.guardian_developer_instructions = None;
+        }
         fill_missing_take!(
             self,
             other,
@@ -328,8 +390,17 @@ impl ConfigRequirementsWithSources {
                 rules,
                 enforce_residency,
                 network,
+                guardian_developer_instructions,
             }
         );
+
+        if let Some(incoming_apps) = other.apps.take() {
+            if let Some(existing_apps) = self.apps.as_mut() {
+                merge_enablement_settings_descending(&mut existing_apps.value, incoming_apps);
+            } else {
+                self.apps = Some(Sourced::new(incoming_apps, source));
+            }
+        }
     }
 
     pub fn into_toml(self) -> ConfigRequirementsToml {
@@ -339,9 +410,11 @@ impl ConfigRequirementsWithSources {
             allowed_web_search_modes,
             feature_requirements,
             mcp_servers,
+            apps,
             rules,
             enforce_residency,
             network,
+            guardian_developer_instructions,
         } = self;
         ConfigRequirementsToml {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
@@ -349,9 +422,12 @@ impl ConfigRequirementsWithSources {
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
+            apps: apps.map(|sourced| sourced.value),
             rules: rules.map(|sourced| sourced.value),
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
             network: network.map(|sourced| sourced.value),
+            guardian_developer_instructions: guardian_developer_instructions
+                .map(|sourced| sourced.value),
         }
     }
 }
@@ -399,9 +475,17 @@ impl ConfigRequirementsToml {
                 .as_ref()
                 .is_none_or(FeatureRequirementsToml::is_empty)
             && self.mcp_servers.is_none()
+            && self
+                .apps
+                .as_ref()
+                .is_none_or(AppsRequirementsToml::is_empty)
             && self.rules.is_none()
             && self.enforce_residency.is_none()
             && self.network.is_none()
+            && self
+                .guardian_developer_instructions
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
     }
 }
 
@@ -415,9 +499,11 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_web_search_modes,
             feature_requirements,
             mcp_servers,
+            apps: _apps,
             rules,
             enforce_residency,
             network,
+            guardian_developer_instructions: _guardian_developer_instructions,
         } = toml;
 
         let approval_policy = match allowed_approval_policies {
@@ -444,7 +530,10 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 })?;
                 ConstrainedWithSource::new(constrained, Some(requirement_source))
             }
-            None => ConstrainedWithSource::new(Constrained::allow_any_from_default(), None),
+            None => ConstrainedWithSource::new(
+                Constrained::allow_any_from_default(),
+                /*source*/ None,
+            ),
         };
 
         // TODO(gt): `ConfigRequirementsToml` should let the author specify the
@@ -495,7 +584,10 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 ConstrainedWithSource::new(constrained, Some(requirement_source))
             }
             None => {
-                ConstrainedWithSource::new(Constrained::allow_any(default_sandbox_policy), None)
+                ConstrainedWithSource::new(
+                    Constrained::allow_any(default_sandbox_policy),
+                    /*source*/ None,
+                )
             }
         };
         let exec_policy = match rules {
@@ -548,7 +640,10 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 })?;
                 ConstrainedWithSource::new(constrained, Some(requirement_source))
             }
-            None => ConstrainedWithSource::new(Constrained::allow_any(WebSearchMode::Cached), None),
+            None => ConstrainedWithSource::new(
+                Constrained::allow_any(WebSearchMode::Cached),
+                /*source*/ None,
+            ),
         };
         let feature_requirements =
             feature_requirements.filter(|requirements| !requirements.value.is_empty());
@@ -574,7 +669,10 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 })?;
                 ConstrainedWithSource::new(constrained, Some(requirement_source))
             }
-            None => ConstrainedWithSource::new(Constrained::allow_any(None), None),
+            None => ConstrainedWithSource::new(
+                Constrained::allow_any(/*initial_value*/ None),
+                /*source*/ None,
+            ),
         };
         let network = network.map(|sourced_network| {
             let Sourced { value, source } = sourced_network;
@@ -622,9 +720,11 @@ mod tests {
             allowed_web_search_modes,
             feature_requirements,
             mcp_servers,
+            apps,
             rules,
             enforce_residency,
             network,
+            guardian_developer_instructions,
         } = toml;
         ConfigRequirementsWithSources {
             allowed_approval_policies: allowed_approval_policies
@@ -636,10 +736,13 @@ mod tests {
             feature_requirements: feature_requirements
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             mcp_servers: mcp_servers.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            apps: apps.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             rules: rules.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             enforce_residency: enforce_residency
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             network: network.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            guardian_developer_instructions: guardian_developer_instructions
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
         }
     }
 
@@ -662,6 +765,8 @@ mod tests {
         };
         let enforce_residency = ResidencyRequirement::Us;
         let enforce_source = source.clone();
+        let guardian_developer_instructions =
+            "Use the company-managed guardian policy.".to_string();
 
         // Intentionally constructed without `..Default::default()` so adding a new field to
         // `ConfigRequirementsToml` forces this test to be updated.
@@ -671,9 +776,11 @@ mod tests {
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
             feature_requirements: Some(feature_requirements.clone()),
             mcp_servers: None,
+            apps: None,
             rules: None,
             enforce_residency: Some(enforce_residency),
             network: None,
+            guardian_developer_instructions: Some(guardian_developer_instructions.clone()),
         };
 
         target.merge_unset_fields(source.clone(), other);
@@ -685,7 +792,7 @@ mod tests {
                     allowed_approval_policies,
                     source.clone()
                 )),
-                allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source)),
+                allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source.clone(),)),
                 allowed_web_search_modes: Some(Sourced::new(
                     allowed_web_search_modes,
                     enforce_source.clone(),
@@ -695,9 +802,14 @@ mod tests {
                     enforce_source.clone(),
                 )),
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),
                 network: None,
+                guardian_developer_instructions: Some(Sourced::new(
+                    guardian_developer_instructions,
+                    source,
+                )),
             }
         );
     }
@@ -728,9 +840,11 @@ mod tests {
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                guardian_developer_instructions: None,
             }
         );
         Ok(())
@@ -769,12 +883,248 @@ mod tests {
                 allowed_web_search_modes: None,
                 feature_requirements: None,
                 mcp_servers: None,
+                apps: None,
                 rules: None,
                 enforce_residency: None,
                 network: None,
+                guardian_developer_instructions: None,
             }
         );
         Ok(())
+    }
+
+    #[test]
+    fn merge_unset_fields_ignores_blank_guardian_override() {
+        let mut target = ConfigRequirementsWithSources::default();
+        target.merge_unset_fields(
+            RequirementSource::CloudRequirements,
+            ConfigRequirementsToml {
+                guardian_developer_instructions: Some("   \n\t".to_string()),
+                ..Default::default()
+            },
+        );
+        target.merge_unset_fields(
+            RequirementSource::SystemRequirementsToml {
+                file: system_requirements_toml_file_for_test()
+                    .expect("system requirements.toml path"),
+            },
+            ConfigRequirementsToml {
+                guardian_developer_instructions: Some(
+                    "Use the system guardian policy.".to_string(),
+                ),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            target.guardian_developer_instructions,
+            Some(Sourced::new(
+                "Use the system guardian policy.".to_string(),
+                RequirementSource::SystemRequirementsToml {
+                    file: system_requirements_toml_file_for_test()
+                        .expect("system requirements.toml path"),
+                },
+            )),
+        );
+    }
+
+    #[test]
+    fn deserialize_guardian_developer_instructions() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+guardian_developer_instructions = """
+Use the cloud-managed guardian policy.
+"""
+"#,
+        )?;
+
+        assert_eq!(
+            requirements.guardian_developer_instructions.as_deref(),
+            Some("Use the cloud-managed guardian policy.\n")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn blank_guardian_developer_instructions_is_empty() -> Result<()> {
+        let requirements: ConfigRequirementsToml = from_str(
+            r#"
+guardian_developer_instructions = """
+
+"""
+"#,
+        )?;
+
+        assert!(requirements.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_apps_requirements() -> Result<()> {
+        let toml_str = r#"
+            [apps.connector_123123]
+            enabled = false
+        "#;
+        let requirements: ConfigRequirementsToml = from_str(toml_str)?;
+
+        assert_eq!(
+            requirements.apps,
+            Some(AppsRequirementsToml {
+                apps: BTreeMap::from([(
+                    "connector_123123".to_string(),
+                    AppRequirementToml {
+                        enabled: Some(false),
+                    },
+                )]),
+            })
+        );
+        Ok(())
+    }
+
+    fn apps_requirements(entries: &[(&str, Option<bool>)]) -> AppsRequirementsToml {
+        AppsRequirementsToml {
+            apps: entries
+                .iter()
+                .map(|(app_id, enabled)| {
+                    (
+                        (*app_id).to_string(),
+                        AppRequirementToml { enabled: *enabled },
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn merge_enablement_settings_descending_unions_distinct_apps() {
+        let mut merged = apps_requirements(&[("connector_high", Some(false))]);
+        let lower = apps_requirements(&[("connector_low", Some(true))]);
+
+        merge_enablement_settings_descending(&mut merged, lower);
+
+        assert_eq!(
+            merged,
+            apps_requirements(&[
+                ("connector_high", Some(false)),
+                ("connector_low", Some(true))
+            ]),
+        );
+    }
+
+    #[test]
+    fn merge_enablement_settings_descending_prefers_false_from_lower_precedence() {
+        let mut merged = apps_requirements(&[("connector_123123", Some(true))]);
+        let lower = apps_requirements(&[("connector_123123", Some(false))]);
+
+        merge_enablement_settings_descending(&mut merged, lower);
+
+        assert_eq!(
+            merged,
+            apps_requirements(&[("connector_123123", Some(false))]),
+        );
+    }
+
+    #[test]
+    fn merge_enablement_settings_descending_keeps_higher_true_when_lower_is_unset() {
+        let mut merged = apps_requirements(&[("connector_123123", Some(true))]);
+        let lower = apps_requirements(&[("connector_123123", None)]);
+
+        merge_enablement_settings_descending(&mut merged, lower);
+
+        assert_eq!(
+            merged,
+            apps_requirements(&[("connector_123123", Some(true))]),
+        );
+    }
+
+    #[test]
+    fn merge_enablement_settings_descending_uses_lower_value_when_higher_missing() {
+        let mut merged = apps_requirements(&[]);
+        let lower = apps_requirements(&[("connector_123123", Some(true))]);
+
+        merge_enablement_settings_descending(&mut merged, lower);
+
+        assert_eq!(
+            merged,
+            apps_requirements(&[("connector_123123", Some(true))]),
+        );
+    }
+
+    #[test]
+    fn merge_enablement_settings_descending_preserves_higher_false_when_lower_missing_app() {
+        let mut merged = apps_requirements(&[("connector_123123", Some(false))]);
+        let lower = apps_requirements(&[]);
+
+        merge_enablement_settings_descending(&mut merged, lower);
+
+        assert_eq!(
+            merged,
+            apps_requirements(&[("connector_123123", Some(false))]),
+        );
+    }
+
+    #[test]
+    fn merge_unset_fields_merges_apps_across_sources_with_enabled_evaluation() {
+        let higher_source = RequirementSource::CloudRequirements;
+        let lower_source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+        let mut target = ConfigRequirementsWithSources::default();
+
+        target.merge_unset_fields(
+            higher_source.clone(),
+            ConfigRequirementsToml {
+                apps: Some(apps_requirements(&[
+                    ("connector_high", Some(true)),
+                    ("connector_shared", Some(true)),
+                ])),
+                ..Default::default()
+            },
+        );
+        target.merge_unset_fields(
+            lower_source,
+            ConfigRequirementsToml {
+                apps: Some(apps_requirements(&[
+                    ("connector_low", Some(false)),
+                    ("connector_shared", Some(false)),
+                ])),
+                ..Default::default()
+            },
+        );
+
+        let apps = target.apps.expect("apps should be present");
+        assert_eq!(
+            apps.value,
+            apps_requirements(&[
+                ("connector_high", Some(true)),
+                ("connector_low", Some(false)),
+                ("connector_shared", Some(false)),
+            ])
+        );
+        assert_eq!(apps.source, higher_source);
+    }
+
+    #[test]
+    fn merge_unset_fields_apps_empty_higher_source_does_not_block_lower_disables() {
+        let mut target = ConfigRequirementsWithSources::default();
+
+        target.merge_unset_fields(
+            RequirementSource::CloudRequirements,
+            ConfigRequirementsToml {
+                apps: Some(apps_requirements(&[])),
+                ..Default::default()
+            },
+        );
+        target.merge_unset_fields(
+            RequirementSource::LegacyManagedConfigTomlFromMdm,
+            ConfigRequirementsToml {
+                apps: Some(apps_requirements(&[("connector_123123", Some(false))])),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            target.apps.map(|apps| apps.value),
+            Some(apps_requirements(&[("connector_123123", Some(false))])),
+        );
     }
 
     #[test]

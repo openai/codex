@@ -1,9 +1,9 @@
 use crate::codex::PreviousTurnSettings;
 use crate::codex::TurnContext;
 use crate::environment_context::EnvironmentContext;
-use crate::features::Feature;
 use crate::shell::Shell;
 use codex_execpolicy::Policy;
+use codex_features::Feature;
 use codex_protocol::config_types::Personality;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
@@ -43,9 +43,11 @@ fn build_permissions_update_item(
     Some(DeveloperInstructions::from_policy(
         next.sandbox_policy.get(),
         next.approval_policy.value(),
+        next.config.approvals_reviewer,
         exec_policy,
         &next.cwd,
-        next.features.enabled(Feature::RequestPermissions),
+        next.features.enabled(Feature::ExecPermissionApprovals),
+        next.features.enabled(Feature::RequestPermissionsTool),
     ))
 }
 
@@ -75,7 +77,17 @@ pub(crate) fn build_realtime_update_item(
         next.realtime_active,
     ) {
         (Some(true), false) => Some(DeveloperInstructions::realtime_end_message("inactive")),
-        (Some(false), true) | (None, true) => Some(DeveloperInstructions::realtime_start_message()),
+        (Some(false), true) | (None, true) => Some(
+            if let Some(instructions) = next
+                .config
+                .experimental_realtime_start_instructions
+                .as_deref()
+            {
+                DeveloperInstructions::realtime_start_message_with_instructions(instructions)
+            } else {
+                DeveloperInstructions::realtime_start_message()
+            },
+        ),
         (Some(true), true) | (Some(false), false) => None,
         (None, false) => previous_turn_settings
             .and_then(|settings| settings.realtime_active)

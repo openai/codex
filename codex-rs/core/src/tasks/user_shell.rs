@@ -10,6 +10,7 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::codex::TurnContext;
+use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
@@ -101,7 +102,7 @@ pub(crate) async fn execute_user_shell_command(
     session
         .services
         .session_telemetry
-        .counter("codex.task.user_shell", 1, &[]);
+        .counter("codex.task.user_shell", /*inc*/ 1, &[]);
 
     if mode == UserShellCommandMode::StandaloneTurn {
         // Auxiliary mode runs within an existing active turn. That turn already
@@ -165,8 +166,13 @@ pub(crate) async fn execute_user_shell_command(
         // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
         // should use that instead of an "arbitrarily large" timeout here.
         expiration: USER_SHELL_TIMEOUT_MS.into(),
+        capture_policy: ExecCapturePolicy::ShellTool,
         sandbox: SandboxType::None,
         windows_sandbox_level: turn_context.windows_sandbox_level,
+        windows_sandbox_private_desktop: turn_context
+            .config
+            .permissions
+            .windows_sandbox_private_desktop,
         sandbox_permissions: SandboxPermissions::UseDefault,
         sandbox_policy: sandbox_policy.clone(),
         file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
@@ -181,9 +187,14 @@ pub(crate) async fn execute_user_shell_command(
         tx_event: session.get_tx_event(),
     });
 
-    let exec_result = execute_exec_request(exec_env, &sandbox_policy, stdout_stream, None)
-        .or_cancel(&cancellation_token)
-        .await;
+    let exec_result = execute_exec_request(
+        exec_env,
+        &sandbox_policy,
+        stdout_stream,
+        /*after_spawn*/ None,
+    )
+    .or_cancel(&cancellation_token)
+    .await;
 
     match exec_result {
         Err(CancelErr::Cancelled) => {
@@ -322,6 +333,9 @@ async fn persist_user_shell_output(
         session
             .record_conversation_items(turn_context, std::slice::from_ref(&output_item))
             .await;
+        // Standalone shell turns can run before any regular user turn, so
+        // explicitly materialize rollout persistence after recording output.
+        session.ensure_rollout_materialized().await;
         return;
     }
 

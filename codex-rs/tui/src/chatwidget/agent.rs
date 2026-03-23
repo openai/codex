@@ -46,7 +46,7 @@ pub(crate) fn spawn_agent(
                 tracing::error!("{message}");
                 app_event_tx_clone.send(AppEvent::CodexEvent(Event {
                     id: "".to_string(),
-                    msg: EventMsg::Error(err.to_error_event(None)),
+                    msg: EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
                 }));
                 app_event_tx_clone.send(AppEvent::FatalExitRequest(message));
                 tracing::error!("failed to initialize codex: {err}");

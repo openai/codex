@@ -1,0 +1,15 @@
+warning: argument comment `/*api_base*/` does not match parameter `base_url`
+  --> $DIR/comment_mismatch.rs:9:44
+   |
+LL |     let _ = create_openai_url(/*api_base*/ None);
+   |                                            ^^^^
+   |
+   = help: use `/*base_url*/`
+note: the lint level is defined here
+  --> $DIR/comment_mismatch.rs:1:9
+   |
+LL | #![warn(argument_comment_mismatch)]
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: 1 warning emitted
+

@@ -1,5 +1,7 @@
 use core::fmt;
 use std::io;
+#[cfg(unix)]
+use std::os::fd::RawFd;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -41,9 +43,24 @@ impl From<TerminalSize> for PtySize {
     }
 }
 
+#[cfg(unix)]
+pub(crate) trait PtyHandleKeepAlive: Send {}
+
+#[cfg(unix)]
+impl<T: Send + ?Sized> PtyHandleKeepAlive for T {}
+
+pub(crate) enum PtyMasterHandle {
+    Resizable(Box<dyn MasterPty + Send>),
+    #[cfg(unix)]
+    Opaque {
+        raw_fd: RawFd,
+        _handle: Box<dyn PtyHandleKeepAlive>,
+    },
+}
+
 pub struct PtyHandles {
     pub _slave: Option<Box<dyn SlavePty + Send>>,
-    pub _master: Box<dyn MasterPty + Send>,
+    pub(crate) _master: PtyMasterHandle,
 }
 
 impl fmt::Debug for PtyHandles {
@@ -131,7 +148,11 @@ impl ProcessHandle {
         let handles = handles
             .as_ref()
             .ok_or_else(|| anyhow!("process is not attached to a PTY"))?;
-        handles._master.resize(size.into())
+        match &handles._master {
+            PtyMasterHandle::Resizable(master) => master.resize(size.into()),
+            #[cfg(unix)]
+            PtyMasterHandle::Opaque { raw_fd, .. } => resize_raw_pty(*raw_fd, size),
+        }
     }
 
     /// Close the child's stdin channel.
@@ -182,6 +203,21 @@ impl Drop for ProcessHandle {
     fn drop(&mut self) {
         self.terminate();
     }
+}
+
+#[cfg(unix)]
+fn resize_raw_pty(raw_fd: RawFd, size: TerminalSize) -> anyhow::Result<()> {
+    let mut winsize = libc::winsize {
+        ws_row: size.rows,
+        ws_col: size.cols,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let result = unsafe { libc::ioctl(raw_fd, libc::TIOCSWINSZ, &mut winsize) };
+    if result == -1 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(())
 }
 
 /// Combine split stdout/stderr receivers into a single broadcast receiver.

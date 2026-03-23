@@ -221,6 +221,6 @@ fn policy_builtins(builder: &mut GlobalsBuilder) {
     }
 
     fn flag(name: String) -> anyhow::Result<Opt> {
-        Ok(Opt::new(name, OptMeta::Flag, false))
+        Ok(Opt::new(name, OptMeta::Flag, /*required*/ false))
     }
 }

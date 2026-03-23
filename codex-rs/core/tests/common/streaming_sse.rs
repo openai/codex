@@ -81,7 +81,7 @@ pub async fn start_streaming_sse_server(
                     tokio::spawn(async move {
                         let (request, body_prefix) = read_http_request(&mut stream).await;
                         let Some((method, path)) = parse_request_line(&request) else {
-                            let _ = write_http_response(&mut stream, 400, "bad request", "text/plain").await;
+                            let _ = write_http_response(&mut stream, /*status*/ 400, "bad request", "text/plain").await;
                             return;
                         };
 
@@ -90,7 +90,7 @@ pub async fn start_streaming_sse_server(
                                 .await
                                 .is_err()
                             {
-                                let _ = write_http_response(&mut stream, 400, "bad request", "text/plain").await;
+                                let _ = write_http_response(&mut stream, /*status*/ 400, "bad request", "text/plain").await;
                                 return;
                             }
                             let body = serde_json::json!({
@@ -98,7 +98,7 @@ pub async fn start_streaming_sse_server(
                                 "object": "list"
                             })
                             .to_string();
-                            let _ = write_http_response(&mut stream, 200, &body, "application/json").await;
+                            let _ = write_http_response(&mut stream, /*status*/ 200, &body, "application/json").await;
                             return;
                         }
 
@@ -108,13 +108,13 @@ pub async fn start_streaming_sse_server(
                             {
                                 Ok(body) => body,
                                 Err(_) => {
-                                    let _ = write_http_response(&mut stream, 400, "bad request", "text/plain").await;
+                                    let _ = write_http_response(&mut stream, /*status*/ 400, "bad request", "text/plain").await;
                                     return;
                                 }
                             };
                             requests.lock().await.push(body);
                             let Some((chunks, completion)) = take_next_stream(&state).await else {
-                                let _ = write_http_response(&mut stream, 500, "no responses queued", "text/plain").await;
+                                let _ = write_http_response(&mut stream, /*status*/ 500, "no responses queued", "text/plain").await;
                                 return;
                             };
 
@@ -138,7 +138,7 @@ pub async fn start_streaming_sse_server(
                             return;
                         }
 
-                        let _ = write_http_response(&mut stream, 404, "not found", "text/plain").await;
+                        let _ = write_http_response(&mut stream, /*status*/ 404, "not found", "text/plain").await;
                     });
                 }
             }

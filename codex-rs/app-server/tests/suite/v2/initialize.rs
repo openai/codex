@@ -46,9 +46,15 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
     let JSONRPCMessage::Response(response) = message else {
         anyhow::bail!("expected initialize response, got {message:?}");
     };
-    let InitializeResponse { user_agent } = to_response::<InitializeResponse>(response)?;
+    let InitializeResponse {
+        user_agent,
+        platform_family,
+        platform_os,
+    } = to_response::<InitializeResponse>(response)?;
 
     assert!(user_agent.starts_with("codex_vscode/"));
+    assert_eq!(platform_family, std::env::consts::FAMILY);
+    assert_eq!(platform_os, std::env::consts::OS);
     Ok(())
 }
 
@@ -80,9 +86,15 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
     let JSONRPCMessage::Response(response) = message else {
         anyhow::bail!("expected initialize response, got {message:?}");
     };
-    let InitializeResponse { user_agent } = to_response::<InitializeResponse>(response)?;
+    let InitializeResponse {
+        user_agent,
+        platform_family,
+        platform_os,
+    } = to_response::<InitializeResponse>(response)?;
 
     assert!(user_agent.starts_with("codex_originator_via_env_var/"));
+    assert_eq!(platform_family, std::env::consts::FAMILY);
+    assert_eq!(platform_os, std::env::consts::OS);
     Ok(())
 }
 
@@ -139,10 +151,7 @@ async fn initialize_opt_out_notification_methods_filters_notifications() -> Resu
             },
             Some(InitializeCapabilities {
                 experimental_api: true,
-                opt_out_notification_methods: Some(vec![
-                    "thread/started".to_string(),
-                    "codex/event/session_configured".to_string(),
-                ]),
+                opt_out_notification_methods: Some(vec!["thread/started".to_string()]),
             }),
         ),
     )
@@ -193,13 +202,13 @@ async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<(
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
     let notify_file = codex_home.path().join("notify.json");
-    let notify_capture = cargo_bin("test_notify_capture")?;
+    let notify_capture = cargo_bin("codex-app-server-test-notify-capture")?;
     let notify_capture = notify_capture
         .to_str()
         .expect("notify capture path should be valid UTF-8");
-    let notify_file = notify_file
+    let notify_file_str = notify_file
         .to_str()
-        .expect("notify output path should be valid UTF-8");
+        .expect("notify file path should be valid UTF-8");
     create_config_toml_with_extra(
         codex_home.path(),
         &server.uri(),
@@ -207,7 +216,7 @@ async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<(
         &format!(
             "notify = [{}, {}]",
             toml_basic_string(notify_capture),
-            toml_basic_string(notify_file)
+            toml_basic_string(notify_file_str)
         ),
     )?;
 
@@ -255,9 +264,8 @@ async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<(
     )
     .await??;
 
-    let notify_file = Path::new(notify_file);
-    fs_wait::wait_for_path_exists(notify_file, Duration::from_secs(5)).await?;
-    let payload_raw = tokio::fs::read_to_string(notify_file).await?;
+    fs_wait::wait_for_path_exists(&notify_file, Duration::from_secs(5)).await?;
+    let payload_raw = tokio::fs::read_to_string(&notify_file).await?;
     let payload: Value = serde_json::from_str(&payload_raw)?;
     assert_eq!(payload["client"], "xcode");
 
@@ -291,6 +299,9 @@ sandbox_mode = "read-only"
 model_provider = "mock_provider"
 
 {extra}
+
+[features]
+shell_snapshot = false
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

@@ -11,10 +11,11 @@ use tokio::fs;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::time::timeout;
+use url::Url;
 
 const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Executes artifact build and render commands against a resolved runtime.
+/// Executes artifact build commands against a resolved runtime.
 #[derive(Clone, Debug)]
 pub struct ArtifactsClient {
     runtime_source: RuntimeSource,
@@ -54,7 +55,18 @@ impl ArtifactsClient {
             source,
         })?;
         let script_path = staging_dir.path().join("artifact-build.mjs");
-        let wrapped_script = build_wrapped_script(&request.source);
+        let build_entrypoint_url =
+            Url::from_file_path(runtime.build_js_path()).map_err(|()| ArtifactsError::Io {
+                context: format!(
+                    "failed to convert artifact build entrypoint to a file URL: {}",
+                    runtime.build_js_path().display()
+                ),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "invalid artifact build entrypoint path",
+                ),
+            })?;
+        let wrapped_script = build_wrapped_script(&build_entrypoint_url, &request.source);
         fs::write(&script_path, wrapped_script)
             .await
             .map_err(|source| ArtifactsError::Io {
@@ -63,44 +75,8 @@ impl ArtifactsClient {
             })?;
 
         let mut command = Command::new(js_runtime.executable_path());
-        command
-            .arg(&script_path)
-            .current_dir(&request.cwd)
-            .env("CODEX_ARTIFACT_BUILD_ENTRYPOINT", runtime.build_js_path())
-            .env(
-                "CODEX_ARTIFACT_RENDER_ENTRYPOINT",
-                runtime.render_cli_path(),
-            )
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        if js_runtime.requires_electron_run_as_node() {
-            command.env("ELECTRON_RUN_AS_NODE", "1");
-        }
-        for (key, value) in &request.env {
-            command.env(key, value);
-        }
-
-        run_command(
-            command,
-            request.timeout.unwrap_or(DEFAULT_EXECUTION_TIMEOUT),
-        )
-        .await
-    }
-
-    /// Executes the artifact render CLI against the configured runtime.
-    pub async fn execute_render(
-        &self,
-        request: ArtifactRenderCommandRequest,
-    ) -> Result<ArtifactCommandOutput, ArtifactsError> {
-        let runtime = self.resolve_runtime().await?;
-        let js_runtime = runtime.resolve_js_runtime()?;
-        let mut command = Command::new(js_runtime.executable_path());
-        command
-            .arg(runtime.render_cli_path())
-            .args(request.target.to_args())
-            .current_dir(&request.cwd)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        command.arg(&script_path).current_dir(&request.cwd);
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
         if js_runtime.requires_electron_run_as_node() {
             command.env("ELECTRON_RUN_AS_NODE", "1");
         }
@@ -130,76 +106,6 @@ pub struct ArtifactBuildRequest {
     pub cwd: PathBuf,
     pub timeout: Option<Duration>,
     pub env: BTreeMap<String, String>,
-}
-
-/// Request payload for the artifact render CLI.
-#[derive(Clone, Debug)]
-pub struct ArtifactRenderCommandRequest {
-    pub cwd: PathBuf,
-    pub timeout: Option<Duration>,
-    pub env: BTreeMap<String, String>,
-    pub target: ArtifactRenderTarget,
-}
-
-/// Render targets supported by the packaged artifact runtime.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ArtifactRenderTarget {
-    Presentation(PresentationRenderTarget),
-    Spreadsheet(SpreadsheetRenderTarget),
-}
-
-impl ArtifactRenderTarget {
-    /// Converts a render target to the CLI args expected by `render_cli.mjs`.
-    pub fn to_args(&self) -> Vec<String> {
-        match self {
-            Self::Presentation(target) => {
-                vec![
-                    "pptx".to_string(),
-                    "render".to_string(),
-                    "--in".to_string(),
-                    target.input_path.display().to_string(),
-                    "--slide".to_string(),
-                    target.slide_number.to_string(),
-                    "--out".to_string(),
-                    target.output_path.display().to_string(),
-                ]
-            }
-            Self::Spreadsheet(target) => {
-                let mut args = vec![
-                    "xlsx".to_string(),
-                    "render".to_string(),
-                    "--in".to_string(),
-                    target.input_path.display().to_string(),
-                    "--sheet".to_string(),
-                    target.sheet_name.clone(),
-                    "--out".to_string(),
-                    target.output_path.display().to_string(),
-                ];
-                if let Some(range) = &target.range {
-                    args.push("--range".to_string());
-                    args.push(range.clone());
-                }
-                args
-            }
-        }
-    }
-}
-
-/// Presentation render request parameters.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PresentationRenderTarget {
-    pub input_path: PathBuf,
-    pub output_path: PathBuf,
-    pub slide_number: u32,
-}
-
-/// Spreadsheet render request parameters.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SpreadsheetRenderTarget {
-    pub input_path: PathBuf,
-    pub output_path: PathBuf,
-    pub sheet_name: String,
-    pub range: Option<String>,
 }
 
 /// Captured stdout, stderr, and exit status from an artifact subprocess.
@@ -232,24 +138,28 @@ pub enum ArtifactsError {
     TimedOut { timeout: Duration },
 }
 
-fn build_wrapped_script(source: &str) -> String {
-    format!(
-        concat!(
-            "import {{ pathToFileURL }} from \"node:url\";\n",
-            "const artifactTool = await import(pathToFileURL(process.env.CODEX_ARTIFACT_BUILD_ENTRYPOINT).href);\n",
-            "globalThis.artifactTool = artifactTool;\n",
-            "globalThis.artifacts = artifactTool;\n",
-            "globalThis.codexArtifacts = artifactTool;\n",
-            "for (const [name, value] of Object.entries(artifactTool)) {{\n",
-            "  if (name === \"default\" || Object.prototype.hasOwnProperty.call(globalThis, name)) {{\n",
-            "    continue;\n",
-            "  }}\n",
-            "  globalThis[name] = value;\n",
-            "}}\n\n",
-            "{}\n"
-        ),
-        source
-    )
+fn build_wrapped_script(build_entrypoint_url: &Url, source: &str) -> String {
+    let mut wrapped = String::new();
+    wrapped.push_str("const artifactTool = await import(");
+    wrapped.push_str(
+        &serde_json::to_string(build_entrypoint_url.as_str()).unwrap_or_else(|error| {
+            panic!("artifact build entrypoint URL must serialize: {error}")
+        }),
+    );
+    wrapped.push_str(");\n");
+    wrapped.push_str(
+        r#"globalThis.artifactTool = artifactTool;
+for (const [name, value] of Object.entries(artifactTool)) {
+  if (name === "default" || Object.prototype.hasOwnProperty.call(globalThis, name)) {
+    continue;
+  }
+  globalThis[name] = value;
+}
+"#,
+    );
+    wrapped.push_str(source);
+    wrapped.push('\n');
+    wrapped
 }
 
 async fn run_command(
