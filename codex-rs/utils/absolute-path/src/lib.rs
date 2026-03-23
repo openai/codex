@@ -26,14 +26,15 @@ impl AbsolutePathBuf {
         let Some(path_str) = path.to_str() else {
             return path.to_path_buf();
         };
-        if cfg!(not(target_os = "windows"))
-            && let Some(home) = home_dir()
-        {
+        if let Some(home) = home_dir() {
             if path_str == "~" {
                 return home;
             }
-            if let Some(rest) = path_str.strip_prefix("~/") {
-                let rest = rest.trim_start_matches('/');
+            if let Some(rest) = path_str
+                .strip_prefix("~/")
+                .or_else(|| path_str.strip_prefix("~\\"))
+            {
+                let rest = rest.trim_start_matches(['/', '\\']);
                 if rest.is_empty() {
                     return home;
                 }
@@ -148,35 +149,8 @@ enum AbsolutePathBufGuardMode {
     ExpandHomeOnly,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct AbsolutePathBufGuardState {
-    base_path: PathBuf,
-    mode: AbsolutePathBufGuardMode,
-}
-
-impl AbsolutePathBufGuardState {
-    fn deserialize_absolute_path(&self, path: PathBuf) -> std::io::Result<AbsolutePathBuf> {
-        match self.mode {
-            AbsolutePathBufGuardMode::ResolveRelativePaths => {
-                AbsolutePathBuf::resolve_path_against_base(path, &self.base_path)
-            }
-            AbsolutePathBufGuardMode::ExpandHomeOnly => {
-                let expanded = AbsolutePathBuf::maybe_expand_home_directory(&path);
-                if expanded.is_absolute() {
-                    AbsolutePathBuf::from_absolute_path(expanded)
-                } else {
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "AbsolutePathBuf deserialized without an absolute path",
-                    ))
-                }
-            }
-        }
-    }
-}
-
 thread_local! {
-    static ABSOLUTE_PATH_GUARD_STATE: RefCell<Option<AbsolutePathBufGuardState>> =
+    static ABSOLUTE_PATH_GUARD_STATE: RefCell<Option<(PathBuf, AbsolutePathBufGuardMode)>> =
         const { RefCell::new(None) };
 }
 
@@ -198,12 +172,32 @@ impl AbsolutePathBufGuard {
 
     fn with_mode(base_path: &Path, mode: AbsolutePathBufGuardMode) -> Self {
         ABSOLUTE_PATH_GUARD_STATE.with(|cell| {
-            *cell.borrow_mut() = Some(AbsolutePathBufGuardState {
-                base_path: base_path.to_path_buf(),
-                mode,
-            });
+            *cell.borrow_mut() = Some((base_path.to_path_buf(), mode));
         });
         Self
+    }
+}
+
+fn deserialize_absolute_path_with_guard(
+    path: PathBuf,
+    base_path: &Path,
+    mode: AbsolutePathBufGuardMode,
+) -> std::io::Result<AbsolutePathBuf> {
+    match mode {
+        AbsolutePathBufGuardMode::ResolveRelativePaths => {
+            AbsolutePathBuf::resolve_path_against_base(path, base_path)
+        }
+        AbsolutePathBufGuardMode::ExpandHomeOnly => {
+            let expanded = AbsolutePathBuf::maybe_expand_home_directory(&path);
+            if expanded.is_absolute() {
+                AbsolutePathBuf::from_absolute_path(expanded)
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "AbsolutePathBuf deserialized without an absolute path",
+                ))
+            }
+        }
     }
 }
 
@@ -222,9 +216,10 @@ impl<'de> Deserialize<'de> for AbsolutePathBuf {
     {
         let path = PathBuf::deserialize(deserializer)?;
         ABSOLUTE_PATH_GUARD_STATE.with(|cell| match cell.borrow().as_ref() {
-            Some(guard_state) => Ok(guard_state
-                .deserialize_absolute_path(path)
-                .map_err(SerdeError::custom)?),
+            Some((base_path, mode)) => {
+                Ok(deserialize_absolute_path_with_guard(path, base_path, *mode)
+                    .map_err(SerdeError::custom)?)
+            }
             None if path.is_absolute() => {
                 Self::from_absolute_path(path).map_err(SerdeError::custom)
             }
@@ -278,9 +273,8 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_os = "windows"))]
     #[test]
-    fn home_directory_root_on_non_windows_is_expanded_in_deserialization() {
+    fn home_directory_root_is_expanded_in_deserialization() {
         let Some(home) = home_dir() else {
             return;
         };
@@ -292,9 +286,8 @@ mod tests {
         assert_eq!(abs_path_buf.as_path(), home.as_path());
     }
 
-    #[cfg(not(target_os = "windows"))]
     #[test]
-    fn home_directory_subpath_on_non_windows_is_expanded_in_deserialization() {
+    fn home_directory_subpath_is_expanded_in_deserialization() {
         let Some(home) = home_dir() else {
             return;
         };
@@ -306,7 +299,6 @@ mod tests {
         assert_eq!(abs_path_buf.as_path(), home.join("code").as_path());
     }
 
-    #[cfg(not(target_os = "windows"))]
     #[test]
     fn home_expansion_only_guard_expands_home_directory_subpath() {
         let Some(home) = home_dir() else {
@@ -335,9 +327,8 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_os = "windows"))]
     #[test]
-    fn home_directory_double_slash_on_non_windows_is_expanded_in_deserialization() {
+    fn home_directory_double_slash_is_expanded_in_deserialization() {
         let Some(home) = home_dir() else {
             return;
         };
@@ -349,18 +340,16 @@ mod tests {
         assert_eq!(abs_path_buf.as_path(), home.join("code").as_path());
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
-    fn home_directory_on_windows_is_not_expanded_in_deserialization() {
-        let temp_dir = tempdir().expect("base dir");
-        let base_dir = temp_dir.path();
-        let abs_path_buf = {
-            let _guard = AbsolutePathBufGuard::new(base_dir);
-            serde_json::from_str::<AbsolutePathBuf>("\"~/code\"").expect("failed to deserialize")
+    fn home_directory_backslash_path_is_expanded_in_deserialization() {
+        let Some(home) = home_dir() else {
+            return;
         };
-        assert_eq!(
-            abs_path_buf.as_path(),
-            base_dir.join("~").join("code").as_path()
-        );
+        let temp_dir = tempdir().expect("base dir");
+        let abs_path_buf = {
+            let _guard = AbsolutePathBufGuard::new(temp_dir.path());
+            serde_json::from_str::<AbsolutePathBuf>(r#""~\\code""#).expect("failed to deserialize")
+        };
+        assert_eq!(abs_path_buf.as_path(), home.join("code").as_path());
     }
 }
