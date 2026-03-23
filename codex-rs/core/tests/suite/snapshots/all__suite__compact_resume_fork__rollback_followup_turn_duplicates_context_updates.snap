@@ -1,10 +1,10 @@
 ---
-source: core/src/codex_tests.rs
-expression: snapshot
+source: core/tests/suite/compact_resume_fork.rs
+expression: "context_snapshot::format_labeled_requests_snapshot(\"rollback currently duplicates pre-turn override context updates on the follow-up request\",\n&[(\"rolled-back turn request\", &requests[1]),\n(\"follow-up request after rollback\", &requests[2]),],\n&ContextSnapshotOptions::default().strip_capability_instructions().render_mode(ContextSnapshotRenderMode::KindWithTextPrefix\n{ max_chars: 96 }),)"
 ---
-Scenario: Rolling back a turn with context diffs and then sending a follow-up request currently duplicates the rolled-back context updates.
+Scenario: rollback currently duplicates pre-turn override context updates on the follow-up request
 
-## Rolled-back Turn Request
+## rolled-back turn request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:turn 1 user
@@ -13,7 +13,7 @@ Scenario: Rolling back a turn with context diffs and then sending a follow-up re
 05:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
 06:message/user:turn 2 user
 
-## Follow-up Request After Rollback
+## follow-up request after rollback
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 02:message/user:turn 1 user
