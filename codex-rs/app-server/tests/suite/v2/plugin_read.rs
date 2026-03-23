@@ -162,6 +162,10 @@ description: Visible only for ChatGPT
         r#"[features]
 plugins = true
 
+[[skills.config]]
+name = "demo-plugin:thread-summarizer"
+enabled = false
+
 [plugins."demo-plugin@codex-curated"]
 enabled = true
 "#,
@@ -244,6 +248,7 @@ enabled = true
         response.plugin.skills[0].description,
         "Summarize email threads"
     );
+    assert!(!response.plugin.skills[0].enabled);
     assert_eq!(response.plugin.apps.len(), 1);
     assert_eq!(response.plugin.apps[0].id, "gmail");
     assert_eq!(response.plugin.apps[0].name, "gmail");

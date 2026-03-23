@@ -1090,10 +1090,13 @@ impl AuthManager {
     }
 
     /// Current cached auth (clone). May be `None` if not logged in or load failed.
-    /// Refreshes cached ChatGPT tokens if they are stale before returning.
+    /// For stale managed ChatGPT auth, first performs a guarded reload and then
+    /// refreshes only if the on-disk auth is unchanged.
     pub async fn auth(&self) -> Option<CodexAuth> {
         let auth = self.auth_cached()?;
-        if let Err(err) = self.refresh_if_stale(&auth).await {
+        if Self::is_stale_for_proactive_refresh(&auth)
+            && let Err(err) = self.refresh_token().await
+        {
             tracing::error!("Failed to refresh token: {}", err);
             return Some(auth);
         }
@@ -1320,30 +1323,21 @@ impl AuthManager {
         self.auth_cached().as_ref().map(CodexAuth::auth_mode)
     }
 
-    async fn refresh_if_stale(&self, auth: &CodexAuth) -> Result<bool, RefreshTokenError> {
+    fn is_stale_for_proactive_refresh(auth: &CodexAuth) -> bool {
         let chatgpt_auth = match auth {
             CodexAuth::Chatgpt(chatgpt_auth) => chatgpt_auth,
-            _ => return Ok(false),
+            _ => return false,
         };
 
         let auth_dot_json = match chatgpt_auth.current_auth_json() {
             Some(auth_dot_json) => auth_dot_json,
-            None => return Ok(false),
-        };
-        let tokens = match auth_dot_json.tokens {
-            Some(tokens) => tokens,
-            None => return Ok(false),
+            None => return false,
         };
         let last_refresh = match auth_dot_json.last_refresh {
             Some(last_refresh) => last_refresh,
-            None => return Ok(false),
+            None => return false,
         };
-        if last_refresh >= Utc::now() - chrono::Duration::days(TOKEN_REFRESH_INTERVAL) {
-            return Ok(false);
-        }
-        self.refresh_and_persist_chatgpt_token(chatgpt_auth, tokens.refresh_token)
-            .await?;
-        Ok(true)
+        last_refresh < Utc::now() - chrono::Duration::days(TOKEN_REFRESH_INTERVAL)
     }
 
     async fn refresh_external_auth(

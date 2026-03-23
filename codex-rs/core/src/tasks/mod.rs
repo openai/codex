@@ -153,7 +153,15 @@ impl Session {
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
+        self.start_task(turn_context, input, task).await;
+    }
 
+    async fn start_task<T: SessionTask>(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        input: Vec<UserInput>,
+        task: T,
+    ) {
         let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
@@ -224,6 +232,22 @@ impl Session {
             .await;
     }
 
+    pub(crate) async fn ensure_task_for_queued_response_items(self: &Arc<Self>) {
+        if !self.has_queued_response_items_for_next_turn().await {
+            return;
+        }
+
+        if self.active_turn.lock().await.is_some() {
+            return;
+        }
+
+        let turn_context = self.new_default_turn().await;
+        self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
+            .await;
+        self.start_task(turn_context, Vec::new(), RegularTask::new())
+            .await;
+    }
+
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
         if let Some(mut active_turn) = self.take_active_turn().await {
             for task in active_turn.drain_tasks() {
@@ -232,6 +256,9 @@ impl Session {
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             active_turn.clear_pending().await;
+        }
+        if reason == TurnAbortReason::Interrupted {
+            self.ensure_task_for_queued_response_items().await;
         }
     }
 
@@ -371,10 +398,14 @@ impl Session {
         let mut turn = ActiveTurn::default();
         let mut turn_state = turn.turn_state.lock().await;
         turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
+        for item in self.take_queued_response_items_for_next_turn().await {
+            turn_state.push_pending_input(item);
+        }
         drop(turn_state);
         turn.add_task(task);
         *active = Some(turn);
     }
+
     async fn take_active_turn(&self) -> Option<ActiveTurn> {
         let mut active = self.active_turn.lock().await;
         active.take()

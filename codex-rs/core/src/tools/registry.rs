@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use crate::client_common::tools::ToolSpec;
 use crate::function_tool::FunctionCallError;
+use crate::hook_runtime::run_pre_tool_use_hooks;
 use crate::memories::usage::emit_metric_for_tool_read;
 use crate::protocol::SandboxPolicy;
 use crate::sandbox_tags::sandbox_tag;
@@ -20,7 +21,10 @@ use codex_hooks::HookToolInput;
 use codex_hooks::HookToolInputLocalShell;
 use codex_hooks::HookToolKind;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ShellCommandToolCallParams;
+use codex_protocol::models::ShellToolCallParams;
 use codex_utils_readiness::Readiness;
+use serde::Deserialize;
 use tracing::warn;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -243,6 +247,20 @@ impl ToolRegistry {
             return Err(FunctionCallError::Fatal(message));
         }
 
+        if let Some(command) = pre_tool_use_command(tool_name.as_ref(), &invocation.payload)
+            && let Some(reason) = run_pre_tool_use_hooks(
+                &invocation.session,
+                &invocation.turn,
+                invocation.call_id.clone(),
+                command.clone(),
+            )
+            .await
+        {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "Bash command blocked by hook: {reason}. Command: {command}"
+            )));
+        }
+
         let is_mutating = handler.is_mutating(&invocation).await;
         let response_cell = tokio::sync::Mutex::new(None);
         let invocation_for_tool = invocation.clone();
@@ -410,6 +428,35 @@ fn sandbox_policy_tag(policy: &SandboxPolicy) -> &'static str {
         SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
         SandboxPolicy::DangerFullAccess => "danger-full-access",
         SandboxPolicy::ExternalSandbox { .. } => "external-sandbox",
+    }
+}
+
+#[derive(Deserialize)]
+struct PreToolUseExecCommandArgs {
+    cmd: String,
+}
+
+fn pre_tool_use_command(tool_name: &str, payload: &ToolPayload) -> Option<String> {
+    match (tool_name, payload) {
+        ("shell" | "container.exec", ToolPayload::Function { arguments }) => {
+            serde_json::from_str::<ShellToolCallParams>(arguments)
+                .ok()
+                .map(|params| codex_shell_command::parse_command::shlex_join(&params.command))
+        }
+        ("local_shell", ToolPayload::LocalShell { params }) => Some(
+            codex_shell_command::parse_command::shlex_join(&params.command),
+        ),
+        ("shell_command", ToolPayload::Function { arguments }) => {
+            serde_json::from_str::<ShellCommandToolCallParams>(arguments)
+                .ok()
+                .map(|params| params.command)
+        }
+        ("exec_command", ToolPayload::Function { arguments }) => {
+            serde_json::from_str::<PreToolUseExecCommandArgs>(arguments)
+                .ok()
+                .map(|params| params.cmd)
+        }
+        _ => None,
     }
 }
 

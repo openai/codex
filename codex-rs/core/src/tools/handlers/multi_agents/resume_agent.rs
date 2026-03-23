@@ -1,5 +1,6 @@
 use super::*;
 use crate::agent::next_thread_spawn_depth;
+use std::sync::Arc;
 
 pub(crate) struct Handler;
 

@@ -3599,6 +3599,24 @@ impl ChatComposer {
 
     fn mention_items(&self) -> Vec<MentionItem> {
         let mut mentions = Vec::new();
+        let plugin_namespaces: HashSet<String> =
+            self.plugins.as_ref().map_or_else(HashSet::new, |plugins| {
+                plugins
+                    .iter()
+                    .filter_map(|plugin| {
+                        let (plugin_name, _) = plugin
+                            .config_name
+                            .split_once('@')
+                            .unwrap_or((plugin.config_name.as_str(), ""));
+                        let plugin_name = plugin_name.trim();
+                        if plugin_name.is_empty() {
+                            None
+                        } else {
+                            Some(plugin_name.to_ascii_lowercase())
+                        }
+                    })
+                    .collect()
+            });
         let plugin_display_names: HashSet<String> =
             self.plugins.as_ref().map_or_else(HashSet::new, |plugins| {
                 plugins
@@ -3609,6 +3627,13 @@ impl ChatComposer {
 
         if let Some(skills) = self.skills.as_ref() {
             for skill in skills {
+                let is_plugin_namespaced_skill =
+                    skill.name.split_once(':').is_some_and(|(namespace, _)| {
+                        plugin_namespaces.contains(&namespace.to_ascii_lowercase())
+                    });
+                if is_plugin_namespaced_skill {
+                    continue;
+                }
                 let display_name = skill_display_name(skill).to_string();
                 let description = skill_description(skill);
                 let skill_name = skill.name.clone();
@@ -5418,7 +5443,7 @@ mod tests {
     }
 
     #[test]
-    fn mention_items_keep_plugin_owned_skills_but_hide_duplicate_apps() {
+    fn mention_items_hide_plugin_owned_skill_and_app_duplicates() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
@@ -5480,27 +5505,13 @@ mod tests {
             }],
         }));
 
-        let mut mention_summaries: Vec<_> = composer
-            .mention_items()
-            .into_iter()
-            .map(|mention| (mention.display_name, mention.category_tag, mention.path))
-            .collect();
-        mention_summaries.sort();
-
+        let mentions = composer.mention_items();
+        assert_eq!(mentions.len(), 1);
+        assert_eq!(mentions[0].display_name, "Google Calendar".to_string());
+        assert_eq!(mentions[0].category_tag, Some("[Plugin]".to_string()));
         assert_eq!(
-            mention_summaries,
-            vec![
-                (
-                    "Google Calendar".to_string(),
-                    Some("[Plugin]".to_string()),
-                    Some("plugin://google-calendar@debug".to_string()),
-                ),
-                (
-                    "Google Calendar".to_string(),
-                    Some("[Skill]".to_string()),
-                    Some("/tmp/repo/google-calendar/SKILL.md".to_string()),
-                ),
-            ]
+            mentions[0].path,
+            Some("plugin://google-calendar@debug".to_string())
         );
     }
 

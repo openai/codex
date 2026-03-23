@@ -38,6 +38,7 @@ use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
 use crate::models::MessagePhase;
+use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::WebSearchAction;
 use crate::num_format::format_with_separators;
@@ -293,6 +294,12 @@ pub enum Op {
         personality: Option<Personality>,
     },
 
+    /// Inter-agent communication that should be recorded as assistant history
+    /// while still using the normal thread submission lifecycle.
+    InterAgentCommunication {
+        communication: InterAgentCommunication,
+    },
+
     /// Override parts of the persistent turn context for subsequent turns.
     ///
     /// All fields are optional; when omitted, the existing value is preserved.
@@ -499,6 +506,81 @@ pub enum Op {
     ListModels,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct InterAgentCommunication {
+    pub author: AgentPath,
+    pub recipient: AgentPath,
+    #[serde(default)]
+    pub other_recipients: Vec<AgentPath>,
+    pub content: String,
+}
+
+impl InterAgentCommunication {
+    pub fn new(
+        author: AgentPath,
+        recipient: AgentPath,
+        other_recipients: Vec<AgentPath>,
+        content: String,
+    ) -> Self {
+        Self {
+            author,
+            recipient,
+            other_recipients,
+            content,
+        }
+    }
+
+    pub fn to_response_item(&self) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: self.as_text(),
+            }],
+            end_turn: None,
+            phase: None,
+        }
+    }
+
+    pub fn to_response_input_item(&self) -> ResponseInputItem {
+        ResponseInputItem::Message {
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: self.as_text(),
+            }],
+        }
+    }
+
+    pub fn is_message_content(content: &[ContentItem]) -> bool {
+        content.iter().any(|content_item| match content_item {
+            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                Self::is_instruction_text(text)
+            }
+            _ => false,
+        })
+    }
+
+    fn as_text(&self) -> String {
+        let other_recipients = self
+            .other_recipients
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "author: {}\nrecipient: {}\nother_recipients: [{other_recipients}]\nContent: {}",
+            self.author, self.recipient, self.content
+        )
+    }
+
+    fn is_instruction_text(text: &str) -> bool {
+        text.starts_with("author: ")
+            && text.contains("\nrecipient: ")
+            && text.contains("\nother_recipients: [")
+            && text.contains("]\nContent: ")
+    }
+}
+
 impl Op {
     pub fn kind(&self) -> &'static str {
         match self {
@@ -510,6 +592,7 @@ impl Op {
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::UserInput { .. } => "user_input",
             Self::UserTurn { .. } => "user_turn",
+            Self::InterAgentCommunication { .. } => "inter_agent_communication",
             Self::OverrideTurnContext { .. } => "override_turn_context",
             Self::ExecApproval { .. } => "exec_approval",
             Self::PatchApproval { .. } => "patch_approval",
@@ -1342,6 +1425,7 @@ pub enum EventMsg {
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum HookEventName {
+    PreToolUse,
     SessionStart,
     UserPromptSubmit,
     Stop,

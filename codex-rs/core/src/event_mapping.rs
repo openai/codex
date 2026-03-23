@@ -72,7 +72,7 @@ fn parse_agent_message(
     let mut content: Vec<AgentMessageContent> = Vec::new();
     for content_item in message.iter() {
         match content_item {
-            ContentItem::OutputText { text } => {
+            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
                 content.push(AgentMessageContent::Text { text: text.clone() });
             }
             _ => {

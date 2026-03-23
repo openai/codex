@@ -577,6 +577,7 @@ async fn wait_for_guardian_review(
 ) -> (GuardianReviewSessionOutcome, bool) {
     let timeout = tokio::time::sleep_until(deadline);
     tokio::pin!(timeout);
+    let mut last_error_message: Option<String> = None;
 
     loop {
         tokio::select! {
@@ -598,10 +599,21 @@ async fn wait_for_guardian_review(
                 match event {
                     Ok(event) => match event.msg {
                         EventMsg::TurnComplete(turn_complete) => {
+                            if turn_complete.last_agent_message.is_none()
+                                && let Some(error_message) = last_error_message
+                            {
+                                return (
+                                    GuardianReviewSessionOutcome::Completed(Err(anyhow!(error_message))),
+                                    true,
+                                );
+                            }
                             return (
                                 GuardianReviewSessionOutcome::Completed(Ok(turn_complete.last_agent_message)),
                                 true,
                             );
+                        }
+                        EventMsg::Error(error) => {
+                            last_error_message = Some(error.message);
                         }
                         EventMsg::TurnAborted(_) => {
                             return (GuardianReviewSessionOutcome::Aborted, true);
