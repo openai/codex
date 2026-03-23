@@ -29,8 +29,11 @@ use codex_app_server_protocol::ReviewTarget as ApiReviewTarget;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::Thread as AppServerThread;
+use codex_app_server_protocol::ThreadItem as AppServerThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadSortKey;
@@ -751,7 +754,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             InProcessServerEvent::ServerRequest(request) => {
                 handle_server_request(&client, request, &mut error_seen).await;
             }
-            InProcessServerEvent::ServerNotification(notification) => {
+            InProcessServerEvent::ServerNotification(mut notification) => {
                 if let ServerNotification::Error(payload) = &notification {
                     if payload.thread_id == primary_thread_id_for_requests
                         && payload.turn_id == task_id
@@ -770,6 +773,9 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 {
                     error_seen = true;
                 }
+
+                maybe_backfill_turn_completed_items(&client, &mut request_ids, &mut notification)
+                    .await;
 
                 if should_process_notification(
                     &notification,
@@ -1026,6 +1032,58 @@ fn should_process_notification(
         }
         _ => false,
     }
+}
+
+async fn maybe_backfill_turn_completed_items(
+    client: &InProcessAppServerClient,
+    request_ids: &mut RequestIdSequencer,
+    notification: &mut ServerNotification,
+) {
+    // In-process delivery may drop non-terminal item notifications under backpressure while still
+    // guaranteeing `turn/completed`. Because app-server currently emits that completion with an
+    // empty `turn.items`, exec does one last `thread/read` here so human/json output can recover
+    // the final message and reconcile any still-running items before shutdown.
+    let ServerNotification::TurnCompleted(payload) = notification else {
+        return;
+    };
+    if !payload.turn.items.is_empty() {
+        return;
+    }
+
+    let response = send_request_with_response::<ThreadReadResponse>(
+        client,
+        ClientRequest::ThreadRead {
+            request_id: request_ids.next(),
+            params: ThreadReadParams {
+                thread_id: payload.thread_id.clone(),
+                include_turns: true,
+            },
+        },
+        "thread/read",
+    )
+    .await;
+
+    match response {
+        Ok(response) => {
+            if let Some(items) = turn_items_for_thread(&response.thread, &payload.turn.id) {
+                payload.turn.items = items;
+            }
+        }
+        Err(err) => {
+            warn!("thread/read failed while backfilling turn items for turn completion: {err}");
+        }
+    }
+}
+
+fn turn_items_for_thread(
+    thread: &AppServerThread,
+    turn_id: &str,
+) -> Option<Vec<AppServerThreadItem>> {
+    thread
+        .turns
+        .iter()
+        .find(|turn| turn.id == turn_id)
+        .map(|turn| turn.items.clone())
 }
 
 fn all_thread_source_kinds() -> Vec<ThreadSourceKind> {
@@ -1714,6 +1772,60 @@ mod tests {
             lagged_event_warning_message(7),
             "in-process app-server event stream lagged; dropped 7 events".to_string()
         );
+    }
+
+    #[test]
+    fn turn_items_for_thread_returns_matching_turn_items() {
+        let thread = AppServerThread {
+            id: "thread-1".to_string(),
+            preview: String::new(),
+            ephemeral: false,
+            model_provider: "openai".to_string(),
+            created_at: 0,
+            updated_at: 0,
+            status: codex_app_server_protocol::ThreadStatus::Idle,
+            path: None,
+            cwd: PathBuf::from("/tmp/project"),
+            cli_version: "0.0.0-test".to_string(),
+            source: codex_app_server_protocol::SessionSource::Exec,
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: None,
+            turns: vec![
+                codex_app_server_protocol::Turn {
+                    id: "turn-1".to_string(),
+                    items: vec![AppServerThreadItem::AgentMessage {
+                        id: "msg-1".to_string(),
+                        text: "hello".to_string(),
+                        phase: None,
+                        memory_citation: None,
+                    }],
+                    status: codex_app_server_protocol::TurnStatus::Completed,
+                    error: None,
+                },
+                codex_app_server_protocol::Turn {
+                    id: "turn-2".to_string(),
+                    items: vec![AppServerThreadItem::Plan {
+                        id: "plan-1".to_string(),
+                        text: "ship it".to_string(),
+                    }],
+                    status: codex_app_server_protocol::TurnStatus::Completed,
+                    error: None,
+                },
+            ],
+        };
+
+        assert_eq!(
+            turn_items_for_thread(&thread, "turn-1"),
+            Some(vec![AppServerThreadItem::AgentMessage {
+                id: "msg-1".to_string(),
+                text: "hello".to_string(),
+                phase: None,
+                memory_citation: None,
+            }])
+        );
+        assert_eq!(turn_items_for_thread(&thread, "missing-turn"), None);
     }
 
     #[test]
