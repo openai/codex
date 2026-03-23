@@ -103,6 +103,10 @@ fn history_contains_inter_agent_communication(
     })
 }
 
+fn inter_agent_message_text(recipient: &str, content: &str) -> String {
+    format!("author: /root\nrecipient: {recipient}\nother_recipients: []\nContent: {content}")
+}
+
 #[derive(Clone, Copy)]
 struct NeverEndingTask;
 
