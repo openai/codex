@@ -9,7 +9,9 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::protocol::UserMessageEvent;
 use core_test_support::responses::mount_models_once;
 use pretty_assertions::assert_eq;
 use std::time::Duration;
@@ -274,6 +276,31 @@ fn interrupted_snapshot_is_not_mid_turn() {
 
     assert_eq!(
         snapshot_turn_state(&interrupted_history),
+        SnapshotTurnState {
+            ends_mid_turn: false,
+            active_turn_id: None,
+        },
+    );
+}
+
+#[test]
+fn completed_legacy_event_history_is_not_mid_turn() {
+    let completed_history = InitialHistory::Forked(vec![
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "hello".to_string(),
+            images: None,
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+        })),
+        RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+            message: "done".to_string(),
+            phase: None,
+            memory_citation: None,
+        })),
+    ]);
+
+    assert_eq!(
+        snapshot_turn_state(&completed_history),
         SnapshotTurnState {
             ends_mid_turn: false,
             active_turn_id: None,

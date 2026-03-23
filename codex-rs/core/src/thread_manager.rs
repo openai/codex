@@ -927,7 +927,7 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
         let active_turn_snapshot = builder.active_turn_snapshot();
         if active_turn_snapshot
             .as_ref()
-            .is_some_and(|turn| turn.status == TurnStatus::Interrupted)
+            .is_some_and(|turn| turn.status != TurnStatus::InProgress)
         {
             return SnapshotTurnState {
                 ends_mid_turn: false,
