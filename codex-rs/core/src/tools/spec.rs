@@ -11,9 +11,6 @@ use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::code_mode::PUBLIC_TOOL_NAME;
 use crate::tools::code_mode::WAIT_TOOL_NAME;
-use crate::tools::code_mode::is_code_mode_nested_tool;
-use crate::tools::code_mode::tool_description as code_mode_tool_description;
-use crate::tools::code_mode::wait_tool_description as code_mode_wait_tool_description;
 use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
 use crate::tools::discoverable::DiscoverablePluginInfo;
 use crate::tools::discoverable::DiscoverableTool;
@@ -833,7 +830,7 @@ fn create_wait_tool() -> ToolSpec {
         name: WAIT_TOOL_NAME.to_string(),
         description: format!(
             "Waits on a yielded `{PUBLIC_TOOL_NAME}` cell and returns new output or completion.\n{}",
-            code_mode_wait_tool_description().trim()
+            codex_code_mode::build_wait_tool_description().trim()
         ),
         strict: false,
         parameters: JsonSchema::Object {
@@ -2176,7 +2173,10 @@ SOURCE: /[\s\S]+/
 
     ToolSpec::Freeform(FreeformTool {
         name: PUBLIC_TOOL_NAME.to_string(),
-        description: code_mode_tool_description(enabled_tools, code_mode_only_enabled),
+        description: codex_code_mode::build_exec_tool_description(
+            enabled_tools,
+            code_mode_only_enabled,
+        ),
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),
             syntax: "lark".to_string(),
@@ -2647,7 +2647,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                     ToolSpec::Freeform(tool) => (tool.name, tool.description),
                     _ => return None,
                 };
-                is_code_mode_nested_tool(&name).then_some((name, description))
+                codex_code_mode::is_code_mode_nested_tool(&name).then_some((name, description))
             })
             .collect::<Vec<_>>();
         enabled_tools.sort_by(|left, right| left.0.cmp(&right.0));

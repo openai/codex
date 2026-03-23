@@ -144,6 +144,33 @@ crate.annotation(
 )
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
+new_local_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:local.bzl", "new_local_repository")
+
+new_local_repository(
+    name = "v8_targets",
+    build_file = "//third_party/v8:BUILD.bazel",
+    path = "third_party/v8",
+)
+
+crate.annotation(
+    build_script_data = [
+        "@v8_targets//:rusty_v8_archive_for_target",
+        "@v8_targets//:rusty_v8_binding_for_target",
+    ],
+    build_script_env = {
+        "RUSTY_V8_ARCHIVE": "$(execpath @v8_targets//:rusty_v8_archive_for_target)",
+        "RUSTY_V8_SRC_BINDING_PATH": "$(execpath @v8_targets//:rusty_v8_binding_for_target)",
+    },
+    crate = "v8",
+    gen_build_script = "on",
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:rusty_v8_prebuilt_out_dir.patch",
+    ],
+)
+
+inject_repo(crate, "v8_targets")
 
 llvm = use_extension("@llvm//extensions:llvm.bzl", "llvm")
 use_repo(llvm, "llvm-project")
@@ -208,6 +235,86 @@ http_archive(
     strip_prefix = "v8-146.4.0",
     type = "tar.gz",
     urls = ["https://static.crates.io/crates/v8/v8-146.4.0.crate"],
+)
+
+http_file(
+    name = "rusty_v8_146_4_0_aarch64_apple_darwin_archive",
+    downloaded_file_path = "librusty_v8_release_aarch64-apple-darwin.a.gz",
+    urls = [
+        "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/librusty_v8_release_aarch64-apple-darwin.a.gz",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_146_4_0_aarch64_unknown_linux_gnu_archive",
+    downloaded_file_path = "librusty_v8_release_aarch64-unknown-linux-gnu.a.gz",
+    urls = [
+        "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/librusty_v8_release_aarch64-unknown-linux-gnu.a.gz",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_146_4_0_aarch64_pc_windows_msvc_archive",
+    downloaded_file_path = "rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
+    urls = [
+        "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/rusty_v8_release_aarch64-pc-windows-msvc.lib.gz",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_146_4_0_x86_64_apple_darwin_archive",
+    downloaded_file_path = "librusty_v8_release_x86_64-apple-darwin.a.gz",
+    urls = [
+        "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/librusty_v8_release_x86_64-apple-darwin.a.gz",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_146_4_0_x86_64_unknown_linux_gnu_archive",
+    downloaded_file_path = "librusty_v8_release_x86_64-unknown-linux-gnu.a.gz",
+    urls = [
+        "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/librusty_v8_release_x86_64-unknown-linux-gnu.a.gz",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_146_4_0_x86_64_pc_windows_msvc_archive",
+    downloaded_file_path = "rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
+    urls = [
+        "https://github.com/denoland/rusty_v8/releases/download/v146.4.0/rusty_v8_release_x86_64-pc-windows-msvc.lib.gz",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_146_4_0_aarch64_unknown_linux_musl_archive",
+    downloaded_file_path = "librusty_v8_release_aarch64-unknown-linux-musl.a.gz",
+    urls = [
+        "https://github.com/openai/codex/releases/download/rusty-v8-v146.4.0/librusty_v8_release_aarch64-unknown-linux-musl.a.gz",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_146_4_0_aarch64_unknown_linux_musl_binding",
+    downloaded_file_path = "src_binding_release_aarch64-unknown-linux-musl.rs",
+    urls = [
+        "https://github.com/openai/codex/releases/download/rusty-v8-v146.4.0/src_binding_release_aarch64-unknown-linux-musl.rs",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_146_4_0_x86_64_unknown_linux_musl_archive",
+    downloaded_file_path = "librusty_v8_release_x86_64-unknown-linux-musl.a.gz",
+    urls = [
+        "https://github.com/openai/codex/releases/download/rusty-v8-v146.4.0/librusty_v8_release_x86_64-unknown-linux-musl.a.gz",
+    ],
+)
+
+http_file(
+    name = "rusty_v8_146_4_0_x86_64_unknown_linux_musl_binding",
+    downloaded_file_path = "src_binding_release_x86_64-unknown-linux-musl.rs",
+    urls = [
+        "https://github.com/openai/codex/releases/download/rusty-v8-v146.4.0/src_binding_release_x86_64-unknown-linux-musl.rs",
+    ],
 )
 
 use_repo(crate, "crates")

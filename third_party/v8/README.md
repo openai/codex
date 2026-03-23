@@ -1,45 +1,47 @@
-# `rusty_v8` Release Artifacts
+# `rusty_v8` Consumer Artifacts
 
-This directory contains the Bazel packaging used to build and stage
-target-specific `rusty_v8` release artifacts for Bazel-managed consumers.
+This directory wires the `v8` crate to exact-version Bazel inputs.
+Bazel consumer builds use:
+
+- upstream `denoland/rusty_v8` release archives on Windows
+- source-built V8 archives on Darwin, GNU Linux, and musl Linux
+- `openai/codex` release assets for published musl release pairs
+
+Cargo builds still use prebuilt `rusty_v8` archives by default. Only Bazel
+overrides `RUSTY_V8_ARCHIVE`/`RUSTY_V8_SRC_BINDING_PATH` in `MODULE.bazel` to
+select source-built local archives for its consumer builds.
 
 Current pinned versions:
 
 - Rust crate: `v8 = =146.4.0`
-- Embedded upstream V8 source: `14.6.202.9`
+- Embedded upstream V8 source for musl release builds: `14.6.202.9`
 
-The generated release pairs include:
+The consumer-facing selectors are:
 
-- `//third_party/v8:rusty_v8_release_pair_x86_64_apple_darwin`
-- `//third_party/v8:rusty_v8_release_pair_aarch64_apple_darwin`
-- `//third_party/v8:rusty_v8_release_pair_x86_64_unknown_linux_gnu`
-- `//third_party/v8:rusty_v8_release_pair_aarch64_unknown_linux_gnu`
+- `//third_party/v8:rusty_v8_archive_for_target`
+- `//third_party/v8:rusty_v8_binding_for_target`
+
+Musl release assets are expected at the tag:
+
+- `rusty-v8-v<crate_version>`
+
+with these raw asset names:
+
+- `librusty_v8_release_<target>.a.gz`
+- `src_binding_release_<target>.rs`
+
+The dedicated publishing workflow is `.github/workflows/rusty-v8-release.yml`.
+It builds musl release pairs from source and keeps the release artifacts as the
+statically linked form:
+
 - `//third_party/v8:rusty_v8_release_pair_x86_64_unknown_linux_musl`
 - `//third_party/v8:rusty_v8_release_pair_aarch64_unknown_linux_musl`
-- `//third_party/v8:rusty_v8_release_pair_x86_64_pc_windows_msvc`
-- `//third_party/v8:rusty_v8_release_pair_aarch64_pc_windows_msvc`
 
-Each release pair contains:
-
-- a static library built from source
-- a Rust binding file copied from the exact same `v8` crate version for that
-  target
+Cargo musl builds use `RUSTY_V8_ARCHIVE` plus a downloaded
+`RUSTY_V8_SRC_BINDING_PATH` to point at those `openai/codex` release assets
+directly. We do not use `RUSTY_V8_MIRROR` for musl because the upstream `v8`
+crate hardcodes a `v<crate_version>` tag layout, while our musl artifacts are
+published under `rusty-v8-v<crate_version>`.
 
 Do not mix artifacts across crate versions. The archive and binding must match
-the exact pinned `v8` crate version used by this repo.
-
-The dedicated publishing workflow is:
-
-- `.github/workflows/rusty-v8-release.yml`
-
-That workflow currently stages musl artifacts:
-
-- `librusty_v8_release_x86_64-unknown-linux-musl.a.gz`
-- `librusty_v8_release_aarch64-unknown-linux-musl.a.gz`
-- `src_binding_release_x86_64-unknown-linux-musl.rs`
-- `src_binding_release_aarch64-unknown-linux-musl.rs`
-
-During musl staging, the produced static archive is merged with the target's
-LLVM `libc++` and `libc++abi` static runtime archives. Rust's musl toolchain
-already provides the matching `libunwind`, so staging does not bundle a second
-copy.
+the exact resolved `v8` crate version in `codex-rs/Cargo.lock`.

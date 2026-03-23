@@ -622,7 +622,8 @@ impl PluginsManager {
         if let Some(featured_plugin_ids) = self.cached_featured_plugin_ids(&cache_key) {
             return Ok(featured_plugin_ids);
         }
-        let featured_plugin_ids = fetch_remote_featured_plugin_ids(config, auth).await?;
+        let featured_plugin_ids =
+            fetch_remote_featured_plugin_ids(config, auth, self.restriction_product).await?;
         self.write_featured_plugin_ids_cache(cache_key, &featured_plugin_ids);
         Ok(featured_plugin_ids)
     }

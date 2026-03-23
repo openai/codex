@@ -13,6 +13,7 @@ members = [
     "feedback",
     "features",
     "codex-backend-openapi-models",
+    "code-mode",
     "cloud-requirements",
     "cloud-tasks",
     "cloud-tasks-client",
@@ -45,6 +46,7 @@ members = [
     "otel",
     "tui",
     "tui_app_server",
+    "v8-poc",
     "utils/absolute-path",
     "utils/cargo-bin",
     "utils/git",
@@ -90,6 +92,7 @@ app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
 codex-artifacts = { path = "artifacts" }
+codex-code-mode = { path = "code-mode" }
 codex-package-manager = { path = "package-manager" }
 codex-app-server = { path = "app-server" }
 codex-app-server-client = { path = "app-server-client" }
@@ -137,6 +140,7 @@ codex-test-macros = { path = "test-macros" }
 codex-terminal-detection = { path = "terminal-detection" }
 codex-tui = { path = "tui" }
 codex-tui-app-server = { path = "tui_app_server" }
+codex-v8-poc = { path = "v8-poc" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-approval-presets = { path = "utils/approval-presets" }
 codex-utils-cache = { path = "utils/cache" }
@@ -245,6 +249,7 @@ regex-lite = "0.1.8"
 reqwest = "0.12"
 rmcp = { version = "0.15.0", default-features = false }
 runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
+v8 = "=146.4.0"
 rustls = { version = "0.23", default-features = false, features = [
     "ring",
     "std",
@@ -370,7 +375,8 @@ ignored = [
     "icu_provider",
     "openssl-sys",
     "codex-utils-readiness",
-    "codex-secrets"
+    "codex-secrets",
+    "codex-v8-poc",
 ]
 
 [profile.release]
