@@ -1132,7 +1132,7 @@ async fn record_initial_history_reconstructs_forked_transcript() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<()> {
     let server = start_mock_server().await;
-    let _initial_request = mount_sse_once(
+    mount_sse_once(
         &server,
         sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
     )
