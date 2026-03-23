@@ -676,7 +676,6 @@ async fn multi_agent_v2_send_input_interrupts_busy_child_without_losing_message(
             ))
     )));
 
-    let expected_message = inter_agent_message_text("/root/worker", "continue");
     timeout(Duration::from_secs(5), async {
         loop {
             let history_items = thread
