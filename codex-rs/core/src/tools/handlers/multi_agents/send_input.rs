@@ -1,6 +1,14 @@
 use super::*;
+use crate::agent::inter_agent_instruction::InterAgentDelivery;
+use crate::agent::inter_agent_instruction::InterAgentInstruction;
 
 pub(crate) struct Handler;
+
+fn can_use_v2_inter_agent_instruction(items: &[UserInput]) -> bool {
+    items
+        .iter()
+        .all(|item| matches!(item, UserInput::Text { .. }))
+}
 
 #[async_trait]
 impl ToolHandler for Handler {
@@ -52,12 +60,40 @@ impl ToolHandler for Handler {
                 .into(),
             )
             .await;
-        let result = session
-            .services
-            .agent_control
-            .send_input(receiver_thread_id, input_items)
-            .await
-            .map_err(|err| collab_agent_error(receiver_thread_id, err));
+        let agent_control = session.services.agent_control.clone();
+        let result = if turn.config.features.enabled(Feature::MultiAgentV2)
+            && can_use_v2_inter_agent_instruction(&input_items)
+        {
+            let receiver_agent_path = receiver_agent.agent_path.clone().ok_or_else(|| {
+                FunctionCallError::RespondToModel(
+                    "target agent is missing an agent_path".to_string(),
+                )
+            })?;
+            let instruction = InterAgentInstruction::new(
+                turn.session_source
+                    .get_agent_path()
+                    .unwrap_or_else(AgentPath::root),
+                receiver_agent_path,
+                Vec::new(),
+                prompt.clone(),
+            );
+            agent_control
+                .deliver_inter_agent_instruction(
+                    receiver_thread_id,
+                    instruction,
+                    if args.interrupt {
+                        InterAgentDelivery::NextTurn
+                    } else {
+                        InterAgentDelivery::CurrentTurn
+                    },
+                )
+                .await
+        } else {
+            agent_control
+                .send_input(receiver_thread_id, input_items)
+                .await
+        }
+        .map_err(|err| collab_agent_error(receiver_thread_id, err));
         let status = session
             .services
             .agent_control

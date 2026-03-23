@@ -1,4 +1,6 @@
 use crate::agent::AgentStatus;
+use crate::agent::inter_agent_instruction::InterAgentDelivery;
+use crate::agent::inter_agent_instruction::InterAgentInstruction;
 use crate::agent::registry::AgentMetadata;
 use crate::agent::registry::AgentRegistry;
 use crate::agent::role::DEFAULT_ROLE_NAME;
@@ -454,26 +456,72 @@ impl AgentControl {
         items: Vec<UserInput>,
     ) -> CodexResult<String> {
         let state = self.upgrade()?;
-        let result = state
-            .send_op(
-                agent_id,
-                Op::UserInput {
-                    items,
-                    final_output_json_schema: None,
-                },
-            )
-            .await;
-        if matches!(result, Err(CodexErr::InternalAgentDied)) {
-            let _ = state.remove_thread(&agent_id).await;
-            self.state.release_spawned_thread(agent_id);
-        }
-        result
+        self.handle_thread_request_result(
+            agent_id,
+            &state,
+            state
+                .send_op(
+                    agent_id,
+                    Op::UserInput {
+                        items,
+                        final_output_json_schema: None,
+                    },
+                )
+                .await,
+        )
+        .await
+    }
+
+    /// Append a prebuilt message to an existing agent thread outside the normal user-input path.
+    #[cfg(test)]
+    pub(crate) async fn append_message(
+        &self,
+        agent_id: ThreadId,
+        message: ResponseItem,
+    ) -> CodexResult<String> {
+        let state = self.upgrade()?;
+        self.handle_thread_request_result(
+            agent_id,
+            &state,
+            state.append_message(agent_id, message).await,
+        )
+        .await
+    }
+
+    pub(crate) async fn deliver_inter_agent_instruction(
+        &self,
+        agent_id: ThreadId,
+        instruction: InterAgentInstruction,
+        delivery: InterAgentDelivery,
+    ) -> CodexResult<String> {
+        let state = self.upgrade()?;
+        self.handle_thread_request_result(
+            agent_id,
+            &state,
+            state
+                .deliver_inter_agent_instruction(agent_id, instruction, delivery)
+                .await,
+        )
+        .await
     }
 
     /// Interrupt the current task for an existing agent thread.
     pub(crate) async fn interrupt_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
         state.send_op(agent_id, Op::Interrupt).await
+    }
+
+    async fn handle_thread_request_result(
+        &self,
+        agent_id: ThreadId,
+        state: &Arc<ThreadManagerState>,
+        result: CodexResult<String>,
+    ) -> CodexResult<String> {
+        if matches!(result, Err(CodexErr::InternalAgentDied)) {
+            let _ = state.remove_thread(&agent_id).await;
+            self.state.release_spawned_thread(agent_id);
+        }
+        result
     }
 
     /// Submit a shutdown request for a live agent without marking it explicitly closed in

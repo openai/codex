@@ -3,6 +3,8 @@ use crate::CodexAuth;
 use crate::ModelProviderInfo;
 use crate::OPENAI_PROVIDER_ID;
 use crate::agent::AgentControl;
+use crate::agent::inter_agent_instruction::InterAgentDelivery;
+use crate::agent::inter_agent_instruction::InterAgentInstruction;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnArgs;
 use crate::codex::CodexSpawnOk;
@@ -26,6 +28,8 @@ use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
+#[cfg(test)]
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
@@ -604,6 +608,29 @@ impl ThreadManagerState {
             log.push((thread_id, op.clone()));
         }
         thread.submit(op).await
+    }
+
+    #[cfg(test)]
+    /// Append a prebuilt message to a thread by ID outside the normal user-input path.
+    pub(crate) async fn append_message(
+        &self,
+        thread_id: ThreadId,
+        message: ResponseItem,
+    ) -> CodexResult<String> {
+        let thread = self.get_thread(thread_id).await?;
+        thread.append_message(message).await
+    }
+
+    pub(crate) async fn deliver_inter_agent_instruction(
+        &self,
+        thread_id: ThreadId,
+        instruction: InterAgentInstruction,
+        delivery: InterAgentDelivery,
+    ) -> CodexResult<String> {
+        let thread = self.get_thread(thread_id).await?;
+        thread
+            .deliver_inter_agent_instruction(instruction, delivery)
+            .await
     }
 
     /// Remove a thread from the manager by ID, returning it when present.

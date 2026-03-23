@@ -2681,6 +2681,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        idle_pending_input: Mutex::new(Vec::new()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -3480,6 +3481,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         pending_mcp_server_refresh_config: Mutex::new(None),
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
+        idle_pending_input: Mutex::new(Vec::new()),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         js_repl,
@@ -4591,6 +4593,32 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
         .expect("requeue later pending input at the front of the queue");
 
     assert_eq!(sess.get_pending_input().await, vec![later, newer]);
+}
+
+#[tokio::test]
+async fn queued_response_items_for_next_turn_move_into_next_active_turn() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let queued_item = ResponseInputItem::Message {
+        role: "assistant".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "queued before wake".to_string(),
+        }],
+    };
+
+    sess.queue_response_items_for_next_turn(vec![queued_item.clone()])
+        .await;
+
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    assert_eq!(sess.get_pending_input().await, vec![queued_item]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

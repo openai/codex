@@ -33,6 +33,18 @@ fn assistant_message(text: &str) -> ResponseItem {
     }
 }
 
+fn inter_agent_assistant_message(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: text.to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }
+}
+
 #[tokio::test]
 async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previous_turn_settings()
 {
@@ -414,6 +426,96 @@ async fn reconstruct_history_rollback_skips_non_user_turns_for_history_and_metad
     assert_eq!(
         reconstructed.history,
         vec![turn_one_user, turn_one_assistant]
+    );
+    assert_eq!(
+        reconstructed.previous_turn_settings,
+        Some(PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            realtime_active: Some(turn_context.realtime_active),
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(reconstructed.reference_context_item)
+            .expect("serialize reconstructed reference context item"),
+        serde_json::to_value(Some(first_context_item))
+            .expect("serialize expected reference context item")
+    );
+}
+
+#[tokio::test]
+async fn reconstruct_history_rollback_counts_inter_agent_assistant_turns() {
+    let (session, turn_context) = make_session_and_context().await;
+    let first_context_item = turn_context.to_turn_context_item();
+    let first_turn_id = first_context_item
+        .turn_id
+        .clone()
+        .expect("turn context should have turn_id");
+    let assistant_turn_id = "assistant-instruction-turn".to_string();
+    let assistant_turn_context = TurnContextItem {
+        turn_id: Some(assistant_turn_id.clone()),
+        ..first_context_item.clone()
+    };
+    let assistant_instruction = inter_agent_assistant_message(
+        "author: /root\nrecipient: /root/worker\nother_recipients: []\nContent: continue",
+    );
+    let assistant_reply = assistant_message("worker reply");
+
+    let rollout_items = vec![
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: first_turn_id.clone(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: "turn 1 user".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        )),
+        RolloutItem::TurnContext(first_context_item.clone()),
+        RolloutItem::ResponseItem(user_message("turn 1 user")),
+        RolloutItem::ResponseItem(assistant_message("turn 1 assistant")),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(
+            codex_protocol::protocol::TurnCompleteEvent {
+                turn_id: first_turn_id,
+                last_agent_message: None,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: assistant_turn_id.clone(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::TurnContext(assistant_turn_context),
+        RolloutItem::ResponseItem(assistant_instruction),
+        RolloutItem::ResponseItem(assistant_reply),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(
+            codex_protocol::protocol::TurnCompleteEvent {
+                turn_id: assistant_turn_id,
+                last_agent_message: None,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+            codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
+        )),
+    ];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert_eq!(
+        reconstructed.history,
+        vec![
+            user_message("turn 1 user"),
+            assistant_message("turn 1 assistant")
+        ]
     );
     assert_eq!(
         reconstructed.previous_turn_settings,
