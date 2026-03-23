@@ -106,6 +106,23 @@ pub(super) struct PendingSteerCompareKey {
 }
 
 impl ChatWidget {
+    pub(super) fn stop_realtime_conversation_from_ui(&mut self) {
+        self.request_realtime_conversation_close(/*info_message*/ None);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn stop_realtime_conversation_for_deleted_meter(&mut self, id: &str) -> bool {
+        if self.realtime_conversation.is_live()
+            && self.realtime_conversation.meter_placeholder_id.as_deref() == Some(id)
+        {
+            self.realtime_conversation.meter_placeholder_id = None;
+            self.stop_realtime_conversation_from_ui();
+            return true;
+        }
+
+        false
+    }
+
     pub(super) fn rendered_user_message_event_from_parts(
         message: String,
         text_elements: Vec<TextElement>,
