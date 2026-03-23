@@ -1310,10 +1310,11 @@ impl AuthManager {
     /// token is the same as the cached, then ask the token authority to refresh.
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
         let auth_before_reload = self.auth_cached();
-        if let Some(auth_before_reload) = auth_before_reload.as_ref()
-            && let Some(error) = self.permanent_refresh_failure_for_auth(auth_before_reload)
+        if auth_before_reload
+            .as_ref()
+            .is_some_and(CodexAuth::is_api_key_auth)
         {
-            return Err(RefreshTokenError::Permanent(error));
+            return Ok(());
         }
         let expected_account_id = auth_before_reload
             .as_ref()

@@ -1378,14 +1378,13 @@ impl CodexMessageProcessor {
                 requires_openai_auth: Some(false),
             }
         } else {
-            let refresh_failure = self.auth_manager.refresh_failure();
-            let permanent_refresh_failure = refresh_failure.is_some()
-                || matches!(
-                    refresh_outcome,
-                    RefreshTokenRequestOutcome::FailedPermanently
-                );
             match self.auth_manager.auth().await {
                 Some(auth) => {
+                    let permanent_refresh_failure = self.auth_manager.refresh_failure().is_some()
+                        || matches!(
+                            refresh_outcome,
+                            RefreshTokenRequestOutcome::FailedPermanently
+                        );
                     let auth_mode = auth.api_auth_mode();
                     let (reported_auth_method, token_opt) =
                         if include_token && permanent_refresh_failure {
