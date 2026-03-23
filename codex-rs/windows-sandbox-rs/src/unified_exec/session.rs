@@ -177,19 +177,18 @@ fn spawn_output_reader(
     })
 }
 
-fn normalize_windows_tty_input(bytes: &[u8]) -> Vec<u8> {
+fn normalize_windows_tty_input(bytes: &[u8], previous_was_cr: &mut bool) -> Vec<u8> {
     let mut normalized = Vec::with_capacity(bytes.len());
-    let mut previous_was_cr = false;
     for &byte in bytes {
         if byte == b'\n' {
-            if !previous_was_cr {
+            if !*previous_was_cr {
                 normalized.push(b'\r');
             }
             normalized.push(b'\n');
-            previous_was_cr = false;
+            *previous_was_cr = false;
         } else {
             normalized.push(byte);
-            previous_was_cr = byte == b'\r';
+            *previous_was_cr = byte == b'\r';
         }
     }
     normalized
@@ -202,12 +201,13 @@ fn spawn_input_writer(
     normalize_newlines: bool,
 ) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn_blocking(move || {
+        let mut previous_was_cr = false;
         while let Some(bytes) = writer_rx.blocking_recv() {
             let Some(handle) = input_write else {
                 continue;
             };
             let bytes = if normalize_newlines {
-                normalize_windows_tty_input(&bytes)
+                normalize_windows_tty_input(&bytes, &mut previous_was_cr)
             } else {
                 bytes
             };
