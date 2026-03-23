@@ -2,6 +2,7 @@
 use crate::config::NetworkMode;
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::bail;
 use anyhow::ensure;
 use globset::GlobBuilder;
 use globset::GlobSet;
@@ -151,7 +152,7 @@ pub(crate) fn is_global_wildcard_domain_pattern(pattern: &str) -> bool {
         .any(|candidate| candidate == "*")
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum GlobalWildcard {
     Allow,
     Reject,
@@ -172,11 +173,11 @@ fn compile_globset_with_policy(
     let mut builder = GlobSetBuilder::new();
     let mut seen = HashSet::new();
     for pattern in patterns {
-        ensure!(
-            matches!(global_wildcard, GlobalWildcard::Allow)
-                || !is_global_wildcard_domain_pattern(pattern),
-            "unsupported global wildcard domain pattern \"*\"; use exact hosts or scoped wildcards like *.example.com or **.example.com"
-        );
+        if global_wildcard == GlobalWildcard::Reject && is_global_wildcard_domain_pattern(pattern) {
+            bail!(
+                "unsupported global wildcard domain pattern \"*\"; use exact hosts or scoped wildcards like *.example.com or **.example.com"
+            );
+        }
         let pattern = normalize_pattern(pattern);
         // Supported domain patterns:
         // - "example.com": match the exact host
