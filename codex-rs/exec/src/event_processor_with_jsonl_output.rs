@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -57,6 +58,7 @@ use crate::exec_events::WebSearchItem;
 pub struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,
     next_item_id: AtomicU64,
+    raw_to_exec_item_id: HashMap<String, String>,
     running_todo_list: Option<RunningTodoList>,
     last_total_token_usage: Option<ThreadTokenUsage>,
     last_critical_error: Option<ThreadErrorEvent>,
@@ -80,6 +82,7 @@ impl EventProcessorWithJsonOutput {
         Self {
             last_message_path,
             next_item_id: AtomicU64::new(0),
+            raw_to_exec_item_id: HashMap::new(),
             running_todo_list: None,
             last_total_token_usage: None,
             last_critical_error: None,
@@ -132,52 +135,69 @@ impl EventProcessorWithJsonOutput {
             .collect()
     }
 
-    fn map_item_with_id(id: String, item: ThreadItem) -> Option<ExecThreadItem> {
-        let details = match item {
-            ThreadItem::AgentMessage { text, .. } => {
-                ThreadItemDetails::AgentMessage(AgentMessageItem { text })
-            }
-            ThreadItem::Reasoning { summary, .. } => ThreadItemDetails::Reasoning(ReasoningItem {
-                text: summary.join("\n"),
+    fn map_item_with_id(
+        item: ThreadItem,
+        make_id: impl FnOnce() -> String,
+    ) -> Option<ExecThreadItem> {
+        match item {
+            ThreadItem::AgentMessage { text, .. } => Some(ExecThreadItem {
+                id: make_id(),
+                details: ThreadItemDetails::AgentMessage(AgentMessageItem { text }),
             }),
+            ThreadItem::Reasoning { summary, .. } => {
+                let text = summary.join("\n");
+                if text.trim().is_empty() {
+                    return None;
+                }
+                Some(ExecThreadItem {
+                    id: make_id(),
+                    details: ThreadItemDetails::Reasoning(ReasoningItem { text }),
+                })
+            }
             ThreadItem::CommandExecution {
                 command,
                 aggregated_output,
                 exit_code,
                 status,
                 ..
-            } => ThreadItemDetails::CommandExecution(CommandExecutionItem {
-                command,
-                aggregated_output: aggregated_output.unwrap_or_default(),
-                exit_code,
-                status: match status {
-                    CommandExecutionStatus::InProgress => ExecCommandExecutionStatus::InProgress,
-                    CommandExecutionStatus::Completed => ExecCommandExecutionStatus::Completed,
-                    CommandExecutionStatus::Failed => ExecCommandExecutionStatus::Failed,
-                    CommandExecutionStatus::Declined => ExecCommandExecutionStatus::Declined,
-                },
+            } => Some(ExecThreadItem {
+                id: make_id(),
+                details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
+                    command,
+                    aggregated_output: aggregated_output.unwrap_or_default(),
+                    exit_code,
+                    status: match status {
+                        CommandExecutionStatus::InProgress => ExecCommandExecutionStatus::InProgress,
+                        CommandExecutionStatus::Completed => ExecCommandExecutionStatus::Completed,
+                        CommandExecutionStatus::Failed => ExecCommandExecutionStatus::Failed,
+                        CommandExecutionStatus::Declined => ExecCommandExecutionStatus::Declined,
+                    },
+                }),
             }),
             ThreadItem::FileChange {
                 changes, status, ..
-            } => ThreadItemDetails::FileChange(FileChangeItem {
-                changes: changes
-                    .into_iter()
-                    .map(|change| FileUpdateChange {
-                        path: change.path,
-                        kind: match change.kind {
-                            PatchChangeKind::Add => ExecPatchChangeKind::Add,
-                            PatchChangeKind::Delete => ExecPatchChangeKind::Delete,
-                            PatchChangeKind::Update { .. } => ExecPatchChangeKind::Update,
-                        },
-                    })
-                    .collect(),
-                status: match status {
-                    PatchApplyStatus::InProgress => ExecPatchApplyStatus::InProgress,
-                    PatchApplyStatus::Completed => ExecPatchApplyStatus::Completed,
-                    PatchApplyStatus::Failed | PatchApplyStatus::Declined => {
-                        ExecPatchApplyStatus::Failed
-                    }
-                },
+            } => Some(ExecThreadItem {
+                id: make_id(),
+                details: ThreadItemDetails::FileChange(FileChangeItem {
+                    changes: changes
+                        .into_iter()
+                        .map(|change| FileUpdateChange {
+                            path: change.path,
+                            kind: match change.kind {
+                                PatchChangeKind::Add => ExecPatchChangeKind::Add,
+                                PatchChangeKind::Delete => ExecPatchChangeKind::Delete,
+                                PatchChangeKind::Update { .. } => ExecPatchChangeKind::Update,
+                            },
+                        })
+                        .collect(),
+                    status: match status {
+                        PatchApplyStatus::InProgress => ExecPatchApplyStatus::InProgress,
+                        PatchApplyStatus::Completed => ExecPatchApplyStatus::Completed,
+                        PatchApplyStatus::Failed | PatchApplyStatus::Declined => {
+                            ExecPatchApplyStatus::Failed
+                        }
+                    },
+                }),
             }),
             ThreadItem::McpToolCall {
                 server,
@@ -187,21 +207,24 @@ impl EventProcessorWithJsonOutput {
                 result,
                 error,
                 ..
-            } => ThreadItemDetails::McpToolCall(McpToolCallItem {
-                server,
-                tool,
-                status: match status {
-                    McpToolCallStatus::InProgress => ExecMcpToolCallStatus::InProgress,
-                    McpToolCallStatus::Completed => ExecMcpToolCallStatus::Completed,
-                    McpToolCallStatus::Failed => ExecMcpToolCallStatus::Failed,
-                },
-                arguments,
-                result: result.map(|result| McpToolCallItemResult {
-                    content: result.content,
-                    structured_content: result.structured_content,
-                }),
-                error: error.map(|error| McpToolCallItemError {
-                    message: error.message,
+            } => Some(ExecThreadItem {
+                id: make_id(),
+                details: ThreadItemDetails::McpToolCall(McpToolCallItem {
+                    server,
+                    tool,
+                    status: match status {
+                        McpToolCallStatus::InProgress => ExecMcpToolCallStatus::InProgress,
+                        McpToolCallStatus::Completed => ExecMcpToolCallStatus::Completed,
+                        McpToolCallStatus::Failed => ExecMcpToolCallStatus::Failed,
+                    },
+                    arguments,
+                    result: result.map(|result| McpToolCallItemResult {
+                        content: result.content,
+                        structured_content: result.structured_content,
+                    }),
+                    error: error.map(|error| McpToolCallItemError {
+                        message: error.message,
+                    }),
                 }),
             }),
             ThreadItem::CollabAgentToolCall {
@@ -212,60 +235,68 @@ impl EventProcessorWithJsonOutput {
                 agents_states,
                 status,
                 ..
-            } => ThreadItemDetails::CollabToolCall(CollabToolCallItem {
-                tool: match tool {
-                    CollabAgentTool::SpawnAgent => CollabTool::SpawnAgent,
-                    CollabAgentTool::SendInput => CollabTool::SendInput,
-                    CollabAgentTool::ResumeAgent => CollabTool::Wait,
-                    CollabAgentTool::Wait => CollabTool::Wait,
-                    CollabAgentTool::CloseAgent => CollabTool::CloseAgent,
-                },
-                sender_thread_id,
-                receiver_thread_ids,
-                prompt,
-                agents_states: agents_states
-                    .into_iter()
-                    .map(|(thread_id, state)| {
-                        (
-                            thread_id,
-                            CollabAgentState {
-                                status: match state.status {
-                                    codex_app_server_protocol::CollabAgentStatus::PendingInit => {
-                                        CollabAgentStatus::PendingInit
-                                    }
-                                    codex_app_server_protocol::CollabAgentStatus::Running => {
-                                        CollabAgentStatus::Running
-                                    }
-                                    codex_app_server_protocol::CollabAgentStatus::Interrupted => {
-                                        CollabAgentStatus::Interrupted
-                                    }
-                                    codex_app_server_protocol::CollabAgentStatus::Completed => {
-                                        CollabAgentStatus::Completed
-                                    }
-                                    codex_app_server_protocol::CollabAgentStatus::Errored => {
-                                        CollabAgentStatus::Errored
-                                    }
-                                    codex_app_server_protocol::CollabAgentStatus::Shutdown => {
-                                        CollabAgentStatus::Shutdown
-                                    }
-                                    codex_app_server_protocol::CollabAgentStatus::NotFound => {
-                                        CollabAgentStatus::NotFound
-                                    }
+            } => Some(ExecThreadItem {
+                id: make_id(),
+                details: ThreadItemDetails::CollabToolCall(CollabToolCallItem {
+                    tool: match tool {
+                        CollabAgentTool::SpawnAgent => CollabTool::SpawnAgent,
+                        CollabAgentTool::SendInput => CollabTool::SendInput,
+                        CollabAgentTool::ResumeAgent => CollabTool::Wait,
+                        CollabAgentTool::Wait => CollabTool::Wait,
+                        CollabAgentTool::CloseAgent => CollabTool::CloseAgent,
+                    },
+                    sender_thread_id,
+                    receiver_thread_ids,
+                    prompt,
+                    agents_states: agents_states
+                        .into_iter()
+                        .map(|(thread_id, state)| {
+                            (
+                                thread_id,
+                                CollabAgentState {
+                                    status: match state.status {
+                                        codex_app_server_protocol::CollabAgentStatus::PendingInit => {
+                                            CollabAgentStatus::PendingInit
+                                        }
+                                        codex_app_server_protocol::CollabAgentStatus::Running => {
+                                            CollabAgentStatus::Running
+                                        }
+                                        codex_app_server_protocol::CollabAgentStatus::Interrupted => {
+                                            CollabAgentStatus::Interrupted
+                                        }
+                                        codex_app_server_protocol::CollabAgentStatus::Completed => {
+                                            CollabAgentStatus::Completed
+                                        }
+                                        codex_app_server_protocol::CollabAgentStatus::Errored => {
+                                            CollabAgentStatus::Errored
+                                        }
+                                        codex_app_server_protocol::CollabAgentStatus::Shutdown => {
+                                            CollabAgentStatus::Shutdown
+                                        }
+                                        codex_app_server_protocol::CollabAgentStatus::NotFound => {
+                                            CollabAgentStatus::NotFound
+                                        }
+                                    },
+                                    message: state.message,
                                 },
-                                message: state.message,
-                            },
-                        )
-                    })
-                    .collect(),
-                status: match status {
-                    CollabAgentToolCallStatus::InProgress => CollabToolCallStatus::InProgress,
-                    CollabAgentToolCallStatus::Completed => CollabToolCallStatus::Completed,
-                    CollabAgentToolCallStatus::Failed => CollabToolCallStatus::Failed,
-                },
+                            )
+                        })
+                        .collect(),
+                    status: match status {
+                        CollabAgentToolCallStatus::InProgress => CollabToolCallStatus::InProgress,
+                        CollabAgentToolCallStatus::Completed => CollabToolCallStatus::Completed,
+                        CollabAgentToolCallStatus::Failed => CollabToolCallStatus::Failed,
+                    },
+                }),
             }),
-            ThreadItem::WebSearch { query, action, .. } => {
-                ThreadItemDetails::WebSearch(WebSearchItem {
-                    id: id.clone(),
+            ThreadItem::WebSearch {
+                id: raw_id,
+                query,
+                action,
+            } => Some(ExecThreadItem {
+                id: make_id(),
+                details: ThreadItemDetails::WebSearch(WebSearchItem {
+                    id: raw_id,
                     query,
                     action: match action {
                         Some(action) => serde_json::from_value(
@@ -274,29 +305,52 @@ impl EventProcessorWithJsonOutput {
                         .unwrap_or(WebSearchAction::Other),
                         None => WebSearchAction::Other,
                     },
-                })
-            }
-            _ => return None,
-        };
-
-        Some(ExecThreadItem { id, details })
-    }
-
-    fn map_started_item(item: ThreadItem) -> Option<ExecThreadItem> {
-        match item {
-            ThreadItem::AgentMessage { .. }
-            | ThreadItem::Reasoning { .. }
-            | ThreadItem::FileChange { .. } => None,
-            other => Self::map_item_with_id(other.id().to_string(), other),
+                }),
+            }),
+            _ => None,
         }
     }
 
-    fn map_completed_item(&self, item: ThreadItem) -> Option<ExecThreadItem> {
+    fn started_item_id(&mut self, raw_id: &str) -> String {
+        if let Some(existing) = self.raw_to_exec_item_id.get(raw_id) {
+            return existing.clone();
+        }
+        let exec_id = self.next_item_id();
+        self.raw_to_exec_item_id
+            .insert(raw_id.to_string(), exec_id.clone());
+        exec_id
+    }
+
+    fn completed_item_id(&mut self, raw_id: &str) -> String {
+        self.raw_to_exec_item_id
+            .remove(raw_id)
+            .unwrap_or_else(|| self.next_item_id())
+    }
+
+    fn map_started_item(&mut self, item: ThreadItem) -> Option<ExecThreadItem> {
         match item {
-            ThreadItem::AgentMessage { .. } | ThreadItem::Reasoning { .. } => {
-                Self::map_item_with_id(self.next_item_id(), item)
+            ThreadItem::AgentMessage { .. } | ThreadItem::Reasoning { .. } => None,
+            other => {
+                let raw_id = other.id().to_string();
+                Self::map_item_with_id(other, || self.started_item_id(&raw_id))
             }
-            other => Self::map_item_with_id(other.id().to_string(), other),
+        }
+    }
+
+    fn map_completed_item_mut(&mut self, item: ThreadItem) -> Option<ExecThreadItem> {
+        if let ThreadItem::Reasoning { summary, .. } = &item
+            && summary.join("\n").trim().is_empty()
+        {
+            return None;
+        }
+        match &item {
+            ThreadItem::AgentMessage { .. } | ThreadItem::Reasoning { .. } => {
+                Self::map_item_with_id(item, || self.next_item_id())
+            }
+            other => {
+                let raw_id = other.id().to_string();
+                Self::map_item_with_id(item, || self.completed_item_id(&raw_id))
+            }
         }
     }
 
@@ -386,13 +440,13 @@ impl EventProcessorWithJsonOutput {
                 CodexStatus::Running
             }
             ServerNotification::ItemStarted(notification) => {
-                if let Some(item) = Self::map_started_item(notification.item) {
+                if let Some(item) = self.map_started_item(notification.item) {
                     events.push(ThreadEvent::ItemStarted(ItemStartedEvent { item }));
                 }
                 CodexStatus::Running
             }
             ServerNotification::ItemCompleted(notification) => {
-                if let Some(item) = self.map_completed_item(notification.item) {
+                if let Some(item) = self.map_completed_item_mut(notification.item) {
                     if let ThreadItemDetails::AgentMessage(AgentMessageItem { text }) =
                         &item.details
                     {

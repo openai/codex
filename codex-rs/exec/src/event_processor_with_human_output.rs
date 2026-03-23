@@ -8,6 +8,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::TurnStatus;
+use codex_core::WireApi;
 use codex_core::config::Config;
 use codex_protocol::num_format::format_with_separators;
 use codex_protocol::protocol::SandboxPolicy;
@@ -24,6 +25,8 @@ pub(crate) struct EventProcessorWithHumanOutput {
     cyan: Style,
     dimmed: Style,
     green: Style,
+    italic: Style,
+    magenta: Style,
     red: Style,
     yellow: Style,
     show_agent_reasoning: bool,
@@ -46,6 +49,8 @@ impl EventProcessorWithHumanOutput {
             cyan: style(Style::new().cyan(), Style::new()),
             dimmed: style(Style::new().dimmed(), Style::new()),
             green: style(Style::new().green(), Style::new()),
+            italic: style(Style::new().italic(), Style::new()),
+            magenta: style(Style::new().magenta(), Style::new()),
             red: style(Style::new().red(), Style::new()),
             yellow: style(Style::new().yellow(), Style::new()),
             show_agent_reasoning: !config.hide_agent_reasoning,
@@ -61,10 +66,10 @@ impl EventProcessorWithHumanOutput {
         match item {
             ThreadItem::CommandExecution { command, cwd, .. } => {
                 eprintln!(
-                    "{} {} {}",
-                    "exec:".style(self.bold),
-                    command.style(self.cyan),
-                    format!("({})", cwd.display()).style(self.dimmed)
+                    "{}\n{} in {}",
+                    "exec".style(self.italic).style(self.magenta),
+                    command.style(self.bold),
+                    cwd.display()
                 );
             }
             ThreadItem::McpToolCall { server, tool, .. } => {
@@ -91,7 +96,11 @@ impl EventProcessorWithHumanOutput {
     fn render_item_completed(&mut self, item: ThreadItem) {
         match item {
             ThreadItem::AgentMessage { text, .. } => {
-                eprintln!("{}\n{}", "assistant".style(self.cyan), text);
+                eprintln!(
+                    "{}\n{}",
+                    "codex".style(self.italic).style(self.magenta),
+                    text
+                );
                 self.final_message = Some(text);
                 self.final_message_rendered = true;
             }
@@ -107,26 +116,42 @@ impl EventProcessorWithHumanOutput {
                 }
             }
             ThreadItem::CommandExecution {
-                command,
+                command: _,
                 aggregated_output,
                 exit_code,
                 status,
+                duration_ms,
                 ..
             } => {
-                let status_text = match status {
-                    CommandExecutionStatus::Completed => "completed".style(self.green),
-                    CommandExecutionStatus::Failed => "failed".style(self.red),
-                    CommandExecutionStatus::Declined => "declined".style(self.yellow),
-                    CommandExecutionStatus::InProgress => "in_progress".style(self.dimmed),
-                };
-                eprintln!(
-                    "{} {} {}",
-                    "exec:".style(self.bold),
-                    command.style(self.cyan),
-                    format!("({status_text})").style(self.dimmed)
-                );
-                if let Some(exit_code) = exit_code {
-                    eprintln!("{}", format!("exit code: {exit_code}").style(self.dimmed));
+                let duration_suffix = duration_ms
+                    .map(|duration_ms| format!(" in {duration_ms}ms"))
+                    .unwrap_or_default();
+                match status {
+                    CommandExecutionStatus::Completed => {
+                        eprintln!(
+                            "{}",
+                            format!(" succeeded{duration_suffix}:").style(self.green)
+                        );
+                    }
+                    CommandExecutionStatus::Failed => {
+                        let exit_code = exit_code.unwrap_or(1);
+                        eprintln!(
+                            "{}",
+                            format!(" exited {exit_code}{duration_suffix}:").style(self.red)
+                        );
+                    }
+                    CommandExecutionStatus::Declined => {
+                        eprintln!(
+                            "{}",
+                            format!(" declined{duration_suffix}:").style(self.yellow)
+                        );
+                    }
+                    CommandExecutionStatus::InProgress => {
+                        eprintln!(
+                            "{}",
+                            format!(" in progress{duration_suffix}:").style(self.dimmed)
+                        );
+                    }
                 }
                 if let Some(output) = aggregated_output
                     && !output.trim().is_empty()
@@ -179,15 +204,6 @@ impl EventProcessorWithHumanOutput {
             _ => {}
         }
     }
-
-    fn sandbox_label(config: &Config) -> &'static str {
-        match config.permissions.sandbox_policy.get() {
-            SandboxPolicy::DangerFullAccess => "danger-full-access",
-            SandboxPolicy::ReadOnly { .. } => "read-only",
-            SandboxPolicy::ExternalSandbox { .. } => "external-sandbox",
-            SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
-        }
-    }
 }
 
 impl EventProcessor for EventProcessorWithHumanOutput {
@@ -199,26 +215,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
     ) {
         const VERSION: &str = env!("CARGO_PKG_VERSION");
         eprintln!("OpenAI Codex v{VERSION} (research preview)\n--------");
-        eprintln!(
-            "{} {}",
-            "model:".style(self.bold),
-            session_configured_event.model
-        );
-        eprintln!(
-            "{} {}",
-            "provider:".style(self.bold),
-            session_configured_event.model_provider_id
-        );
-        eprintln!(
-            "{} {}",
-            "sandbox:".style(self.bold),
-            Self::sandbox_label(config)
-        );
-        eprintln!(
-            "{} {}",
-            "session id:".style(self.bold),
-            session_configured_event.session_id
-        );
+        for (key, value) in config_summary_entries(config, session_configured_event) {
+            eprintln!("{} {}", format!("{key}:").style(self.bold), value);
+        }
         eprintln!("--------");
         eprintln!("{}\n{}", "user".style(self.cyan), prompt);
     }
@@ -330,10 +329,24 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             ServerNotification::TurnPlanUpdated(notification) => {
                 if let Some(explanation) = notification.explanation {
-                    eprintln!("{}", explanation.style(self.dimmed));
+                    eprintln!("{}", explanation.style(self.italic));
                 }
                 for step in notification.plan {
-                    eprintln!("- {:?} {}", step.status, step.step);
+                    match step.status {
+                        codex_app_server_protocol::TurnPlanStepStatus::Completed => {
+                            eprintln!("  {} {}", "✓".style(self.green), step.step);
+                        }
+                        codex_app_server_protocol::TurnPlanStepStatus::InProgress => {
+                            eprintln!("  {} {}", "→".style(self.cyan), step.step);
+                        }
+                        codex_app_server_protocol::TurnPlanStepStatus::Pending => {
+                            eprintln!(
+                                "  {} {}",
+                                "•".style(self.dimmed),
+                                step.step.style(self.dimmed)
+                            );
+                        }
+                    }
                 }
                 CodexStatus::Running
             }
@@ -378,7 +391,103 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             std::io::stderr().is_terminal(),
         ) && let Some(message) = self.final_message.as_deref()
         {
-            eprintln!("{}\n{}", "assistant".style(self.cyan), message);
+            eprintln!(
+                "{}\n{}",
+                "codex".style(self.italic).style(self.magenta),
+                message
+            );
+        }
+    }
+}
+
+fn config_summary_entries(
+    config: &Config,
+    session_configured_event: &SessionConfiguredEvent,
+) -> Vec<(&'static str, String)> {
+    let mut entries = vec![
+        ("workdir", config.cwd.display().to_string()),
+        ("model", session_configured_event.model.clone()),
+        (
+            "provider",
+            session_configured_event.model_provider_id.clone(),
+        ),
+        (
+            "approval",
+            config.permissions.approval_policy.value().to_string(),
+        ),
+        (
+            "sandbox",
+            summarize_sandbox_policy(config.permissions.sandbox_policy.get()),
+        ),
+    ];
+    if config.model_provider.wire_api == WireApi::Responses {
+        entries.push((
+            "reasoning effort",
+            config
+                .model_reasoning_effort
+                .map(|effort| effort.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+        ));
+        entries.push((
+            "reasoning summaries",
+            config
+                .model_reasoning_summary
+                .map(|summary| summary.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+        ));
+    }
+    entries.push((
+        "session id",
+        session_configured_event.session_id.to_string(),
+    ));
+    entries
+}
+
+fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
+    match sandbox_policy {
+        SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
+        SandboxPolicy::ReadOnly { network_access, .. } => {
+            let mut summary = "read-only".to_string();
+            if *network_access {
+                summary.push_str(" (network access enabled)");
+            }
+            summary
+        }
+        SandboxPolicy::ExternalSandbox { network_access } => {
+            let mut summary = "external-sandbox".to_string();
+            if matches!(
+                network_access,
+                codex_protocol::protocol::NetworkAccess::Enabled
+            ) {
+                summary.push_str(" (network access enabled)");
+            }
+            summary
+        }
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots,
+            network_access,
+            exclude_tmpdir_env_var,
+            exclude_slash_tmp,
+            read_only_access: _,
+        } => {
+            let mut summary = "workspace-write".to_string();
+            let mut writable_entries = vec!["workdir".to_string()];
+            if !*exclude_slash_tmp {
+                writable_entries.push("/tmp".to_string());
+            }
+            if !*exclude_tmpdir_env_var {
+                writable_entries.push("$TMPDIR".to_string());
+            }
+            writable_entries.extend(
+                writable_roots
+                    .iter()
+                    .map(|path| path.to_string_lossy().to_string()),
+            );
+            summary.push_str(&format!(" [{}]", writable_entries.join(", ")));
+            if *network_access {
+                summary.push_str(" (network access enabled)");
+            }
+            summary
         }
     }
 }
@@ -580,6 +689,8 @@ mod tests {
             cyan: Style::new(),
             dimmed: Style::new(),
             green: Style::new(),
+            italic: Style::new(),
+            magenta: Style::new(),
             red: Style::new(),
             yellow: Style::new(),
             show_agent_reasoning: true,
@@ -621,6 +732,8 @@ mod tests {
             cyan: Style::new(),
             dimmed: Style::new(),
             green: Style::new(),
+            italic: Style::new(),
+            magenta: Style::new(),
             red: Style::new(),
             yellow: Style::new(),
             show_agent_reasoning: true,
@@ -663,6 +776,8 @@ mod tests {
             cyan: Style::new(),
             dimmed: Style::new(),
             green: Style::new(),
+            italic: Style::new(),
+            magenta: Style::new(),
             red: Style::new(),
             yellow: Style::new(),
             show_agent_reasoning: true,

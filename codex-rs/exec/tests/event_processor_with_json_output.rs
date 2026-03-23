@@ -183,7 +183,7 @@ fn command_execution_started_and_completed_translate_to_thread_events() {
         CollectedThreadEvents {
             events: vec![ThreadEvent::ItemStarted(ItemStartedEvent {
                 item: ExecThreadItem {
-                    id: "cmd-1".to_string(),
+                    id: "item_0".to_string(),
                     details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
                         command: "ls".to_string(),
                         aggregated_output: String::new(),
@@ -219,12 +219,89 @@ fn command_execution_started_and_completed_translate_to_thread_events() {
         CollectedThreadEvents {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
                 item: ExecThreadItem {
-                    id: "cmd-1".to_string(),
+                    id: "item_0".to_string(),
                     details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
                         command: "ls".to_string(),
                         aggregated_output: "a.txt\n".to_string(),
                         exit_code: Some(0),
                         status: CommandExecutionStatus::Completed,
+                    }),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+}
+
+#[test]
+fn empty_reasoning_items_are_ignored() {
+    let mut processor = EventProcessorWithJsonOutput::new(None);
+
+    let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
+            item: ThreadItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                summary: Vec::new(),
+                content: vec!["raw reasoning".to_string()],
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        },
+    ));
+
+    assert_eq!(
+        collected,
+        CollectedThreadEvents {
+            events: Vec::new(),
+            status: CodexStatus::Running,
+        }
+    );
+}
+
+#[test]
+fn unsupported_items_do_not_consume_synthetic_ids() {
+    let mut processor = EventProcessorWithJsonOutput::new(None);
+
+    let ignored = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
+            item: ThreadItem::Plan {
+                id: "plan-1".to_string(),
+                text: "ignored plan".to_string(),
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        },
+    ));
+
+    assert_eq!(
+        ignored,
+        CollectedThreadEvents {
+            events: Vec::new(),
+            status: CodexStatus::Running,
+        }
+    );
+
+    let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
+            item: ThreadItem::AgentMessage {
+                id: "message-1".to_string(),
+                text: "hello".to_string(),
+                phase: None,
+                memory_citation: None,
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        },
+    ));
+
+    assert_eq!(
+        collected,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+                item: ExecThreadItem {
+                    id: "item_0".to_string(),
+                    details: ThreadItemDetails::AgentMessage(AgentMessageItem {
+                        text: "hello".to_string(),
                     }),
                 },
             })],
@@ -289,7 +366,7 @@ fn web_search_completion_preserves_query_and_action() {
         CollectedThreadEvents {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
                 item: ExecThreadItem {
-                    id: "search-1".to_string(),
+                    id: "item_0".to_string(),
                     details: ThreadItemDetails::WebSearch(WebSearchItem {
                         id: "search-1".to_string(),
                         query: "rust async await".to_string(),
@@ -340,7 +417,7 @@ fn web_search_start_and_completion_reuse_item_id() {
         CollectedThreadEvents {
             events: vec![ThreadEvent::ItemStarted(ItemStartedEvent {
                 item: ExecThreadItem {
-                    id: "search-1".to_string(),
+                    id: "item_0".to_string(),
                     details: ThreadItemDetails::WebSearch(WebSearchItem {
                         id: "search-1".to_string(),
                         query: String::new(),
@@ -356,7 +433,7 @@ fn web_search_start_and_completion_reuse_item_id() {
         CollectedThreadEvents {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
                 item: ExecThreadItem {
-                    id: "search-1".to_string(),
+                    id: "item_0".to_string(),
                     details: ThreadItemDetails::WebSearch(WebSearchItem {
                         id: "search-1".to_string(),
                         query: "rust async await".to_string(),
@@ -416,7 +493,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
         CollectedThreadEvents {
             events: vec![ThreadEvent::ItemStarted(ItemStartedEvent {
                 item: ExecThreadItem {
-                    id: "mcp-1".to_string(),
+                    id: "item_0".to_string(),
                     details: ThreadItemDetails::McpToolCall(McpToolCallItem {
                         server: "server_a".to_string(),
                         tool: "tool_x".to_string(),
@@ -435,7 +512,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
         CollectedThreadEvents {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
                 item: ExecThreadItem {
-                    id: "mcp-1".to_string(),
+                    id: "item_0".to_string(),
                     details: ThreadItemDetails::McpToolCall(McpToolCallItem {
                         server: "server_a".to_string(),
                         tool: "tool_x".to_string(),
@@ -482,7 +559,7 @@ fn mcp_tool_call_failure_sets_failed_status() {
         CollectedThreadEvents {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
                 item: ExecThreadItem {
-                    id: "mcp-2".to_string(),
+                    id: "item_0".to_string(),
                     details: ThreadItemDetails::McpToolCall(McpToolCallItem {
                         server: "server_b".to_string(),
                         tool: "tool_y".to_string(),
@@ -547,7 +624,7 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
         CollectedThreadEvents {
             events: vec![ThreadEvent::ItemStarted(ItemStartedEvent {
                 item: ExecThreadItem {
-                    id: "mcp-3".to_string(),
+                    id: "item_0".to_string(),
                     details: ThreadItemDetails::McpToolCall(McpToolCallItem {
                         server: "server_c".to_string(),
                         tool: "tool_z".to_string(),
@@ -566,7 +643,7 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
         CollectedThreadEvents {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
                 item: ExecThreadItem {
-                    id: "mcp-3".to_string(),
+                    id: "item_0".to_string(),
                     details: ThreadItemDetails::McpToolCall(McpToolCallItem {
                         server: "server_c".to_string(),
                         tool: "tool_z".to_string(),
@@ -637,7 +714,7 @@ fn collab_spawn_begin_and_end_emit_item_events() {
         CollectedThreadEvents {
             events: vec![ThreadEvent::ItemStarted(ItemStartedEvent {
                 item: ExecThreadItem {
-                    id: "collab-1".to_string(),
+                    id: "item_0".to_string(),
                     details: ThreadItemDetails::CollabToolCall(CollabToolCallItem {
                         tool: CollabTool::SpawnAgent,
                         sender_thread_id: "thread-parent".to_string(),
@@ -656,7 +733,7 @@ fn collab_spawn_begin_and_end_emit_item_events() {
         CollectedThreadEvents {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
                 item: ExecThreadItem {
-                    id: "collab-1".to_string(),
+                    id: "item_0".to_string(),
                     details: ThreadItemDetails::CollabToolCall(CollabToolCallItem {
                         tool: CollabTool::SpawnAgent,
                         sender_thread_id: "thread-parent".to_string(),
@@ -715,7 +792,7 @@ fn file_change_completion_maps_change_kinds() {
         CollectedThreadEvents {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
                 item: ExecThreadItem {
-                    id: "patch-1".to_string(),
+                    id: "item_0".to_string(),
                     details: ThreadItemDetails::FileChange(FileChangeItem {
                         changes: vec![
                             ExecFileUpdateChange {
@@ -765,7 +842,7 @@ fn file_change_declined_maps_to_failed_status() {
         CollectedThreadEvents {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
                 item: ExecThreadItem {
-                    id: "patch-2".to_string(),
+                    id: "item_0".to_string(),
                     details: ThreadItemDetails::FileChange(FileChangeItem {
                         changes: vec![ExecFileUpdateChange {
                             path: "file.txt".to_string(),

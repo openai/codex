@@ -43,6 +43,7 @@ use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnStartedNotification;
 use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
@@ -696,6 +697,12 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             )
             .await
             .map_err(anyhow::Error::msg)?;
+            let _ = event_processor.process_server_notification(ServerNotification::TurnStarted(
+                TurnStartedNotification {
+                    thread_id: response.review_thread_id.clone(),
+                    turn: response.turn.clone(),
+                },
+            ));
             let task_id = response.turn.id;
             info!("Sent review request with event ID: {task_id}");
             task_id
