@@ -97,7 +97,10 @@
 
 # Marketplace JSON sample spec
 
-`marketplace.json` always lives at `<repo-root>/.agents/plugins/marketplace.json`.
+`marketplace.json` depends on where the plugin should live:
+
+- Repo plugin: `<repo-root>/.agents/plugins/marketplace.json`
+- Local plugin: `~/.agents/plugins/marketplace.json`
 
 ```json
 {
@@ -137,7 +140,9 @@
 - `name` (`string`): Plugin identifier. Match the plugin folder name and `plugin.json` `name`.
 - `source` (`object`): Plugin source descriptor.
   - `source` (`string`): Use `local` for this repo workflow.
-  - `path` (`string`): Relative plugin path, always `./plugins/<plugin-name>`.
+  - `path` (`string`): Relative plugin path based on the marketplace root.
+    - Repo plugin: `./plugins/<plugin-name>`
+    - Local plugin in `~/.agents/plugins/marketplace.json`: `./.codex/plugins/<plugin-name>`
 - `policy` (`object`): Marketplace policy block. Always include it.
   - `installation` (`string`): Availability policy.
     - Allowed values: `NOT_AVAILABLE`, `AVAILABLE`, `INSTALLED_BY_DEFAULT`
@@ -156,3 +161,6 @@
 - Treat `policy.products` as an override and omit it unless explicitly requested.
 - Append new entries unless the user explicitly requests reordering.
 - Replace an existing entry for the same plugin only when overwrite is intentional.
+- Choose marketplace location to match the plugin destination:
+  - Repo plugin: `<repo-root>/.agents/plugins/marketplace.json`
+  - Local plugin: `~/.agents/plugins/marketplace.json`
