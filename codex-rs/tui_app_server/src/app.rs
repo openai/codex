@@ -2918,6 +2918,10 @@ impl App {
                 continue;
             };
 
+            if thread_id == primary_thread_id {
+                continue;
+            }
+
             match app_server
                 .thread_read(thread_id, /*include_turns*/ false)
                 .await
