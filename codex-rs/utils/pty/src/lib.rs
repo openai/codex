@@ -15,12 +15,16 @@ pub use pipe::spawn_process as spawn_pipe_process;
 pub use pipe::spawn_process_no_stdin as spawn_pipe_process_no_stdin;
 /// Handle for interacting with a spawned process (PTY or pipe).
 pub use process::ProcessHandle;
+/// Driver-backed process adapter used by integrations with their own process transport.
+pub use process::ProcessDriver;
 /// Bundle of process handles plus split output and exit receivers returned by spawn helpers.
 pub use process::SpawnedProcess;
 /// Terminal size in character cells used for PTY spawn and resize operations.
 pub use process::TerminalSize;
 /// Combine stdout/stderr receivers into a single broadcast receiver.
 pub use process::combine_output_receivers;
+/// Adapt an externally-driven process into the standard spawned-process handle.
+pub use process::spawn_from_driver;
 /// Backwards-compatible alias for ProcessHandle.
 pub type ExecCommandSession = ProcessHandle;
 /// Backwards-compatible alias for SpawnedProcess.
