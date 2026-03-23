@@ -4515,11 +4515,10 @@ impl App {
             AppEvent::UpdateRecordingMeter { id, text } => {
                 // Update in place to preserve the element id for subsequent frames.
                 let updated = self.chat_widget.update_transcription_in_place(&id, &text);
-                if updated {
-                    tui.frame_requester().schedule_frame();
-                } else if self
-                    .chat_widget
-                    .stop_realtime_conversation_for_deleted_meter(&id)
+                if updated
+                    || self
+                        .chat_widget
+                        .stop_realtime_conversation_for_deleted_meter(&id)
                 {
                     tui.frame_requester().schedule_frame();
                 }
