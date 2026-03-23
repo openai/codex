@@ -3,6 +3,8 @@ use std::sync::Arc;
 use crate::ExecServerClient;
 use crate::ExecServerError;
 use crate::RemoteExecServerConnectArgs;
+use crate::ShellExecParams;
+use crate::ShellExecResponse;
 use crate::file_system::ExecutorFileSystem;
 use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
@@ -103,6 +105,16 @@ impl Environment {
         } else {
             Arc::new(LocalFileSystem)
         }
+    }
+
+    pub async fn shell_exec(
+        &self,
+        params: ShellExecParams,
+    ) -> Result<ShellExecResponse, ExecServerError> {
+        let client = self.remote_exec_server_client.clone().ok_or_else(|| {
+            ExecServerError::Protocol("remote exec-server client is not configured".to_string())
+        })?;
+        client.shell_exec(params).await
     }
 }
 

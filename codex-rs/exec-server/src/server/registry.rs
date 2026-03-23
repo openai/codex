@@ -16,6 +16,8 @@ use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
 use crate::protocol::ReadParams;
+use crate::protocol::SHELL_EXEC_METHOD;
+use crate::protocol::ShellExecParams;
 use crate::protocol::TerminateParams;
 use crate::protocol::WriteParams;
 use crate::rpc::RpcRouter;
@@ -62,6 +64,12 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
         EXEC_TERMINATE_METHOD,
         |handler: Arc<ExecServerHandler>, params: TerminateParams| async move {
             handler.terminate(params).await
+        },
+    );
+    router.request(
+        SHELL_EXEC_METHOD,
+        |handler: Arc<ExecServerHandler>, params: ShellExecParams| async move {
+            handler.shell_exec(params).await
         },
     );
     router.request(

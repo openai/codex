@@ -15,7 +15,7 @@ use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::StreamOutput;
-use crate::exec::execute_exec_request;
+use crate::exec::execute_exec_request_in_environment;
 use crate::exec_env::create_env;
 use crate::parse_command::parse_command;
 use crate::protocol::EventMsg;
@@ -187,9 +187,9 @@ pub(crate) async fn execute_user_shell_command(
         tx_event: session.get_tx_event(),
     });
 
-    let exec_result = execute_exec_request(
+    let exec_result = execute_exec_request_in_environment(
         exec_env,
-        &sandbox_policy,
+        session.services.environment.as_ref(),
         stdout_stream,
         /*after_spawn*/ None,
     )

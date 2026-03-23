@@ -10,12 +10,12 @@ pub(crate) mod zsh_fork_backend;
 
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecToolCallOutput;
+use crate::exec::execute_exec_request_in_environment;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::sandboxing::SandboxPermissions;
-use crate::sandboxing::execute_env;
 use crate::shell::ShellType;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
@@ -231,8 +231,10 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         } else {
             command
         };
+        let environment = ctx.session.services.environment.as_ref();
+        let remote_exec_server_enabled = environment.experimental_exec_server_url().is_some();
 
-        if self.backend == ShellRuntimeBackend::ShellCommandZshFork {
+        if self.backend == ShellRuntimeBackend::ShellCommandZshFork && !remote_exec_server_enabled {
             match zsh_fork_backend::maybe_run_shell_command(req, attempt, ctx, &command).await? {
                 Some(out) => return Ok(out),
                 None => {
@@ -241,6 +243,10 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
                     );
                 }
             }
+        } else if self.backend == ShellRuntimeBackend::ShellCommandZshFork {
+            tracing::warn!(
+                "ZshFork backend specified, but exec-server environments require the standard shell runtime path; falling back to normal execution",
+            );
         }
 
         let spec = build_command_spec(
@@ -255,9 +261,14 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let env = attempt
             .env_for(spec, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
-        let out = execute_env(env, Self::stdout_stream(ctx))
-            .await
-            .map_err(ToolError::Codex)?;
+        let out = execute_exec_request_in_environment(
+            env,
+            environment,
+            Self::stdout_stream(ctx),
+            /*after_spawn*/ None,
+        )
+        .await
+        .map_err(ToolError::Codex)?;
         Ok(out)
     }
 }

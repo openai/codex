@@ -13,6 +13,7 @@ pub const EXEC_WRITE_METHOD: &str = "process/write";
 pub const EXEC_TERMINATE_METHOD: &str = "process/terminate";
 pub const EXEC_OUTPUT_DELTA_METHOD: &str = "process/output";
 pub const EXEC_EXITED_METHOD: &str = "process/exited";
+pub const SHELL_EXEC_METHOD: &str = "shell/exec";
 pub const FS_READ_FILE_METHOD: &str = "fs/readFile";
 pub const FS_WRITE_FILE_METHOD: &str = "fs/writeFile";
 pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
@@ -138,6 +139,27 @@ pub struct ExecOutputDeltaNotification {
 pub struct ExecExitedNotification {
     pub process_id: String,
     pub exit_code: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellExecParams {
+    pub command: Vec<String>,
+    pub cwd: PathBuf,
+    pub env: HashMap<String, String>,
+    pub timeout_ms: Option<u64>,
+    pub output_bytes_cap: Option<usize>,
+    pub arg0: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellExecResponse {
+    pub exit_code: i32,
+    pub stdout: ByteChunk,
+    pub stderr: ByteChunk,
+    pub aggregated_output: ByteChunk,
+    pub timed_out: bool,
 }
 
 mod base64_bytes {

@@ -50,6 +50,9 @@ use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
+use crate::protocol::SHELL_EXEC_METHOD;
+use crate::protocol::ShellExecParams;
+use crate::protocol::ShellExecResponse;
 use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
@@ -198,6 +201,17 @@ impl ExecServerClient {
         self.inner
             .client
             .call(EXEC_READ_METHOD, &params)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn shell_exec(
+        &self,
+        params: ShellExecParams,
+    ) -> Result<ShellExecResponse, ExecServerError> {
+        self.inner
+            .client
+            .call(SHELL_EXEC_METHOD, &params)
             .await
             .map_err(Into::into)
     }
