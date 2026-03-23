@@ -477,7 +477,7 @@ pub async fn run_main_with_transport(
             range: None,
         });
     }
-    if let Some(warning) = codex_core::config::missing_system_bwrap_warning() {
+    if let Some(warning) = codex_core::config::system_bwrap_warning() {
         config_warnings.push(ConfigWarningNotification {
             summary: warning,
             details: None,
