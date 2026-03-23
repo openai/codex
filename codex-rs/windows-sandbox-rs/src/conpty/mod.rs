@@ -37,7 +37,7 @@ pub struct ConptyInstance {
     pub hpc: HANDLE,
     pub input_write: HANDLE,
     pub output_read: HANDLE,
-    _desktop: Option<LaunchDesktop>,
+    desktop: Option<LaunchDesktop>,
 }
 
 impl Drop for ConptyInstance {
@@ -58,9 +58,10 @@ impl Drop for ConptyInstance {
 
 impl ConptyInstance {
     /// Consume the instance and return raw handles without closing them.
-    pub fn into_raw(self) -> (HANDLE, HANDLE, HANDLE) {
+    pub fn into_raw(self) -> (HANDLE, HANDLE, HANDLE, Option<LaunchDesktop>) {
         let me = std::mem::ManuallyDrop::new(self);
-        (me.hpc, me.input_write, me.output_read)
+        let desktop = unsafe { std::ptr::read(&me.desktop) };
+        (me.hpc, me.input_write, me.output_read, desktop)
     }
 }
 
@@ -76,7 +77,7 @@ pub fn create_conpty(cols: i16, rows: i16) -> Result<ConptyInstance> {
         hpc: hpc as HANDLE,
         input_write: input_write as HANDLE,
         output_read: output_read as HANDLE,
-        _desktop: None,
+        desktop: None,
     })
 }
 
@@ -114,7 +115,7 @@ pub fn spawn_conpty_process_as_user(
         hpc: hpc as HANDLE,
         input_write: input_write as HANDLE,
         output_read: output_read as HANDLE,
-        _desktop: Some(desktop),
+        desktop: Some(desktop),
     };
     let mut attrs = ProcThreadAttributeList::new(/*attr_count*/ 1)?;
     attrs.set_pseudoconsole(conpty.hpc)?;
@@ -147,7 +148,5 @@ pub fn spawn_conpty_process_as_user(
             env_block.len()
         ));
     }
-    let mut conpty = conpty;
-    conpty._desktop = desktop;
     Ok((pi, conpty))
 }

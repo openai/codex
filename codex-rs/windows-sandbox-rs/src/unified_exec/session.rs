@@ -110,14 +110,14 @@ fn spawn_legacy_process(
             use_private_desktop,
             logs_base_dir,
         )?;
-        let (hpc, input_write, output_read) = conpty.into_raw();
+        let (hpc, input_write, output_read, desktop) = conpty.into_raw();
         let output_join = spawn_output_reader(output_read, stdout_tx);
         let writer_handle = spawn_input_writer(
             Some(input_write),
             writer_rx,
             /*normalize_newlines*/ true,
         );
-        (pi, output_join, writer_handle, Some(hpc), None)
+        (pi, output_join, writer_handle, Some(hpc), desktop)
     } else {
         let pipe_handles = spawn_process_with_pipes(
             h_token,
@@ -755,7 +755,7 @@ pub async fn spawn_windows_sandbox_session_elevated(
         codex_home: elevated.common.sandbox_base.clone(),
         real_codex_home: codex_home.to_path_buf(),
         cap_sids: elevated.cap_sids.clone(),
-        timeout_ms: None,
+        timeout_ms,
         tty,
         stdin_open,
         use_private_desktop,
