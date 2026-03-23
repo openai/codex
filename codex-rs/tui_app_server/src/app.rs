@@ -977,6 +977,7 @@ pub(crate) struct App {
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<ThreadBufferedEvent>>,
     primary_thread_id: Option<ThreadId>,
+    last_subagent_backfill_attempt: Option<ThreadId>,
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
@@ -2806,6 +2807,7 @@ impl App {
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
+        self.last_subagent_backfill_attempt = None;
         self.primary_session_configured = None;
         self.pending_primary_events.clear();
         self.pending_app_server_requests.clear();
@@ -2892,9 +2894,12 @@ impl App {
     /// by `find_loaded_subagent_threads_for_primary`. Each discovered subagent is registered via
     /// `upsert_agent_picker_thread`, which writes to both `AgentNavigationState` and the
     /// `ChatWidget` metadata map.
-    async fn backfill_loaded_subagent_threads(&mut self, app_server: &mut AppServerSession) {
+    async fn backfill_loaded_subagent_threads(
+        &mut self,
+        app_server: &mut AppServerSession,
+    ) -> bool {
         let Some(primary_thread_id) = self.primary_thread_id else {
-            return;
+            return false;
         };
 
         let loaded_thread_ids = match app_server
@@ -2907,7 +2912,7 @@ impl App {
             Ok(response) => response.data,
             Err(err) => {
                 tracing::warn!(%err, "failed to list loaded threads for subagent backfill");
-                return;
+                return false;
             }
         };
 
@@ -2942,6 +2947,8 @@ impl App {
                 /*is_closed*/ false,
             );
         }
+
+        true
     }
 
     /// Returns the adjacent thread id for keyboard navigation, backfilling from the server if the
@@ -2965,7 +2972,14 @@ impl App {
             return Some(thread_id);
         }
 
-        self.backfill_loaded_subagent_threads(app_server).await;
+        let primary_thread_id = self.primary_thread_id?;
+        if self.last_subagent_backfill_attempt == Some(primary_thread_id) {
+            return None;
+        }
+
+        if self.backfill_loaded_subagent_threads(app_server).await {
+            self.last_subagent_backfill_attempt = Some(primary_thread_id);
+        }
         self.agent_navigation
             .adjacent_thread_id(self.current_displayed_thread_id(), direction)
     }
@@ -3317,6 +3331,7 @@ impl App {
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
+            last_subagent_backfill_attempt: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
@@ -8050,6 +8065,7 @@ guardian_approval = true
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
+            last_subagent_backfill_attempt: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
@@ -8101,6 +8117,7 @@ guardian_approval = true
                 active_thread_id: None,
                 active_thread_rx: None,
                 primary_thread_id: None,
+                last_subagent_backfill_attempt: None,
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
