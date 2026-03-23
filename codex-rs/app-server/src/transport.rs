@@ -722,9 +722,13 @@ pub(crate) async fn route_outgoing_envelope(
                 .collect();
 
             for connection_id in target_connections {
-                let _ =
-                    send_message_to_connection(connections, connection_id, message.clone(), None)
-                        .await;
+                let _ = send_message_to_connection(
+                    connections,
+                    connection_id,
+                    message.clone(),
+                    /*write_complete_tx*/ None,
+                )
+                .await;
             }
         }
     }
