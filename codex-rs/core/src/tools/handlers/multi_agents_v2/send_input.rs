@@ -1,6 +1,13 @@
 use super::*;
+use codex_protocol::protocol::InterAgentCommunication;
 
 pub(crate) struct Handler;
+
+fn can_use_v2_inter_agent_instruction(items: &[UserInput]) -> bool {
+    items
+        .iter()
+        .all(|item| matches!(item, UserInput::Text { .. }))
+}
 
 #[async_trait]
 impl ToolHandler for Handler {
@@ -52,11 +59,33 @@ impl ToolHandler for Handler {
                 .into(),
             )
             .await;
-        let agent_control = session.services.agent_control.clone();
-        let result = agent_control
-            .send_input(receiver_thread_id, input_items)
-            .await
-            .map_err(|err| collab_agent_error(receiver_thread_id, err));
+        let result = if can_use_v2_inter_agent_instruction(&input_items) {
+            let receiver_agent_path = receiver_agent.agent_path.clone().ok_or_else(|| {
+                FunctionCallError::RespondToModel(
+                    "target agent is missing an agent_path".to_string(),
+                )
+            })?;
+            let communication = InterAgentCommunication::new(
+                turn.session_source
+                    .get_agent_path()
+                    .unwrap_or_else(AgentPath::root),
+                receiver_agent_path,
+                Vec::new(),
+                prompt.clone(),
+            );
+            session
+                .services
+                .agent_control
+                .send_inter_agent_communication(receiver_thread_id, communication)
+                .await
+        } else {
+            session
+                .services
+                .agent_control
+                .send_input(receiver_thread_id, input_items)
+                .await
+        }
+        .map_err(|err| collab_agent_error(receiver_thread_id, err));
         let status = session
             .services
             .agent_control

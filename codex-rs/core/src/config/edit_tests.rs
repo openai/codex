@@ -111,6 +111,27 @@ enabled = false
 }
 
 #[test]
+fn set_skill_config_writes_name_selector_entry() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+
+    ConfigEditsBuilder::new(codex_home)
+        .with_edits([ConfigEdit::SetSkillConfigByName {
+            name: "github:yeet".to_string(),
+            enabled: false,
+        }])
+        .apply_blocking()
+        .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let expected = r#"[[skills.config]]
+name = "github:yeet"
+enabled = false
+"#;
+    assert_eq!(contents, expected);
+}
+
+#[test]
 fn blocking_set_model_preserves_inline_table_contents() {
     let tmp = tempdir().expect("tmpdir");
     let codex_home = tmp.path();

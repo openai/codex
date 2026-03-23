@@ -19,9 +19,14 @@ use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tools::context::ToolOutput;
+use crate::tools::handlers::multi_agents_v2::SendInputHandler as SendInputHandlerV2;
+use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
+use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_features::Feature;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
@@ -317,7 +322,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_input_accepts_relative_path(
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
-    let spawn_output = SpawnAgentHandler
+    let spawn_output = SpawnAgentHandlerV2
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -356,7 +361,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_input_accepts_relative_path(
         Some("/root/test_process")
     );
 
-    SendInputHandler
+    SendInputHandlerV2
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -368,6 +373,18 @@ async fn multi_agent_v2_spawn_returns_path_and_send_input_accepts_relative_path(
         ))
         .await
         .expect("send_input should accept v2 path");
+
+    assert!(manager.captured_ops().iter().any(|(id, op)| {
+        *id == child_thread_id
+            && matches!(
+                op,
+                Op::InterAgentCommunication { communication }
+                    if communication.author == AgentPath::root()
+                        && communication.recipient.as_str() == "/root/test_process"
+                        && communication.other_recipients.is_empty()
+                        && communication.content == "continue"
+            )
+    }));
 
     let child_thread = manager
         .get_thread(child_thread_id)
@@ -432,7 +449,7 @@ async fn multi_agent_v2_send_input_accepts_structured_items() {
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    SpawnAgentHandler
+    SpawnAgentHandlerV2
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -467,7 +484,7 @@ async fn multi_agent_v2_send_input_accepts_structured_items() {
         })),
     );
 
-    SendInputHandler
+    SendInputHandlerV2
         .handle(invocation)
         .await
         .expect("structured items should be accepted in v2");
@@ -557,7 +574,7 @@ async fn multi_agent_v2_send_input_interrupts_busy_child_without_losing_message(
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
-    SpawnAgentHandler
+    SpawnAgentHandlerV2
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -594,7 +611,7 @@ async fn multi_agent_v2_send_input_interrupts_busy_child_without_losing_message(
         )
         .await;
 
-    SendInputHandler
+    SendInputHandlerV2
         .handle(invocation(
             session,
             turn,
@@ -614,6 +631,16 @@ async fn multi_agent_v2_send_input_interrupts_busy_child_without_losing_message(
         .filter_map(|(id, op)| (*id == agent_id).then_some(op))
         .collect();
     assert!(ops_for_agent.iter().any(|op| matches!(op, Op::Interrupt)));
+    assert!(ops_for_agent.iter().any(|op| {
+        matches!(
+            op,
+            Op::InterAgentCommunication { communication }
+                if communication.author == AgentPath::root()
+                    && communication.recipient.as_str() == "/root/worker"
+                    && communication.other_recipients.is_empty()
+                    && communication.content == "continue"
+        )
+    }));
     assert!(!ops_for_agent.iter().any(|op| matches!(
         op,
         Op::UserInput { items, .. }
@@ -688,7 +715,7 @@ async fn multi_agent_v2_spawn_includes_agent_id_key_when_named() {
         .expect("test config should allow feature update");
     turn.config = Arc::new(config);
 
-    let output = SpawnAgentHandler
+    let output = SpawnAgentHandlerV2
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -736,7 +763,7 @@ async fn multi_agent_v2_spawn_surfaces_task_name_validation_errors() {
             "task_name": "BadName"
         })),
     );
-    let Err(err) = SpawnAgentHandler.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandlerV2.handle(invocation).await else {
         panic!("invalid agent name should be rejected");
     };
     assert_eq!(
@@ -1355,16 +1382,16 @@ async fn multi_agent_v2_wait_agent_accepts_targets_argument() {
         "wait_agent",
         function_payload(json!({"targets": [target.clone()]})),
     );
-    let output = WaitAgentHandler
+    let output = WaitAgentHandlerV2
         .handle(invocation)
         .await
         .expect("targets should be accepted in v2 mode");
     let (content, success) = expect_text_output(output);
-    let result: wait::WaitAgentResult =
+    let result: crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult =
         serde_json::from_str(&content).expect("wait_agent result should be json");
     assert_eq!(
         result,
-        wait::WaitAgentResult {
+        crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult {
             status: HashMap::from([(target, AgentStatus::NotFound)]),
             timed_out: false,
         }
@@ -1556,7 +1583,7 @@ async fn multi_agent_v2_wait_agent_returns_statuses_keyed_by_path() {
 
     let session = Arc::new(session);
     let turn = Arc::new(turn);
-    let spawn_output = SpawnAgentHandler
+    let spawn_output = SpawnAgentHandlerV2
         .handle(invocation(
             session.clone(),
             turn.clone(),
@@ -1600,7 +1627,7 @@ async fn multi_agent_v2_wait_agent_returns_statuses_keyed_by_path() {
         .await
         .expect("shutdown status should arrive");
 
-    let wait_output = WaitAgentHandler
+    let wait_output = WaitAgentHandlerV2
         .handle(invocation(
             session,
             turn,
@@ -1613,11 +1640,11 @@ async fn multi_agent_v2_wait_agent_returns_statuses_keyed_by_path() {
         .await
         .expect("wait_agent should succeed");
     let (content, success) = expect_text_output(wait_output);
-    let result: wait::WaitAgentResult =
+    let result: crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult =
         serde_json::from_str(&content).expect("wait_agent result should be json");
     assert_eq!(
         result,
-        wait::WaitAgentResult {
+        crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult {
             status: HashMap::from([(spawn_result.task_name, AgentStatus::Shutdown)]),
             timed_out: false,
         }
