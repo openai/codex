@@ -5,6 +5,8 @@ use std::time::Instant;
 
 use crate::client_common::tools::ToolSpec;
 use crate::function_tool::FunctionCallError;
+use crate::hook_runtime::record_additional_contexts;
+use crate::hook_runtime::run_post_tool_use_hooks;
 use crate::hook_runtime::run_pre_tool_use_hooks;
 use crate::memories::usage::emit_metric_for_tool_read;
 use crate::protocol::SandboxPolicy;
@@ -25,6 +27,7 @@ use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use codex_utils_readiness::Readiness;
 use serde::Deserialize;
+use serde_json::Value;
 use tracing::warn;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -303,6 +306,36 @@ impl ToolRegistry {
             Err(err) => (err.to_string(), false),
         };
         emit_metric_for_tool_read(&invocation, success).await;
+        let post_tool_use_payload = if success {
+            let guard = response_cell.lock().await;
+            guard
+                .as_ref()
+                .and_then(|result| post_tool_use_payload(tool_name.as_ref(), result))
+        } else {
+            None
+        };
+        let post_tool_use_outcome = if let Some(post_tool_use_payload) = post_tool_use_payload {
+            Some(
+                run_post_tool_use_hooks(
+                    &invocation.session,
+                    &invocation.turn,
+                    invocation.call_id.clone(),
+                    post_tool_use_payload.command,
+                    post_tool_use_payload.tool_response,
+                )
+                .await,
+            )
+        } else {
+            None
+        };
+        if let Some(outcome) = &post_tool_use_outcome {
+            record_additional_contexts(
+                &invocation.session,
+                &invocation.turn,
+                outcome.additional_contexts.clone(),
+            )
+            .await;
+        }
         let hook_abort_error = dispatch_after_tool_use_hook(AfterToolUseHookDispatch {
             invocation: &invocation,
             output_preview,
@@ -315,6 +348,14 @@ impl ToolRegistry {
 
         if let Some(err) = hook_abort_error {
             return Err(err);
+        }
+
+        if let Some(reason) = post_tool_use_outcome.and_then(|outcome| outcome.block_reason) {
+            let command = pre_tool_use_command(tool_name.as_ref(), &payload_for_response)
+                .unwrap_or_else(|| "<unknown>".to_string());
+            return Err(FunctionCallError::RespondToModel(format!(
+                "Bash command completed, but PostToolUse hook blocked further processing: {reason}. Command: {command}"
+            )));
         }
 
         match result {
@@ -458,6 +499,28 @@ fn pre_tool_use_command(tool_name: &str, payload: &ToolPayload) -> Option<String
         }
         _ => None,
     }
+}
+
+struct PostToolUsePayload {
+    command: String,
+    tool_response: Value,
+}
+
+fn post_tool_use_payload(tool_name: &str, result: &AnyToolResult) -> Option<PostToolUsePayload> {
+    let command = pre_tool_use_command(tool_name, &result.payload)?;
+    let response_item = result
+        .result
+        .to_response_item(&result.call_id, &result.payload);
+    let tool_response = match response_item {
+        ResponseInputItem::FunctionCallOutput { output, .. } => {
+            serde_json::to_value(output).ok()?
+        }
+        _ => return None,
+    };
+    Some(PostToolUsePayload {
+        command,
+        tool_response,
+    })
 }
 
 // Hooks use a separate wire-facing input type so hook payload JSON stays stable

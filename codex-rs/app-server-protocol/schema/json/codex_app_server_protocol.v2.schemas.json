@@ -4699,6 +4699,7 @@
     "HookEventName": {
       "enum": [
         "preToolUse",
+        "postToolUse",
         "sessionStart",
         "userPromptSubmit",
         "stop"

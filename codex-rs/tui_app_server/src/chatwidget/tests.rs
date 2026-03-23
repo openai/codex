@@ -12476,6 +12476,17 @@ async fn pre_tool_use_hook_events_render_snapshot() {
 }
 
 #[tokio::test]
+async fn post_tool_use_hook_events_render_snapshot() {
+    assert_hook_events_snapshot(
+        codex_protocol::protocol::HookEventName::PostToolUse,
+        "post-tool-use:0:/tmp/hooks.json",
+        "warming the shell",
+        "post_tool_use_hook_events_render_snapshot",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn session_start_hook_events_render_snapshot() {
     assert_hook_events_snapshot(
         codex_protocol::protocol::HookEventName::SessionStart,

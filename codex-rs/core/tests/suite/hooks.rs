@@ -237,6 +237,73 @@ elif mode == "exit_2":
     Ok(())
 }
 
+fn write_post_tool_use_hook(
+    home: &Path,
+    matcher: Option<&str>,
+    mode: &str,
+    reason: &str,
+) -> Result<()> {
+    let script_path = home.join("post_tool_use_hook.py");
+    let log_path = home.join("post_tool_use_hook_log.jsonl");
+    let mode_json = serde_json::to_string(mode).context("serialize post tool use mode")?;
+    let reason_json = serde_json::to_string(reason).context("serialize post tool use reason")?;
+    let script = format!(
+        r#"import json
+from pathlib import Path
+import sys
+
+log_path = Path(r"{log_path}")
+mode = {mode_json}
+reason = {reason_json}
+
+payload = json.load(sys.stdin)
+
+with log_path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+
+if mode == "context":
+    print(json.dumps({{
+        "hookSpecificOutput": {{
+            "hookEventName": "PostToolUse",
+            "additionalContext": reason
+        }}
+    }}))
+elif mode == "decision_block":
+    print(json.dumps({{
+        "decision": "block",
+        "reason": reason
+    }}))
+elif mode == "exit_2":
+    sys.stderr.write(reason + "\n")
+    raise SystemExit(2)
+"#,
+        log_path = log_path.display(),
+        mode_json = mode_json,
+        reason_json = reason_json,
+    );
+
+    let mut group = serde_json::json!({
+        "hooks": [{
+            "type": "command",
+            "command": format!("python3 {}", script_path.display()),
+            "statusMessage": "running post tool use hook",
+        }]
+    });
+    if let Some(matcher) = matcher {
+        group["matcher"] = Value::String(matcher.to_string());
+    }
+
+    let hooks = serde_json::json!({
+        "hooks": {
+            "PostToolUse": [group]
+        }
+    });
+
+    fs::write(&script_path, script).context("write post tool use hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
 fn write_session_start_hook_recording_transcript(home: &Path) -> Result<()> {
     let script_path = home.join("session_start_hook.py");
     let log_path = home.join("session_start_hook_log.jsonl");
@@ -322,6 +389,15 @@ fn read_pre_tool_use_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> 
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).context("parse pre tool use hook log line"))
+        .collect()
+}
+
+fn read_post_tool_use_hook_inputs(home: &Path) -> Result<Vec<serde_json::Value>> {
+    fs::read_to_string(home.join("post_tool_use_hook_log.jsonl"))
+        .context("read post tool use hook log")?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).context("parse post tool use hook log line"))
         .collect()
 }
 
@@ -1271,6 +1347,347 @@ async fn pre_tool_use_does_not_fire_for_non_shell_tools() -> Result<()> {
     assert!(
         !hook_log_path.exists(),
         "non-shell tools should not trigger pre tool use hooks",
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn post_tool_use_records_additional_context_for_shell_command() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "posttooluse-shell-command";
+    let command = "printf post-tool-output".to_string();
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "post hook context observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let post_context = "Remember the bash post-tool note.";
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_post_tool_use_hook(home, Some("^Bash$"), "context", post_context)
+            {
+                panic!("failed to write post tool use hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("run the shell command with post hook")
+        .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .message_input_texts("developer")
+            .contains(&post_context.to_string()),
+        "follow-up request should include post tool use additional context",
+    );
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell command output string");
+    assert!(
+        output.contains("post-tool-output"),
+        "shell command output should still reach the model",
+    );
+
+    let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["hook_event_name"], "PostToolUse");
+    assert_eq!(hook_inputs[0]["tool_name"], "Bash");
+    assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert!(
+        hook_inputs[0]["tool_response"]
+            .as_str()
+            .is_some_and(|output| output.contains("post-tool-output")),
+    );
+    let transcript_path = hook_inputs[0]["transcript_path"]
+        .as_str()
+        .expect("post tool use hook transcript_path");
+    assert!(
+        !transcript_path.is_empty(),
+        "post tool use hook should receive a non-empty transcript_path",
+    );
+    assert!(
+        Path::new(transcript_path).exists(),
+        "post tool use hook transcript_path should be materialized on disk",
+    );
+    assert!(
+        hook_inputs[0]["turn_id"]
+            .as_str()
+            .is_some_and(|turn_id| !turn_id.is_empty())
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn post_tool_use_records_additional_context_for_local_shell() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "posttooluse-local-shell";
+    let command = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "printf local-post-tool-output".to_string(),
+    ];
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_local_shell_call(
+                    call_id,
+                    "completed",
+                    command.iter().map(String::as_str).collect(),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "local shell post hook context observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let post_context = "Remember the local shell post-tool note.";
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_post_tool_use_hook(home, Some("^Bash$"), "context", post_context)
+            {
+                panic!("failed to write post tool use hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("run the local shell command with post hook")
+        .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .message_input_texts("developer")
+            .contains(&post_context.to_string()),
+        "follow-up request should include local shell post tool use additional context",
+    );
+    let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(
+        hook_inputs[0]["tool_input"]["command"],
+        codex_shell_command::parse_command::shlex_join(&command),
+    );
+    assert!(
+        hook_inputs[0]["tool_response"]
+            .as_str()
+            .is_some_and(|output| output.contains("local-post-tool-output")),
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn post_tool_use_can_block_exec_command_after_execution() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "posttooluse-exec-command";
+    let marker = std::env::temp_dir().join("posttooluse-exec-command-marker");
+    let command = format!(
+        "printf post-hook-output && printf ran > {}",
+        marker.display()
+    );
+    let args = serde_json::json!({ "cmd": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "exec_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "post hook blocked the exec result"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_post_tool_use_hook(home, Some("^Bash$"), "exit_2", "blocked by post hook")
+            {
+                panic!("failed to write post tool use hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config.use_experimental_unified_exec_tool = true;
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    if marker.exists() {
+        fs::remove_file(&marker).context("remove leftover post exec marker")?;
+    }
+
+    test.submit_turn("run the exec command with post hook")
+        .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("exec command output string");
+    assert!(
+        output.contains(
+            "Bash command completed, but PostToolUse hook blocked further processing: blocked by post hook"
+        ),
+        "blocked exec command output should surface the post hook reason",
+    );
+    assert!(
+        output.contains(&format!("Command: {command}")),
+        "blocked exec command output should surface the executed command",
+    );
+    assert!(
+        marker.exists(),
+        "post tool use should run after command execution"
+    );
+
+    let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert!(
+        hook_inputs[0]["tool_response"]
+            .as_str()
+            .is_some_and(|output| output.contains("post-hook-output")),
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn post_tool_use_does_not_fire_for_non_shell_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "posttooluse-update-plan";
+    let args = serde_json::json!({
+        "plan": [{
+            "step": "watch the tide",
+            "status": "pending",
+        }]
+    });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "update_plan",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "plan updated"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_post_tool_use_hook(home, None, "decision_block", "should not fire")
+            {
+                panic!("failed to write post tool use hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("update the plan").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("update plan output string");
+    assert!(
+        !output.contains("should not fire"),
+        "non-shell tool output should not be affected by PostToolUse",
+    );
+
+    let hook_log_path = test.codex_home_path().join("post_tool_use_hook_log.jsonl");
+    assert!(
+        !hook_log_path.exists(),
+        "non-shell tools should not trigger post tool use hooks",
     );
 
     Ok(())

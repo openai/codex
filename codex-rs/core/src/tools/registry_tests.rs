@@ -1,4 +1,5 @@
 use super::*;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use async_trait::async_trait;
@@ -109,4 +110,28 @@ fn pre_tool_use_command_skips_non_shell_tools() {
     };
 
     assert_eq!(pre_tool_use_command("update_plan", &payload), None);
+}
+
+#[test]
+fn post_tool_use_payload_uses_function_call_output_wire_value() {
+    let payload = ToolPayload::Function {
+        arguments: serde_json::json!({ "command": "printf shell command" }).to_string(),
+    };
+    let result = AnyToolResult {
+        call_id: "call-42".to_string(),
+        payload,
+        result: Box::new(FunctionToolOutput::from_text(
+            "shell output".to_string(),
+            Some(true),
+        )),
+    };
+
+    let post_payload =
+        post_tool_use_payload("shell_command", &result).expect("post tool use payload");
+
+    assert_eq!(post_payload.command, "printf shell command".to_string());
+    assert_eq!(
+        post_payload.tool_response,
+        serde_json::json!("shell output")
+    );
 }
