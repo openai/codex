@@ -8890,6 +8890,7 @@ mod tests {
                     request_id: sent_request_id,
                     ..
                 }),
+            ..
         } = request_message
         else {
             panic!("expected tool request to be sent to the subscribed connection");
