@@ -1610,6 +1610,238 @@ async fn thread_rollback_restores_cleared_reference_context_item_after_compactio
     assert!(sess.reference_context_item().await.is_none());
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_rollback_followup_turn_duplicates_context_updates_snapshot() -> anyhow::Result<()> {
+    const TURN_ONE_USER: &str = "turn 1 user";
+    const TURN_TWO_USER: &str = "turn 2 user";
+    const FOLLOWUP_USER: &str = "follow-up user";
+    const ROLLED_BACK_DEV_INSTRUCTIONS: &str = "ROLLED_BACK_DEV_INSTRUCTIONS";
+
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
+    attach_rollout_recorder(&sess).await;
+
+    let first_context_item = tc.to_turn_context_item();
+    let first_turn_id = first_context_item
+        .turn_id
+        .clone()
+        .expect("turn context should have turn_id");
+    sess.persist_rollout_items(&[RolloutItem::EventMsg(EventMsg::TurnStarted(
+        TurnStartedEvent {
+            turn_id: first_turn_id.clone(),
+            model_context_window: Some(128_000),
+            collaboration_mode_kind: ModeKind::Default,
+        },
+    ))])
+    .await;
+    sess.record_context_updates_and_set_reference_context_item(tc.as_ref())
+        .await;
+    let turn_one_input = vec![UserInput::Text {
+        text: TURN_ONE_USER.to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.persist_rollout_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
+        UserMessageEvent {
+            message: TURN_ONE_USER.to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        },
+    ))])
+    .await;
+    sess.record_user_prompt_and_emit_turn_item(
+        tc.as_ref(),
+        &turn_one_input,
+        user_message(TURN_ONE_USER),
+    )
+    .await;
+    sess.record_conversation_items(tc.as_ref(), &[assistant_message("turn 1 assistant")])
+        .await;
+    sess.persist_rollout_items(&[RolloutItem::EventMsg(EventMsg::TurnComplete(
+        TurnCompleteEvent {
+            turn_id: first_turn_id,
+            last_agent_message: None,
+        },
+    ))])
+    .await;
+
+    let override_root = tempfile::tempdir().expect("create override tempdir");
+    let override_cwd = override_root.path().join("PRETURN_CONTEXT_DIFF_CWD");
+    std::fs::create_dir_all(&override_cwd)?;
+    sess.update_settings(SessionSettingsUpdate {
+        cwd: Some(override_cwd),
+        collaboration_mode: Some(CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model: tc.model_info.slug.clone(),
+                reasoning_effort: tc.reasoning_effort,
+                developer_instructions: Some(ROLLED_BACK_DEV_INSTRUCTIONS.to_string()),
+            },
+        }),
+        ..Default::default()
+    })
+    .await?;
+
+    let rolled_back_context = sess
+        .new_default_turn_with_sub_id("turn-2".to_string())
+        .await;
+    let rolled_back_context_item = rolled_back_context.to_turn_context_item();
+    let rolled_back_turn_id = rolled_back_context_item
+        .turn_id
+        .clone()
+        .expect("turn context should have turn_id");
+    sess.persist_rollout_items(&[RolloutItem::EventMsg(EventMsg::TurnStarted(
+        TurnStartedEvent {
+            turn_id: rolled_back_turn_id.clone(),
+            model_context_window: Some(128_000),
+            collaboration_mode_kind: ModeKind::Default,
+        },
+    ))])
+    .await;
+    sess.record_context_updates_and_set_reference_context_item(rolled_back_context.as_ref())
+        .await;
+    let turn_two_input = vec![UserInput::Text {
+        text: TURN_TWO_USER.to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.persist_rollout_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
+        UserMessageEvent {
+            message: TURN_TWO_USER.to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        },
+    ))])
+    .await;
+    sess.record_user_prompt_and_emit_turn_item(
+        rolled_back_context.as_ref(),
+        &turn_two_input,
+        user_message(TURN_TWO_USER),
+    )
+    .await;
+    let before_rollback_request_input = sess
+        .clone_history()
+        .await
+        .for_prompt(&rolled_back_context.model_info.input_modalities);
+    sess.record_conversation_items(
+        rolled_back_context.as_ref(),
+        &[assistant_message("turn 2 assistant")],
+    )
+    .await;
+    sess.persist_rollout_items(&[RolloutItem::EventMsg(EventMsg::TurnComplete(
+        TurnCompleteEvent {
+            turn_id: rolled_back_turn_id,
+            last_agent_message: None,
+        },
+    ))])
+    .await;
+
+    handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+    let rollback_event = wait_for_thread_rolled_back(&rx).await;
+    assert_eq!(rollback_event.num_turns, 1);
+
+    let before_rollback_dev_count = developer_input_texts(&before_rollback_request_input)
+        .iter()
+        .filter(|text| text.contains(ROLLED_BACK_DEV_INSTRUCTIONS))
+        .count();
+    assert_eq!(before_rollback_dev_count, 1);
+
+    let followup_context = sess
+        .new_default_turn_with_sub_id("turn-followup".to_string())
+        .await;
+    sess.record_context_updates_and_set_reference_context_item(followup_context.as_ref())
+        .await;
+    let followup_input = vec![UserInput::Text {
+        text: FOLLOWUP_USER.to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.persist_rollout_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
+        UserMessageEvent {
+            message: FOLLOWUP_USER.to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+        },
+    ))])
+    .await;
+    sess.record_user_prompt_and_emit_turn_item(
+        followup_context.as_ref(),
+        &followup_input,
+        user_message(FOLLOWUP_USER),
+    )
+    .await;
+    let after_rollback_request_input = sess
+        .clone_history()
+        .await
+        .for_prompt(&followup_context.model_info.input_modalities);
+
+    let after_rollback_dev_count = developer_input_texts(&after_rollback_request_input)
+        .iter()
+        .filter(|text| text.contains(ROLLED_BACK_DEV_INSTRUCTIONS))
+        .count();
+    assert_eq!(after_rollback_dev_count, 2);
+    let after_rollback_user_texts = after_rollback_request_input
+        .iter()
+        .filter_map(|item| match item {
+            ResponseItem::Message { role, content, .. } if role == "user" => {
+                Some(content.as_slice())
+            }
+            _ => None,
+        })
+        .flat_map(|content| content.iter())
+        .filter_map(|item| match item {
+            ContentItem::InputText { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let after_rollback_last = after_rollback_user_texts
+        .last()
+        .cloned()
+        .unwrap_or_else(|| panic!("post-rollback request missing user messages"))
+        .to_string();
+    assert_eq!(after_rollback_last, FOLLOWUP_USER);
+
+    let before_rollback_request_items = serde_json::to_value(&before_rollback_request_input)
+        .expect("serialize pre-rollback request input")
+        .as_array()
+        .cloned()
+        .expect("pre-rollback request input should serialize to array");
+    let after_rollback_request_items = serde_json::to_value(&after_rollback_request_input)
+        .expect("serialize post-rollback request input")
+        .as_array()
+        .cloned()
+        .expect("post-rollback request input should serialize to array");
+
+    let snapshot = context_snapshot::format_labeled_items_snapshot(
+        "Rolling back a turn with context diffs and then sending a follow-up request currently duplicates the rolled-back context updates.",
+        &[
+            (
+                "Rolled-back Turn Request",
+                before_rollback_request_items.as_slice(),
+            ),
+            (
+                "Follow-up Request After Rollback",
+                after_rollback_request_items.as_slice(),
+            ),
+        ],
+        &ContextSnapshotOptions::default()
+            .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 96 })
+            .strip_capability_instructions()
+            .strip_agents_md_user_context(),
+    );
+
+    let mut settings = insta::Settings::clone_current();
+    settings.set_snapshot_path("snapshots");
+    settings.set_prepend_module_to_snapshot(false);
+    settings.bind(|| {
+        insta::assert_snapshot!(
+            "codex_core__codex_tests__thread_rollback_followup_turn_duplicates_context_updates",
+            snapshot
+        );
+    });
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn thread_rollback_persists_marker_and_replays_cumulatively() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
