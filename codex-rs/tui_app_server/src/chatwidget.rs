@@ -905,6 +905,12 @@ pub(crate) struct ChatWidget {
     last_non_retry_error: Option<(String, String)>,
 }
 
+/// Cached nickname and role for a collab agent thread, used to attach human-readable labels to
+/// rendered tool-call items.
+///
+/// Populated externally by `App` via `set_collab_agent_metadata` and consulted by the
+/// notification-to-core-event conversion helpers. Defaults to empty so that missing metadata
+/// degrades to the previous behavior of showing raw thread ids.
 #[derive(Clone, Debug, Default)]
 struct CollabAgentMetadata {
     agent_nickname: Option<String>,
@@ -1386,6 +1392,8 @@ fn app_server_collab_state_to_core(state: &AppServerCollabAgentState) -> AgentSt
     }
 }
 
+/// Converts app-server collab agent states into the core protocol representation, enriching each
+/// entry with cached nickname and role metadata so rendered items show human-readable names.
 fn app_server_collab_agent_statuses_to_core(
     receiver_thread_ids: &[String],
     agents_states: &HashMap<String, AppServerCollabAgentState>,
@@ -1418,6 +1426,10 @@ fn app_server_collab_agent_statuses_to_core(
     (agent_statuses, statuses)
 }
 
+/// Builds `CollabAgentRef` entries for every valid receiver thread, attaching cached metadata.
+///
+/// Used when converting collab `Wait` tool-call items so the rendered waiting list shows agent
+/// names instead of bare thread ids.
 fn app_server_collab_receiver_agent_refs(
     receiver_thread_ids: &[String],
     collab_agent_metadata: &HashMap<ThreadId, CollabAgentMetadata>,
@@ -1522,6 +1534,12 @@ fn web_search_action_to_core(
 }
 
 impl ChatWidget {
+    /// Stores or overwrites the cached nickname and role for a collab agent thread.
+    ///
+    /// Called by `App::upsert_agent_picker_thread` and `App::replace_chat_widget` to keep the
+    /// rendering metadata in sync with the navigation cache. Must be called before any
+    /// notification referencing this thread is processed, otherwise the rendered item will fall
+    /// back to showing the raw thread id.
     pub(crate) fn set_collab_agent_metadata(
         &mut self,
         thread_id: ThreadId,
@@ -1537,6 +1555,7 @@ impl ChatWidget {
         );
     }
 
+    /// Returns the cached metadata for a thread, defaulting to empty if none has been registered.
     fn collab_agent_metadata(&self, thread_id: ThreadId) -> CollabAgentMetadata {
         self.collab_agent_metadata
             .get(&thread_id)

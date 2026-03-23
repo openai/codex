@@ -356,6 +356,11 @@ impl AppServerSession {
             .wrap_err("thread/list failed during TUI session lookup")
     }
 
+    /// Lists thread ids that the app server currently holds in memory.
+    ///
+    /// Used by `App::backfill_loaded_subagent_threads` to discover subagent threads that were
+    /// spawned before the TUI connected. The caller then fetches full metadata per thread via
+    /// `thread_read` and walks the spawn tree.
     pub(crate) async fn thread_loaded_list(
         &mut self,
         params: ThreadLoadedListParams,

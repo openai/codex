@@ -1,3 +1,19 @@
+//! Discovers subagent threads that belong to a primary thread by walking spawn-tree edges.
+//!
+//! When the TUI connects to a remote app server and resumes or switches to an existing thread, it
+//! needs to populate `AgentNavigationState` and `ChatWidget` metadata for every subagent that was
+//! spawned during that thread's lifetime. The server exposes a flat list of currently loaded
+//! threads via `thread/loaded/list`, but the TUI must figure out which of those are descendants of
+//! the primary thread.
+//!
+//! This module provides the pure, synchronous tree-walk that turns that flat list into the filtered
+//! set of descendants. It intentionally has no async, no I/O, and no side effects so it can be
+//! unit-tested in isolation.
+//!
+//! The walk starts from `primary_thread_id` and repeatedly follows
+//! `SessionSource::SubAgent(ThreadSpawn { parent_thread_id, .. })` edges until no new children are
+//! found. The primary thread itself is never included in the output.
+
 use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::Thread;
 use codex_protocol::ThreadId;
@@ -5,6 +21,8 @@ use codex_protocol::protocol::SubAgentSource;
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+/// A subagent thread discovered by the spawn-tree walk, carrying just enough metadata for the
+/// TUI to register it in the navigation cache and rendering metadata map.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LoadedSubagentThread {
     pub(crate) thread_id: ThreadId,
@@ -12,6 +30,19 @@ pub(crate) struct LoadedSubagentThread {
     pub(crate) agent_role: Option<String>,
 }
 
+/// Walks the spawn tree rooted at `primary_thread_id` and returns every descendant subagent.
+///
+/// The walk is breadth-first over `SessionSource::SubAgent(ThreadSpawn { parent_thread_id })` edges.
+/// Threads whose `source` is not a `ThreadSpawn`, or whose `parent_thread_id` does not chain back
+/// to `primary_thread_id`, are excluded. The primary thread itself is never included.
+///
+/// Results are sorted by stringified thread id for deterministic output in tests and in the
+/// navigation cache. Callers should not rely on this ordering for anything semantic; it exists
+/// purely to make snapshot assertions stable.
+///
+/// If two threads claim the same parent, both are included. Cycles in the parent chain are not
+/// possible because `ThreadId`s are server-assigned UUIDs and the server enforces acyclicity, but
+/// the `included` set guards against re-visiting regardless.
 pub(crate) fn find_loaded_subagent_threads_for_primary(
     threads: Vec<Thread>,
     primary_thread_id: ThreadId,

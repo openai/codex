@@ -202,6 +202,10 @@ fn command_execution_decision_to_review_decision(
     }
 }
 
+/// Extracts `receiver_thread_ids` from collab agent tool-call notifications.
+///
+/// Only `ItemStarted` and `ItemCompleted` notifications with a `CollabAgentToolCall` item carry
+/// receiver thread ids. All other notification variants return `None`.
 fn collab_receiver_thread_ids(notification: &ServerNotification) -> Option<&[String]> {
     match notification {
         ServerNotification::ItemStarted(notification) => match &notification.item {
@@ -2287,6 +2291,17 @@ impl App {
         Ok(())
     }
 
+    /// Eagerly fetches nickname and role for receiver threads referenced by a collab notification.
+    ///
+    /// This runs on every buffered thread notification before it reaches rendering. For each
+    /// receiver thread id that the navigation cache does not yet have metadata for, it issues a
+    /// `thread/read` RPC and registers the result in both `AgentNavigationState` and the
+    /// `ChatWidget` metadata map. Threads that already have a nickname or role cached are skipped,
+    /// so the cost is at most one RPC per thread over the lifetime of a session.
+    ///
+    /// Failures are logged and silently ignored -- the worst outcome is that a rendered item shows
+    /// a thread id instead of a human-readable name, which is the same behavior the TUI had before
+    /// this change.
     async fn hydrate_collab_agent_metadata_for_notification(
         &mut self,
         app_server: &mut AppServerSession,
@@ -2693,6 +2708,12 @@ impl App {
         self.sync_active_agent_label();
     }
 
+    /// Replaces the chat widget and re-seeds the new widget's collab metadata from the navigation
+    /// cache.
+    ///
+    /// Thread switches reconstruct the `ChatWidget`, which loses the `collab_agent_metadata` map.
+    /// This helper copies every known nickname/role from `AgentNavigationState` into the
+    /// replacement widget so that replayed collab items render agent names immediately.
     fn replace_chat_widget(&mut self, mut chat_widget: ChatWidget) {
         for (thread_id, entry) in self.agent_navigation.ordered_threads() {
             chat_widget.set_collab_agent_metadata(
@@ -2860,6 +2881,17 @@ impl App {
         Ok(())
     }
 
+    /// Fetches all loaded threads from the app server and registers descendants of the primary
+    /// thread in the navigation cache and chat widget metadata.
+    ///
+    /// Called after `replace_chat_widget_with_app_server_thread` during resume, fork, and new
+    /// thread creation so that the `/agent` picker and keyboard navigation are pre-populated even
+    /// if the TUI did not witness the original spawn events.
+    ///
+    /// The loaded-thread list is fetched in full (no pagination) and the spawn tree is walked
+    /// by `find_loaded_subagent_threads_for_primary`. Each discovered subagent is registered via
+    /// `upsert_agent_picker_thread`, which writes to both `AgentNavigationState` and the
+    /// `ChatWidget` metadata map.
     async fn backfill_loaded_subagent_threads(&mut self, app_server: &mut AppServerSession) {
         let Some(primary_thread_id) = self.primary_thread_id else {
             return;
@@ -2908,6 +2940,14 @@ impl App {
         }
     }
 
+    /// Returns the adjacent thread id for keyboard navigation, backfilling from the server if the
+    /// local cache has no neighbor.
+    ///
+    /// Tries the fast path first: ask `AgentNavigationState` directly. If it returns `None` (no
+    /// adjacent entry exists, typically because the cache was never populated with remote
+    /// subagents), performs a full `backfill_loaded_subagent_threads` and retries. This ensures the
+    /// first next/previous keypress in a resumed remote session discovers subagents on demand
+    /// without requiring the user to wait for a proactive fetch.
     async fn adjacent_thread_id_with_backfill(
         &mut self,
         app_server: &mut AppServerSession,
