@@ -194,6 +194,7 @@ export type { NetworkApprovalProtocol } from "./NetworkApprovalProtocol";
 export type { NetworkPolicyAmendment } from "./NetworkPolicyAmendment";
 export type { NetworkPolicyRuleAction } from "./NetworkPolicyRuleAction";
 export type { NetworkRequirements } from "./NetworkRequirements";
+export type { NonSteerableTurnKind } from "./NonSteerableTurnKind";
 export type { OverriddenMetadata } from "./OverriddenMetadata";
 export type { PatchApplyStatus } from "./PatchApplyStatus";
 export type { PatchChangeKind } from "./PatchChangeKind";
@@ -281,6 +282,7 @@ export type { ThreadRealtimeErrorNotification } from "./ThreadRealtimeErrorNotif
 export type { ThreadRealtimeItemAddedNotification } from "./ThreadRealtimeItemAddedNotification";
 export type { ThreadRealtimeOutputAudioDeltaNotification } from "./ThreadRealtimeOutputAudioDeltaNotification";
 export type { ThreadRealtimeStartedNotification } from "./ThreadRealtimeStartedNotification";
+export type { ThreadRealtimeTranscriptUpdatedNotification } from "./ThreadRealtimeTranscriptUpdatedNotification";
 export type { ThreadResumeParams } from "./ThreadResumeParams";
 export type { ThreadResumeResponse } from "./ThreadResumeResponse";
 export type { ThreadRollbackParams } from "./ThreadRollbackParams";

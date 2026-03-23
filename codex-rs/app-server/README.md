@@ -140,7 +140,7 @@ Example with notification opt-out:
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
-- `turn/steer` — add user input to an already in-flight turn without starting a new turn; returns the active `turnId` that accepted the input.
+- `turn/steer` — add user input to an already in-flight regular turn without starting a new turn; returns the active `turnId` that accepted the input. Review and manual compaction turns reject `turn/steer`.
 - `turn/interrupt` — request cancellation of an in-flight turn by `(thread_id, turn_id)`; success is an empty `{}` response and the turn finishes with `status: "interrupted"`.
 - `thread/realtime/start` — start a thread-scoped realtime session (experimental); returns `{}` and streams `thread/realtime/*` notifications.
 - `thread/realtime/appendAudio` — append an input audio chunk to the active realtime session (experimental); returns `{}`.
@@ -575,8 +575,8 @@ Use `thread/backgroundTerminals/clean` to terminate all running background termi
 
 ### Example: Steer an active turn
 
-Use `turn/steer` to append additional user input to the currently active turn. This does not emit
-`turn/started` and does not accept turn context overrides.
+Use `turn/steer` to append additional user input to the currently active regular turn. This does
+not emit `turn/started` and does not accept turn context overrides.
 
 ```json
 { "method": "turn/steer", "id": 32, "params": {
@@ -587,7 +587,9 @@ Use `turn/steer` to append additional user input to the currently active turn. T
 { "id": 32, "result": { "turnId": "turn_456" } }
 ```
 
-`expectedTurnId` is required. If there is no active turn (or `expectedTurnId` does not match the active turn), the request fails with an `invalid request` error.
+`expectedTurnId` is required. If there is no active turn, `expectedTurnId` does not match the
+active turn, or the active turn kind does not accept same-turn steering (for example review or
+manual compaction), the request fails with an `invalid request` error.
 
 ### Example: Request a code review
 
@@ -825,7 +827,8 @@ The fuzzy file search session API emits per-query notifications:
 The thread realtime API emits thread-scoped notifications for session lifecycle and streaming media:
 
 - `thread/realtime/started` — `{ threadId, sessionId }` once realtime starts for the thread (experimental).
-- `thread/realtime/itemAdded` — `{ threadId, item }` for non-audio realtime items (experimental). `item` is forwarded as raw JSON while the upstream websocket item schema remains unstable.
+- `thread/realtime/itemAdded` — `{ threadId, item }` for raw non-audio realtime items that do not have a dedicated typed app-server notification, including `handoff_request` (experimental). `item` is forwarded as raw JSON while the upstream websocket item schema remains unstable.
+- `thread/realtime/transcriptUpdated` — `{ threadId, role, text }` whenever realtime transcript text changes (experimental). This forwards the live transcript delta from that realtime event, not the full accumulated transcript.
 - `thread/realtime/outputAudio/delta` — `{ threadId, audio }` for streamed output audio chunks (experimental). `audio` uses camelCase fields (`data`, `sampleRate`, `numChannels`, `samplesPerChannel`).
 - `thread/realtime/error` — `{ threadId, message }` when realtime encounters a transport or backend error (experimental).
 - `thread/realtime/closed` — `{ threadId, reason }` when the realtime transport closes (experimental).
@@ -917,6 +920,8 @@ There are additional item-specific events:
 - `ResponseStreamConnectionFailed { httpStatusCode? }`: failure to connect to the response SSE stream
 - `ResponseStreamDisconnected { httpStatusCode? }`: disconnect of the response SSE stream in the middle of a turn before completion
 - `ResponseTooManyFailedAttempts { httpStatusCode? }`
+- `ActiveTurnNotSteerable { turnKind }`: `turn/start` or `turn/steer` was submitted while the
+  current active turn was not steerable, for example `/review` or manual `/compact`
 - `BadRequest`
 - `Unauthorized`
 - `SandboxError`

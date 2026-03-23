@@ -186,7 +186,39 @@ mod rollout_reconstruction_tests;
 pub enum SteerInputError {
     NoActiveTurn(Vec<UserInput>),
     ExpectedTurnMismatch { expected: String, actual: String },
+    ActiveTurnNotSteerable { turn_kind: NonSteerableTurnKind },
     EmptyInput,
+}
+
+impl SteerInputError {
+    fn to_error_event(&self) -> ErrorEvent {
+        match self {
+            Self::NoActiveTurn(_) => ErrorEvent {
+                message: "no active turn to steer".to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            },
+            Self::ExpectedTurnMismatch { expected, actual } => ErrorEvent {
+                message: format!("expected active turn id `{expected}` but found `{actual}`"),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            },
+            Self::ActiveTurnNotSteerable { turn_kind } => {
+                let turn_kind_label = match turn_kind {
+                    NonSteerableTurnKind::Review => "review",
+                    NonSteerableTurnKind::Compact => "compact",
+                };
+                ErrorEvent {
+                    message: format!("cannot steer a {turn_kind_label} turn"),
+                    codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
+                        turn_kind: *turn_kind,
+                    }),
+                }
+            }
+            Self::EmptyInput => ErrorEvent {
+                message: "input must not be empty".to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            },
+        }
+    }
 }
 
 /// Notes from the previous real user turn.
@@ -333,6 +365,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_readiness::Readiness;
@@ -765,6 +798,7 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    idle_pending_input: Mutex<Vec<ResponseInputItem>>,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
@@ -776,6 +810,7 @@ pub(crate) struct TurnSkillsContext {
     pub(crate) outcome: Arc<SkillLoadOutcome>,
     pub(crate) implicit_invocation_seen_skills: Arc<Mutex<HashSet<String>>>,
 }
+
 impl TurnSkillsContext {
     pub(crate) fn new(outcome: Arc<SkillLoadOutcome>) -> Self {
         Self {
@@ -1862,6 +1897,7 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
+            idle_pending_input: Mutex::new(Vec::new()),
             guardian_review_session: GuardianReviewSessionManager::default(),
             services,
             js_repl,
@@ -3439,6 +3475,7 @@ impl Session {
             DeveloperInstructions::from_policy(
                 turn_context.sandbox_policy.get(),
                 turn_context.approval_policy.value(),
+                turn_context.config.approvals_reviewer,
                 self.services.exec_policy.current().as_ref(),
                 &turn_context.cwd,
                 turn_context
@@ -3858,12 +3895,27 @@ impl Session {
             });
         }
 
+        match active_turn.tasks.first().map(|(_, task)| task.kind) {
+            Some(crate::state::TaskKind::Regular) => {}
+            Some(crate::state::TaskKind::Review) => {
+                return Err(SteerInputError::ActiveTurnNotSteerable {
+                    turn_kind: NonSteerableTurnKind::Review,
+                });
+            }
+            Some(crate::state::TaskKind::Compact) => {
+                return Err(SteerInputError::ActiveTurnNotSteerable {
+                    turn_kind: NonSteerableTurnKind::Compact,
+                });
+            }
+            None => return Err(SteerInputError::NoActiveTurn(input)),
+        }
+
         let mut turn_state = active_turn.turn_state.lock().await;
         turn_state.push_pending_input(input.into());
         Ok(active_turn_id.clone())
     }
 
-    /// Returns the input if there was no task running to inject into
+    /// Returns the input if there was no task running to inject into.
     pub async fn inject_response_items(
         &self,
         input: Vec<ResponseInputItem>,
@@ -3902,6 +3954,24 @@ impl Session {
             }
             None => Vec::with_capacity(0),
         }
+    }
+
+    /// Queue response items to be injected into the next active turn created for this session.
+    pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {
+        if items.is_empty() {
+            return;
+        }
+
+        let mut idle_pending_input = self.idle_pending_input.lock().await;
+        idle_pending_input.extend(items);
+    }
+
+    pub(crate) async fn take_queued_response_items_for_next_turn(&self) -> Vec<ResponseInputItem> {
+        std::mem::take(&mut *self.idle_pending_input.lock().await)
+    }
+
+    pub(crate) async fn has_queued_response_items_for_next_turn(&self) -> bool {
+        !self.idle_pending_input.lock().await.is_empty()
     }
 
     pub async fn has_pending_input(&self) -> bool {
@@ -4525,26 +4595,35 @@ mod handlers {
             _ => unreachable!(),
         };
 
-        let Ok(current_context) = sess.new_turn_with_sub_id(sub_id, updates).await else {
+        let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
             // new_turn_with_sub_id already emits the error event.
             return;
         };
         sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
             .await;
-        current_context.session_telemetry.user_prompt(&items);
-
-        // Attempt to inject input into current task.
-        if let Err(SteerInputError::NoActiveTurn(items)) =
-            sess.steer_input(items, /*expected_turn_id*/ None).await
+        match sess
+            .steer_input(items.clone(), /*expected_turn_id*/ None)
+            .await
         {
-            sess.refresh_mcp_servers_if_requested(&current_context)
+            Ok(_) => current_context.session_telemetry.user_prompt(&items),
+            Err(SteerInputError::NoActiveTurn(items)) => {
+                current_context.session_telemetry.user_prompt(&items);
+                sess.refresh_mcp_servers_if_requested(&current_context)
+                    .await;
+                sess.spawn_task(
+                    Arc::clone(&current_context),
+                    items,
+                    crate::tasks::RegularTask::new(),
+                )
                 .await;
-            sess.spawn_task(
-                Arc::clone(&current_context),
-                items,
-                crate::tasks::RegularTask::new(),
-            )
-            .await;
+            }
+            Err(err) => {
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(err.to_error_event()),
+                })
+                .await;
+            }
         }
     }
 
@@ -5383,7 +5462,7 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
-    if input.is_empty() {
+    if input.is_empty() && !sess.has_pending_input().await {
         return None;
     }
 
@@ -5510,20 +5589,6 @@ pub(crate) async fn run_turn(
         &available_connectors,
         &skill_name_counts_lower,
     ));
-    // Explicit plugin mentions can make a plugin's enabled apps callable for
-    // this turn without persisting those connectors as sticky user selections.
-    let mut turn_enabled_connectors = explicitly_enabled_connectors.clone();
-    turn_enabled_connectors.extend(
-        mentioned_plugins
-            .iter()
-            .flat_map(|plugin| plugin.app_connector_ids.iter())
-            .map(|connector_id| connector_id.0.clone())
-            .filter(|connector_id| {
-                available_connectors
-                    .iter()
-                    .any(|connector| connector.is_enabled && connector.id == *connector_id)
-            }),
-    );
     let connector_names_by_id = available_connectors
         .iter()
         .map(|connector| (connector.id.as_str(), connector.name.as_str()))
@@ -5539,25 +5604,33 @@ pub(crate) async fn run_turn(
         })
         .collect::<Vec<_>>();
 
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-    let response_item: ResponseItem = initial_input_for_turn.clone().into();
-    let mut last_agent_message: Option<String> = None;
     if run_pending_session_start_hooks(&sess, &turn_context).await {
-        return last_agent_message;
+        return None;
     }
-    let user_prompt_submit_outcome =
-        run_user_prompt_submit_hooks(&sess, &turn_context, UserMessageItem::new(&input).message())
-            .await;
-    if user_prompt_submit_outcome.should_stop {
-        record_additional_contexts(
+    let additional_contexts = if input.is_empty() {
+        Vec::new()
+    } else {
+        let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
+        let response_item: ResponseItem = initial_input_for_turn.clone().into();
+        let user_prompt_submit_outcome = run_user_prompt_submit_hooks(
             &sess,
             &turn_context,
-            user_prompt_submit_outcome.additional_contexts,
+            UserMessageItem::new(&input).message(),
         )
         .await;
-        return last_agent_message;
-    }
-    let additional_contexts = user_prompt_submit_outcome.additional_contexts;
+        if user_prompt_submit_outcome.should_stop {
+            record_additional_contexts(
+                &sess,
+                &turn_context,
+                user_prompt_submit_outcome.additional_contexts,
+            )
+            .await;
+            return None;
+        }
+        sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
+            .await;
+        user_prompt_submit_outcome.additional_contexts
+    };
     sess.services
         .analytics_events_client
         .track_app_mentioned(tracking.clone(), mentioned_app_invocations);
@@ -5568,17 +5641,17 @@ pub(crate) async fn run_turn(
     }
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
-    sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
-        .await;
     record_additional_contexts(&sess, &turn_context, additional_contexts).await;
-    // Track the previous-turn baseline from the regular user-turn path only so
-    // standalone tasks (compact/shell/review/undo) cannot suppress future
-    // model/realtime injections.
-    sess.set_previous_turn_settings(Some(PreviousTurnSettings {
-        model: turn_context.model_info.slug.clone(),
-        realtime_active: Some(turn_context.realtime_active),
-    }))
-    .await;
+    if !input.is_empty() {
+        // Track the previous-turn baseline from the regular user-turn path only so
+        // standalone tasks (compact/shell/review/undo) cannot suppress future
+        // model/realtime injections.
+        sess.set_previous_turn_settings(Some(PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            realtime_active: Some(turn_context.realtime_active),
+        }))
+        .await;
+    }
 
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
@@ -5589,8 +5662,10 @@ pub(crate) async fn run_turn(
             .await;
     }
 
+    let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
     sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
         .await;
+    let mut last_agent_message: Option<String> = None;
     let mut stop_hook_active = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
@@ -5675,7 +5750,7 @@ pub(crate) async fn run_turn(
             &mut client_session,
             turn_metadata_header.as_deref(),
             sampling_request_input,
-            &turn_enabled_connectors,
+            &explicitly_enabled_connectors,
             skills_outcome,
             &mut server_model_warning_emitted_for_turn,
             cancellation_token.child_token(),

@@ -1672,8 +1672,6 @@ async fn code_mode_exit_stops_script_immediately() -> Result<()> {
         &server,
         "use exec to stop script early with exit helper",
         r#"
-import { exit, text } from "@openai/code_mode";
-
 text("before");
 exit();
 text("after");
@@ -2129,6 +2127,7 @@ text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
         "SuppressedError",
         "Symbol",
         "SyntaxError",
+        "Temporal",
         "TypeError",
         "URIError",
         "Uint16Array",
@@ -2141,7 +2140,6 @@ text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
         "WebAssembly",
         "__codexContentItems",
         "add_content",
-        "console",
         "decodeURI",
         "decodeURIComponent",
         "encodeURI",
@@ -2282,10 +2280,8 @@ async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
     test.session_configured = new_thread.session_configured;
 
     let code = r#"
-import { ALL_TOOLS, hidden_dynamic_tool } from "tools.js";
-
 const tool = ALL_TOOLS.find(({ name }) => name === "hidden_dynamic_tool");
-const out = await hidden_dynamic_tool({ city: "Paris" });
+const out = await tools.hidden_dynamic_tool({ city: "Paris" });
 text(
   JSON.stringify({
     name: tool?.name ?? null,

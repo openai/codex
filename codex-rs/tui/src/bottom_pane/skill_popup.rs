@@ -180,6 +180,7 @@ impl SkillPopup {
                 })
         });
 
+        out.truncate(MAX_POPUP_ROWS);
         out
     }
 }
@@ -228,4 +229,44 @@ fn skill_popup_hint_line() -> Line<'static> {
         key_hint::plain(KeyCode::Esc).into(),
         " to close".into(),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn mention_item(index: usize) -> MentionItem {
+        MentionItem {
+            display_name: format!("Mention {index:02}"),
+            description: Some(format!("Description {index:02}")),
+            insert_text: format!("$mention-{index:02}"),
+            search_terms: vec![format!("mention-{index:02}")],
+            path: Some(format!("skill://mention-{index:02}")),
+            category_tag: Some("[Skill]".to_string()),
+            sort_rank: 1,
+        }
+    }
+
+    #[test]
+    fn filtered_mentions_are_capped_to_max_popup_rows() {
+        let popup = SkillPopup::new((0..(MAX_POPUP_ROWS + 2)).map(mention_item).collect());
+
+        let filtered_names: Vec<String> = popup
+            .filtered_items()
+            .into_iter()
+            .map(|idx| popup.mentions[idx].display_name.clone())
+            .collect();
+
+        assert_eq!(
+            filtered_names,
+            (0..MAX_POPUP_ROWS)
+                .map(|idx| format!("Mention {idx:02}"))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            popup.calculate_required_height(72),
+            (MAX_POPUP_ROWS as u16) + 2
+        );
+    }
 }

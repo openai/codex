@@ -48,7 +48,9 @@ use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::AppServerRequestHandle;
+use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
@@ -63,6 +65,7 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::Turn;
+use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -435,8 +438,8 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
     )));
 }
 
-fn emit_missing_system_bwrap_warning(app_event_tx: &AppEventSender) {
-    let Some(message) = codex_core::config::missing_system_bwrap_warning() else {
+fn emit_system_bwrap_warning(app_event_tx: &AppEventSender) {
+    let Some(message) = codex_core::config::system_bwrap_warning() else {
         return;
     };
 
@@ -464,8 +467,6 @@ enum ThreadBufferedEvent {
     Notification(ServerNotification),
     Request(ServerRequest),
     HistoryEntryResponse(GetHistoryEntryResponseEvent),
-    LegacyWarning(String),
-    LegacyRollback { num_turns: u32 },
 }
 
 #[derive(Debug)]
@@ -474,7 +475,6 @@ struct ThreadEventStore {
     turns: Vec<Turn>,
     buffer: VecDeque<ThreadBufferedEvent>,
     pending_interactive_replay: PendingInteractiveReplayState,
-    pending_local_legacy_rollbacks: VecDeque<u32>,
     active_turn_id: Option<String>,
     input_state: Option<ThreadInputState>,
     capacity: usize,
@@ -483,10 +483,7 @@ struct ThreadEventStore {
 
 impl ThreadEventStore {
     fn event_survives_session_refresh(event: &ThreadBufferedEvent) -> bool {
-        matches!(
-            event,
-            ThreadBufferedEvent::Request(_) | ThreadBufferedEvent::LegacyWarning(_)
-        )
+        matches!(event, ThreadBufferedEvent::Request(_))
     }
 
     fn new(capacity: usize) -> Self {
@@ -495,7 +492,6 @@ impl ThreadEventStore {
             turns: Vec::new(),
             buffer: VecDeque::new(),
             pending_interactive_replay: PendingInteractiveReplayState::default(),
-            pending_local_legacy_rollbacks: VecDeque::new(),
             active_turn_id: None,
             input_state: None,
             capacity,
@@ -521,7 +517,6 @@ impl ThreadEventStore {
     }
 
     fn set_turns(&mut self, turns: Vec<Turn>) {
-        self.pending_local_legacy_rollbacks.clear();
         self.active_turn_id = turns
             .iter()
             .rev()
@@ -578,37 +573,6 @@ impl ThreadEventStore {
         self.active_turn_id = None;
     }
 
-    fn note_local_thread_rollback(&mut self, num_turns: u32) {
-        self.pending_local_legacy_rollbacks.push_back(num_turns);
-        while self.pending_local_legacy_rollbacks.len() > self.capacity {
-            self.pending_local_legacy_rollbacks.pop_front();
-        }
-    }
-
-    fn consume_pending_local_legacy_rollback(&mut self, num_turns: u32) -> bool {
-        match self.pending_local_legacy_rollbacks.front() {
-            Some(pending_num_turns) if *pending_num_turns == num_turns => {
-                self.pending_local_legacy_rollbacks.pop_front();
-                true
-            }
-            _ => false,
-        }
-    }
-
-    fn apply_legacy_thread_rollback(&mut self, num_turns: u32) {
-        let num_turns = usize::try_from(num_turns).unwrap_or(usize::MAX);
-        if num_turns >= self.turns.len() {
-            self.turns.clear();
-        } else {
-            self.turns
-                .truncate(self.turns.len().saturating_sub(num_turns));
-        }
-        self.buffer.clear();
-        self.pending_interactive_replay = PendingInteractiveReplayState::default();
-        self.pending_local_legacy_rollbacks.clear();
-        self.active_turn_id = None;
-    }
-
     fn snapshot(&self) -> ThreadEventSnapshot {
         ThreadEventSnapshot {
             session: self.session.clone(),
@@ -623,9 +587,7 @@ impl ThreadEventStore {
                         .pending_interactive_replay
                         .should_replay_snapshot_request(request),
                     ThreadBufferedEvent::Notification(_)
-                    | ThreadBufferedEvent::HistoryEntryResponse(_)
-                    | ThreadBufferedEvent::LegacyWarning(_)
-                    | ThreadBufferedEvent::LegacyRollback { .. } => true,
+                    | ThreadBufferedEvent::HistoryEntryResponse(_) => true,
                 })
                 .cloned()
                 .collect(),
@@ -1006,6 +968,18 @@ fn normalize_harness_overrides_for_cwd(
     }
     overrides.additional_writable_roots = normalized;
     Ok(overrides)
+}
+
+fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<AppServerTurnError> {
+    let TypedRequestError::Server { source, .. } = error else {
+        return None;
+    };
+    let turn_error: AppServerTurnError = serde_json::from_value(source.data.clone()?).ok()?;
+    matches!(
+        turn_error.codex_error_info,
+        Some(AppServerCodexErrorInfo::ActiveTurnNotSteerable { .. })
+    )
+    .then_some(turn_error)
 }
 
 impl App {
@@ -1991,9 +1965,21 @@ impl App {
                 personality,
             } => {
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
-                    app_server
+                    match app_server
                         .turn_steer(thread_id, turn_id, items.to_vec())
-                        .await?;
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(error) => {
+                            if let Some(turn_error) = active_turn_not_steerable_turn_error(&error) {
+                                if !self.chat_widget.enqueue_rejected_steer() {
+                                    self.chat_widget.add_error_message(turn_error.message);
+                                }
+                            } else {
+                                return Err(error.into());
+                            }
+                        }
+                    }
                 } else {
                     app_server
                         .turn_start(
@@ -2283,50 +2269,6 @@ impl App {
         Ok(())
     }
 
-    async fn enqueue_thread_legacy_warning(
-        &mut self,
-        thread_id: ThreadId,
-        message: String,
-    ) -> Result<()> {
-        let (sender, store) = {
-            let channel = self.ensure_thread_channel(thread_id);
-            (channel.sender.clone(), Arc::clone(&channel.store))
-        };
-
-        let should_send = {
-            let mut guard = store.lock().await;
-            guard
-                .buffer
-                .push_back(ThreadBufferedEvent::LegacyWarning(message.clone()));
-            if guard.buffer.len() > guard.capacity
-                && let Some(removed) = guard.buffer.pop_front()
-                && let ThreadBufferedEvent::Request(request) = &removed
-            {
-                guard
-                    .pending_interactive_replay
-                    .note_evicted_server_request(request);
-            }
-            guard.active
-        };
-
-        if should_send {
-            match sender.try_send(ThreadBufferedEvent::LegacyWarning(message)) {
-                Ok(()) => {}
-                Err(TrySendError::Full(event)) => {
-                    tokio::spawn(async move {
-                        if let Err(err) = sender.send(event).await {
-                            tracing::warn!("thread {thread_id} event channel closed: {err}");
-                        }
-                    });
-                }
-                Err(TrySendError::Closed(_)) => {
-                    tracing::warn!("thread {thread_id} event channel closed");
-                }
-            }
-        }
-        Ok(())
-    }
-
     async fn enqueue_thread_history_entry_response(
         &mut self,
         thread_id: ThreadId,
@@ -2371,64 +2313,6 @@ impl App {
         Ok(())
     }
 
-    async fn enqueue_thread_legacy_rollback(
-        &mut self,
-        thread_id: ThreadId,
-        num_turns: u32,
-    ) -> Result<()> {
-        let (sender, store) = {
-            let channel = self.ensure_thread_channel(thread_id);
-            (channel.sender.clone(), Arc::clone(&channel.store))
-        };
-
-        let should_send = {
-            let mut guard = store.lock().await;
-            if guard.consume_pending_local_legacy_rollback(num_turns) {
-                false
-            } else {
-                guard.apply_legacy_thread_rollback(num_turns);
-                guard.active
-            }
-        };
-
-        if should_send {
-            match sender.try_send(ThreadBufferedEvent::LegacyRollback { num_turns }) {
-                Ok(()) => {}
-                Err(TrySendError::Full(event)) => {
-                    tokio::spawn(async move {
-                        if let Err(err) = sender.send(event).await {
-                            tracing::warn!("thread {thread_id} event channel closed: {err}");
-                        }
-                    });
-                }
-                Err(TrySendError::Closed(_)) => {
-                    tracing::warn!("thread {thread_id} event channel closed");
-                }
-            }
-        }
-        Ok(())
-    }
-
-    async fn enqueue_primary_thread_legacy_warning(&mut self, message: String) -> Result<()> {
-        if let Some(thread_id) = self.primary_thread_id {
-            return self.enqueue_thread_legacy_warning(thread_id, message).await;
-        }
-        self.pending_primary_events
-            .push_back(ThreadBufferedEvent::LegacyWarning(message));
-        Ok(())
-    }
-
-    async fn enqueue_primary_thread_legacy_rollback(&mut self, num_turns: u32) -> Result<()> {
-        if let Some(thread_id) = self.primary_thread_id {
-            return self
-                .enqueue_thread_legacy_rollback(thread_id, num_turns)
-                .await;
-        }
-        self.pending_primary_events
-            .push_back(ThreadBufferedEvent::LegacyRollback { num_turns });
-        Ok(())
-    }
-
     async fn enqueue_primary_thread_session(
         &mut self,
         session: ThreadSessionState,
@@ -2464,14 +2348,6 @@ impl App {
                 }
                 ThreadBufferedEvent::HistoryEntryResponse(event) => {
                     self.enqueue_thread_history_entry_response(thread_id, event)
-                        .await?;
-                }
-                ThreadBufferedEvent::LegacyWarning(message) => {
-                    self.enqueue_thread_legacy_warning(thread_id, message)
-                        .await?;
-                }
-                ThreadBufferedEvent::LegacyRollback { num_turns } => {
-                    self.enqueue_thread_legacy_rollback(thread_id, num_turns)
                         .await?;
                 }
             }
@@ -2945,7 +2821,7 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_project_config_warnings(&app_event_tx, &config);
-        emit_missing_system_bwrap_warning(&app_event_tx);
+        emit_system_bwrap_warning(&app_event_tx);
         tui.set_notification_method(config.tui_notification_method);
 
         let harness_overrides =
@@ -4769,7 +4645,6 @@ impl App {
         if let Some(channel) = self.thread_event_channels.get(&thread_id) {
             let mut store = channel.store.lock().await;
             store.apply_thread_rollback(response);
-            store.note_local_thread_rollback(num_turns);
         }
         if self.active_thread_id == Some(thread_id)
             && let Some(mut rx) = self.active_thread_rx.take()
@@ -4814,13 +4689,6 @@ impl App {
             ThreadBufferedEvent::HistoryEntryResponse(event) => {
                 self.chat_widget.handle_history_entry_response(event);
             }
-            ThreadBufferedEvent::LegacyWarning(message) => {
-                self.chat_widget.add_warning_message(message);
-            }
-            ThreadBufferedEvent::LegacyRollback { num_turns } => {
-                self.handle_backtrack_rollback_succeeded(num_turns);
-                self.chat_widget.handle_thread_rolled_back();
-            }
         }
         if needs_refresh {
             self.refresh_status_line();
@@ -4837,13 +4705,6 @@ impl App {
                 .handle_server_request(request, Some(ReplayKind::ThreadSnapshot)),
             ThreadBufferedEvent::HistoryEntryResponse(event) => {
                 self.chat_widget.handle_history_entry_response(event)
-            }
-            ThreadBufferedEvent::LegacyWarning(message) => {
-                self.chat_widget.add_warning_message(message);
-            }
-            ThreadBufferedEvent::LegacyRollback { num_turns } => {
-                self.handle_backtrack_rollback_succeeded(num_turns);
-                self.chat_widget.handle_thread_rolled_back();
             }
         }
     }
@@ -5335,10 +5196,13 @@ mod tests {
     use codex_app_server_protocol::AdditionalPermissionProfile;
     use codex_app_server_protocol::AgentMessageDeltaNotification;
     use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
+    use codex_app_server_protocol::ConfigWarningNotification;
+    use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::NetworkApprovalContext as AppServerNetworkApprovalContext;
     use codex_app_server_protocol::NetworkApprovalProtocol as AppServerNetworkApprovalProtocol;
     use codex_app_server_protocol::NetworkPolicyAmendment as AppServerNetworkPolicyAmendment;
     use codex_app_server_protocol::NetworkPolicyRuleAction as AppServerNetworkPolicyRuleAction;
+    use codex_app_server_protocol::NonSteerableTurnKind as AppServerNonSteerableTurnKind;
     use codex_app_server_protocol::RequestId as AppServerRequestId;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::ServerRequest;
@@ -5351,6 +5215,7 @@ mod tests {
     use codex_app_server_protocol::TokenUsageBreakdown;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
+    use codex_app_server_protocol::TurnError as AppServerTurnError;
     use codex_app_server_protocol::TurnStartedNotification;
     use codex_app_server_protocol::TurnStatus;
     use codex_app_server_protocol::UserInput as AppServerUserInput;
@@ -5900,7 +5765,7 @@ mod tests {
         app.chat_widget
             .apply_external_edit("queued follow-up".to_string());
         app.chat_widget
-            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         let input_state = app
             .chat_widget
             .capture_thread_input_state()
@@ -5936,33 +5801,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn replay_thread_snapshot_replays_legacy_warning_history() {
-        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-
-        app.replay_thread_snapshot(
-            ThreadEventSnapshot {
-                session: None,
-                turns: Vec::new(),
-                events: vec![ThreadBufferedEvent::LegacyWarning(
-                    "legacy warning message".to_string(),
-                )],
-                input_state: None,
-            },
-            false,
-        );
-
-        let mut saw_warning = false;
-        while let Ok(event) = app_event_rx.try_recv() {
-            if let AppEvent::InsertHistoryCell(cell) = event {
-                let transcript = lines_to_single_string(&cell.transcript_lines(80));
-                saw_warning |= transcript.contains("legacy warning message");
-            }
-        }
-
-        assert!(saw_warning, "expected replayed legacy warning history cell");
-    }
-
-    #[tokio::test]
     async fn replay_only_thread_keeps_restored_queue_visible() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
@@ -5977,7 +5815,7 @@ mod tests {
         app.chat_widget
             .apply_external_edit("queued follow-up".to_string());
         app.chat_widget
-            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         let input_state = app
             .chat_widget
             .capture_thread_input_state()
@@ -6026,7 +5864,7 @@ mod tests {
         app.chat_widget
             .apply_external_edit("queued follow-up".to_string());
         app.chat_widget
-            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         let input_state = app
             .chat_widget
             .capture_thread_input_state()
@@ -6073,7 +5911,7 @@ mod tests {
         app.chat_widget
             .apply_external_edit("queued follow-up".to_string());
         app.chat_widget
-            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         let input_state = app
             .chat_widget
             .capture_thread_input_state()
@@ -6143,7 +5981,7 @@ mod tests {
         app.chat_widget
             .apply_external_edit("queued follow-up".to_string());
         app.chat_widget
-            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         let input_state = app
             .chat_widget
             .capture_thread_input_state()
@@ -7309,87 +7147,6 @@ guardian_approval = true
     }
 
     #[tokio::test]
-    async fn legacy_warning_eviction_clears_pending_interactive_replay_state() -> Result<()> {
-        let mut app = make_test_app().await;
-        let thread_id = ThreadId::new();
-        let channel = ThreadEventChannel::new(1);
-        {
-            let mut store = channel.store.lock().await;
-            store.push_request(exec_approval_request(
-                thread_id,
-                "turn-approval",
-                "call-approval",
-                None,
-            ));
-            assert_eq!(store.has_pending_thread_approvals(), true);
-        }
-        app.thread_event_channels.insert(thread_id, channel);
-
-        app.enqueue_thread_legacy_warning(thread_id, "legacy warning".to_string())
-            .await?;
-
-        let store = app
-            .thread_event_channels
-            .get(&thread_id)
-            .expect("thread store should exist")
-            .store
-            .lock()
-            .await;
-        assert_eq!(store.has_pending_thread_approvals(), false);
-        let snapshot = store.snapshot();
-        assert_eq!(snapshot.events.len(), 1);
-        assert!(matches!(
-            snapshot.events.first(),
-            Some(ThreadBufferedEvent::LegacyWarning(message)) if message == "legacy warning"
-        ));
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn legacy_thread_rollback_trims_inactive_thread_snapshot_state() -> Result<()> {
-        let mut app = make_test_app().await;
-        let thread_id = ThreadId::new();
-        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
-        let turns = vec![
-            test_turn("turn-1", TurnStatus::Completed, Vec::new()),
-            test_turn("turn-2", TurnStatus::Completed, Vec::new()),
-        ];
-        let channel = ThreadEventChannel::new_with_session(4, session, turns);
-        {
-            let mut store = channel.store.lock().await;
-            store.push_request(exec_approval_request(
-                thread_id,
-                "turn-approval",
-                "call-approval",
-                None,
-            ));
-            assert_eq!(store.has_pending_thread_approvals(), true);
-        }
-        app.thread_event_channels.insert(thread_id, channel);
-
-        app.enqueue_thread_legacy_rollback(thread_id, 1).await?;
-
-        let store = app
-            .thread_event_channels
-            .get(&thread_id)
-            .expect("thread store should exist")
-            .store
-            .lock()
-            .await;
-        assert_eq!(
-            store.turns,
-            vec![test_turn("turn-1", TurnStatus::Completed, Vec::new())]
-        );
-        assert_eq!(store.has_pending_thread_approvals(), false);
-        let snapshot = store.snapshot();
-        assert_eq!(snapshot.turns, store.turns);
-        assert!(snapshot.events.is_empty());
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn inactive_thread_started_notification_initializes_replay_session() -> Result<()> {
         let mut app = make_test_app().await;
         let temp_dir = tempdir()?;
@@ -8108,16 +7865,6 @@ guardian_approval = true
         assert_eq!(store.has_pending_thread_approvals(), false);
     }
 
-    #[test]
-    fn thread_event_store_consumes_matching_local_legacy_rollback_once() {
-        let mut store = ThreadEventStore::new(8);
-        store.note_local_thread_rollback(2);
-
-        assert!(store.consume_pending_local_legacy_rollback(2));
-        assert!(!store.consume_pending_local_legacy_rollback(2));
-        assert!(!store.consume_pending_local_legacy_rollback(1));
-    }
-
     fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
         let mut seen = Vec::new();
         while let Ok(op) = op_rx.try_recv() {
@@ -8297,6 +8044,30 @@ guardian_approval = true
                 model_slug: "gpt-5.2".to_string(),
                 message: "gpt-5.2 is available".to_string(),
             })
+        );
+    }
+
+    #[test]
+    fn active_turn_not_steerable_turn_error_extracts_structured_server_error() {
+        let turn_error = AppServerTurnError {
+            message: "cannot steer a review turn".to_string(),
+            codex_error_info: Some(AppServerCodexErrorInfo::ActiveTurnNotSteerable {
+                turn_kind: AppServerNonSteerableTurnKind::Review,
+            }),
+            additional_details: None,
+        };
+        let error = TypedRequestError::Server {
+            method: "turn/steer".to_string(),
+            source: JSONRPCErrorError {
+                code: -32602,
+                message: turn_error.message.clone(),
+                data: Some(serde_json::to_value(&turn_error).expect("turn error should serialize")),
+            },
+        };
+
+        assert_eq!(
+            active_turn_not_steerable_turn_error(&error),
+            Some(turn_error)
         );
     }
 
@@ -9076,8 +8847,13 @@ guardian_approval = true
         let (tx, rx) = mpsc::channel(8);
         app.active_thread_id = Some(thread_id);
         app.active_thread_rx = Some(rx);
-        tx.send(ThreadBufferedEvent::LegacyWarning(
-            "stale warning".to_string(),
+        tx.send(ThreadBufferedEvent::Notification(
+            ServerNotification::ConfigWarning(ConfigWarningNotification {
+                summary: "stale warning".to_string(),
+                details: None,
+                path: None,
+                range: None,
+            }),
         ))
         .await
         .expect("event should queue");
@@ -9113,62 +8889,6 @@ guardian_approval = true
             .as_mut()
             .expect("active receiver should remain attached");
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
-    }
-
-    #[tokio::test]
-    async fn local_rollback_response_suppresses_matching_legacy_rollback() {
-        let mut app = make_test_app().await;
-        let thread_id = ThreadId::new();
-        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
-        let initial_turns = vec![
-            test_turn("turn-1", TurnStatus::Completed, Vec::new()),
-            test_turn("turn-2", TurnStatus::Completed, Vec::new()),
-        ];
-        app.thread_event_channels.insert(
-            thread_id,
-            ThreadEventChannel::new_with_session(8, session, initial_turns),
-        );
-
-        app.handle_thread_rollback_response(
-            thread_id,
-            1,
-            &ThreadRollbackResponse {
-                thread: Thread {
-                    id: thread_id.to_string(),
-                    preview: String::new(),
-                    ephemeral: false,
-                    model_provider: "openai".to_string(),
-                    created_at: 0,
-                    updated_at: 0,
-                    status: codex_app_server_protocol::ThreadStatus::Idle,
-                    path: None,
-                    cwd: PathBuf::from("/tmp/project"),
-                    cli_version: "0.0.0".to_string(),
-                    source: SessionSource::Cli.into(),
-                    agent_nickname: None,
-                    agent_role: None,
-                    git_info: None,
-                    name: None,
-                    turns: vec![test_turn("turn-1", TurnStatus::Completed, Vec::new())],
-                },
-            },
-        )
-        .await;
-
-        app.enqueue_thread_legacy_rollback(thread_id, 1)
-            .await
-            .expect("legacy rollback should not fail");
-
-        let store = app
-            .thread_event_channels
-            .get(&thread_id)
-            .expect("thread channel")
-            .store
-            .lock()
-            .await;
-        let snapshot = store.snapshot();
-        assert_eq!(snapshot.turns.len(), 1);
-        assert!(snapshot.events.is_empty());
     }
 
     #[tokio::test]
