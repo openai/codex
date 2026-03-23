@@ -1451,6 +1451,76 @@ async fn post_tool_use_records_additional_context_for_shell_command() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn post_tool_use_block_decision_preserves_shell_command_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "posttooluse-shell-command-block";
+    let command = "printf blocked-output".to_string();
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "post hook feedback observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let reason = "bash output looked sketchy";
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_post_tool_use_hook(home, Some("^Bash$"), "decision_block", reason)
+            {
+                panic!("failed to write post tool use hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("run the shell command with blocking post hook")
+        .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .message_input_texts("developer")
+            .contains(&reason.to_string()),
+        "follow-up request should include the post tool use feedback",
+    );
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell command output string");
+    assert!(
+        output.contains("blocked-output"),
+        "post tool use block decision should preserve the tool output",
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn post_tool_use_records_additional_context_for_local_shell() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1526,7 +1596,7 @@ async fn post_tool_use_records_additional_context_for_local_shell() -> Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn post_tool_use_can_block_exec_command_after_execution() -> Result<()> {
+async fn post_tool_use_exit_two_preserves_exec_command_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1588,20 +1658,20 @@ async fn post_tool_use_can_block_exec_command_after_execution() -> Result<()> {
 
     let requests = responses.requests();
     assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .message_input_texts("developer")
+            .contains(&"blocked by post hook".to_string()),
+        "follow-up request should include the exit-2 post hook feedback",
+    );
     let output_item = requests[1].function_call_output(call_id);
     let output = output_item
         .get("output")
         .and_then(Value::as_str)
         .expect("exec command output string");
     assert!(
-        output.contains(
-            "Bash command completed, but PostToolUse hook blocked further processing: blocked by post hook"
-        ),
-        "blocked exec command output should surface the post hook reason",
-    );
-    assert!(
-        output.contains(&format!("Command: {command}")),
-        "blocked exec command output should surface the executed command",
+        output.contains("post-hook-output"),
+        "post tool use exit code 2 should preserve the executed tool output",
     );
     assert!(
         marker.exists(),

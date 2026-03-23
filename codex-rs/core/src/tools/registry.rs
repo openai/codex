@@ -328,14 +328,6 @@ impl ToolRegistry {
         } else {
             None
         };
-        if let Some(outcome) = &post_tool_use_outcome {
-            record_additional_contexts(
-                &invocation.session,
-                &invocation.turn,
-                outcome.additional_contexts.clone(),
-            )
-            .await;
-        }
         let hook_abort_error = dispatch_after_tool_use_hook(AfterToolUseHookDispatch {
             invocation: &invocation,
             output_preview,
@@ -350,12 +342,13 @@ impl ToolRegistry {
             return Err(err);
         }
 
-        if let Some(reason) = post_tool_use_outcome.and_then(|outcome| outcome.block_reason) {
-            let command = pre_tool_use_command(tool_name.as_ref(), &payload_for_response)
-                .unwrap_or_else(|| "<unknown>".to_string());
-            return Err(FunctionCallError::RespondToModel(format!(
-                "Bash command completed, but PostToolUse hook blocked further processing: {reason}. Command: {command}"
-            )));
+        if let Some(outcome) = &post_tool_use_outcome {
+            record_additional_contexts(
+                &invocation.session,
+                &invocation.turn,
+                outcome.additional_contexts.clone(),
+            )
+            .await;
         }
 
         match result {
