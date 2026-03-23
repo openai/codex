@@ -259,6 +259,27 @@ fn interrupted_fork_snapshot_appends_interrupt_boundary() {
     );
 }
 
+#[test]
+fn interrupted_snapshot_is_not_mid_turn() {
+    let interrupted_history = InitialHistory::Forked(vec![
+        RolloutItem::ResponseItem(user_msg("hello")),
+        RolloutItem::ResponseItem(assistant_msg("partial")),
+        RolloutItem::ResponseItem(interrupted_turn_history_marker()),
+        RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        })),
+    ]);
+
+    assert_eq!(
+        snapshot_turn_state(&interrupted_history),
+        SnapshotTurnState {
+            ends_mid_turn: false,
+            active_turn_id: None,
+        },
+    );
+}
+
 #[tokio::test]
 async fn interrupted_fork_snapshot_preserves_persisted_turn_id() {
     let temp_dir = tempdir().expect("tempdir");

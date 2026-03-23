@@ -26,6 +26,7 @@ use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillsManager;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_app_server_protocol::ThreadHistoryBuilder;
+use codex_app_server_protocol::protocol::v2::TurnStatus;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelPreset;
@@ -923,9 +924,20 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
         builder.handle_rollout_item(item);
     }
     if builder.has_active_turn() {
+        let active_turn_snapshot = builder.active_turn_snapshot();
+        if active_turn_snapshot
+            .as_ref()
+            .is_some_and(|turn| turn.status == TurnStatus::Interrupted)
+        {
+            return SnapshotTurnState {
+                ends_mid_turn: false,
+                active_turn_id: None,
+            };
+        }
+
         return SnapshotTurnState {
             ends_mid_turn: true,
-            active_turn_id: builder.active_turn_snapshot().map(|turn| turn.id),
+            active_turn_id: active_turn_snapshot.map(|turn| turn.id),
         };
     }
 
