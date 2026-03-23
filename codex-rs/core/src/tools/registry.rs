@@ -356,7 +356,7 @@ impl ToolRegistry {
                 if let Some(result) = guard.as_mut() {
                     result.result = Box::new(FunctionToolOutput::from_text(
                         feedback_message.clone(),
-                        None,
+                        /*success*/ None,
                     ));
                 }
             }
