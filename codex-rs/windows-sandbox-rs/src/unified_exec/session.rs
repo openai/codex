@@ -355,9 +355,10 @@ fn start_runner_stdin_writer(
     stdin_open: bool,
 ) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn_blocking(move || {
+        let mut previous_was_cr = false;
         while let Some(bytes) = writer_rx.blocking_recv() {
             let bytes = if normalize_newlines {
-                normalize_windows_tty_input(&bytes)
+                normalize_windows_tty_input(&bytes, &mut previous_was_cr)
             } else {
                 bytes
             };
