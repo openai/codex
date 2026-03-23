@@ -3850,13 +3850,6 @@ impl Session {
         Ok(active_turn_id.clone())
     }
 
-    pub(crate) async fn active_turn_id(&self) -> Option<String> {
-        let active = self.active_turn.lock().await;
-        active
-            .as_ref()
-            .and_then(|turn| turn.tasks.first().map(|(turn_id, _)| turn_id.clone()))
-    }
-
     /// Returns the input if there was no task running to inject into
     pub async fn inject_response_items(
         &self,

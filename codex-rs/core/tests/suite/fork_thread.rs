@@ -116,7 +116,6 @@ async fn fork_thread_twice_drops_to_first_message() {
             config_for_fork.clone(),
             base_path.clone(),
             /*persist_extended_history*/ false,
-            /*source_active_turn_id*/ None,
             /*parent_trace*/ None,
         )
         .await
@@ -142,7 +141,6 @@ async fn fork_thread_twice_drops_to_first_message() {
             config_for_fork.clone(),
             fork1_path.clone(),
             /*persist_extended_history*/ false,
-            /*source_active_turn_id*/ None,
             /*parent_trace*/ None,
         )
         .await

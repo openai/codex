@@ -4020,11 +4020,6 @@ impl CodexMessageProcessor {
         };
 
         let fallback_model_provider = config.model_provider_id.clone();
-        let source_active_turn_id = if let Some(source_thread_id) = source_thread_id {
-            self.thread_manager.active_turn_id(source_thread_id).await
-        } else {
-            None
-        };
 
         let NewThread {
             thread_id,
@@ -4038,7 +4033,6 @@ impl CodexMessageProcessor {
                 config,
                 rollout_path.clone(),
                 persist_extended_history,
-                source_active_turn_id,
                 self.request_trace_context(&request_id).await,
             )
             .await
@@ -6419,8 +6413,6 @@ impl CodexMessageProcessor {
         if let Some(review_model) = &config.review_model {
             config.model = Some(review_model.clone());
         }
-        let source_active_turn_id = self.thread_manager.active_turn_id(parent_thread_id).await;
-
         let NewThread {
             thread_id,
             thread: review_thread,
@@ -6433,7 +6425,6 @@ impl CodexMessageProcessor {
                 config,
                 rollout_path,
                 /*persist_extended_history*/ false,
-                source_active_turn_id,
                 self.request_trace_context(request_id).await,
             )
             .await

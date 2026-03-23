@@ -2178,7 +2178,6 @@ impl App {
                         config.clone(),
                         target_session.path.clone(),
                         /*persist_extended_history*/ false,
-                        thread_manager.active_turn_id(target_session.thread_id).await,
                         /*parent_trace*/ None,
                     )
                     .await
@@ -2592,12 +2591,6 @@ impl App {
                     // Fresh threads expose a precomputed path, but the file is
                     // materialized lazily on first user message.
                     if path.exists() {
-                        let source_active_turn_id = if let Some(thread_id) = self.chat_widget.thread_id()
-                        {
-                            self.server.active_turn_id(thread_id).await
-                        } else {
-                            None
-                        };
                         match self
                             .server
                             .fork_thread(
@@ -2605,7 +2598,6 @@ impl App {
                                 self.config.clone(),
                                 path.clone(),
                                 /*persist_extended_history*/ false,
-                                source_active_turn_id,
                                 /*parent_trace*/ None,
                             )
                             .await

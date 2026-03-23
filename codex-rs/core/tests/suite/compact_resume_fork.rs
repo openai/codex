@@ -712,7 +712,6 @@ async fn fork_thread(
         config.clone(),
         path,
         /*persist_extended_history*/ false,
-        /*source_active_turn_id*/ None,
         /*parent_trace*/ None,
     ))
     .await

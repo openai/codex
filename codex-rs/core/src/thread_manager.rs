@@ -584,19 +584,17 @@ impl ThreadManager {
         config: Config,
         path: PathBuf,
         persist_extended_history: bool,
-        source_active_turn_id: Option<String>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
         let history = RolloutRecorder::get_rollout_history(&path).await?;
-        // A live source thread can have an active turn that has not emitted any
-        // persisted rollout items yet. When the caller knows that turn id,
-        // trust it instead of re-deriving mid-turn state from the persisted
-        // history alone.
-        let snapshot_mid_turn =
-            source_active_turn_id.is_some() || snapshot_ends_mid_turn(&history);
+        let snapshot_state = snapshot_turn_state(&history);
         let history = match snapshot {
             ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
-                truncate_before_nth_user_message(history, nth_user_message, snapshot_mid_turn)
+                truncate_before_nth_user_message(
+                    history,
+                    nth_user_message,
+                    snapshot_state.ends_mid_turn,
+                )
             }
             ForkSnapshot::Interrupted => {
                 let history = match history {
@@ -604,8 +602,8 @@ impl ThreadManager {
                     InitialHistory::Forked(history) => InitialHistory::Forked(history),
                     InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
                 };
-                if snapshot_mid_turn {
-                    append_interrupted_boundary(history, source_active_turn_id)
+                if snapshot_state.ends_mid_turn {
+                    append_interrupted_boundary(history, snapshot_state.active_turn_id)
                 } else {
                     history
                 }
@@ -627,15 +625,6 @@ impl ThreadManager {
 
     pub(crate) fn agent_control(&self) -> AgentControl {
         AgentControl::new(Arc::downgrade(&self.state))
-    }
-
-    /// Return the currently active turn id for a live thread, if one exists.
-    ///
-    /// Fork callers can use this to preserve the real interrupted turn id
-    /// without reconstructing it from the persisted rollout file.
-    pub async fn active_turn_id(&self, thread_id: ThreadId) -> Option<String> {
-        let thread = self.state.get_thread(thread_id).await.ok()?;
-        thread.active_turn_id().await
     }
 
     #[cfg(test)]
@@ -921,32 +910,47 @@ fn truncate_before_nth_user_message(
     }
 }
 
-fn snapshot_ends_mid_turn(history: &InitialHistory) -> bool {
+#[derive(Debug, Eq, PartialEq)]
+struct SnapshotTurnState {
+    ends_mid_turn: bool,
+    active_turn_id: Option<String>,
+}
+
+fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
     let rollout_items = history.get_rollout_items();
     let mut builder = ThreadHistoryBuilder::new();
     for item in &rollout_items {
         builder.handle_rollout_item(item);
     }
     if builder.has_active_turn() {
-        return true;
+        return SnapshotTurnState {
+            ends_mid_turn: true,
+            active_turn_id: builder.active_turn_snapshot().map(|turn| turn.id),
+        };
     }
 
     let Some(last_user_position) = truncation::user_message_positions_in_rollout(&rollout_items)
         .last()
         .copied()
     else {
-        return false;
+        return SnapshotTurnState {
+            ends_mid_turn: false,
+            active_turn_id: None,
+        };
     };
 
     // Synthetic fork/resume histories can contain user/assistant response items
     // without explicit turn lifecycle events. If the persisted snapshot has no
     // terminating boundary after its last user message, treat it as mid-turn.
-    !rollout_items[last_user_position + 1..].iter().any(|item| {
-        matches!(
-            item,
-            RolloutItem::EventMsg(EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
-        )
-    })
+    SnapshotTurnState {
+        ends_mid_turn: !rollout_items[last_user_position + 1..].iter().any(|item| {
+            matches!(
+                item,
+                RolloutItem::EventMsg(EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
+            )
+        }),
+        active_turn_id: None,
+    }
 }
 
 /// Append the same persisted interrupt boundary used by the live interrupt path
