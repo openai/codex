@@ -5759,20 +5759,24 @@ impl CodexMessageProcessor {
 
                 self.clear_plugin_related_caches();
 
-                let plugin_mcp_servers = load_plugin_mcp_servers(result.installed_path.as_path());
+                let plugin_apps = load_plugin_apps(result.installed_path.as_path());
 
-                if !plugin_mcp_servers.is_empty() {
-                    if let Err(err) = self.queue_mcp_server_refresh_for_config(&config).await {
-                        warn!(
-                            plugin = result.plugin_id.as_key(),
-                            "failed to queue MCP refresh after plugin install: {err:?}"
-                        );
+                if plugin_apps.is_empty() {
+                    let plugin_mcp_servers =
+                        load_plugin_mcp_servers(result.installed_path.as_path());
+
+                    if !plugin_mcp_servers.is_empty() {
+                        if let Err(err) = self.queue_mcp_server_refresh_for_config(&config).await {
+                            warn!(
+                                plugin = result.plugin_id.as_key(),
+                                "failed to queue MCP refresh after plugin install: {err:?}"
+                            );
+                        }
+                        self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
+                            .await;
                     }
-                    self.start_plugin_mcp_oauth_logins(&config, plugin_mcp_servers)
-                        .await;
                 }
 
-                let plugin_apps = load_plugin_apps(result.installed_path.as_path());
                 let apps_needing_auth = if plugin_apps.is_empty()
                     || !config.features.apps_enabled(Some(&self.auth_manager)).await
                 {
