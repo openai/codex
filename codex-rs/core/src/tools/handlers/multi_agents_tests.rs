@@ -24,6 +24,7 @@ use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHand
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_features::Feature;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -373,6 +374,18 @@ async fn multi_agent_v2_spawn_returns_path_and_send_input_accepts_relative_path(
         .await
         .expect("send_input should accept v2 path");
 
+    assert!(manager.captured_ops().iter().any(|(id, op)| {
+        *id == child_thread_id
+            && matches!(
+                op,
+                Op::InterAgentCommunication { communication }
+                    if communication.author == AgentPath::root()
+                        && communication.recipient.as_str() == "/root/test_process"
+                        && communication.other_recipients.is_empty()
+                        && communication.content == "continue"
+            )
+    }));
+
     let child_thread = manager
         .get_thread(child_thread_id)
         .await
@@ -618,6 +631,16 @@ async fn multi_agent_v2_send_input_interrupts_busy_child_without_losing_message(
         .filter_map(|(id, op)| (*id == agent_id).then_some(op))
         .collect();
     assert!(ops_for_agent.iter().any(|op| matches!(op, Op::Interrupt)));
+    assert!(ops_for_agent.iter().any(|op| {
+        matches!(
+            op,
+            Op::InterAgentCommunication { communication }
+                if communication.author == AgentPath::root()
+                    && communication.recipient.as_str() == "/root/worker"
+                    && communication.other_recipients.is_empty()
+                    && communication.content == "continue"
+        )
+    }));
     assert!(!ops_for_agent.iter().any(|op| matches!(
         op,
         Op::UserInput { items, .. }

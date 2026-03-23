@@ -4306,6 +4306,10 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
                     false
                 }
+                Op::InterAgentCommunication { communication } => {
+                    handlers::inter_agent_communication(&sess, sub.id.clone(), communication).await;
+                    false
+                }
                 Op::ExecApproval {
                     id: approval_id,
                     turn_id,
@@ -4485,6 +4489,7 @@ mod handlers {
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::InterAgentCommunication;
     use codex_protocol::protocol::ListCustomPromptsResponseEvent;
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
@@ -4625,6 +4630,29 @@ mod handlers {
                 .await;
             }
         }
+    }
+
+    pub async fn inter_agent_communication(
+        sess: &Arc<Session>,
+        sub_id: String,
+        communication: InterAgentCommunication,
+    ) {
+        let pending_item = communication.to_response_input_item();
+        if sess
+            .inject_response_items(vec![pending_item.clone()])
+            .await
+            .is_ok()
+        {
+            return;
+        }
+
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+        sess.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
+            .await;
+        sess.queue_response_items_for_next_turn(vec![pending_item])
+            .await;
+        sess.spawn_task(turn_context, Vec::new(), crate::tasks::RegularTask::new())
+            .await;
     }
 
     pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command: String) {

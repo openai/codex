@@ -1,6 +1,4 @@
 use crate::agent::AgentStatus;
-use crate::agent::inter_agent_instruction::InterAgentDelivery;
-use crate::agent::inter_agent_instruction::InterAgentInstruction;
 use crate::agent::registry::AgentMetadata;
 use crate::agent::registry::AgentRegistry;
 use crate::agent::role::DEFAULT_ROLE_NAME;
@@ -23,6 +21,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
@@ -488,18 +487,17 @@ impl AgentControl {
         .await
     }
 
-    pub(crate) async fn deliver_inter_agent_instruction(
+    pub(crate) async fn send_inter_agent_communication(
         &self,
         agent_id: ThreadId,
-        instruction: InterAgentInstruction,
-        delivery: InterAgentDelivery,
+        communication: InterAgentCommunication,
     ) -> CodexResult<String> {
         let state = self.upgrade()?;
         self.handle_thread_request_result(
             agent_id,
             &state,
             state
-                .deliver_inter_agent_instruction(agent_id, instruction, delivery)
+                .send_op(agent_id, Op::InterAgentCommunication { communication })
                 .await,
         )
         .await

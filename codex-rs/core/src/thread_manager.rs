@@ -3,8 +3,6 @@ use crate::CodexAuth;
 use crate::ModelProviderInfo;
 use crate::OPENAI_PROVIDER_ID;
 use crate::agent::AgentControl;
-use crate::agent::inter_agent_instruction::InterAgentDelivery;
-use crate::agent::inter_agent_instruction::InterAgentInstruction;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnArgs;
 use crate::codex::CodexSpawnOk;
@@ -619,18 +617,6 @@ impl ThreadManagerState {
     ) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
         thread.append_message(message).await
-    }
-
-    pub(crate) async fn deliver_inter_agent_instruction(
-        &self,
-        thread_id: ThreadId,
-        instruction: InterAgentInstruction,
-        delivery: InterAgentDelivery,
-    ) -> CodexResult<String> {
-        let thread = self.get_thread(thread_id).await?;
-        thread
-            .deliver_inter_agent_instruction(instruction, delivery)
-            .await
     }
 
     /// Remove a thread from the manager by ID, returning it when present.
