@@ -1715,6 +1715,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
                     id: approval.effective_approval_id(),
                     turn_id: None,
                     decision: decision.clone(),
+                    persist_permissions: None,
                 })
                 .await?;
             wait_for_completion(&test).await;
@@ -1941,6 +1942,7 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
             decision: ReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment: expected_execpolicy_amendment.clone(),
             },
+            persist_permissions: None,
         })
         .await?;
     wait_for_completion(&test).await;
@@ -2180,6 +2182,7 @@ async fn spawned_subagent_execpolicy_amendment_propagates_to_parent_session() ->
             decision: ReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment: expected_execpolicy_amendment,
             },
+            persist_permissions: None,
         })
         .await?;
 
@@ -2405,6 +2408,7 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
             decision: ReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment: amendment.clone(),
             },
+            persist_permissions: None,
         })
         .await?;
     wait_for_completion(&test).await;
@@ -2599,6 +2603,7 @@ allow_local_binding = true
                         id: approval.effective_approval_id(),
                         turn_id: None,
                         decision: ReviewDecision::Approved,
+                        persist_permissions: None,
                     })
                     .await?;
             }
@@ -2639,6 +2644,7 @@ allow_local_binding = true
             decision: ReviewDecision::NetworkPolicyAmendment {
                 network_policy_amendment: deny_network_amendment.clone(),
             },
+            persist_permissions: None,
         })
         .await?;
     wait_for_completion(&test).await;
@@ -2742,6 +2748,7 @@ allow_local_binding = true
                         id: approval.effective_approval_id(),
                         turn_id: None,
                         decision: ReviewDecision::Approved,
+                        persist_permissions: None,
                     })
                     .await?;
             }
@@ -2826,6 +2833,7 @@ async fn compound_command_with_one_safe_command_still_requires_approval() -> Res
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::Denied,
+            persist_permissions: None,
         })
         .await?;
     wait_for_completion(&test).await;

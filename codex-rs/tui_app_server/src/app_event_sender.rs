@@ -5,6 +5,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::mcp::RequestId as McpRequestId;
 use codex_protocol::protocol::ConversationAudioParams;
+use codex_protocol::protocol::PersistPermissionProfileAction;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -79,10 +80,17 @@ impl AppEventSender {
         ));
     }
 
-    pub(crate) fn exec_approval(&self, thread_id: ThreadId, id: String, decision: ReviewDecision) {
+    pub(crate) fn exec_approval(
+        &self,
+        thread_id: ThreadId,
+        id: String,
+        decision: ReviewDecision,
+        persist_permissions: Option<PersistPermissionProfileAction>,
+    ) {
         self.send(AppEvent::SubmitThreadOp {
             thread_id,
-            op: AppCommand::exec_approval(id, /*turn_id*/ None, decision).into_core(),
+            op: AppCommand::exec_approval(id, /*turn_id*/ None, decision, persist_permissions)
+                .into_core(),
         });
     }
 
@@ -91,10 +99,12 @@ impl AppEventSender {
         thread_id: ThreadId,
         id: String,
         response: RequestPermissionsResponse,
+        persist_permissions: Option<PersistPermissionProfileAction>,
     ) {
         self.send(AppEvent::SubmitThreadOp {
             thread_id,
-            op: AppCommand::request_permissions_response(id, response).into_core(),
+            op: AppCommand::request_permissions_response(id, response, persist_permissions)
+                .into_core(),
         });
     }
 

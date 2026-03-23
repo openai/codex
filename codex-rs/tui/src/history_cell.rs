@@ -813,6 +813,19 @@ pub fn new_approval_decision_cell(
                 ],
             )
         }
+        ApprovedPersistToProfile => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✔ ".green(),
+                vec![
+                    actor.subject().into(),
+                    "approved".bold(),
+                    " codex to run ".into(),
+                    snippet,
+                    " and saved those permissions".into(),
+                ],
+            )
+        }
         ApprovedExecpolicyAmendment {
             proposed_execpolicy_amendment,
         } => {

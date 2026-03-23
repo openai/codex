@@ -1124,6 +1124,7 @@ mod tests {
                                 macos: None,
                             },
                         ),
+                        permissions_profile_persistence: None,
                         skill_metadata: Some(CommandExecutionRequestApprovalSkillMetadata {
                             path_to_skills_md: PathBuf::from("/tmp/SKILLS.md"),
                         }),
@@ -1191,6 +1192,7 @@ mod tests {
                                 macos: None,
                             },
                         ),
+                        permissions_profile_persistence: None,
                         skill_metadata: Some(CommandExecutionRequestApprovalSkillMetadata {
                             path_to_skills_md: PathBuf::from("/tmp/SKILLS.md"),
                         }),

@@ -257,6 +257,7 @@ permissions:
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::Denied,
+            persist_permissions: None,
         })
         .await?;
 
@@ -351,6 +352,7 @@ permissions:
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::Denied,
+            persist_permissions: None,
         })
         .await?;
 
@@ -446,6 +448,7 @@ permissions:
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::Denied,
+            persist_permissions: None,
         })
         .await?;
 
@@ -895,6 +898,7 @@ async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> R
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::ApprovedForSession,
+            persist_permissions: None,
         })
         .await?;
 

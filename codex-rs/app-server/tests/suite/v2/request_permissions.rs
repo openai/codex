@@ -96,6 +96,7 @@ async fn request_permissions_round_trip() -> Result<()> {
                 }),
             },
             scope: PermissionGrantScope::Turn,
+            persist_to_profile: false,
         })?,
     )
     .await?;

@@ -76,6 +76,9 @@
     "permissions": {
       "$ref": "#/definitions/GrantedPermissionProfile"
     },
+    "persistToProfile": {
+      "type": "boolean"
+    },
     "scope": {
       "allOf": [
         {

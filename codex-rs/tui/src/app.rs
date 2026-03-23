@@ -1619,6 +1619,7 @@ impl App {
                     available_decisions: ev.effective_available_decisions(),
                     network_approval_context: ev.network_approval_context.clone(),
                     additional_permissions: ev.additional_permissions.clone(),
+                    permissions_profile_persistence: ev.permissions_profile_persistence.clone(),
                 }))
             }
             EventMsg::ApplyPatchApprovalRequest(ev) => Some(ThreadInteractiveRequest::Approval(
@@ -1658,6 +1659,7 @@ impl App {
                     call_id: ev.call_id.clone(),
                     reason: ev.reason.clone(),
                     permissions: ev.permissions.clone(),
+                    permissions_profile_persistence: ev.permissions_profile_persistence.clone(),
                 },
             )),
             _ => None,
@@ -4713,6 +4715,7 @@ mod tests {
                     additional_permissions: None,
                     skill_metadata: None,
                     available_decisions: None,
+                    permissions_profile_persistence: None,
                     parsed_cmd: Vec::new(),
                 },
             ),
@@ -6360,6 +6363,7 @@ guardian_approval = true
                         additional_permissions: None,
                         skill_metadata: None,
                         available_decisions: None,
+                        permissions_profile_persistence: None,
                         parsed_cmd: Vec::new(),
                     },
                 ),
@@ -6449,6 +6453,7 @@ guardian_approval = true
                         additional_permissions: None,
                         skill_metadata: None,
                         available_decisions: None,
+                        permissions_profile_persistence: None,
                         parsed_cmd: Vec::new(),
                     },
                 ),

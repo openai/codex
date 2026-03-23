@@ -455,6 +455,7 @@ mod tests {
                     additional_permissions: None,
                     skill_metadata: None,
                     available_decisions: None,
+                    permissions_profile_persistence: None,
                     parsed_cmd: Vec::new(),
                 },
             ),
@@ -464,6 +465,7 @@ mod tests {
             id: "approval-1".to_string(),
             turn_id: Some("turn-1".to_string()),
             decision: codex_protocol::protocol::ReviewDecision::Approved,
+            persist_permissions: None,
         });
 
         let snapshot = store.snapshot();
@@ -599,6 +601,7 @@ mod tests {
                     additional_permissions: None,
                     skill_metadata: None,
                     available_decisions: None,
+                    permissions_profile_persistence: None,
                     parsed_cmd: Vec::new(),
                 },
             ),
@@ -689,6 +692,7 @@ mod tests {
                     additional_permissions: None,
                     skill_metadata: None,
                     available_decisions: None,
+                    permissions_profile_persistence: None,
                     parsed_cmd: Vec::new(),
                 },
             ),
@@ -700,6 +704,7 @@ mod tests {
             id: "call-1".to_string(),
             turn_id: Some("turn-1".to_string()),
             decision: codex_protocol::protocol::ReviewDecision::Approved,
+            persist_permissions: None,
         });
 
         assert_eq!(store.has_pending_thread_approvals(), false);

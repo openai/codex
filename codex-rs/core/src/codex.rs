@@ -33,6 +33,7 @@ use crate::models_manager::manager::ModelsManager;
 use crate::models_manager::manager::RefreshStrategy;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
+use crate::permission_profile_persistence::persistence_target_for_permissions;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
 use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
@@ -2886,12 +2887,17 @@ impl Session {
                 },
             ]
         });
+        let permissions_profile_persistence =
+            additional_permissions.as_ref().and_then(|permissions| {
+                persistence_target_for_permissions(turn_context.config.as_ref(), permissions)
+            });
         let available_decisions = available_decisions.unwrap_or_else(|| {
             ExecApprovalRequestEvent::default_available_decisions(
                 network_approval_context.as_ref(),
                 proposed_execpolicy_amendment.as_ref(),
                 proposed_network_policy_amendments.as_deref(),
                 additional_permissions.as_ref(),
+                permissions_profile_persistence.as_ref(),
             )
         });
         let event = EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
@@ -2905,6 +2911,7 @@ impl Session {
             proposed_execpolicy_amendment,
             proposed_network_policy_amendments,
             additional_permissions,
+            permissions_profile_persistence,
             skill_metadata,
             available_decisions: Some(available_decisions),
             parsed_cmd,
@@ -2998,7 +3005,11 @@ impl Session {
             call_id,
             turn_id: turn_context.sub_id.clone(),
             reason: args.reason,
-            permissions: args.permissions,
+            permissions: args.permissions.clone(),
+            permissions_profile_persistence: persistence_target_for_permissions(
+                turn_context.config.as_ref(),
+                &args.permissions.into(),
+            ),
         });
         self.send_event(turn_context, event).await;
         rx_response.await.ok()
@@ -4241,8 +4252,16 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     id: approval_id,
                     turn_id,
                     decision,
+                    persist_permissions,
                 } => {
-                    handlers::exec_approval(&sess, approval_id, turn_id, decision).await;
+                    handlers::exec_approval(
+                        &sess,
+                        approval_id,
+                        turn_id,
+                        decision,
+                        persist_permissions,
+                    )
+                    .await;
                     false
                 }
                 Op::PatchApproval { id, decision } => {
@@ -4253,8 +4272,18 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::request_user_input_response(&sess, id, response).await;
                     false
                 }
-                Op::RequestPermissionsResponse { id, response } => {
-                    handlers::request_permissions_response(&sess, id, response).await;
+                Op::RequestPermissionsResponse {
+                    id,
+                    response,
+                    persist_permissions,
+                } => {
+                    handlers::request_permissions_response(
+                        &sess,
+                        id,
+                        response,
+                        persist_permissions,
+                    )
+                    .await;
                     false
                 }
                 Op::DynamicToolResponse { id, response } => {
@@ -4400,6 +4429,7 @@ mod handlers {
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
+    use crate::permission_profile_persistence::persist_permissions_for_profile;
 
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
@@ -4420,6 +4450,7 @@ mod handlers {
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
     use codex_protocol::protocol::Op;
+    use codex_protocol::protocol::PersistPermissionProfileAction;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::RolloutItem;
@@ -4623,6 +4654,7 @@ mod handlers {
         approval_id: String,
         turn_id: Option<String>,
         decision: ReviewDecision,
+        persist_permissions: Option<PersistPermissionProfileAction>,
     ) {
         let event_turn_id = turn_id.unwrap_or_else(|| approval_id.clone());
         if let ReviewDecision::ApprovedExecpolicyAmendment {
@@ -4652,9 +4684,27 @@ mod handlers {
                 }
             }
         }
+        if matches!(
+            decision,
+            ReviewDecision::ApprovedPersistToProfile | ReviewDecision::Approved
+        ) && let Some(action) = persist_permissions.as_ref()
+            && let Err(err) = persist_permissions_for_profile(sess.as_ref(), action).await
+        {
+            let message = format!("Failed to update permissions profile: {err}");
+            tracing::warn!("{message}");
+            sess.send_event_raw(Event {
+                id: event_turn_id.clone(),
+                msg: EventMsg::Warning(WarningEvent { message }),
+            })
+            .await;
+        }
         match decision {
             ReviewDecision::Abort => {
                 sess.interrupt_task().await;
+            }
+            ReviewDecision::ApprovedPersistToProfile => {
+                sess.notify_approval(&approval_id, ReviewDecision::Approved)
+                    .await;
             }
             other => sess.notify_approval(&approval_id, other).await,
         }
@@ -4681,7 +4731,19 @@ mod handlers {
         sess: &Arc<Session>,
         id: String,
         response: RequestPermissionsResponse,
+        persist_permissions: Option<PersistPermissionProfileAction>,
     ) {
+        if let Some(action) = persist_permissions.as_ref()
+            && let Err(err) = persist_permissions_for_profile(sess.as_ref(), action).await
+        {
+            let message = format!("Failed to update permissions profile: {err}");
+            tracing::warn!("{message}");
+            sess.send_event_raw(Event {
+                id: id.clone(),
+                msg: EventMsg::Warning(WarningEvent { message }),
+            })
+            .await;
+        }
         sess.notify_request_permissions_response(&id, response)
             .await;
     }

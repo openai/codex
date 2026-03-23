@@ -392,7 +392,9 @@ impl NetworkApprovalService {
 
         let mut cache_session_deny = false;
         let resolved = match approval_decision {
-            ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
+            ReviewDecision::Approved
+            | ReviewDecision::ApprovedPersistToProfile
+            | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
                 PendingApprovalDecision::AllowOnce
             }
             ReviewDecision::ApprovedForSession => PendingApprovalDecision::AllowForSession,

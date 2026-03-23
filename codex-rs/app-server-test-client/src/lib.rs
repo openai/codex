@@ -1921,6 +1921,7 @@ impl CodexClient {
             proposed_execpolicy_amendment,
             proposed_network_policy_amendments,
             available_decisions,
+            permissions_profile_persistence: _,
         } = params;
 
         println!(

@@ -1681,6 +1681,7 @@ mod tests {
                 }),
                 macos: None,
             }),
+            permissions_profile_persistence: None,
             skill_metadata: None,
             proposed_execpolicy_amendment: None,
             proposed_network_policy_amendments: None,
@@ -1706,6 +1707,7 @@ mod tests {
             cwd: None,
             command_actions: None,
             additional_permissions: None,
+            permissions_profile_persistence: None,
             skill_metadata: Some(v2::CommandExecutionRequestApprovalSkillMetadata {
                 path_to_skills_md: PathBuf::from("/tmp/SKILLS.md"),
             }),

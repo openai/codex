@@ -1237,6 +1237,11 @@ fn exec_approval_request_from_params(
             .network_approval_context
             .and_then(convert_via_json),
         additional_permissions: params.additional_permissions.and_then(convert_via_json),
+        permissions_profile_persistence: params.permissions_profile_persistence.map(|target| {
+            codex_protocol::request_permissions::PermissionProfilePersistence {
+                profile_name: target.profile_name,
+            }
+        }),
         turn_id: params.turn_id,
         approval_id: params.approval_id,
         proposed_execpolicy_amendment: params
@@ -1264,6 +1269,9 @@ fn exec_approval_request_from_params(
                     }
                     codex_app_server_protocol::CommandExecutionApprovalDecision::AcceptForSession => {
                         codex_protocol::protocol::ReviewDecision::ApprovedForSession
+                    }
+                    codex_app_server_protocol::CommandExecutionApprovalDecision::AcceptAndPersist => {
+                        codex_protocol::protocol::ReviewDecision::ApprovedPersistToProfile
                     }
                     codex_app_server_protocol::CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
                         execpolicy_amendment,
@@ -1400,6 +1408,11 @@ fn request_permissions_from_params(
             serde_json::to_value(params.permissions).unwrap_or(serde_json::Value::Null),
         )
         .unwrap_or_default(),
+        permissions_profile_persistence: params.permissions_profile_persistence.map(|target| {
+            codex_protocol::request_permissions::PermissionProfilePersistence {
+                profile_name: target.profile_name,
+            }
+        }),
     }
 }
 
@@ -3915,6 +3928,7 @@ impl ChatWidget {
             available_decisions,
             network_approval_context: ev.network_approval_context,
             additional_permissions: ev.additional_permissions,
+            permissions_profile_persistence: ev.permissions_profile_persistence,
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
@@ -3999,6 +4013,7 @@ impl ChatWidget {
             call_id: ev.call_id,
             reason: ev.reason,
             permissions: ev.permissions,
+            permissions_profile_persistence: ev.permissions_profile_persistence,
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);

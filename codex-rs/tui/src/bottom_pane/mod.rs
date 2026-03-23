@@ -1296,6 +1296,7 @@ mod tests {
             ],
             network_approval_context: None,
             additional_permissions: None,
+            permissions_profile_persistence: None,
         }
     }
 

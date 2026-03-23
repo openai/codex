@@ -14,6 +14,7 @@ use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::PersistPermissionProfileAction;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::SandboxPolicy;
@@ -68,6 +69,7 @@ pub(crate) enum AppCommandView<'a> {
         id: &'a str,
         turn_id: &'a Option<String>,
         decision: &'a ReviewDecision,
+        persist_permissions: &'a Option<PersistPermissionProfileAction>,
     },
     PatchApproval {
         id: &'a str,
@@ -87,6 +89,7 @@ pub(crate) enum AppCommandView<'a> {
     RequestPermissionsResponse {
         id: &'a str,
         response: &'a RequestPermissionsResponse,
+        persist_permissions: &'a Option<PersistPermissionProfileAction>,
     },
     ReloadUserConfig,
     ListSkills {
@@ -203,11 +206,13 @@ impl AppCommand {
         id: String,
         turn_id: Option<String>,
         decision: ReviewDecision,
+        persist_permissions: Option<PersistPermissionProfileAction>,
     ) -> Self {
         Self(Op::ExecApproval {
             id,
             turn_id,
             decision,
+            persist_permissions,
         })
     }
 
@@ -238,8 +243,13 @@ impl AppCommand {
     pub(crate) fn request_permissions_response(
         id: String,
         response: RequestPermissionsResponse,
+        persist_permissions: Option<PersistPermissionProfileAction>,
     ) -> Self {
-        Self(Op::RequestPermissionsResponse { id, response })
+        Self(Op::RequestPermissionsResponse {
+            id,
+            response,
+            persist_permissions,
+        })
     }
 
     pub(crate) fn reload_user_config() -> Self {
@@ -353,10 +363,12 @@ impl AppCommand {
                 id,
                 turn_id,
                 decision,
+                persist_permissions,
             } => AppCommandView::ExecApproval {
                 id,
                 turn_id,
                 decision,
+                persist_permissions,
             },
             Op::PatchApproval { id, decision } => AppCommandView::PatchApproval { id, decision },
             Op::ResolveElicitation {
@@ -375,9 +387,15 @@ impl AppCommand {
             Op::UserInputAnswer { id, response } => {
                 AppCommandView::UserInputAnswer { id, response }
             }
-            Op::RequestPermissionsResponse { id, response } => {
-                AppCommandView::RequestPermissionsResponse { id, response }
-            }
+            Op::RequestPermissionsResponse {
+                id,
+                response,
+                persist_permissions,
+            } => AppCommandView::RequestPermissionsResponse {
+                id,
+                response,
+                persist_permissions,
+            },
             Op::ReloadUserConfig => AppCommandView::ReloadUserConfig,
             Op::ListSkills { cwds, force_reload } => AppCommandView::ListSkills {
                 cwds,

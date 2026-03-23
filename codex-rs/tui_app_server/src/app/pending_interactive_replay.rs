@@ -627,6 +627,7 @@ mod tests {
                 cwd: Some(PathBuf::from("/tmp")),
                 command_actions: None,
                 additional_permissions: None,
+                permissions_profile_persistence: None,
                 skill_metadata: None,
                 proposed_execpolicy_amendment: None,
                 proposed_network_policy_amendments: None,
@@ -761,6 +762,7 @@ mod tests {
             id: "approval-1".to_string(),
             turn_id: Some("turn-1".to_string()),
             decision: ReviewDecision::Approved,
+            persist_permissions: None,
         });
 
         let snapshot = store.snapshot();
@@ -912,6 +914,7 @@ mod tests {
             id: "call-1".to_string(),
             turn_id: Some("turn-1".to_string()),
             decision: ReviewDecision::Approved,
+            persist_permissions: None,
         });
 
         assert_eq!(store.has_pending_thread_approvals(), false);

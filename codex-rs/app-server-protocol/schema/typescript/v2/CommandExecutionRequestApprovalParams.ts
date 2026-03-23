@@ -8,6 +8,7 @@ import type { CommandExecutionRequestApprovalSkillMetadata } from "./CommandExec
 import type { ExecPolicyAmendment } from "./ExecPolicyAmendment";
 import type { NetworkApprovalContext } from "./NetworkApprovalContext";
 import type { NetworkPolicyAmendment } from "./NetworkPolicyAmendment";
+import type { PermissionProfilePersistence } from "./PermissionProfilePersistence";
 
 export type CommandExecutionRequestApprovalParams = { threadId: string, turnId: string, itemId: string, 
 /**
@@ -44,6 +45,11 @@ commandActions?: Array<CommandAction> | null,
  * Optional additional permissions requested for this command.
  */
 additionalPermissions?: AdditionalPermissionProfile | null, 
+/**
+ * Optional named permissions profile that can persist the requested
+ * filesystem access.
+ */
+permissionsProfilePersistence?: PermissionProfilePersistence | null, 
 /**
  * Optional skill metadata when the approval was triggered by a skill script.
  */

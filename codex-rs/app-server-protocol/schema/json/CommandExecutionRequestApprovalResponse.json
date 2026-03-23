@@ -18,6 +18,13 @@
           "type": "string"
         },
         {
+          "description": "User approved the command and wants to persist the filesystem access in the active named permissions profile.",
+          "enum": [
+            "acceptAndPersist"
+          ],
+          "type": "string"
+        },
+        {
           "additionalProperties": false,
           "description": "User approved the command, and wants to apply the proposed execpolicy amendment so future matching commands can run without prompting.",
           "properties": {

@@ -200,6 +200,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
                         }),
                         ..RequestPermissionProfile::default()
                     },
+                    permissions_profile_persistence: None,
                 },
                 &cancel_token,
             )
@@ -234,6 +235,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
         Op::RequestPermissionsResponse {
             id: call_id,
             response: expected_response,
+            persist_permissions: None,
         }
     );
 }
@@ -286,6 +288,7 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
                     proposed_execpolicy_amendment: None,
                     proposed_network_policy_amendments: None,
                     additional_permissions: None,
+                    permissions_profile_persistence: None,
                     skill_metadata: None,
                     available_decisions: Some(vec![
                         ReviewDecision::Approved,
@@ -343,6 +346,7 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
             id: "callback-approval-1".to_string(),
             turn_id: Some("child-turn-1".to_string()),
             decision: ReviewDecision::Abort,
+            persist_permissions: None,
         }
     );
 }

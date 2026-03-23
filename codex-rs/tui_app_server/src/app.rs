@@ -172,6 +172,9 @@ fn command_execution_decision_to_review_decision(
         codex_app_server_protocol::CommandExecutionApprovalDecision::AcceptForSession => {
             codex_protocol::protocol::ReviewDecision::ApprovedForSession
         }
+        codex_app_server_protocol::CommandExecutionApprovalDecision::AcceptAndPersist => {
+            codex_protocol::protocol::ReviewDecision::ApprovedPersistToProfile
+        }
         codex_app_server_protocol::CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
             execpolicy_amendment,
         } => codex_protocol::protocol::ReviewDecision::ApprovedExecpolicyAmendment {
@@ -208,12 +211,16 @@ fn default_exec_approval_decisions(
         &[codex_protocol::approvals::NetworkPolicyAmendment],
     >,
     additional_permissions: Option<&codex_protocol::models::PermissionProfile>,
+    permissions_profile_persistence: Option<
+        &codex_protocol::request_permissions::PermissionProfilePersistence,
+    >,
 ) -> Vec<codex_protocol::protocol::ReviewDecision> {
     ExecApprovalRequestEvent::default_available_decisions(
         network_approval_context,
         proposed_execpolicy_amendment,
         proposed_network_policy_amendments,
         additional_permissions,
+        permissions_profile_persistence,
     )
 }
 
@@ -1632,6 +1639,14 @@ impl App {
                             .map(codex_app_server_protocol::NetworkPolicyAmendment::into_core)
                             .collect::<Vec<_>>()
                     });
+                let permissions_profile_persistence = params
+                    .permissions_profile_persistence
+                    .clone()
+                    .map(|target| {
+                        codex_protocol::request_permissions::PermissionProfilePersistence {
+                            profile_name: target.profile_name,
+                        }
+                    });
                 Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Exec {
                     thread_id,
                     thread_label,
@@ -1656,10 +1671,12 @@ impl App {
                                 proposed_execpolicy_amendment.as_ref(),
                                 proposed_network_policy_amendments.as_deref(),
                                 additional_permissions.as_ref(),
+                                permissions_profile_persistence.as_ref(),
                             )
                         }),
                     network_approval_context,
                     additional_permissions,
+                    permissions_profile_persistence,
                 }))
             }
             ServerRequest::FileChangeRequestApproval { params, .. } => Some(
@@ -1713,6 +1730,14 @@ impl App {
                         serde_json::to_value(&params.permissions).ok()?,
                     )
                     .ok()?,
+                    permissions_profile_persistence: params
+                        .permissions_profile_persistence
+                        .clone()
+                        .map(|target| {
+                            codex_protocol::request_permissions::PermissionProfilePersistence {
+                                profile_name: target.profile_name,
+                            }
+                        }),
                 }),
             ),
             _ => None,
@@ -5165,6 +5190,7 @@ mod tests {
     use crate::multi_agents::AgentPickerThreadEntry;
     use assert_matches::assert_matches;
 
+    use codex_app_server_protocol::AdditionalFileSystemPermissions;
     use codex_app_server_protocol::AdditionalNetworkPermissions;
     use codex_app_server_protocol::AdditionalPermissionProfile;
     use codex_app_server_protocol::AgentMessageDeltaNotification;
@@ -5174,6 +5200,7 @@ mod tests {
     use codex_app_server_protocol::NetworkApprovalProtocol as AppServerNetworkApprovalProtocol;
     use codex_app_server_protocol::NetworkPolicyAmendment as AppServerNetworkPolicyAmendment;
     use codex_app_server_protocol::NetworkPolicyRuleAction as AppServerNetworkPolicyRuleAction;
+    use codex_app_server_protocol::PermissionProfilePersistence as AppServerPermissionProfilePersistence;
     use codex_app_server_protocol::RequestId as AppServerRequestId;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::ServerRequest;
@@ -5208,6 +5235,7 @@ mod tests {
     use codex_protocol::protocol::McpAuthStatus;
     use codex_protocol::protocol::NetworkApprovalContext;
     use codex_protocol::protocol::NetworkApprovalProtocol;
+    use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::RolloutLine;
     use codex_protocol::protocol::SandboxPolicy;
@@ -5216,6 +5244,7 @@ mod tests {
     use codex_protocol::protocol::TurnContextItem;
     use codex_protocol::user_input::TextElement;
     use codex_protocol::user_input::UserInput;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
@@ -7060,6 +7089,58 @@ guardian_approval = true
     }
 
     #[tokio::test]
+    async fn inactive_thread_exec_approval_includes_persist_decision_in_fallbacks() {
+        let app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let mut request = exec_approval_request(thread_id, "turn-approval", "call-approval", None);
+        let ServerRequest::CommandExecutionRequestApproval { params, .. } = &mut request else {
+            panic!("expected exec approval request");
+        };
+        params.additional_permissions = Some(AdditionalPermissionProfile {
+            network: None,
+            file_system: Some(AdditionalFileSystemPermissions {
+                read: None,
+                write: Some(vec![
+                    AbsolutePathBuf::try_from(PathBuf::from("/tmp/persist-me"))
+                        .expect("absolute path"),
+                ]),
+            }),
+            macos: None,
+        });
+        params.permissions_profile_persistence = Some(AppServerPermissionProfilePersistence {
+            profile_name: "default".to_string(),
+        });
+
+        let Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Exec {
+            available_decisions,
+            permissions_profile_persistence,
+            ..
+        })) = app
+            .interactive_request_for_thread_request(thread_id, &request)
+            .await
+        else {
+            panic!("expected exec approval request");
+        };
+
+        assert_eq!(
+            permissions_profile_persistence,
+            Some(
+                codex_protocol::request_permissions::PermissionProfilePersistence {
+                    profile_name: "default".to_string(),
+                }
+            )
+        );
+        assert_eq!(
+            available_decisions,
+            vec![
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedPersistToProfile,
+                ReviewDecision::Abort,
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn inactive_thread_approval_badge_clears_after_turn_completion_notification() -> Result<()>
     {
         let mut app = make_test_app().await;
@@ -7762,6 +7843,7 @@ guardian_approval = true
                 cwd: Some(PathBuf::from("/tmp/project")),
                 command_actions: None,
                 additional_permissions: None,
+                permissions_profile_persistence: None,
                 skill_metadata: None,
                 proposed_execpolicy_amendment: None,
                 proposed_network_policy_amendments: None,

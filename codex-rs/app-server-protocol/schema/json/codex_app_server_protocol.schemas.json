@@ -1623,6 +1623,13 @@
           "type": "string"
         },
         {
+          "description": "User approved the command and wants to persist the filesystem access in the active named permissions profile.",
+          "enum": [
+            "acceptAndPersist"
+          ],
+          "type": "string"
+        },
+        {
           "additionalProperties": false,
           "description": "User approved the command, and wants to apply the proposed execpolicy amendment so future matching commands can run without prompting.",
           "properties": {
@@ -1732,6 +1739,17 @@
             }
           ],
           "description": "Optional context for a managed-network approval prompt."
+        },
+        "permissionsProfilePersistence": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfilePersistence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional named permissions profile that can persist the requested filesystem access."
         },
         "proposedExecpolicyAmendment": {
           "description": "Optional proposed execpolicy amendment to allow similar commands without prompting.",
@@ -3235,6 +3253,17 @@
       ],
       "type": "string"
     },
+    "PermissionProfilePersistence": {
+      "properties": {
+        "profileName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profileName"
+      ],
+      "type": "object"
+    },
     "PermissionsRequestApprovalParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -3243,6 +3272,16 @@
         },
         "permissions": {
           "$ref": "#/definitions/RequestPermissionProfile"
+        },
+        "permissionsProfilePersistence": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfilePersistence"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "reason": {
           "type": [
@@ -3271,6 +3310,9 @@
       "properties": {
         "permissions": {
           "$ref": "#/definitions/GrantedPermissionProfile"
+        },
+        "persistToProfile": {
+          "type": "boolean"
         },
         "scope": {
           "allOf": [
@@ -3365,6 +3407,13 @@
           "description": "User has approved this request and wants future prompts in the same session-scoped approval cache to be automatically approved for the remainder of the session.",
           "enum": [
             "approved_for_session"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "User has approved this request and wants the filesystem permissions to be persisted into the active named permissions profile.",
+          "enum": [
+            "approved_persist_to_profile"
           ],
           "type": "string"
         },

@@ -126,12 +126,14 @@ use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::PersistPermissionProfileAction;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewOutputEvent;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
+use codex_protocol::request_permissions::PermissionProfilePersistence as CorePermissionProfilePersistence;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse as CoreRequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
@@ -608,6 +610,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 proposed_execpolicy_amendment,
                 proposed_network_policy_amendments,
                 additional_permissions,
+                permissions_profile_persistence,
                 skill_metadata,
                 parsed_cmd,
                 ..
@@ -678,8 +681,13 @@ pub(crate) async fn apply_bespoke_event_handling(
                                 .map(V2NetworkPolicyAmendment::from)
                                 .collect()
                         });
-                    let additional_permissions =
-                        additional_permissions.map(V2AdditionalPermissionProfile::from);
+                    let additional_permissions_for_request = additional_permissions
+                        .clone()
+                        .map(V2AdditionalPermissionProfile::from);
+                    let permissions_profile_persistence_for_request =
+                        permissions_profile_persistence
+                            .clone()
+                            .map(codex_app_server_protocol::PermissionProfilePersistence::from);
                     let skill_metadata =
                         skill_metadata.map(CommandExecutionRequestApprovalSkillMetadata::from);
 
@@ -693,7 +701,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                         command,
                         cwd,
                         command_actions,
-                        additional_permissions,
+                        additional_permissions: additional_permissions_for_request,
+                        permissions_profile_persistence:
+                            permissions_profile_persistence_for_request,
                         skill_metadata,
                         proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
                         proposed_network_policy_amendments: proposed_network_policy_amendments_v2,
@@ -704,6 +714,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                             params,
                         ))
                         .await;
+                    let additional_permissions = additional_permissions.and_then(|permissions| {
+                        serde_json::to_value(permissions)
+                            .ok()
+                            .and_then(|value| serde_json::from_value(value).ok())
+                    });
                     tokio::spawn(async move {
                         on_command_execution_request_approval_response(
                             event_turn_id,
@@ -711,6 +726,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                             approval_id,
                             call_id,
                             completion_item,
+                            additional_permissions,
+                            permissions_profile_persistence,
                             pending_request_id,
                             rx,
                             conversation,
@@ -859,6 +876,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                     item_id: request.call_id.clone(),
                     reason: request.reason,
                     permissions: request.permissions.into(),
+                    permissions_profile_persistence: request
+                        .permissions_profile_persistence
+                        .clone()
+                        .map(codex_app_server_protocol::PermissionProfilePersistence::from),
                 };
                 let (pending_request_id, rx) = outgoing
                     .send_request(ServerRequestPayload::PermissionsRequestApproval(params))
@@ -867,6 +888,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     on_request_permissions_response(
                         request.call_id,
                         requested_permissions,
+                        request.permissions_profile_persistence,
                         pending_request_id,
                         rx,
                         conversation,
@@ -888,6 +910,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .submit(Op::RequestPermissionsResponse {
                         id: request.call_id,
                         response: empty,
+                        persist_permissions: None,
                     })
                     .await
                 {
@@ -2287,6 +2310,7 @@ async fn on_exec_approval_response(
             id: call_id,
             turn_id: Some(turn_id),
             decision: response.decision,
+            persist_permissions: None,
         })
         .await
     {
@@ -2445,6 +2469,7 @@ fn mcp_server_elicitation_response_from_client_result(
 async fn on_request_permissions_response(
     call_id: String,
     requested_permissions: CoreRequestPermissionProfile,
+    permissions_profile_persistence: Option<CorePermissionProfilePersistence>,
     pending_request_id: RequestId,
     receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
@@ -2454,9 +2479,11 @@ async fn on_request_permissions_response(
     let response = receiver.await;
     resolve_server_request_on_thread_listener(&thread_state, pending_request_id).await;
     drop(request_permissions_guard);
-    let Some(response) =
-        request_permissions_response_from_client_result(requested_permissions, response)
-    else {
+    let Some((response, persist_permissions)) = request_permissions_response_from_client_result(
+        requested_permissions,
+        permissions_profile_persistence,
+        response,
+    ) else {
         return;
     };
 
@@ -2464,6 +2491,7 @@ async fn on_request_permissions_response(
         .submit(Op::RequestPermissionsResponse {
             id: call_id,
             response,
+            persist_permissions,
         })
         .await
     {
@@ -2473,24 +2501,34 @@ async fn on_request_permissions_response(
 
 fn request_permissions_response_from_client_result(
     requested_permissions: CoreRequestPermissionProfile,
+    permissions_profile_persistence: Option<CorePermissionProfilePersistence>,
     response: std::result::Result<ClientRequestResult, oneshot::error::RecvError>,
-) -> Option<CoreRequestPermissionsResponse> {
+) -> Option<(
+    CoreRequestPermissionsResponse,
+    Option<PersistPermissionProfileAction>,
+)> {
     let value = match response {
         Ok(Ok(value)) => value,
         Ok(Err(err)) if is_turn_transition_server_request_error(&err) => return None,
         Ok(Err(err)) => {
             error!("request failed with client error: {err:?}");
-            return Some(CoreRequestPermissionsResponse {
-                permissions: Default::default(),
-                scope: CorePermissionGrantScope::Turn,
-            });
+            return Some((
+                CoreRequestPermissionsResponse {
+                    permissions: Default::default(),
+                    scope: CorePermissionGrantScope::Turn,
+                },
+                None,
+            ));
         }
         Err(err) => {
             error!("request failed: {err:?}");
-            return Some(CoreRequestPermissionsResponse {
-                permissions: Default::default(),
-                scope: CorePermissionGrantScope::Turn,
-            });
+            return Some((
+                CoreRequestPermissionsResponse {
+                    permissions: Default::default(),
+                    scope: CorePermissionGrantScope::Turn,
+                },
+                None,
+            ));
         }
     };
 
@@ -2500,16 +2538,26 @@ fn request_permissions_response_from_client_result(
             PermissionsRequestApprovalResponse {
                 permissions: V2GrantedPermissionProfile::default(),
                 scope: codex_app_server_protocol::PermissionGrantScope::Turn,
+                persist_to_profile: false,
             }
         });
-    Some(CoreRequestPermissionsResponse {
-        permissions: intersect_permission_profiles(
-            requested_permissions.into(),
-            response.permissions.into(),
-        )
-        .into(),
-        scope: response.scope.to_core(),
-    })
+    let permissions: codex_protocol::models::PermissionProfile =
+        intersect_permission_profiles(requested_permissions.into(), response.permissions.into());
+    let persist_permissions = if response.persist_to_profile {
+        permissions_profile_persistence.map(|target| PersistPermissionProfileAction {
+            profile_name: target.profile_name,
+            permissions: permissions.clone(),
+        })
+    } else {
+        None
+    };
+    Some((
+        CoreRequestPermissionsResponse {
+            permissions: permissions.into(),
+            scope: response.scope.to_core(),
+        },
+        persist_permissions,
+    ))
 }
 
 const REVIEW_FALLBACK_MESSAGE: &str = "Reviewer failed to output a response.";
@@ -2623,6 +2671,8 @@ async fn on_command_execution_request_approval_response(
     approval_id: Option<String>,
     item_id: String,
     completion_item: Option<CommandExecutionCompletionItem>,
+    additional_permissions: Option<codex_protocol::models::PermissionProfile>,
+    permissions_profile_persistence: Option<CorePermissionProfilePersistence>,
     pending_request_id: RequestId,
     receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
@@ -2649,6 +2699,9 @@ async fn on_command_execution_request_approval_response(
                 CommandExecutionApprovalDecision::Accept => (ReviewDecision::Approved, None),
                 CommandExecutionApprovalDecision::AcceptForSession => {
                     (ReviewDecision::ApprovedForSession, None)
+                }
+                CommandExecutionApprovalDecision::AcceptAndPersist => {
+                    (ReviewDecision::ApprovedPersistToProfile, None)
                 }
                 CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
                     execpolicy_amendment,
@@ -2728,11 +2781,23 @@ async fn on_command_execution_request_approval_response(
         .await;
     }
 
+    let persist_permissions = if matches!(decision, ReviewDecision::ApprovedPersistToProfile) {
+        permissions_profile_persistence.and_then(|target| {
+            additional_permissions.map(|permissions| PersistPermissionProfileAction {
+                profile_name: target.profile_name,
+                permissions,
+            })
+        })
+    } else {
+        None
+    };
+
     if let Err(err) = conversation
         .submit(Op::ExecApproval {
             id: approval_id.unwrap_or_else(|| item_id.clone()),
             turn_id: Some(event_turn_id),
             decision,
+            persist_permissions,
         })
         .await
     {
@@ -3058,6 +3123,7 @@ mod tests {
 
         let response = request_permissions_response_from_client_result(
             CoreRequestPermissionProfile::default(),
+            None,
             Ok(Err(error)),
         );
 
@@ -3148,6 +3214,7 @@ mod tests {
         for (granted_permissions, expected_permissions) in cases {
             let response = request_permissions_response_from_client_result(
                 requested_permissions.clone(),
+                None,
                 Ok(Ok(serde_json::json!({
                     "permissions": granted_permissions,
                 }))),
@@ -3156,10 +3223,13 @@ mod tests {
 
             assert_eq!(
                 response,
-                CoreRequestPermissionsResponse {
-                    permissions: expected_permissions,
-                    scope: CorePermissionGrantScope::Turn,
-                }
+                (
+                    CoreRequestPermissionsResponse {
+                        permissions: expected_permissions,
+                        scope: CorePermissionGrantScope::Turn,
+                    },
+                    None,
+                )
             );
         }
     }
@@ -3168,6 +3238,7 @@ mod tests {
     fn request_permissions_response_preserves_session_scope() {
         let response = request_permissions_response_from_client_result(
             CoreRequestPermissionProfile::default(),
+            None,
             Ok(Ok(serde_json::json!({
                 "scope": "session",
                 "permissions": {},
@@ -3177,10 +3248,13 @@ mod tests {
 
         assert_eq!(
             response,
-            CoreRequestPermissionsResponse {
-                permissions: CoreRequestPermissionProfile::default(),
-                scope: CorePermissionGrantScope::Session,
-            }
+            (
+                CoreRequestPermissionsResponse {
+                    permissions: CoreRequestPermissionProfile::default(),
+                    scope: CorePermissionGrantScope::Session,
+                },
+                None,
+            )
         );
     }
 

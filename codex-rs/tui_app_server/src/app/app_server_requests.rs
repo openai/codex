@@ -149,22 +149,27 @@ impl PendingAppServerRequests {
                     })
                 })
                 .transpose()?,
-            AppCommandView::RequestPermissionsResponse { id, response } => self
+            AppCommandView::RequestPermissionsResponse {
+                id,
+                response,
+                persist_permissions,
+            } => self
                 .permissions_approvals
                 .remove(id)
                 .map(|request_id| {
                     Ok::<AppServerRequestResolution, String>(AppServerRequestResolution {
                         request_id,
                         result: serde_json::to_value(PermissionsRequestApprovalResponse {
-                            permissions: serde_json::from_value::<GrantedPermissionProfile>(
-                                serde_json::to_value(&response.permissions).map_err(|err| {
-                                    format!("failed to encode granted permissions: {err}")
-                                })?,
-                            )
-                            .map_err(|err| {
-                                format!("failed to decode granted permissions for app-server: {err}")
-                            })?,
+                            permissions: GrantedPermissionProfile {
+                                network: response.permissions.network.clone().map(Into::into),
+                                file_system: response
+                                    .permissions
+                                    .file_system
+                                    .clone()
+                                    .map(Into::into),
+                            },
                             scope: response.scope.into(),
+                            persist_to_profile: persist_permissions.is_some(),
                         })
                         .map_err(|err| {
                             format!("failed to serialize permissions approval response: {err}")
@@ -267,6 +272,10 @@ fn file_change_decision(decision: &ReviewDecision) -> Result<FileChangeApprovalD
         ReviewDecision::ApprovedForSession => Ok(FileChangeApprovalDecision::AcceptForSession),
         ReviewDecision::Denied => Ok(FileChangeApprovalDecision::Decline),
         ReviewDecision::Abort => Ok(FileChangeApprovalDecision::Cancel),
+        ReviewDecision::ApprovedPersistToProfile => Err(
+            "permission profile persistence is not a valid file change approval decision"
+                .to_string(),
+        ),
         ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
             Err("execpolicy amendment is not a valid file change approval decision".to_string())
         }
@@ -297,6 +306,7 @@ mod tests {
     use codex_protocol::approvals::ExecPolicyAmendment;
     use codex_protocol::mcp::RequestId as McpRequestId;
     use codex_protocol::protocol::Op;
+    use codex_protocol::protocol::PersistPermissionProfileAction;
     use codex_protocol::protocol::ReviewDecision;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -318,6 +328,7 @@ mod tests {
                 cwd: None,
                 command_actions: None,
                 additional_permissions: None,
+                permissions_profile_persistence: None,
                 skill_metadata: None,
                 proposed_execpolicy_amendment: None,
                 proposed_network_policy_amendments: None,
@@ -332,6 +343,7 @@ mod tests {
                 id: "approval-1".to_string(),
                 turn_id: None,
                 decision: ReviewDecision::Approved,
+                persist_permissions: None,
             })
             .expect("resolution should serialize")
             .expect("request should be pending");
@@ -356,6 +368,7 @@ mod tests {
                         "network": { "enabled": null }
                     }))
                     .expect("valid permissions"),
+                    permissions_profile_persistence: None,
                 },
             }),
             None
@@ -383,6 +396,7 @@ mod tests {
                     .expect("valid permissions"),
                     scope: codex_protocol::request_permissions::PermissionGrantScope::Session,
                 },
+                persist_permissions: None,
             })
             .expect("permissions response should serialize")
             .expect("permissions request should be pending");
@@ -396,6 +410,7 @@ mod tests {
                 }))
                 .expect("valid permissions"),
                 scope: PermissionGrantScope::Session,
+                persist_to_profile: false,
             }
         );
 
@@ -426,6 +441,72 @@ mod tests {
                     },
                 ))
                 .collect(),
+            }
+        );
+    }
+
+    #[test]
+    fn resolves_persisted_permissions_through_app_server_request_id() {
+        let mut pending = PendingAppServerRequests::default();
+
+        assert_eq!(
+            pending.note_server_request(&ServerRequest::PermissionsRequestApproval {
+                request_id: AppServerRequestId::Integer(9),
+                params: PermissionsRequestApprovalParams {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "perm-2".to_string(),
+                    reason: None,
+                    permissions: serde_json::from_value(json!({
+                        "fileSystem": {
+                            "write": ["/tmp"]
+                        }
+                    }))
+                    .expect("valid permissions"),
+                    permissions_profile_persistence: None,
+                },
+            }),
+            None
+        );
+
+        let permissions = pending
+            .take_resolution(&Op::RequestPermissionsResponse {
+                id: "perm-2".to_string(),
+                response: codex_protocol::request_permissions::RequestPermissionsResponse {
+                    permissions: serde_json::from_value(json!({
+                        "file_system": {
+                            "write": ["/tmp"]
+                        }
+                    }))
+                    .expect("valid permissions"),
+                    scope: codex_protocol::request_permissions::PermissionGrantScope::Turn,
+                },
+                persist_permissions: Some(PersistPermissionProfileAction {
+                    profile_name: "default".to_string(),
+                    permissions: serde_json::from_value(json!({
+                        "file_system": {
+                            "write": ["/tmp"]
+                        }
+                    }))
+                    .expect("valid permissions"),
+                }),
+            })
+            .expect("permissions response should serialize")
+            .expect("permissions request should be pending");
+
+        assert_eq!(permissions.request_id, AppServerRequestId::Integer(9));
+        assert_eq!(
+            serde_json::from_value::<PermissionsRequestApprovalResponse>(permissions.result)
+                .expect("permissions response should decode"),
+            PermissionsRequestApprovalResponse {
+                permissions: serde_json::from_value(json!({
+                    "fileSystem": {
+                        "write": ["/tmp"]
+                    }
+                }))
+                .expect("valid permissions"),
+                scope: PermissionGrantScope::Turn,
+                persist_to_profile: true,
             }
         );
     }

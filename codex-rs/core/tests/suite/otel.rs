@@ -1159,6 +1159,7 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::Approved,
+            persist_permissions: None,
         })
         .await
         .unwrap();
@@ -1225,6 +1226,7 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::ApprovedForSession,
+            persist_permissions: None,
         })
         .await
         .unwrap();
@@ -1291,6 +1293,7 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::Approved,
+            persist_permissions: None,
         })
         .await
         .unwrap();
@@ -1357,6 +1360,7 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::Denied,
+            persist_permissions: None,
         })
         .await
         .unwrap();
@@ -1423,6 +1427,7 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::ApprovedForSession,
+            persist_permissions: None,
         })
         .await
         .unwrap();
@@ -1490,6 +1495,7 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::Denied,
+            persist_permissions: None,
         })
         .await
         .unwrap();

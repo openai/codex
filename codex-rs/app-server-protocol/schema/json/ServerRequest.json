@@ -302,6 +302,13 @@
           "type": "string"
         },
         {
+          "description": "User approved the command and wants to persist the filesystem access in the active named permissions profile.",
+          "enum": [
+            "acceptAndPersist"
+          ],
+          "type": "string"
+        },
+        {
           "additionalProperties": false,
           "description": "User approved the command, and wants to apply the proposed execpolicy amendment so future matching commands can run without prompting.",
           "properties": {
@@ -410,6 +417,17 @@
             }
           ],
           "description": "Optional context for a managed-network approval prompt."
+        },
+        "permissionsProfilePersistence": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfilePersistence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional named permissions profile that can persist the requested filesystem access."
         },
         "proposedExecpolicyAmendment": {
           "description": "Optional proposed execpolicy amendment to allow similar commands without prompting.",
@@ -1443,6 +1461,17 @@
         }
       ]
     },
+    "PermissionProfilePersistence": {
+      "properties": {
+        "profileName": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profileName"
+      ],
+      "type": "object"
+    },
     "PermissionsRequestApprovalParams": {
       "properties": {
         "itemId": {
@@ -1450,6 +1479,16 @@
         },
         "permissions": {
           "$ref": "#/definitions/RequestPermissionProfile"
+        },
+        "permissionsProfilePersistence": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PermissionProfilePersistence"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "reason": {
           "type": [
