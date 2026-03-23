@@ -3,7 +3,7 @@ use crate::truncate;
 use crate::truncate::TruncationPolicy;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use codex_git::GhostCommit;
+use codex_git_utils::GhostCommit;
 use codex_protocol::AgentPath;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;

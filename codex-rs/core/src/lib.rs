@@ -41,7 +41,6 @@ mod exec_policy;
 pub mod external_agent_config;
 mod file_watcher;
 mod flags;
-pub mod git_info;
 mod guardian;
 mod hook_runtime;
 pub mod instructions;

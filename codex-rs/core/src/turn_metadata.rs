@@ -8,11 +8,11 @@ use std::sync::RwLock;
 use serde::Serialize;
 use tokio::task::JoinHandle;
 
-use crate::git_info::get_git_remote_urls_assume_git_repo;
-use crate::git_info::get_git_repo_root;
-use crate::git_info::get_has_changes;
-use crate::git_info::get_head_commit_hash;
 use crate::sandbox_tags::sandbox_tag;
+use codex_git_utils::get_git_remote_urls_assume_git_repo;
+use codex_git_utils::get_git_repo_root;
+use codex_git_utils::get_has_changes;
+use codex_git_utils::get_head_commit_hash;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::SandboxPolicy;
 

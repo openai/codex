@@ -17,7 +17,7 @@ codex-utils-cargo-bin = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
-codex-git = { workspace = true }
+codex-git-utils = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

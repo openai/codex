@@ -50,7 +50,7 @@ members = [
     "v8-poc",
     "utils/absolute-path",
     "utils/cargo-bin",
-    "utils/git",
+    "git-utils",
     "utils/cache",
     "utils/image",
     "utils/json-to-toml",
@@ -117,7 +117,7 @@ codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
 codex-feedback = { path = "feedback" }
 codex-features = { path = "features" }
 codex-file-search = { path = "file-search" }
-codex-git = { path = "utils/git" }
+codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }

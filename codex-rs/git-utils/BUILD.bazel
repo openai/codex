@@ -2,5 +2,5 @@ load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
     name = "git",
-    crate_name = "codex_git",
+    crate_name = "codex_git_utils",
 )

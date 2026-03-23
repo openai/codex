@@ -4,15 +4,14 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::util::resolve_path;
-use codex_app_server_protocol::GitSha;
-use codex_protocol::protocol::GitInfo;
 use futures::future::join_all;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::process::Command;
 use tokio::time::Duration as TokioDuration;
 use tokio::time::timeout;
+use ts_rs::TS;
 
 /// Return `true` if the project folder specified by the `Config` is inside a
 /// Git repository.
@@ -38,9 +37,22 @@ pub fn get_git_repo_root(base_dir: &Path) -> Option<PathBuf> {
 /// Timeout for git commands to prevent freezing on large repositories
 const GIT_COMMAND_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
 
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
+pub struct GitInfo {
+    /// Current commit hash (SHA)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit_hash: Option<String>,
+    /// Current branch name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Repository URL (if available from remote)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository_url: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct GitDiffToRemote {
-    pub sha: GitSha,
+    pub sha: String,
     pub diff: String,
 }
 
@@ -445,9 +457,9 @@ async fn branch_remote_and_distance(
     cwd: &Path,
     branch: &str,
     remotes: &[String],
-) -> Option<(Option<GitSha>, usize)> {
+) -> Option<(Option<String>, usize)> {
     // Try to find the first remote ref that exists for this branch (origin prioritized by caller).
-    let mut found_remote_sha: Option<GitSha> = None;
+    let mut found_remote_sha: Option<String> = None;
     let mut found_remote_ref: Option<String> = None;
     for remote in remotes {
         let remote_ref = format!("refs/remotes/{remote}/{branch}");
@@ -466,7 +478,7 @@ async fn branch_remote_and_distance(
             // Mirror previous behavior and skip the entire branch on parse failure.
             return None;
         };
-        found_remote_sha = Some(GitSha::new(sha.trim()));
+        found_remote_sha = Some(sha.trim().to_string());
         found_remote_ref = Some(remote_ref);
         break;
     }
@@ -520,9 +532,9 @@ async fn branch_remote_and_distance(
 }
 
 // Finds the closest sha that exist on any of branches and also exists on any of the remotes.
-async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -> Option<GitSha> {
+async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -> Option<String> {
     // A sha and how many commits away from HEAD it is.
-    let mut closest_sha: Option<(GitSha, usize)> = None;
+    let mut closest_sha: Option<(String, usize)> = None;
     for branch in branches {
         let Some((maybe_remote_sha, distance)) =
             branch_remote_and_distance(cwd, branch, remotes).await
@@ -544,10 +556,9 @@ async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -
     closest_sha.map(|(sha, _)| sha)
 }
 
-async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
+async fn diff_against_sha(cwd: &Path, sha: &str) -> Option<String> {
     let output =
-        run_git_command_with_timeout(&["diff", "--no-textconv", "--no-ext-diff", &sha.0], cwd)
-            .await?;
+        run_git_command_with_timeout(&["diff", "--no-textconv", "--no-ext-diff", sha], cwd).await?;
     // 0 is success and no diff.
     // 1 is success but there is a diff.
     let exit_ok = output.status.code().is_some_and(|c| c == 0 || c == 1);
@@ -616,7 +627,14 @@ pub fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
         return None;
     }
 
-    let git_dir_path = canonicalize_or_raw(resolve_path(&repo_root, &PathBuf::from(git_dir_rel)));
+    let git_dir_path = canonicalize_or_raw({
+        let git_dir_rel = PathBuf::from(git_dir_rel);
+        if git_dir_rel.is_absolute() {
+            git_dir_rel
+        } else {
+            repo_root.join(git_dir_rel)
+        }
+    });
     let worktrees_dir = git_dir_path.parent()?;
     if worktrees_dir.file_name() != Some(OsStr::new("worktrees")) {
         return None;
@@ -691,5 +709,5 @@ pub async fn current_branch_name(cwd: &Path) -> Option<String> {
 }
 
 #[cfg(test)]
-#[path = "git_info_tests.rs"]
+#[path = "info_tests.rs"]
 mod tests;

@@ -346,7 +346,7 @@ async fn test_get_git_working_tree_state_clean_repo() {
     let state = git_diff_to_remote(&repo_path)
         .await
         .expect("Should collect working tree state");
-    assert_eq!(state.sha, GitSha::new(&remote_sha));
+    assert_eq!(state.sha, remote_sha);
     assert!(state.diff.is_empty());
 }
 
@@ -373,7 +373,7 @@ async fn test_get_git_working_tree_state_with_changes() {
     let state = git_diff_to_remote(&repo_path)
         .await
         .expect("Should collect working tree state");
-    assert_eq!(state.sha, GitSha::new(&remote_sha));
+    assert_eq!(state.sha, remote_sha);
     assert!(state.diff.contains("test.txt"));
     assert!(state.diff.contains("untracked.txt"));
 }
@@ -417,7 +417,7 @@ async fn test_get_git_working_tree_state_branch_fallback() {
     let state = git_diff_to_remote(&repo_path)
         .await
         .expect("Should collect working tree state");
-    assert_eq!(state.sha, GitSha::new(&remote_sha));
+    assert_eq!(state.sha, remote_sha);
 }
 
 #[test]
@@ -551,7 +551,7 @@ async fn test_get_git_working_tree_state_unpushed_commit() {
     let state = git_diff_to_remote(&repo_path)
         .await
         .expect("Should collect working tree state");
-    assert_eq!(state.sha, GitSha::new(&remote_sha));
+    assert_eq!(state.sha, remote_sha);
     assert!(state.diff.contains("updated"));
 }
 

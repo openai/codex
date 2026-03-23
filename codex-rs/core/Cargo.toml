@@ -41,7 +41,7 @@ codex-shell-command = { workspace = true }
 codex-skills = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-file-search = { workspace = true }
-codex-git = { workspace = true }
+codex-git-utils = { workspace = true }
 codex-hooks = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
