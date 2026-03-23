@@ -3537,16 +3537,14 @@ impl Session {
             }
         }
         if turn_context.apps_enabled() {
-            let accessible_connectors = {
-                let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
-                connectors::with_app_enabled_state(
-                    connectors::accessible_connectors_from_mcp_tools(
-                        &mcp_connection_manager.list_all_tools().await,
-                    ),
+            let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
+            let accessible_and_enabled_connectors =
+                connectors::list_accessible_and_enabled_connectors_from_manager(
+                    &mcp_connection_manager,
                     &turn_context.config,
                 )
-            };
-            if let Some(apps_section) = render_apps_section(&accessible_connectors) {
+                .await;
+            if let Some(apps_section) = render_apps_section(&accessible_and_enabled_connectors) {
                 developer_sections.push(apps_section);
             }
         }
