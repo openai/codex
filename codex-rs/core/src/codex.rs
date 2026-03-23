@@ -4982,9 +4982,12 @@ mod handlers {
 
             sess.refresh_mcp_servers_if_requested(&current_context)
                 .await;
-            let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();
-            sess.spawn_task(Arc::clone(&current_context), turn_input, regular_task)
-                .await;
+            sess.spawn_task(
+                Arc::clone(&current_context),
+                turn_input,
+                crate::tasks::RegularTask::new(),
+            )
+            .await;
 
             if pending_items.is_empty() {
                 return;
