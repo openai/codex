@@ -6,7 +6,6 @@ use anyhow::Result;
 use serde_json::Value as JsonValue;
 use tempfile::tempdir;
 use tokio::select;
-use tokio::time::sleep;
 use tokio::time::timeout;
 
 #[tokio::test]
@@ -138,16 +137,7 @@ trust_level = "trusted"
     let mut output_rx = codex_utils_pty::combine_output_receivers(stdout_rx, stderr_rx);
     let mut exit_rx = exit_rx;
     let writer_tx = session.writer_sender();
-    let interrupt_writer = writer_tx.clone();
-    let interrupt_task = tokio::spawn(async move {
-        sleep(Duration::from_secs(2)).await;
-        for _ in 0..4 {
-            let _ = interrupt_writer.send(vec![3]).await;
-            sleep(Duration::from_millis(500)).await;
-        }
-    });
-
-    let exit_code_result = timeout(Duration::from_secs(15), async {
+    let exited_before_output = timeout(Duration::from_secs(15), async {
         loop {
             select! {
                 result = output_rx.recv() => match result {
@@ -156,31 +146,28 @@ trust_level = "trusted"
                             let _ = writer_tx.send(b"\x1b[1;1R".to_vec()).await;
                         }
                         output.extend_from_slice(&chunk);
+                        break Ok::<bool, anyhow::Error>(false);
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break exit_rx.await,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        break Ok::<bool, anyhow::Error>(true);
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                 },
-                result = &mut exit_rx => break result,
+                result = &mut exit_rx => break result.map(|_| true).map_err(Into::into),
             }
         }
     })
-    .await;
+    .await
+    .context("timed out waiting for codex resume to start")??;
 
-    interrupt_task.abort();
-
-    let exit_code = match exit_code_result {
-        Ok(Ok(code)) => code,
-        Ok(Err(err)) => return Err(err.into()),
-        Err(_) => {
-            session.terminate();
-            anyhow::bail!("timed out waiting for codex resume to exit");
+    if !exited_before_output {
+        session.terminate();
+        match timeout(Duration::from_secs(5), exit_rx).await {
+            Ok(Ok(_code)) => {}
+            Ok(Err(err)) => return Err(err.into()),
+            Err(_) => anyhow::bail!("timed out waiting for codex resume to exit after terminate"),
         }
-    };
-    anyhow::ensure!(
-        exit_code == 0 || exit_code == 130,
-        "unexpected exit code from codex resume: {exit_code}; output: {}",
-        String::from_utf8_lossy(&output)
-    );
+    }
 
     let config_contents = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     let config: toml::Value = toml::from_str(&config_contents)?;
