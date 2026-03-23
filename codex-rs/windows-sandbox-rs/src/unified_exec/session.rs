@@ -468,10 +468,9 @@ fn finalize_exit(
         raw_exit as i32
     };
 
-    // Avoid blocking exit propagation if the output reader gets stuck.
-    let _ = exit_tx.send(exit_code);
-
     let _ = output_join.join();
+
+    let _ = exit_tx.send(exit_code);
 
     unsafe {
         if thread_handle != 0 && thread_handle != INVALID_HANDLE_VALUE {
