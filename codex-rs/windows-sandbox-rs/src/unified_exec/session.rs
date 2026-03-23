@@ -536,7 +536,9 @@ fn resize_conpty_handle(
     if result == 0 {
         Ok(())
     } else {
-        Err(anyhow::anyhow!("failed to resize console: HRESULT {result}"))
+        Err(anyhow::anyhow!(
+            "failed to resize console: HRESULT {result}"
+        ))
     }
 }
 
@@ -662,12 +664,13 @@ pub async fn spawn_windows_sandbox_session_legacy(
                 }
             }
         }
-        if let Some(hpc) = hpc_for_wait
-            && let Ok(mut guard) = hpc.lock()
-            && let Some(hpc) = guard.take()
-        {
-            unsafe {
-                ClosePseudoConsole(hpc);
+        if let Some(hpc) = hpc_for_wait {
+            if let Ok(mut guard) = hpc.lock() {
+                if let Some(hpc) = guard.take() {
+                    unsafe {
+                        ClosePseudoConsole(hpc);
+                    }
+                }
             }
         }
         unsafe {

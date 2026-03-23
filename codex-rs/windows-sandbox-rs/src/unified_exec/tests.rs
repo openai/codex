@@ -305,7 +305,11 @@ fn runner_resizer_sends_resize_frame() {
         let pipe_write = std::sync::Arc::new(std::sync::Mutex::new(file));
         let mut resizer = super::make_runner_resizer(pipe_write);
 
-        resizer(codex_utils_pty::TerminalSize { rows: 45, cols: 132 }).expect("send resize frame");
+        resizer(codex_utils_pty::TerminalSize {
+            rows: 45,
+            cols: 132,
+        })
+        .expect("send resize frame");
 
         let mut reader = OpenOptions::new()
             .read(true)

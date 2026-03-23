@@ -6,10 +6,12 @@ use pretty_assertions::assert_eq;
 use crate::SpawnedProcess;
 use crate::TerminalSize;
 use crate::combine_output_receivers;
+use crate::spawn_from_driver;
 #[cfg(unix)]
 use crate::pipe::spawn_process_no_stdin_with_inherited_fds;
 #[cfg(unix)]
 use crate::pty::spawn_process_with_inherited_fds;
+use crate::ProcessDriver;
 use crate::spawn_pipe_process;
 use crate::spawn_pipe_process_no_stdin;
 use crate::spawn_pty_process;
@@ -585,6 +587,103 @@ async fn pipe_process_can_expose_split_stdout_and_stderr() -> anyhow::Result<()>
     assert_eq!(stdout, expected_stdout);
     assert_eq!(stderr, expected_stderr);
     assert_eq!(code, 0);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn driver_backed_process_can_expose_split_stdout_and_stderr() -> anyhow::Result<()> {
+    let (writer_tx, _writer_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
+    let (stdout_tx, stdout_driver_rx) = tokio::sync::broadcast::channel::<Vec<u8>>(8);
+    let (stderr_tx, stderr_driver_rx) = tokio::sync::broadcast::channel::<Vec<u8>>(8);
+    let (exit_tx, exit_rx) = tokio::sync::oneshot::channel::<i32>();
+
+    let spawned = spawn_from_driver(ProcessDriver {
+        writer_tx,
+        stdout_rx: stdout_driver_rx,
+        stderr_rx: Some(stderr_driver_rx),
+        exit_rx,
+        terminator: None,
+        writer_handle: None,
+        resizer: None,
+    });
+
+    let SpawnedProcess {
+        session: _session,
+        stdout_rx,
+        stderr_rx,
+        exit_rx,
+    } = spawned;
+    let stdout_task = tokio::spawn(async move { collect_split_output(stdout_rx).await });
+    let stderr_task = tokio::spawn(async move { collect_split_output(stderr_rx).await });
+
+    stdout_tx.send(b"driver-out".to_vec())?;
+    stderr_tx.send(b"driver-err".to_vec())?;
+    drop(stdout_tx);
+    drop(stderr_tx);
+    exit_tx.send(0).expect("send exit code");
+
+    let timeout = tokio::time::Duration::from_secs(2);
+    let code = tokio::time::timeout(timeout, exit_rx)
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting for driver exit"))?
+        .unwrap_or(-1);
+    let stdout = tokio::time::timeout(timeout, stdout_task)
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting to drain driver stdout"))??;
+    let stderr = tokio::time::timeout(timeout, stderr_task)
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting to drain driver stderr"))??;
+
+    assert_eq!(stdout, b"driver-out".to_vec());
+    assert_eq!(stderr, b"driver-err".to_vec());
+    assert_eq!(code, 0);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn driver_backed_process_can_resize_via_resizer_hook() -> anyhow::Result<()> {
+    let (writer_tx, _writer_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
+    let (_stdout_tx, stdout_driver_rx) = tokio::sync::broadcast::channel::<Vec<u8>>(8);
+    let (exit_tx, exit_rx) = tokio::sync::oneshot::channel::<i32>();
+    let (size_tx, size_rx) = tokio::sync::oneshot::channel::<TerminalSize>();
+
+    let size_tx = std::sync::Arc::new(std::sync::Mutex::new(Some(size_tx)));
+    let spawned = spawn_from_driver(ProcessDriver {
+        writer_tx,
+        stdout_rx: stdout_driver_rx,
+        stderr_rx: None,
+        exit_rx,
+        terminator: None,
+        writer_handle: None,
+        resizer: Some(Box::new(move |size| {
+            if let Ok(mut guard) = size_tx.lock() {
+                if let Some(size_tx) = guard.take() {
+                    let _ = size_tx.send(size);
+                }
+            }
+            Ok(())
+        })),
+    });
+
+    spawned.session.resize(TerminalSize {
+        rows: 40,
+        cols: 120,
+    })?;
+    exit_tx.send(0).expect("send exit code");
+
+    let resized = tokio::time::timeout(tokio::time::Duration::from_secs(2), size_rx)
+        .await
+        .map_err(|_| anyhow::anyhow!("timed out waiting for resize"))?
+        .expect("receive resized terminal size");
+    assert_eq!(
+        resized,
+        TerminalSize {
+            rows: 40,
+            cols: 120
+        }
+    );
 
     Ok(())
 }
