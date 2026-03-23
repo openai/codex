@@ -83,6 +83,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::item_metadata::stamp_sandbox_policy_on_input_item;
 use codex_protocol::item_metadata::stamp_user_message_type_on_input_item;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
@@ -333,6 +334,8 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ResponseItemMetadata;
+use codex_protocol::models::SandboxPolicyMetadata;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
@@ -1003,6 +1006,85 @@ fn local_time_context() -> (String, String) {
     }
 }
 
+fn sandbox_policy_to_metadata(policy: &SandboxPolicy) -> SandboxPolicyMetadata {
+    match policy {
+        SandboxPolicy::ReadOnly { .. } => SandboxPolicyMetadata::ReadOnly,
+        SandboxPolicy::WorkspaceWrite { .. } | SandboxPolicy::ExternalSandbox { .. } => {
+            SandboxPolicyMetadata::Sandbox
+        }
+        SandboxPolicy::DangerFullAccess => SandboxPolicyMetadata::FullAccess,
+    }
+}
+
+fn set_tool_response_item_metadata(
+    item: ResponseItem,
+    metadata: ResponseItemMetadata,
+) -> ResponseItem {
+    match item {
+        ResponseItem::LocalShellCall {
+            id,
+            call_id,
+            status,
+            action,
+            ..
+        } => ResponseItem::LocalShellCall {
+            id,
+            call_id,
+            status,
+            action,
+            metadata: Some(metadata),
+        },
+        ResponseItem::FunctionCall {
+            id,
+            name,
+            namespace,
+            arguments,
+            call_id,
+            ..
+        } => ResponseItem::FunctionCall {
+            id,
+            name,
+            namespace,
+            arguments,
+            call_id,
+            metadata: Some(metadata),
+        },
+        ResponseItem::CustomToolCall {
+            id,
+            status,
+            call_id,
+            name,
+            input,
+            ..
+        } => ResponseItem::CustomToolCall {
+            id,
+            status,
+            call_id,
+            name,
+            input,
+            metadata: Some(metadata),
+        },
+        other => other,
+    }
+}
+
+fn stamp_tool_sandbox_policy_on_response_item(
+    turn_context: &TurnContext,
+    response_item: ResponseItem,
+) -> ResponseItem {
+    let metadata = match &response_item {
+        ResponseItem::LocalShellCall { metadata, .. }
+        | ResponseItem::FunctionCall { metadata, .. }
+        | ResponseItem::CustomToolCall { metadata, .. } => metadata.clone().unwrap_or_default(),
+        _ => return response_item,
+    };
+
+    let mut metadata = metadata;
+    metadata.sandbox_policy = Some(sandbox_policy_to_metadata(
+        turn_context.sandbox_policy.get(),
+    ));
+    set_tool_response_item_metadata(response_item, metadata)
+}
 #[derive(Clone)]
 pub(crate) struct SessionConfiguration {
     /// Provider identifier ("openai", "openrouter", ...).
@@ -3792,6 +3874,12 @@ impl Session {
         turn_context: &TurnContext,
         response_item: ResponseItem,
     ) {
+        let response_item = if self.enabled(Feature::ItemMetadata) {
+            stamp_tool_sandbox_policy_on_response_item(turn_context, response_item)
+        } else {
+            response_item
+        };
+
         // Add to conversation history and persist response item to rollout.
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
@@ -3894,7 +3982,7 @@ impl Session {
             return Err(SteerInputError::NoActiveTurn(input));
         };
 
-        let Some((active_turn_id, _)) = active_turn.tasks.first() else {
+        let Some((active_turn_id, active_turn_context)) = active_turn.tasks.first() else {
             return Err(SteerInputError::NoActiveTurn(input));
         };
 
@@ -3910,6 +3998,10 @@ impl Session {
         let mut input_item: ResponseInputItem = input.into();
         if self.enabled(Feature::ItemMetadata) {
             stamp_user_message_type_on_input_item(&mut input_item, UserMessageType::PromptSteering);
+            stamp_sandbox_policy_on_input_item(
+                &mut input_item,
+                sandbox_policy_to_metadata(active_turn_context.turn_context.sandbox_policy.get()),
+            );
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
@@ -3925,6 +4017,9 @@ impl Session {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
+                let sandbox_policy = at.tasks.first().map(|(_, task)| {
+                    sandbox_policy_to_metadata(task.turn_context.sandbox_policy.get())
+                });
                 let mut ts = at.turn_state.lock().await;
                 for mut item in input {
                     if self.enabled(Feature::ItemMetadata)
@@ -3934,6 +4029,9 @@ impl Session {
                             &mut item,
                             UserMessageType::PromptQueued,
                         );
+                        if let Some(sandbox_policy) = sandbox_policy.clone() {
+                            stamp_sandbox_policy_on_input_item(&mut item, sandbox_policy);
+                        }
                     }
                     ts.push_pending_input(item);
                 }
@@ -5632,6 +5730,10 @@ pub(crate) async fn run_turn(
     let mut initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
     if sess.enabled(Feature::ItemMetadata) {
         stamp_user_message_type_on_input_item(&mut initial_input_for_turn, UserMessageType::Prompt);
+        stamp_sandbox_policy_on_input_item(
+            &mut initial_input_for_turn,
+            sandbox_policy_to_metadata(turn_context.sandbox_policy.get()),
+        );
     }
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
     sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)

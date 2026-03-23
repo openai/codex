@@ -428,6 +428,7 @@ async fn spawn_agent_can_fork_parent_thread_history() {
         namespace: None,
         arguments: "{}".to_string(),
         call_id: parent_spawn_call_id.clone(),
+        metadata: None,
     };
     parent_thread
         .codex
@@ -511,6 +512,7 @@ async fn spawn_agent_fork_injects_output_for_parent_spawn_call() {
         namespace: None,
         arguments: "{}".to_string(),
         call_id: parent_spawn_call_id.clone(),
+        metadata: None,
     };
     parent_thread
         .codex
@@ -587,6 +589,7 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
         namespace: None,
         arguments: "{}".to_string(),
         call_id: parent_spawn_call_id.clone(),
+        metadata: None,
     };
     parent_thread
         .codex

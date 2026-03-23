@@ -133,6 +133,7 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
                 namespace: None,
                 arguments: "{\"old\":true}".to_string(),
                 call_id: "call_old".to_string(),
+                metadata: None,
             }],
             &turn_context,
         )
@@ -161,6 +162,7 @@ async fn build_arc_monitor_request_includes_relevant_history_and_null_policies()
                     env: None,
                     user: None,
                 }),
+                metadata: None,
             }],
             &turn_context,
         )

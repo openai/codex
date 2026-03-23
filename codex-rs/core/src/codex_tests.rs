@@ -4414,6 +4414,60 @@ async fn task_finish_emits_prompt_queued_metadata_for_injected_user_input_when_f
     ));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_call_metadata_stamps_sandbox_policy_when_feature_enabled() {
+    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
+    Arc::get_mut(&mut sess)
+        .expect("session should be uniquely owned in this test")
+        .features
+        .enable(Feature::ItemMetadata)
+        .expect("feature flag should be enabled for this test");
+
+    sess.spawn_task(
+        Arc::clone(&tc),
+        vec![UserInput::Text {
+            text: "start".to_string(),
+            text_elements: Vec::new(),
+        }],
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+    while rx.try_recv().is_ok() {}
+
+    sess.record_response_item_and_emit_turn_item(
+        tc.as_ref(),
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "shell".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-2".to_string(),
+            metadata: None,
+        },
+    )
+    .await;
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("expected raw response item event")
+        .expect("channel open");
+    assert!(matches!(
+        event.msg,
+        EventMsg::RawResponseItem(ref ev)
+            if matches!(
+                &ev.item,
+                ResponseItem::FunctionCall {
+                    metadata: Some(metadata),
+                    ..
+                } if metadata.sandbox_policy
+                    == Some(codex_protocol::models::SandboxPolicyMetadata::ReadOnly)
+            )
+    ));
+}
+
 #[tokio::test]
 async fn steer_input_requires_active_turn() {
     let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
@@ -4745,6 +4799,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         call_id: "call-1".to_string(),
         name: "shell".to_string(),
         input: "{}".to_string(),
+        metadata: None,
     };
 
     let call = ToolRouter::build_tool_call(session.as_ref(), item.clone())

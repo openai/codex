@@ -54,6 +54,7 @@ fn truncates_rollout_from_start_before_nth_user_only() {
             name: "tool".to_string(),
             namespace: None,
             arguments: "{}".to_string(),
+            metadata: None,
         },
         assistant_msg("a4"),
     ];

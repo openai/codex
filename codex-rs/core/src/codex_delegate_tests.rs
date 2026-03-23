@@ -77,6 +77,7 @@ async fn forward_events_cancelled_while_send_blocked_shuts_down_delegate() {
                     call_id: "call-1".to_string(),
                     name: "tool".to_string(),
                     input: "{}".to_string(),
+                    metadata: None,
                 },
             }),
         })
