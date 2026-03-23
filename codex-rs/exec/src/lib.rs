@@ -1142,7 +1142,7 @@ async fn resolve_resume_thread_id(
     config: &Config,
     args: &crate::cli::ResumeArgs,
 ) -> anyhow::Result<Option<String>> {
-    let model_providers = Some(vec![config.model_provider_id.clone()]);
+    let model_providers = resume_lookup_model_providers(config, args);
 
     if args.last {
         let mut cursor = None;
@@ -1195,7 +1195,7 @@ async fn resolve_resume_thread_id(
                     cursor,
                     limit: Some(100),
                     sort_key: Some(ThreadSortKey::UpdatedAt),
-                    model_providers: Some(vec![config.model_provider_id.clone()]),
+                    model_providers: model_providers.clone(),
                     source_kinds: Some(all_thread_source_kinds()),
                     archived: Some(false),
                     cwd: None,
@@ -1221,6 +1221,17 @@ async fn resolve_resume_thread_id(
             return Ok(None);
         };
         cursor = Some(next_cursor);
+    }
+}
+
+fn resume_lookup_model_providers(
+    config: &Config,
+    args: &crate::cli::ResumeArgs,
+) -> Option<Vec<String>> {
+    if args.last {
+        Some(vec![config.model_provider_id.clone()])
+    } else {
+        None
     }
 }
 
@@ -1772,6 +1783,40 @@ mod tests {
             lagged_event_warning_message(7),
             "in-process app-server event stream lagged; dropped 7 events".to_string()
         );
+    }
+
+    #[tokio::test]
+    async fn resume_lookup_model_providers_filters_only_last_lookup() {
+        let codex_home = tempdir().expect("create temp codex home");
+        let cwd = tempdir().expect("create temp cwd");
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(cwd.path().to_path_buf()))
+            .build()
+            .await
+            .expect("build default config");
+        config.model_provider_id = "test-provider".to_string();
+
+        let last_args = crate::cli::ResumeArgs {
+            session_id: None,
+            last: true,
+            all: false,
+            images: vec![],
+            prompt: None,
+        };
+        let named_args = crate::cli::ResumeArgs {
+            session_id: Some("named-session".to_string()),
+            last: false,
+            all: false,
+            images: vec![],
+            prompt: None,
+        };
+
+        assert_eq!(
+            resume_lookup_model_providers(&config, &last_args),
+            Some(vec!["test-provider".to_string()])
+        );
+        assert_eq!(resume_lookup_model_providers(&config, &named_args), None);
     }
 
     #[test]
