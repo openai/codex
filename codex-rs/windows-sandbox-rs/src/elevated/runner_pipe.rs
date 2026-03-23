@@ -6,14 +6,14 @@
 //! and elevated capture. The legacy restricted‑token path spawns the child directly
 //! and does not use these helpers.
 
-use crate::helper_materialization::HelperExecutable;
 use crate::helper_materialization::resolve_helper_for_launch;
+use crate::helper_materialization::HelperExecutable;
 use crate::winutil::resolve_sid;
 use crate::winutil::string_from_sid_bytes;
 use crate::winutil::to_wide;
+use rand::rngs::SmallRng;
 use rand::Rng;
 use rand::SeedableRng;
-use rand::rngs::SmallRng;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;

@@ -64,6 +64,39 @@ pub fn quote_windows_arg(arg: &str) -> String {
     quoted
 }
 
+fn is_cmd_executable(program: &str) -> bool {
+    let lower = std::path::Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(program)
+        .to_ascii_lowercase();
+    matches!(lower.as_str(), "cmd" | "cmd.exe")
+}
+
+/// Build a Windows command line for CreateProcess-style APIs.
+///
+/// Most programs should receive CRT-style quoted arguments. `cmd.exe` is the exception:
+/// the tokens after the executable are part of cmd's own command string, so escaping inner
+/// quotes with CRT rules breaks `cmd /c "<program with spaces>" ...`.
+#[cfg(target_os = "windows")]
+pub fn argv_to_command_line(argv: &[String]) -> String {
+    let Some((program, args)) = argv.split_first() else {
+        return String::new();
+    };
+
+    if is_cmd_executable(program) {
+        if args.is_empty() {
+            return quote_windows_arg(program);
+        }
+        return format!("{} {}", quote_windows_arg(program), args.join(" "));
+    }
+
+    argv.iter()
+        .map(|arg| quote_windows_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 // Produce a readable description for a Win32 error code.
 pub fn format_last_error(err: i32) -> String {
     unsafe {
@@ -108,6 +141,43 @@ pub fn string_from_sid_bytes(sid: &[u8]) -> Result<String, String> {
         let out = String::from_utf16_lossy(slice);
         let _ = LocalFree(str_ptr as HLOCAL);
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::argv_to_command_line;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn argv_to_command_line_preserves_raw_cmd_suffix() {
+        let argv = vec![
+            "cmd.exe".to_string(),
+            "/d".to_string(),
+            "/s".to_string(),
+            "/c".to_string(),
+            "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -EncodedCommand abc=="
+                .to_string(),
+        ];
+
+        assert_eq!(
+            argv_to_command_line(&argv),
+            "cmd.exe /d /s /c \"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -EncodedCommand abc=="
+        );
+    }
+
+    #[test]
+    fn argv_to_command_line_quotes_regular_program_args() {
+        let argv = vec![
+            "pwsh.exe".to_string(),
+            "-Command".to_string(),
+            "Write-Output \"hello world\"".to_string(),
+        ];
+
+        assert_eq!(
+            argv_to_command_line(&argv),
+            "pwsh.exe -Command \"Write-Output \\\"hello world\\\"\""
+        );
     }
 }
 
