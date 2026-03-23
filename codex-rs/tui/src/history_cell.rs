@@ -1627,14 +1627,6 @@ impl PendingToolPayloadCell {
         true
     }
 
-    pub(crate) fn set_payload(&mut self, payload: String) -> bool {
-        if self.payload == payload {
-            return false;
-        }
-        self.payload = payload;
-        true
-    }
-
     pub(crate) fn complete(&mut self, success: bool) {
         self.success = Some(success);
     }

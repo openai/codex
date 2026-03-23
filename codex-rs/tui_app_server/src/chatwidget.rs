@@ -6680,6 +6680,7 @@ impl ChatWidget {
             | EventMsg::PlanDelta(_)
             | EventMsg::AgentReasoningDelta(_)
             | EventMsg::TerminalInteraction(_)
+            | EventMsg::ToolCallPayloadDelta(_)
             | EventMsg::ExecCommandOutputDelta(_) => {}
             _ => {
                 tracing::trace!("handle_codex_event: {:?}", msg);
@@ -6889,7 +6890,8 @@ impl ChatWidget {
             | EventMsg::ItemStarted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
-            | EventMsg::ReasoningRawContentDelta(_) => {}
+            | EventMsg::ReasoningRawContentDelta(_)
+            | EventMsg::ToolCallPayloadDelta(_) => {}
             EventMsg::DynamicToolCallRequest(request) => self.on_dynamic_tool_call_request(request),
             EventMsg::DynamicToolCallResponse(response) => {
                 self.on_dynamic_tool_call_response(response)
