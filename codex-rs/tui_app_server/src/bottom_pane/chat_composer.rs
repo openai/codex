@@ -5443,7 +5443,7 @@ mod tests {
     }
 
     #[test]
-    fn mention_items_keep_plugin_owned_skills_but_hide_duplicate_apps() {
+    fn mention_items_hide_plugin_owned_skill_and_app_duplicates() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
@@ -5505,27 +5505,13 @@ mod tests {
             }],
         }));
 
-        let mut mention_summaries: Vec<_> = composer
-            .mention_items()
-            .into_iter()
-            .map(|mention| (mention.display_name, mention.category_tag, mention.path))
-            .collect();
-        mention_summaries.sort();
-
+        let mentions = composer.mention_items();
+        assert_eq!(mentions.len(), 1);
+        assert_eq!(mentions[0].display_name, "Google Calendar".to_string());
+        assert_eq!(mentions[0].category_tag, Some("[Plugin]".to_string()));
         assert_eq!(
-            mention_summaries,
-            vec![
-                (
-                    "Google Calendar".to_string(),
-                    Some("[Plugin]".to_string()),
-                    Some("plugin://google-calendar@debug".to_string()),
-                ),
-                (
-                    "Google Calendar".to_string(),
-                    Some("[Skill]".to_string()),
-                    Some("/tmp/repo/google-calendar/SKILL.md".to_string()),
-                ),
-            ]
+            mentions[0].path,
+            Some("plugin://google-calendar@debug".to_string())
         );
     }
 
