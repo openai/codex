@@ -1,10 +1,11 @@
 ---
 source: core/tests/suite/compact_remote.rs
+assertion_line: 2612
 expression: "format_labeled_requests_snapshot(\"Remote manual /compact with no prior user turn skips the remote compact request; the follow-up turn carries canonical context and new user message.\",\n&[(\"Remote Post-Compaction History Layout\", &follow_up_request)])"
 ---
 Scenario: Remote manual /compact with no prior user turn skips the remote compact request; the follow-up turn carries canonical context and new user message.
 
 ## Remote Post-Compaction History Layout
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
 02:message/user:USER_ONE

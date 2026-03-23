@@ -20,8 +20,11 @@ fn detects_agents_instructions_fragment() {
 #[test]
 fn detects_subagent_notification_fragment_case_insensitively() {
     assert!(
-        SUBAGENT_NOTIFICATION_FRAGMENT
-            .matches_text("<SUBAGENT_NOTIFICATION>{}</subagent_notification>")
+        ContextualUserFragmentMarkers::new(
+            SUBAGENT_NOTIFICATION_OPEN_TAG,
+            SUBAGENT_NOTIFICATION_CLOSE_TAG,
+        )
+        .matches_text("<SUBAGENT_NOTIFICATION>{}</subagent_notification>")
     );
 }
 

@@ -491,6 +491,7 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
             realtime_active: None,
             effort: None,
             summary: ReasoningSummaryConfig::Auto,
+            project_doc_instructions: None,
             user_instructions: None,
             developer_instructions: None,
             final_output_json_schema: None,

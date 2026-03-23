@@ -1,5 +1,6 @@
 ---
 source: core/tests/suite/compact_remote.rs
+assertion_line: 1743
 expression: "format_labeled_requests_snapshot(\"Remote manual /compact while realtime remains active: the next regular turn restates realtime-start instructions after compaction clears the baseline.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Compaction History Layout\", post_compact_request),])"
 ---
 Scenario: Remote manual /compact while realtime remains active: the next regular turn restates realtime-start instructions after compaction clears the baseline.
@@ -8,7 +9,7 @@ Scenario: Remote manual /compact while realtime remains active: the next regular
 00:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <realtime_conversation>\nRealtime conversation started.\n\nYou a...
-01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
 02:message/user:USER_ONE
 03:message/assistant:REMOTE_FIRST_REPLY
 
@@ -17,5 +18,5 @@ Scenario: Remote manual /compact while realtime remains active: the next regular
 01:message/developer[2]:
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <realtime_conversation>\nRealtime conversation started.\n\nYou a...
-02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
 03:message/user:USER_TWO

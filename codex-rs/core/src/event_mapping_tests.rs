@@ -144,6 +144,16 @@ fn skips_user_instructions_and_env() {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText {
+                    text: "<user_instructions>\ncustom guidance\n</user_instructions>"
+                        .to_string(),
+                }],
+                end_turn: None,
+                phase: None,
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
                     text: "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>".to_string(),
                 }],
                 end_turn: None,

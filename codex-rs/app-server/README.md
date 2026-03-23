@@ -124,7 +124,7 @@ Example with notification opt-out:
 ## API Overview
 
 - `thread/start` — create a new thread; emits `thread/started` (including the current `thread.status`) and auto-subscribes you to turn/item events for that thread.
-- `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it.
+- `thread/resume` — reopen an existing thread by id so subsequent `turn/start` calls append to it. When calling `thread/resume` against a thread that is already loaded/running, override fields are ignored and logged as mismatch warnings rather than being reapplied mid-session.
 - `thread/fork` — fork an existing thread into a new thread id by copying the stored history; accepts `ephemeral: true` for an in-memory temporary fork, emits `thread/started` (including the current `thread.status`), and auto-subscribes you to turn/item events for the new thread.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.

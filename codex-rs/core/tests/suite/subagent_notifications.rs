@@ -58,7 +58,7 @@ fn body_contains(req: &wiremock::Request, text: &str) -> bool {
 }
 
 fn has_subagent_notification(req: &ResponsesRequest) -> bool {
-    req.message_input_texts("user")
+    req.message_input_texts("developer")
         .iter()
         .any(|text| text.contains("<subagent_notification>"))
 }

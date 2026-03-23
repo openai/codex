@@ -19,6 +19,10 @@ import type { SandboxMode } from "./SandboxMode";
  * If using history or path, the thread_id param will be ignored.
  *
  * Prefer using thread_id whenever possible.
+ *
+ * When resuming a thread that is already loaded/running, override fields are
+ * ignored and reported as mismatch warnings rather than being reapplied
+ * mid-session.
  */
 export type ThreadResumeParams = {threadId: string, /**
  * [UNSTABLE] FOR CODEX CLOUD - DO NOT USE.
@@ -36,7 +40,11 @@ model?: string | null, modelProvider?: string | null, serviceTier?: ServiceTier 
  * Override where approval requests are routed for review on this thread
  * and subsequent turns.
  */
-approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, developerInstructions?: string | null, personality?: Personality | null, /**
+approvalsReviewer?: ApprovalsReviewer | null, sandbox?: SandboxMode | null, config?: { [key in string]?: JsonValue } | null, baseInstructions?: string | null, /**
+ * Custom developer override for this thread session.
+ * Takes precedence over `~/.codex/config.toml` `developer_instructions`.
+ */
+developerInstructions?: string | null, personality?: Personality | null, /**
  * If true, persist additional rollout EventMsg variants required to
  * reconstruct a richer thread history on subsequent resume/fork/read.
  */

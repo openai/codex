@@ -36,11 +36,7 @@ pub const DEFAULT_PROJECT_DOC_FILENAME: &str = "AGENTS.md";
 /// Preferred local override for project-level docs.
 pub const LOCAL_PROJECT_DOC_FILENAME: &str = "AGENTS.override.md";
 
-/// When both `Config::instructions` and the project doc are present, they will
-/// be concatenated with the following separator.
-const PROJECT_DOC_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
-
-fn render_js_repl_instructions(config: &Config) -> Option<String> {
+pub(crate) fn render_js_repl_instructions(config: &Config) -> Option<String> {
     if !config.features.enabled(Feature::JsRepl) {
         return None;
     }
@@ -74,48 +70,17 @@ fn render_js_repl_instructions(config: &Config) -> Option<String> {
     Some(section)
 }
 
-/// Combines `Config::instructions` and `AGENTS.md` (if present) into a single
-/// string of instructions.
-pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
+/// Builds the project-doc / AGENTS text that later renders as the AGENTS
+/// contextual-user fragment.
+pub(crate) async fn build_project_doc_instructions_text(config: &Config) -> Option<String> {
     let project_docs = read_project_docs(config).await;
-
-    let mut output = String::new();
-
-    if let Some(instructions) = config.user_instructions.clone() {
-        output.push_str(&instructions);
-    }
-
     match project_docs {
-        Ok(Some(docs)) => {
-            if !output.is_empty() {
-                output.push_str(PROJECT_DOC_SEPARATOR);
-            }
-            output.push_str(&docs);
-        }
-        Ok(None) => {}
+        Ok(Some(docs)) => Some(docs),
+        Ok(None) => None,
         Err(e) => {
             error!("error trying to find project doc: {e:#}");
+            None
         }
-    };
-
-    if let Some(js_repl_section) = render_js_repl_instructions(config) {
-        if !output.is_empty() {
-            output.push_str("\n\n");
-        }
-        output.push_str(&js_repl_section);
-    }
-
-    if config.features.enabled(Feature::ChildAgentsMd) {
-        if !output.is_empty() {
-            output.push_str("\n\n");
-        }
-        output.push_str(HIERARCHICAL_AGENTS_MESSAGE);
-    }
-
-    if !output.is_empty() {
-        Some(output)
-    } else {
-        None
     }
 }
 

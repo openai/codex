@@ -22,11 +22,12 @@ use tracing::warn;
 use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::contextual_user_message::TURN_ABORTED_OPEN_TAG;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
+use crate::model_visible_context::ModelVisibleContextFragment;
+use crate::model_visible_fragments::TurnAbortedMarker;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
 use crate::protocol::TokenUsage;
@@ -41,9 +42,7 @@ use codex_otel::metrics::names::TURN_E2E_DURATION_METRIC;
 use codex_otel::metrics::names::TURN_NETWORK_PROXY_METRIC;
 use codex_otel::metrics::names::TURN_TOKEN_USAGE_METRIC;
 use codex_otel::metrics::names::TURN_TOOL_CALL_METRIC;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 
@@ -58,7 +57,6 @@ pub(crate) use user_shell::UserShellCommandTask;
 pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
-const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
 
 fn emit_turn_network_proxy_metric(
     session_telemetry: &SessionTelemetry,
@@ -425,18 +423,8 @@ impl Session {
 
         if reason == TurnAbortReason::Interrupted {
             self.cleanup_after_interrupt(&task.turn_context).await;
-
-            let marker = ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: format!(
-                        "{TURN_ABORTED_OPEN_TAG}\n{TURN_ABORTED_INTERRUPTED_GUIDANCE}\n</turn_aborted>"
-                    ),
-                }],
-                end_turn: None,
-                phase: None,
-            };
+            let marker = TurnAbortedMarker::interrupted();
+            let marker = marker.into_message();
             self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
                 .await;
             self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])

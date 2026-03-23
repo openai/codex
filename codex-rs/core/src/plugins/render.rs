@@ -1,8 +1,11 @@
+use crate::model_visible_fragments::PluginInstructions;
 use crate::plugins::PluginCapabilitySummary;
 use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_OPEN_TAG;
 
-pub(crate) fn render_plugins_section(plugins: &[PluginCapabilitySummary]) -> Option<String> {
+pub(crate) fn render_plugin_instructions(
+    plugins: &[PluginCapabilitySummary],
+) -> Option<PluginInstructions> {
     if plugins.is_empty() {
         return None;
     }
@@ -34,9 +37,9 @@ pub(crate) fn render_plugins_section(plugins: &[PluginCapabilitySummary]) -> Opt
     );
 
     let body = lines.join("\n");
-    Some(format!(
-        "{PLUGINS_INSTRUCTIONS_OPEN_TAG}\n{body}\n{PLUGINS_INSTRUCTIONS_CLOSE_TAG}"
-    ))
+    Some(PluginInstructions {
+        text: format!("{PLUGINS_INSTRUCTIONS_OPEN_TAG}\n{body}\n{PLUGINS_INSTRUCTIONS_CLOSE_TAG}"),
+    })
 }
 
 pub(crate) fn render_explicit_plugin_instructions(
