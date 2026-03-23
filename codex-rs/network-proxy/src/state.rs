@@ -2,7 +2,8 @@ use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
 use crate::mitm::MitmState;
 use crate::policy::DomainPattern;
-use crate::policy::compile_globset;
+use crate::policy::compile_allowlist_globset;
+use crate::policy::compile_denylist_globset;
 use crate::policy::is_global_wildcard_domain_pattern;
 use crate::runtime::ConfigState;
 use serde::Deserialize;
@@ -59,26 +60,10 @@ pub fn build_config_state(
     constraints: NetworkProxyConstraints,
 ) -> anyhow::Result<ConfigState> {
     crate::config::validate_unix_socket_allowlist_paths(&config)?;
-    validate_domain_patterns(
-        "network.allowed_domains",
-        &config.network.allowed_domains,
-        /*allow_global_wildcard*/ true,
-    )
-    .map_err(NetworkProxyConstraintError::into_anyhow)?;
-    validate_domain_patterns(
-        "network.denied_domains",
-        &config.network.denied_domains,
-        /*allow_global_wildcard*/ false,
-    )
-    .map_err(NetworkProxyConstraintError::into_anyhow)?;
-    let deny_set = compile_globset(
-        &config.network.denied_domains,
-        /*allow_global_wildcard*/ false,
-    )?;
-    let allow_set = compile_globset(
-        &config.network.allowed_domains,
-        /*allow_global_wildcard*/ true,
-    )?;
+    validate_denylist_domain_patterns("network.denied_domains", &config.network.denied_domains)
+        .map_err(NetworkProxyConstraintError::into_anyhow)?;
+    let deny_set = compile_denylist_globset(&config.network.denied_domains)?;
+    let allow_set = compile_allowlist_globset(&config.network.allowed_domains)?;
     let mitm = if config.network.mitm {
         Some(Arc::new(MitmState::new(
             config.network.allow_upstream_proxy,
@@ -121,16 +106,7 @@ pub fn validate_policy_against_constraints(
     }
 
     let enabled = config.network.enabled;
-    validate_domain_patterns(
-        "network.allowed_domains",
-        &config.network.allowed_domains,
-        /*allow_global_wildcard*/ true,
-    )?;
-    validate_domain_patterns(
-        "network.denied_domains",
-        &config.network.denied_domains,
-        /*allow_global_wildcard*/ false,
-    )?;
+    validate_denylist_domain_patterns("network.denied_domains", &config.network.denied_domains)?;
     if let Some(max_enabled) = constraints.enabled {
         validate(enabled, move |candidate| {
             if *candidate && !max_enabled {
@@ -230,11 +206,6 @@ pub fn validate_policy_against_constraints(
     }
 
     if let Some(allowed_domains) = &constraints.allowed_domains {
-        validate_domain_patterns(
-            "network.allowed_domains",
-            allowed_domains,
-            /*allow_global_wildcard*/ true,
-        )?;
         match constraints.allowlist_expansion_enabled {
             Some(true) => {
                 let required_set: HashSet<String> = allowed_domains
@@ -314,11 +285,7 @@ pub fn validate_policy_against_constraints(
     }
 
     if let Some(denied_domains) = &constraints.denied_domains {
-        validate_domain_patterns(
-            "network.denied_domains",
-            denied_domains,
-            /*allow_global_wildcard*/ false,
-        )?;
+        validate_denylist_domain_patterns("network.denied_domains", denied_domains)?;
         let required_set: HashSet<String> = denied_domains
             .iter()
             .map(|s| s.to_ascii_lowercase())
@@ -394,15 +361,13 @@ pub fn validate_policy_against_constraints(
     Ok(())
 }
 
-fn validate_domain_patterns(
+fn validate_denylist_domain_patterns(
     field_name: &'static str,
     patterns: &[String],
-    allow_global_wildcard: bool,
 ) -> Result<(), NetworkProxyConstraintError> {
-    if !allow_global_wildcard
-        && let Some(pattern) = patterns
-            .iter()
-            .find(|pattern| is_global_wildcard_domain_pattern(pattern))
+    if let Some(pattern) = patterns
+        .iter()
+        .find(|pattern| is_global_wildcard_domain_pattern(pattern))
     {
         return Err(NetworkProxyConstraintError::InvalidValue {
             field_name,

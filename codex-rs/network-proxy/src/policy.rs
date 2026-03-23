@@ -151,12 +151,30 @@ pub(crate) fn is_global_wildcard_domain_pattern(pattern: &str) -> bool {
         .any(|candidate| candidate == "*")
 }
 
-pub(crate) fn compile_globset(patterns: &[String], allow_global_wildcard: bool) -> Result<GlobSet> {
+#[derive(Clone, Copy)]
+enum GlobalWildcard {
+    Allow,
+    Reject,
+}
+
+pub(crate) fn compile_allowlist_globset(patterns: &[String]) -> Result<GlobSet> {
+    compile_globset_with_policy(patterns, GlobalWildcard::Allow)
+}
+
+pub(crate) fn compile_denylist_globset(patterns: &[String]) -> Result<GlobSet> {
+    compile_globset_with_policy(patterns, GlobalWildcard::Reject)
+}
+
+fn compile_globset_with_policy(
+    patterns: &[String],
+    global_wildcard: GlobalWildcard,
+) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     let mut seen = HashSet::new();
     for pattern in patterns {
         ensure!(
-            allow_global_wildcard || !is_global_wildcard_domain_pattern(pattern),
+            matches!(global_wildcard, GlobalWildcard::Allow)
+                || !is_global_wildcard_domain_pattern(pattern),
             "unsupported global wildcard domain pattern \"*\"; use exact hosts or scoped wildcards like *.example.com or **.example.com"
         );
         let pattern = normalize_pattern(pattern);
@@ -334,11 +352,7 @@ mod tests {
 
     #[test]
     fn compile_globset_normalizes_trailing_dots() {
-        let set = compile_globset(
-            &["Example.COM.".to_string()],
-            /*allow_global_wildcard*/ false,
-        )
-        .unwrap();
+        let set = compile_denylist_globset(&["Example.COM.".to_string()]).unwrap();
 
         assert_eq!(true, set.is_match("example.com"));
         assert_eq!(false, set.is_match("api.example.com"));
@@ -346,11 +360,7 @@ mod tests {
 
     #[test]
     fn compile_globset_normalizes_wildcards() {
-        let set = compile_globset(
-            &["*.Example.COM.".to_string()],
-            /*allow_global_wildcard*/ false,
-        )
-        .unwrap();
+        let set = compile_denylist_globset(&["*.Example.COM.".to_string()]).unwrap();
 
         assert_eq!(true, set.is_match("api.example.com"));
         assert_eq!(false, set.is_match("example.com"));
@@ -358,11 +368,7 @@ mod tests {
 
     #[test]
     fn compile_globset_normalizes_apex_and_subdomains() {
-        let set = compile_globset(
-            &["**.Example.COM.".to_string()],
-            /*allow_global_wildcard*/ false,
-        )
-        .unwrap();
+        let set = compile_denylist_globset(&["**.Example.COM.".to_string()]).unwrap();
 
         assert_eq!(true, set.is_match("example.com"));
         assert_eq!(true, set.is_match("api.example.com"));
@@ -370,7 +376,7 @@ mod tests {
 
     #[test]
     fn compile_globset_normalizes_bracketed_ipv6_literals() {
-        let set = compile_globset(&["[::1]".to_string()], /*allow_global_wildcard*/ false).unwrap();
+        let set = compile_denylist_globset(&["[::1]".to_string()]).unwrap();
 
         assert_eq!(true, set.is_match("::1"));
     }

@@ -819,7 +819,8 @@ mod tests {
 
     use crate::config::NetworkProxyConfig;
     use crate::config::NetworkProxySettings;
-    use crate::policy::compile_globset;
+    use crate::policy::compile_allowlist_globset;
+    use crate::policy::compile_denylist_globset;
     use crate::state::NetworkProxyConstraints;
     use crate::state::build_config_state;
     use crate::state::validate_policy_against_constraints;
@@ -1529,7 +1530,7 @@ mod tests {
     #[test]
     fn compile_globset_is_case_insensitive() {
         let patterns = vec!["ExAmPle.CoM".to_string()];
-        let set = compile_globset(&patterns, /*allow_global_wildcard*/ false).unwrap();
+        let set = compile_denylist_globset(&patterns).unwrap();
         assert!(set.is_match("example.com"));
         assert!(set.is_match("EXAMPLE.COM"));
     }
@@ -1537,7 +1538,7 @@ mod tests {
     #[test]
     fn compile_globset_excludes_apex_for_subdomain_patterns() {
         let patterns = vec!["*.openai.com".to_string()];
-        let set = compile_globset(&patterns, /*allow_global_wildcard*/ false).unwrap();
+        let set = compile_denylist_globset(&patterns).unwrap();
         assert!(set.is_match("api.openai.com"));
         assert!(!set.is_match("openai.com"));
         assert!(!set.is_match("evilopenai.com"));
@@ -1546,7 +1547,7 @@ mod tests {
     #[test]
     fn compile_globset_includes_apex_for_double_wildcard_patterns() {
         let patterns = vec!["**.openai.com".to_string()];
-        let set = compile_globset(&patterns, /*allow_global_wildcard*/ false).unwrap();
+        let set = compile_denylist_globset(&patterns).unwrap();
         assert!(set.is_match("openai.com"));
         assert!(set.is_match("api.openai.com"));
         assert!(!set.is_match("evilopenai.com"));
@@ -1555,13 +1556,13 @@ mod tests {
     #[test]
     fn compile_globset_rejects_global_wildcard() {
         let patterns = vec!["*".to_string()];
-        assert!(compile_globset(&patterns, /*allow_global_wildcard*/ false).is_err());
+        assert!(compile_denylist_globset(&patterns).is_err());
     }
 
     #[test]
     fn compile_globset_allows_global_wildcard_when_enabled() {
         let patterns = vec!["*".to_string()];
-        let set = compile_globset(&patterns, /*allow_global_wildcard*/ true).unwrap();
+        let set = compile_allowlist_globset(&patterns).unwrap();
         assert!(set.is_match("example.com"));
         assert!(set.is_match("api.openai.com"));
         assert!(set.is_match("localhost"));
@@ -1570,19 +1571,19 @@ mod tests {
     #[test]
     fn compile_globset_rejects_bracketed_global_wildcard() {
         let patterns = vec!["[*]".to_string()];
-        assert!(compile_globset(&patterns, /*allow_global_wildcard*/ false).is_err());
+        assert!(compile_denylist_globset(&patterns).is_err());
     }
 
     #[test]
     fn compile_globset_rejects_double_wildcard_bracketed_global_wildcard() {
         let patterns = vec!["**.[*]".to_string()];
-        assert!(compile_globset(&patterns, /*allow_global_wildcard*/ false).is_err());
+        assert!(compile_denylist_globset(&patterns).is_err());
     }
 
     #[test]
     fn compile_globset_dedupes_patterns_without_changing_behavior() {
         let patterns = vec!["example.com".to_string(), "example.com".to_string()];
-        let set = compile_globset(&patterns, /*allow_global_wildcard*/ false).unwrap();
+        let set = compile_denylist_globset(&patterns).unwrap();
         assert!(set.is_match("example.com"));
         assert!(set.is_match("EXAMPLE.COM"));
         assert!(!set.is_match("not-example.com"));
@@ -1591,7 +1592,7 @@ mod tests {
     #[test]
     fn compile_globset_rejects_invalid_patterns() {
         let patterns = vec!["[".to_string()];
-        assert!(compile_globset(&patterns, /*allow_global_wildcard*/ false).is_err());
+        assert!(compile_denylist_globset(&patterns).is_err());
     }
 
     #[test]
