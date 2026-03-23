@@ -354,6 +354,23 @@ impl EventProcessorWithJsonOutput {
         }
     }
 
+    fn reconcile_unfinished_started_items(
+        &mut self,
+        turn_items: &[ThreadItem],
+    ) -> Vec<ThreadEvent> {
+        turn_items
+            .iter()
+            .filter_map(|item| {
+                let raw_id = item.id().to_string();
+                if !self.raw_to_exec_item_id.contains_key(&raw_id) {
+                    return None;
+                }
+                self.map_completed_item_mut(item.clone())
+                    .map(|item| ThreadEvent::ItemCompleted(ItemCompletedEvent { item }))
+            })
+            .collect()
+    }
+
     fn final_message_from_turn_items(items: &[ThreadItem]) -> Option<String> {
         items
             .iter()
@@ -485,6 +502,7 @@ impl EventProcessorWithJsonOutput {
                         },
                     }));
                 }
+                events.extend(self.reconcile_unfinished_started_items(&notification.turn.items));
                 match notification.turn.status {
                     TurnStatus::Completed => {
                         if let Some(final_message) =

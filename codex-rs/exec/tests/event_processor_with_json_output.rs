@@ -1253,6 +1253,92 @@ fn turn_completion_recovers_final_message_from_turn_items() {
 }
 
 #[test]
+fn turn_completion_reconciles_started_items_from_turn_items() {
+    let mut processor = EventProcessorWithJsonOutput::new(None);
+
+    let started =
+        processor.collect_thread_events(ServerNotification::ItemStarted(ItemStartedNotification {
+            item: ThreadItem::CommandExecution {
+                id: "cmd-1".to_string(),
+                command: "ls".to_string(),
+                cwd: PathBuf::from("/tmp/project"),
+                process_id: Some("123".to_string()),
+                source: CommandExecutionSource::UserShell,
+                status: ApiCommandExecutionStatus::InProgress,
+                command_actions: Vec::<CommandAction>::new(),
+                aggregated_output: None,
+                exit_code: None,
+                duration_ms: None,
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        }));
+    assert_eq!(
+        started,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemStarted(ItemStartedEvent {
+                item: ExecThreadItem {
+                    id: "item_0".to_string(),
+                    details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
+                        command: "ls".to_string(),
+                        aggregated_output: String::new(),
+                        exit_code: None,
+                        status: CommandExecutionStatus::InProgress,
+                    }),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+
+    let completed = processor.collect_thread_events(ServerNotification::TurnCompleted(
+        TurnCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: Turn {
+                id: "turn-1".to_string(),
+                items: vec![ThreadItem::CommandExecution {
+                    id: "cmd-1".to_string(),
+                    command: "ls".to_string(),
+                    cwd: PathBuf::from("/tmp/project"),
+                    process_id: Some("123".to_string()),
+                    source: CommandExecutionSource::UserShell,
+                    status: ApiCommandExecutionStatus::Completed,
+                    command_actions: Vec::<CommandAction>::new(),
+                    aggregated_output: Some("a.txt\n".to_string()),
+                    exit_code: Some(0),
+                    duration_ms: Some(3),
+                }],
+                status: TurnStatus::Completed,
+                error: None,
+            },
+        },
+    ));
+
+    assert_eq!(
+        completed,
+        CollectedThreadEvents {
+            events: vec![
+                ThreadEvent::ItemCompleted(ItemCompletedEvent {
+                    item: ExecThreadItem {
+                        id: "item_0".to_string(),
+                        details: ThreadItemDetails::CommandExecution(CommandExecutionItem {
+                            command: "ls".to_string(),
+                            aggregated_output: "a.txt\n".to_string(),
+                            exit_code: Some(0),
+                            status: CommandExecutionStatus::Completed,
+                        }),
+                    },
+                }),
+                ThreadEvent::TurnCompleted(TurnCompletedEvent {
+                    usage: Usage::default(),
+                }),
+            ],
+            status: CodexStatus::InitiateShutdown,
+        }
+    );
+}
+
+#[test]
 fn turn_completion_overwrites_stale_final_message_from_turn_items() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
     let _ = processor.collect_thread_events(ServerNotification::ItemCompleted(
