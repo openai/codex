@@ -7791,6 +7791,7 @@ fn plugins_test_detail(
                 short_description: None,
                 interface: None,
                 path: PathBuf::from(format!("/skills/{name}/SKILL.md")),
+                enabled: true,
             })
             .collect(),
         apps: apps
