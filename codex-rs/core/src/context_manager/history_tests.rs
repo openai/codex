@@ -1,5 +1,4 @@
 use super::*;
-use crate::agent::inter_agent_instruction::InterAgentInstruction;
 use crate::truncate;
 use crate::truncate::TruncationPolicy;
 use base64::Engine;
@@ -19,6 +18,7 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::default_input_modalities;
+use codex_protocol::protocol::InterAgentCommunication;
 use image::ImageBuffer;
 use image::ImageFormat;
 use image::Rgba;
@@ -41,13 +41,21 @@ fn assistant_msg(text: &str) -> ResponseItem {
 }
 
 fn inter_agent_assistant_msg(text: &str) -> ResponseItem {
-    InterAgentInstruction::new(
+    let communication = InterAgentCommunication::new(
         AgentPath::root(),
         AgentPath::root().join("worker").unwrap(),
         Vec::new(),
         text.to_string(),
-    )
-    .to_response_item()
+    );
+    ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: serde_json::to_string(&communication).unwrap(),
+        }],
+        end_turn: None,
+        phase: None,
+    }
 }
 
 fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
