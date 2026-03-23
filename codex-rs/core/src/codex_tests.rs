@@ -47,6 +47,7 @@ use crate::protocol::UserMessageEvent;
 use crate::rollout::policy::EventPersistenceMode;
 use crate::rollout::recorder::RolloutRecorder;
 use crate::rollout::recorder::RolloutRecorderParams;
+use crate::state::ApprovalOutcomeMetadata;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
@@ -4414,6 +4415,269 @@ async fn task_finish_emits_prompt_queued_metadata_for_injected_user_input_when_f
     ));
 }
 
+#[test]
+fn review_decision_metadata_mapping_is_stable() {
+    assert_eq!(
+        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::Approved).review_decision,
+        Some(codex_protocol::models::ReviewDecisionMetadata::Approved)
+    );
+    assert_eq!(
+        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::Denied).review_decision,
+        Some(codex_protocol::models::ReviewDecisionMetadata::Denied)
+    );
+    assert_eq!(
+        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::Abort).review_decision,
+        Some(codex_protocol::models::ReviewDecisionMetadata::Abort)
+    );
+    assert_eq!(
+        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::ApprovedForSession).review_decision,
+        Some(codex_protocol::models::ReviewDecisionMetadata::ApprovedForSession)
+    );
+    assert_eq!(
+        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::ApprovedExecpolicyAmendment {
+            proposed_execpolicy_amendment: codex_protocol::approvals::ExecPolicyAmendment::new(
+                vec!["echo".to_string(), "hi".to_string()],
+            ),
+        })
+        .review_decision,
+        Some(codex_protocol::models::ReviewDecisionMetadata::ApprovedWithAmendment)
+    );
+    assert_eq!(
+        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::NetworkPolicyAmendment {
+            network_policy_amendment: codex_protocol::approvals::NetworkPolicyAmendment {
+                host: "example.com".to_string(),
+                action: codex_protocol::protocol::NetworkPolicyRuleAction::Allow,
+            },
+        })
+        .review_decision,
+        Some(codex_protocol::models::ReviewDecisionMetadata::ApprovedWithNetworkPolicyAllow)
+    );
+    assert_eq!(
+        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::NetworkPolicyAmendment {
+            network_policy_amendment: codex_protocol::approvals::NetworkPolicyAmendment {
+                host: "example.com".to_string(),
+                action: codex_protocol::protocol::NetworkPolicyRuleAction::Deny,
+            },
+        })
+        .review_decision,
+        Some(codex_protocol::models::ReviewDecisionMetadata::DeniedWithNetworkPolicyDeny)
+    );
+}
+
+async fn setup_tool_call_metadata_runtime_test() -> (
+    Arc<Session>,
+    Arc<TurnContext>,
+    async_channel::Receiver<Event>,
+) {
+    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
+    Arc::get_mut(&mut sess)
+        .expect("session should be uniquely owned in this test")
+        .features
+        .enable(Feature::ItemMetadata)
+        .expect("feature flag should be enabled for this test");
+
+    sess.spawn_task(
+        Arc::clone(&tc),
+        vec![UserInput::Text {
+            text: "start".to_string(),
+            text_elements: Vec::new(),
+        }],
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+    while rx.try_recv().is_ok() {}
+
+    (sess, tc, rx)
+}
+
+fn function_call_item(call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        name: "shell".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: call_id.to_string(),
+        metadata: None,
+    }
+}
+
+async fn assert_next_emitted_function_call_metadata(
+    rx: &async_channel::Receiver<Event>,
+    expected_escalated: bool,
+    expected_review_decision: Option<codex_protocol::models::ReviewDecisionMetadata>,
+) {
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("expected raw response item event")
+        .expect("channel open");
+    assert!(matches!(
+        event.msg,
+        EventMsg::RawResponseItem(ref ev)
+            if matches!(
+                &ev.item,
+                ResponseItem::FunctionCall {
+                    metadata: Some(metadata),
+                    ..
+                } if metadata.is_tool_call_escalated == Some(expected_escalated)
+                    && metadata.review_decision == expected_review_decision
+            )
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_call_metadata_stamps_escalated_review_decision_when_feature_enabled() {
+    let (sess, tc, rx) = setup_tool_call_metadata_runtime_test().await;
+
+    sess.record_call_approval_outcome(
+        "call-1".to_string(),
+        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::Denied),
+    )
+    .await;
+    sess.record_response_item_and_emit_turn_item(tc.as_ref(), function_call_item("call-1"))
+        .await;
+    assert_next_emitted_function_call_metadata(
+        &rx,
+        true,
+        Some(codex_protocol::models::ReviewDecisionMetadata::Denied),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_call_metadata_stamps_non_escalated_false_when_feature_enabled() {
+    let (sess, tc, rx) = setup_tool_call_metadata_runtime_test().await;
+
+    sess.record_response_item_and_emit_turn_item(tc.as_ref(), function_call_item("call-2"))
+        .await;
+    assert_next_emitted_function_call_metadata(&rx, false, None).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn handle_output_item_done_stamps_tool_call_metadata_when_feature_enabled() {
+    let (mut sess, tc, _rx) = make_session_and_context_with_rx().await;
+    Arc::get_mut(&mut sess)
+        .expect("session should be uniquely owned in this test")
+        .features
+        .enable(Feature::ItemMetadata)
+        .expect("feature flag should be enabled for this test");
+
+    sess.spawn_task(
+        Arc::clone(&tc),
+        vec![UserInput::Text {
+            text: "start".to_string(),
+            text_elements: Vec::new(),
+        }],
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    let mut ctx = HandleOutputCtx {
+        sess: Arc::clone(&sess),
+        turn_context: Arc::clone(&tc),
+        tool_runtime: test_tool_runtime(Arc::clone(&sess), Arc::clone(&tc)),
+        cancellation_token: CancellationToken::new(),
+    };
+    let item = ResponseItem::FunctionCall {
+        id: None,
+        name: "shell".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: "call-stream-1".to_string(),
+        metadata: None,
+    };
+
+    handle_output_item_done(&mut ctx, item, None)
+        .await
+        .expect("stream output handler should succeed");
+
+    let history = sess.clone_history().await;
+    assert!(history.raw_items().iter().any(|history_item| {
+        matches!(
+            history_item,
+            ResponseItem::FunctionCall {
+                call_id,
+                metadata: Some(metadata),
+                ..
+            } if call_id == "call-stream-1"
+                && metadata.is_tool_call_escalated == Some(false)
+                && metadata.review_decision.is_none()
+        )
+    }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_call_metadata_can_be_restamped_after_approval_outcome() {
+    let (mut sess, tc, _rx) = make_session_and_context_with_rx().await;
+    Arc::get_mut(&mut sess)
+        .expect("session should be uniquely owned in this test")
+        .features
+        .enable(Feature::ItemMetadata)
+        .expect("feature flag should be enabled for this test");
+
+    sess.spawn_task(
+        Arc::clone(&tc),
+        vec![UserInput::Text {
+            text: "start".to_string(),
+            text_elements: Vec::new(),
+        }],
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    sess.record_response_item_and_emit_turn_item(
+        tc.as_ref(),
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "shell".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-restamp-1".to_string(),
+            metadata: None,
+        },
+    )
+    .await;
+    sess.record_call_approval_outcome(
+        "call-restamp-1".to_string(),
+        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::Denied),
+    )
+    .await;
+
+    let original_item = sess
+        .clone_history()
+        .await
+        .raw_items()
+        .iter()
+        .find(|item| {
+            matches!(
+                item,
+                ResponseItem::FunctionCall { call_id, .. } if call_id == "call-restamp-1"
+            )
+        })
+        .cloned()
+        .expect("function call should exist in history");
+
+    let restamped_item = sess.stamp_tool_approval_metadata(original_item).await;
+
+    assert!(matches!(
+        restamped_item,
+        ResponseItem::FunctionCall {
+            metadata: Some(metadata),
+            ..
+        } if metadata.is_tool_call_escalated == Some(true)
+            && metadata.review_decision
+                == Some(codex_protocol::models::ReviewDecisionMetadata::Denied)
+    ));
+}
+
 #[tokio::test]
 async fn steer_input_requires_active_turn() {
     let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
@@ -4745,6 +5009,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         call_id: "call-1".to_string(),
         name: "shell".to_string(),
         input: "{}".to_string(),
+        metadata: None,
     };
 
     let call = ToolRouter::build_tool_call(session.as_ref(), item.clone())

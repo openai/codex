@@ -83,7 +83,11 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
-use codex_protocol::item_metadata::stamp_user_message_type_on_input_item;
+use codex_protocol::item_metadata::response_item_tool_call_id;
+use codex_protocol::item_metadata::stamp_message_metadata_on_input_item;
+use codex_protocol::item_metadata::stamp_tool_metadata_on_response_item;
+use codex_protocol::item_metadata::tool_call_metadata_or_default;
+use codex_protocol::item_metadata::user_message_metadata_patch;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
@@ -294,6 +298,8 @@ use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::tool_kind_for_path;
 use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
+use crate::state::ApprovalOutcomeMetadata;
+use crate::state::PendingApprovalMetadata;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state_db;
@@ -1003,6 +1009,47 @@ fn local_time_context() -> (String, String) {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+struct ToolApprovalMetadataSnapshot {
+    approval_outcomes_by_call_id: HashMap<String, ApprovalOutcomeMetadata>,
+    pending_approval_call_ids: HashSet<String>,
+}
+
+fn stamp_tool_approval_metadata_with_snapshot(
+    response_item: ResponseItem,
+    snapshot: Option<&ToolApprovalMetadataSnapshot>,
+) -> ResponseItem {
+    let Some(snapshot) = snapshot else {
+        return response_item;
+    };
+    let Some(call_id) = response_item_tool_call_id(&response_item) else {
+        return response_item;
+    };
+
+    let outcome = snapshot.approval_outcomes_by_call_id.get(call_id).cloned();
+    let has_pending_approval = snapshot.pending_approval_call_ids.contains(call_id);
+
+    let mut metadata = match tool_call_metadata_or_default(&response_item) {
+        Some(metadata) => metadata,
+        None => return response_item,
+    };
+
+    match outcome {
+        Some(outcome) => {
+            metadata.is_tool_call_escalated = Some(true);
+            metadata.review_decision = outcome.review_decision;
+        }
+        None if !has_pending_approval => {
+            metadata.is_tool_call_escalated = Some(false);
+            metadata.review_decision = None;
+        }
+        None => {
+            return stamp_tool_metadata_on_response_item(response_item, metadata);
+        }
+    }
+
+    stamp_tool_metadata_on_response_item(response_item, metadata)
+}
 #[derive(Clone)]
 pub(crate) struct SessionConfiguration {
     /// Provider identifier ("openai", "openrouter", ...).
@@ -2869,6 +2916,12 @@ impl Session {
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_approval_call_id(
+                        effective_approval_id.clone(),
+                        PendingApprovalMetadata {
+                            call_id: call_id.clone(),
+                        },
+                    );
                     ts.insert_pending_approval(effective_approval_id.clone(), tx_approve)
                 }
                 None => None,
@@ -2934,6 +2987,12 @@ impl Session {
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
+                    ts.insert_pending_approval_call_id(
+                        approval_id.clone(),
+                        PendingApprovalMetadata {
+                            call_id: call_id.clone(),
+                        },
+                    );
                     ts.insert_pending_approval(approval_id.clone(), tx_approve)
                 }
                 None => None,
@@ -3219,7 +3278,44 @@ impl Session {
         }
     }
 
+    pub async fn record_approval_outcome(&self, approval_id: &str, decision: &ReviewDecision) {
+        let mut active = self.active_turn.lock().await;
+        let Some(at) = active.as_mut() else {
+            return;
+        };
+        let mut ts = at.turn_state.lock().await;
+        let pending_approval = ts
+            .remove_pending_approval_call_id(approval_id)
+            .unwrap_or_else(|| PendingApprovalMetadata {
+                call_id: approval_id.to_string(),
+            });
+        drop(ts);
+        drop(active);
+        self.record_call_approval_outcome(
+            pending_approval.call_id,
+            ApprovalOutcomeMetadata::reviewed(decision),
+        )
+        .await;
+    }
+
+    pub(crate) async fn record_call_approval_outcome(
+        &self,
+        call_id: String,
+        outcome: ApprovalOutcomeMetadata,
+    ) {
+        let mut active = self.active_turn.lock().await;
+        let Some(at) = active.as_mut() else {
+            return;
+        };
+        if !self.enabled(Feature::ItemMetadata) {
+            return;
+        }
+        let mut ts = at.turn_state.lock().await;
+        ts.record_approval_outcome(call_id, outcome);
+    }
+
     pub async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {
+        self.record_approval_outcome(approval_id, &decision).await;
         let entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
@@ -3238,6 +3334,56 @@ impl Session {
                 warn!("No pending approval found for call_id: {approval_id}");
             }
         }
+    }
+
+    pub(crate) async fn stamp_tool_approval_metadata(
+        &self,
+        response_item: ResponseItem,
+    ) -> ResponseItem {
+        if !self.enabled(Feature::ItemMetadata) {
+            return response_item;
+        }
+        let snapshot = {
+            let active = self.active_turn.lock().await;
+            let Some(at) = active.as_ref() else {
+                return response_item;
+            };
+            let ts = at.turn_state.lock().await;
+            let (approval_outcomes_by_call_id, pending_approval_call_ids) =
+                ts.approval_metadata_snapshot();
+            ToolApprovalMetadataSnapshot {
+                approval_outcomes_by_call_id,
+                pending_approval_call_ids,
+            }
+        };
+        stamp_tool_approval_metadata_with_snapshot(response_item, Some(&snapshot))
+    }
+
+    pub(crate) async fn stamp_tool_approval_metadata_on_items(
+        &self,
+        response_items: Vec<ResponseItem>,
+    ) -> Vec<ResponseItem> {
+        if !self.enabled(Feature::ItemMetadata) {
+            return response_items;
+        }
+        let snapshot = {
+            let active = self.active_turn.lock().await;
+            let Some(at) = active.as_ref() else {
+                return response_items;
+            };
+            let ts = at.turn_state.lock().await;
+            let (approval_outcomes_by_call_id, pending_approval_call_ids) =
+                ts.approval_metadata_snapshot();
+            ToolApprovalMetadataSnapshot {
+                approval_outcomes_by_call_id,
+                pending_approval_call_ids,
+            }
+        };
+
+        response_items
+            .into_iter()
+            .map(|item| stamp_tool_approval_metadata_with_snapshot(item, Some(&snapshot)))
+            .collect()
     }
 
     pub async fn resolve_elicitation(
@@ -3792,6 +3938,8 @@ impl Session {
         turn_context: &TurnContext,
         response_item: ResponseItem,
     ) {
+        let response_item = self.stamp_tool_approval_metadata(response_item).await;
+
         // Add to conversation history and persist response item to rollout.
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
@@ -3894,7 +4042,7 @@ impl Session {
             return Err(SteerInputError::NoActiveTurn(input));
         };
 
-        let Some((active_turn_id, _)) = active_turn.tasks.first() else {
+        let Some((active_turn_id, _active_task)) = active_turn.tasks.first() else {
             return Err(SteerInputError::NoActiveTurn(input));
         };
 
@@ -3903,13 +4051,14 @@ impl Session {
         {
             return Err(SteerInputError::ExpectedTurnMismatch {
                 expected: expected_turn_id.to_string(),
-                actual: active_turn_id.clone(),
+                actual: active_turn_id.to_string(),
             });
         }
 
         let mut input_item: ResponseInputItem = input.into();
+        let metadata = user_message_metadata_patch(UserMessageType::PromptSteering);
         if self.enabled(Feature::ItemMetadata) {
-            stamp_user_message_type_on_input_item(&mut input_item, UserMessageType::PromptSteering);
+            stamp_message_metadata_on_input_item(&mut input_item, &metadata);
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
@@ -3930,10 +4079,8 @@ impl Session {
                     if self.enabled(Feature::ItemMetadata)
                         && matches!(&item, ResponseInputItem::Message { .. })
                     {
-                        stamp_user_message_type_on_input_item(
-                            &mut item,
-                            UserMessageType::PromptQueued,
-                        );
+                        let metadata = user_message_metadata_patch(UserMessageType::PromptQueued);
+                        stamp_message_metadata_on_input_item(&mut item, &metadata);
                     }
                     ts.push_pending_input(item);
                 }
@@ -4715,6 +4862,8 @@ mod handlers {
         }
         match decision {
             ReviewDecision::Abort => {
+                sess.record_approval_outcome(&approval_id, &ReviewDecision::Abort)
+                    .await;
                 sess.interrupt_task().await;
             }
             other => sess.notify_approval(&approval_id, other).await,
@@ -5630,8 +5779,12 @@ pub(crate) async fn run_turn(
         .await;
 
     let mut initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
+    let initial_message_metadata = user_message_metadata_patch(UserMessageType::Prompt);
     if sess.enabled(Feature::ItemMetadata) {
-        stamp_user_message_type_on_input_item(&mut initial_input_for_turn, UserMessageType::Prompt);
+        stamp_message_metadata_on_input_item(
+            &mut initial_input_for_turn,
+            &initial_message_metadata,
+        );
     }
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
     sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
@@ -5719,11 +5872,13 @@ pub(crate) async fn run_turn(
         }
 
         // Construct the input that we will send to the model.
-        let sampling_request_input: Vec<ResponseItem> = {
-            sess.clone_history()
-                .await
-                .for_prompt(&turn_context.model_info.input_modalities)
-        };
+        let sampling_request_input_items = sess
+            .clone_history()
+            .await
+            .for_prompt(&turn_context.model_info.input_modalities);
+        let sampling_request_input = sess
+            .stamp_tool_approval_metadata_on_items(sampling_request_input_items)
+            .await;
 
         let sampling_request_input_messages = sampling_request_input
             .iter()

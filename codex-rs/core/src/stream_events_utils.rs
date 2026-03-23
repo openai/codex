@@ -213,6 +213,7 @@ pub(crate) async fn handle_output_item_done(
                 payload_preview
             );
 
+            let item = ctx.sess.stamp_tool_approval_metadata(item).await;
             record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
                 .await;
 

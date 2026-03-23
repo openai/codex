@@ -2,6 +2,7 @@
 
 use indexmap::IndexMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -10,6 +11,7 @@ use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ReviewDecisionMetadata;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
@@ -56,6 +58,43 @@ pub(crate) struct RunningTask {
     pub(crate) _timer: Option<codex_otel::Timer>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PendingApprovalMetadata {
+    pub(crate) call_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ApprovalOutcomeMetadata {
+    pub(crate) review_decision: Option<ReviewDecisionMetadata>,
+}
+
+impl ApprovalOutcomeMetadata {
+    pub(crate) fn reviewed(decision: &ReviewDecision) -> Self {
+        let review_decision = match decision {
+            ReviewDecision::Approved => ReviewDecisionMetadata::Approved,
+            ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
+                ReviewDecisionMetadata::ApprovedWithAmendment
+            }
+            ReviewDecision::Denied => ReviewDecisionMetadata::Denied,
+            ReviewDecision::Abort => ReviewDecisionMetadata::Abort,
+            ReviewDecision::ApprovedForSession => ReviewDecisionMetadata::ApprovedForSession,
+            ReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment,
+            } => match network_policy_amendment.action {
+                codex_protocol::protocol::NetworkPolicyRuleAction::Allow => {
+                    ReviewDecisionMetadata::ApprovedWithNetworkPolicyAllow
+                }
+                codex_protocol::protocol::NetworkPolicyRuleAction::Deny => {
+                    ReviewDecisionMetadata::DeniedWithNetworkPolicyDeny
+                }
+            },
+        };
+        Self {
+            review_decision: Some(review_decision),
+        }
+    }
+}
+
 impl ActiveTurn {
     pub(crate) fn add_task(&mut self, task: RunningTask) {
         let sub_id = task.turn_context.sub_id.clone();
@@ -76,6 +115,8 @@ impl ActiveTurn {
 #[derive(Default)]
 pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
+    pending_approval_metadata_by_id: HashMap<String, PendingApprovalMetadata>,
+    approval_outcomes_by_call_id: HashMap<String, ApprovalOutcomeMetadata>,
     pending_request_permissions: HashMap<String, oneshot::Sender<RequestPermissionsResponse>>,
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
@@ -95,6 +136,42 @@ impl TurnState {
         self.pending_approvals.insert(key, tx)
     }
 
+    pub(crate) fn insert_pending_approval_call_id(
+        &mut self,
+        approval_key: String,
+        pending_metadata: PendingApprovalMetadata,
+    ) -> Option<PendingApprovalMetadata> {
+        self.pending_approval_metadata_by_id
+            .insert(approval_key, pending_metadata)
+    }
+
+    pub(crate) fn remove_pending_approval_call_id(
+        &mut self,
+        approval_key: &str,
+    ) -> Option<PendingApprovalMetadata> {
+        self.pending_approval_metadata_by_id.remove(approval_key)
+    }
+
+    pub(crate) fn record_approval_outcome(
+        &mut self,
+        call_id: String,
+        outcome: ApprovalOutcomeMetadata,
+    ) {
+        self.approval_outcomes_by_call_id.insert(call_id, outcome);
+    }
+
+    pub(crate) fn approval_metadata_snapshot(
+        &self,
+    ) -> (HashMap<String, ApprovalOutcomeMetadata>, HashSet<String>) {
+        (
+            self.approval_outcomes_by_call_id.clone(),
+            self.pending_approval_metadata_by_id
+                .values()
+                .map(|metadata| metadata.call_id.clone())
+                .collect(),
+        )
+    }
+
     pub(crate) fn remove_pending_approval(
         &mut self,
         key: &str,
@@ -104,6 +181,8 @@ impl TurnState {
 
     pub(crate) fn clear_pending(&mut self) {
         self.pending_approvals.clear();
+        self.pending_approval_metadata_by_id.clear();
+        self.approval_outcomes_by_call_id.clear();
         self.pending_request_permissions.clear();
         self.pending_user_input.clear();
         self.pending_elicitations.clear();

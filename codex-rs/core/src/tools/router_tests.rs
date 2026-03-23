@@ -142,6 +142,7 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
             namespace: Some("mcp__codex_apps__calendar".to_string()),
             arguments: "{}".to_string(),
             call_id: "call-namespace".to_string(),
+            metadata: None,
         },
     )
     .await?
