@@ -227,6 +227,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 req,
                 attempt,
                 ctx,
+                &command,
                 exec_env,
                 zsh_fork_config,
             )

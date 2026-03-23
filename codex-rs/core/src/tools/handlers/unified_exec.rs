@@ -349,11 +349,19 @@ pub(crate) fn get_command(
             let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
             Ok(shell.derive_exec_args(&args.cmd, use_login_shell))
         }
-        UnifiedExecShellMode::ZshFork(zsh_fork_config) => Ok(vec![
-            zsh_fork_config.shell_zsh_path.to_string_lossy().to_string(),
-            if use_login_shell { "-lc" } else { "-c" }.to_string(),
-            args.cmd.clone(),
-        ]),
+        UnifiedExecShellMode::ZshFork(zsh_fork_config) => {
+            if args.shell.is_some() {
+                return Err(
+                    "shell override is not supported when the zsh-fork backend is enabled."
+                        .to_string(),
+                );
+            }
+            Ok(vec![
+                zsh_fork_config.shell_zsh_path.to_string_lossy().to_string(),
+                if use_login_shell { "-lc" } else { "-c" }.to_string(),
+                args.cmd.clone(),
+            ])
+        }
     }
 }
 

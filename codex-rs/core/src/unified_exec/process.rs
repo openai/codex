@@ -1,6 +1,7 @@
 #![allow(clippy::module_inception)]
 
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
@@ -36,6 +37,13 @@ pub(crate) trait SpawnLifecycle: std::fmt::Debug + Send + Sync {
     }
 
     fn after_spawn(&mut self) {}
+
+    /// Releases resources that needed to stay alive until the child process was
+    /// fully launched or until the session was torn down.
+    ///
+    /// This hook must tolerate being called during normal process exit as well
+    /// as early termination paths, and it is guaranteed to run at most once.
+    fn after_exit(&mut self) {}
 }
 
 pub(crate) type SpawnLifecycleHandle = Box<dyn SpawnLifecycle>;
@@ -66,7 +74,8 @@ pub(crate) struct UnifiedExecProcess {
     output_drained: Arc<Notify>,
     output_task: JoinHandle<()>,
     sandbox_type: SandboxType,
-    _spawn_lifecycle: SpawnLifecycleHandle,
+    _spawn_lifecycle: Arc<StdMutex<SpawnLifecycleHandle>>,
+    spawn_lifecycle_released: Arc<AtomicBool>,
 }
 
 impl UnifiedExecProcess {
@@ -74,7 +83,7 @@ impl UnifiedExecProcess {
         process_handle: ExecCommandSession,
         initial_output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
         sandbox_type: SandboxType,
-        spawn_lifecycle: SpawnLifecycleHandle,
+        spawn_lifecycle: Arc<StdMutex<SpawnLifecycleHandle>>,
     ) -> Self {
         let output_buffer = Arc::new(Mutex::new(HeadTailBuffer::default()));
         let output_notify = Arc::new(Notify::new());
@@ -119,6 +128,19 @@ impl UnifiedExecProcess {
             output_task,
             sandbox_type,
             _spawn_lifecycle: spawn_lifecycle,
+            spawn_lifecycle_released: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn release_spawn_lifecycle(&self) {
+        if self
+            .spawn_lifecycle_released
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return;
+        }
+        if let Ok(mut lifecycle) = self._spawn_lifecycle.lock() {
+            lifecycle.after_exit();
         }
     }
 
@@ -157,6 +179,7 @@ impl UnifiedExecProcess {
     }
 
     pub(super) fn terminate(&self) {
+        self.release_spawn_lifecycle();
         self.output_closed.store(true, Ordering::Release);
         self.output_closed_notify.notify_waiters();
         self.process_handle.terminate();
@@ -232,12 +255,19 @@ impl UnifiedExecProcess {
             mut exit_rx,
         } = spawned;
         let output_rx = codex_utils_pty::combine_output_receivers(stdout_rx, stderr_rx);
-        let managed = Self::new(process_handle, output_rx, sandbox_type, spawn_lifecycle);
+        let spawn_lifecycle = Arc::new(StdMutex::new(spawn_lifecycle));
+        let managed = Self::new(
+            process_handle,
+            output_rx,
+            sandbox_type,
+            Arc::clone(&spawn_lifecycle),
+        );
 
         let exit_ready = matches!(exit_rx.try_recv(), Ok(_) | Err(TryRecvError::Closed));
 
         if exit_ready {
             managed.signal_exit();
+            managed.release_spawn_lifecycle();
             managed.check_for_sandbox_denial().await?;
             return Ok(managed);
         }
@@ -247,14 +277,22 @@ impl UnifiedExecProcess {
             .is_ok()
         {
             managed.signal_exit();
+            managed.release_spawn_lifecycle();
             managed.check_for_sandbox_denial().await?;
             return Ok(managed);
         }
 
         tokio::spawn({
             let cancellation_token = managed.cancellation_token.clone();
+            let spawn_lifecycle = Arc::clone(&spawn_lifecycle);
+            let spawn_lifecycle_released = Arc::clone(&managed.spawn_lifecycle_released);
             async move {
                 let _ = exit_rx.await;
+                if !spawn_lifecycle_released.swap(true, Ordering::AcqRel)
+                    && let Ok(mut lifecycle) = spawn_lifecycle.lock()
+                {
+                    lifecycle.after_exit();
+                }
                 cancellation_token.cancel();
             }
         });

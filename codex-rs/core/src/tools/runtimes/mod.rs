@@ -73,29 +73,6 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     cwd: &Path,
     explicit_env_overrides: &HashMap<String, String>,
 ) -> Vec<String> {
-    if cfg!(windows) {
-        return command.to_vec();
-    }
-
-    let Some(snapshot) = session_shell.shell_snapshot() else {
-        return command.to_vec();
-    };
-
-    if !snapshot.path.exists() {
-        return command.to_vec();
-    }
-
-    if if let (Ok(snapshot_cwd), Ok(command_cwd)) = (
-        path_utils::normalize_for_path_comparison(snapshot.cwd.as_path()),
-        path_utils::normalize_for_path_comparison(cwd),
-    ) {
-        snapshot_cwd != command_cwd
-    } else {
-        snapshot.cwd != cwd
-    } {
-        return command.to_vec();
-    }
-
     if command.len() < 3 {
         return command.to_vec();
     }
@@ -105,27 +82,59 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         return command.to_vec();
     }
 
-    let snapshot_path = snapshot.path.to_string_lossy();
     let shell_path = session_shell.shell_path.to_string_lossy();
     let original_shell = shell_single_quote(&command[0]);
     let original_script = shell_single_quote(&command[2]);
-    let snapshot_path = shell_single_quote(snapshot_path.as_ref());
     let trailing_args = command[3..]
         .iter()
         .map(|arg| format!(" '{}'", shell_single_quote(arg)))
         .collect::<String>();
-    let (override_captures, override_exports) = build_override_exports(explicit_env_overrides);
-    let rewritten_script = if override_exports.is_empty() {
-        format!(
-            "if . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
-        )
-    } else {
-        format!(
-            "{override_captures}\n\nif . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\n{override_exports}\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
-        )
+    let Some(snapshot_restore_preamble) =
+        maybe_build_snapshot_restore_preamble(session_shell, cwd, explicit_env_overrides)
+    else {
+        return command.to_vec();
     };
+    let rewritten_script = format!(
+        "{snapshot_restore_preamble}\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
+    );
 
     vec![shell_path.to_string(), "-c".to_string(), rewritten_script]
+}
+
+pub(crate) fn maybe_build_snapshot_restore_preamble(
+    session_shell: &Shell,
+    cwd: &Path,
+    explicit_env_overrides: &HashMap<String, String>,
+) -> Option<String> {
+    if cfg!(windows) {
+        return None;
+    }
+
+    let snapshot = session_shell.shell_snapshot()?;
+    if !snapshot.path.exists() {
+        return None;
+    }
+
+    let snapshot_matches_cwd = if let (Ok(snapshot_cwd), Ok(command_cwd)) = (
+        path_utils::normalize_for_path_comparison(snapshot.cwd.as_path()),
+        path_utils::normalize_for_path_comparison(cwd),
+    ) {
+        snapshot_cwd == command_cwd
+    } else {
+        snapshot.cwd == cwd
+    };
+    if !snapshot_matches_cwd {
+        return None;
+    }
+
+    let snapshot_path = shell_single_quote(snapshot.path.to_string_lossy().as_ref());
+    let (override_captures, override_exports) = build_override_exports(explicit_env_overrides);
+    let source_snapshot = format!("if . '{snapshot_path}' >/dev/null 2>&1; then :; fi");
+    Some(if override_exports.is_empty() {
+        source_snapshot
+    } else {
+        format!("{override_captures}\n\n{source_snapshot}\n\n{override_exports}")
+    })
 }
 
 fn build_override_exports(explicit_env_overrides: &HashMap<String, String>) -> (String, String) {
