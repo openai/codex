@@ -38,6 +38,7 @@ use codex_windows_sandbox::read_handle_loop;
 use codex_windows_sandbox::spawn_process_with_pipes;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::write_frame;
+use codex_windows_sandbox::LaunchDesktop;
 use std::ffi::c_void;
 use std::fs::File;
 use std::os::windows::io::FromRawHandle;
@@ -87,6 +88,7 @@ struct IpcSpawnedProcess {
     stderr_handle: HANDLE,
     stdin_handle: Option<HANDLE>,
     hpc_handle: Option<HANDLE>,
+    _desktop_owner: Option<LaunchDesktop>,
     _pipe_handles: Option<PipeSpawnHandles>,
 }
 
@@ -279,8 +281,6 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
     unsafe {
         CloseHandle(h_token);
     }
-    let _desktop_owner = desktop_owner;
-
     Ok(IpcSpawnedProcess {
         log_dir,
         pi,
@@ -288,6 +288,7 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
         stderr_handle,
         stdin_handle,
         hpc_handle,
+        _desktop_owner: desktop_owner,
         _pipe_handles: pipe_handles,
     })
 }
