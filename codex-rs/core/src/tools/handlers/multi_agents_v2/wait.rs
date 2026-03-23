@@ -1,15 +1,12 @@
 use super::*;
 use crate::agent::status::is_final;
-use crate::error::CodexErr;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch::Receiver;
 use tokio::time::Instant;
-
 use tokio::time::timeout_at;
 
 pub(crate) struct Handler;
@@ -94,7 +91,7 @@ impl ToolHandler for Handler {
                     }
                     status_rxs.push((*id, rx));
                 }
-                Err(CodexErr::ThreadNotFound(_)) => {
+                Err(crate::error::CodexErr::ThreadNotFound(_)) => {
                     initial_final_statuses.push((*id, AgentStatus::NotFound));
                 }
                 Err(err) => {
@@ -124,7 +121,7 @@ impl ToolHandler for Handler {
             initial_final_statuses
         } else {
             let mut futures = FuturesUnordered::new();
-            for (id, rx) in status_rxs.into_iter() {
+            for (id, rx) in status_rxs {
                 let session = session.clone();
                 futures.push(wait_for_final_status(session, id, rx));
             }
@@ -208,7 +205,7 @@ impl ToolOutput for WaitAgentResult {
     }
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
-        tool_output_response_item(call_id, payload, self, /*success*/ None, "wait_agent")
+        tool_output_response_item(call_id, payload, self, None, "wait_agent")
     }
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
@@ -217,7 +214,7 @@ impl ToolOutput for WaitAgentResult {
 }
 
 async fn wait_for_final_status(
-    session: Arc<Session>,
+    session: std::sync::Arc<Session>,
     thread_id: ThreadId,
     mut status_rx: Receiver<AgentStatus>,
 ) -> Option<(ThreadId, AgentStatus)> {
