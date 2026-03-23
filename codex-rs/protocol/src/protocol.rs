@@ -534,20 +534,8 @@ impl InterAgentCommunication {
         ResponseInputItem::Message {
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
-                text: serde_json::to_string(self).unwrap_or_default()
+                text: serde_json::to_string(self).unwrap_or_default(),
             }],
-        }
-    }
-
-    pub(crate) fn to_response_item(&self) -> ResponseItem {
-        ResponseItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: serde_json::to_string(self).unwrap_or_default()
-            }],
-            end_turn: None,
-            phase: None,
         }
     }
 
