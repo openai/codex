@@ -895,6 +895,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn add_denied_domain_forces_block_with_global_wildcard_allowlist() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allowed_domains: vec!["*".to_string()],
+            ..NetworkProxySettings::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("evil.example", 80).await.unwrap(),
+            HostBlockDecision::Allowed
+        );
+
+        state.add_denied_domain("evil.example").await.unwrap();
+
+        let (allowed, denied) = state.current_patterns().await.unwrap();
+        assert_eq!(allowed, vec!["*".to_string()]);
+        assert_eq!(denied, vec!["evil.example".to_string()]);
+        assert_eq!(
+            state.host_blocked("evil.example", 80).await.unwrap(),
+            HostBlockDecision::Blocked(HostBlockReason::Denied)
+        );
+    }
+
+    #[tokio::test]
     async fn add_allowed_domain_succeeds_when_managed_baseline_allows_expansion() {
         let config = NetworkProxyConfig {
             network: NetworkProxySettings {
