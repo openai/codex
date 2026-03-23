@@ -202,7 +202,7 @@ impl ChatWidget {
         vec![("/realtime".to_string(), "stop live voice".to_string())]
     }
 
-    fn stop_realtime_conversation_from_ui(&mut self) {
+    pub(super) fn stop_realtime_conversation_from_ui(&mut self) {
         self.request_realtime_conversation_close(/*info_message*/ None);
     }
 

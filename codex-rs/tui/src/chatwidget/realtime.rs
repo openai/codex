@@ -106,7 +106,7 @@ pub(super) struct PendingSteerCompareKey {
 }
 
 impl ChatWidget {
-    fn stop_realtime_conversation_from_ui(&mut self) {
+    pub(super) fn stop_realtime_conversation_from_ui(&mut self) {
         self.request_realtime_conversation_close(/*info_message*/ None);
     }
 
