@@ -9,12 +9,14 @@ use crate::config::types::ShellEnvironmentPolicy;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::AgentStatus;
 use crate::protocol::AskForApproval;
+use crate::protocol::EventMsg;
 use crate::protocol::FileSystemSandboxPolicy;
 use crate::protocol::NetworkSandboxPolicy;
 use crate::protocol::Op;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionSource;
 use crate::protocol::SubAgentSource;
+use crate::protocol::TurnCompleteEvent;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
@@ -1414,7 +1416,7 @@ async fn multi_agent_v2_wait_agent_accepts_targets_argument() {
     assert_eq!(
         result,
         crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult {
-            status: HashMap::from([(target, AgentStatus::NotFound)]),
+            message: "Wait completed.".to_string(),
             timed_out: false,
         }
     );
@@ -1582,12 +1584,7 @@ async fn wait_agent_returns_final_status_without_timeout() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_wait_agent_returns_statuses_keyed_by_path() {
-    #[derive(Debug, Deserialize)]
-    struct SpawnAgentResult {
-        task_name: String,
-    }
-
+async fn multi_agent_v2_wait_agent_returns_summary_for_named_targets() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -1617,9 +1614,7 @@ async fn multi_agent_v2_wait_agent_returns_statuses_keyed_by_path() {
         ))
         .await
         .expect("spawn_agent should succeed");
-    let (content, _) = expect_text_output(spawn_output);
-    let spawn_result: SpawnAgentResult =
-        serde_json::from_str(&content).expect("spawn result should parse");
+    let _ = expect_text_output(spawn_output);
 
     let agent_id = session
         .services
@@ -1667,10 +1662,64 @@ async fn multi_agent_v2_wait_agent_returns_statuses_keyed_by_path() {
     assert_eq!(
         result,
         crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult {
-            status: HashMap::from([(spawn_result.task_name, AgentStatus::Shutdown)]),
+            message: "Wait completed.".to_string(),
             timed_out: false,
         }
     );
+    assert_eq!(success, None);
+}
+
+#[tokio::test]
+async fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    turn.config = Arc::new(config.clone());
+
+    let thread = manager.start_thread(config).await.expect("start thread");
+    let agent_id = thread.thread_id;
+    let child_turn = thread.thread.codex.session.new_default_turn().await;
+    thread
+        .thread
+        .codex
+        .session
+        .send_event(
+            child_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: child_turn.sub_id.clone(),
+                last_agent_message: Some("sensitive child output".to_string()),
+            }),
+        )
+        .await;
+
+    let output = WaitAgentHandlerV2
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "wait_agent",
+            function_payload(json!({
+                "targets": [agent_id.to_string()],
+                "timeout_ms": 1000
+            })),
+        ))
+        .await
+        .expect("wait_agent should succeed");
+    let (content, success) = expect_text_output(output);
+    let result: crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult =
+        serde_json::from_str(&content).expect("wait_agent result should be json");
+    assert_eq!(
+        result,
+        crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult {
+            message: "Wait completed.".to_string(),
+            timed_out: false,
+        }
+    );
+    assert!(!content.contains("sensitive child output"));
     assert_eq!(success, None);
 }
 
