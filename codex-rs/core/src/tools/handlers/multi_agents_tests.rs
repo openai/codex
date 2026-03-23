@@ -80,14 +80,27 @@ fn thread_manager() -> ThreadManager {
     )
 }
 
-fn inter_agent_message_text(recipient: &str, content: &str) -> String {
-    serde_json::to_string(&InterAgentCommunication::new(
-        AgentPath::root(),
-        AgentPath::try_from(recipient).expect("recipient path should be valid"),
-        Vec::new(),
-        content.to_string(),
-    ))
-    .expect("inter-agent communication should serialize")
+fn history_contains_inter_agent_communication(
+    history_items: &[ResponseItem],
+    expected: &InterAgentCommunication,
+) -> bool {
+    history_items.iter().any(|item| {
+        let ResponseItem::Message { role, content, .. } = item else {
+            return false;
+        };
+        if role != "assistant" {
+            return false;
+        }
+        content.iter().any(|content_item| match content_item {
+            ContentItem::OutputText { text } => {
+                serde_json::from_str::<InterAgentCommunication>(text)
+                    .ok()
+                    .as_ref()
+                    == Some(expected)
+            }
+            ContentItem::InputText { .. } | ContentItem::InputImage { .. } => false,
+        })
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -401,7 +414,12 @@ async fn multi_agent_v2_spawn_returns_path_and_send_input_accepts_relative_path(
         .get_thread(child_thread_id)
         .await
         .expect("child thread should exist");
-    let expected_message = inter_agent_message_text("/root/test_process", "continue");
+    let expected_communication = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::try_from("/root/test_process").expect("agent path"),
+        Vec::new(),
+        "continue".to_string(),
+    );
     timeout(Duration::from_secs(2), async {
         loop {
             let history_items = child_thread
@@ -411,18 +429,8 @@ async fn multi_agent_v2_spawn_returns_path_and_send_input_accepts_relative_path(
                 .await
                 .raw_items()
                 .to_vec();
-            let recorded = history_items.iter().any(|item| {
-                matches!(
-                    item,
-                    ResponseItem::Message { role, content, .. }
-                        if role == "assistant"
-                            && content.iter().any(|content_item| matches!(
-                                content_item,
-                                ContentItem::OutputText { text }
-                                    if text == &expected_message
-                            ))
-                )
-            });
+            let recorded =
+                history_contains_inter_agent_communication(&history_items, &expected_communication);
             let saw_user_message = history_items.iter().any(|item| {
                 matches!(
                     item,
@@ -674,18 +682,15 @@ async fn multi_agent_v2_send_input_interrupts_busy_child_without_losing_message(
                 .await
                 .raw_items()
                 .to_vec();
-            let saw_envelope = history_items.iter().any(|item| {
-                matches!(
-                    item,
-                    ResponseItem::Message { role, content, .. }
-                        if role == "assistant"
-                            && content.iter().any(|content_item| matches!(
-                                content_item,
-                                ContentItem::OutputText { text }
-                                    if text == &expected_message
-                            ))
-                )
-            });
+            let saw_envelope = history_contains_inter_agent_communication(
+                &history_items,
+                &InterAgentCommunication::new(
+                    AgentPath::root(),
+                    AgentPath::try_from("/root/worker").expect("agent path"),
+                    Vec::new(),
+                    "continue".to_string(),
+                ),
+            );
             let saw_user_message = history_items.iter().any(|item| {
                 matches!(
                     item,
