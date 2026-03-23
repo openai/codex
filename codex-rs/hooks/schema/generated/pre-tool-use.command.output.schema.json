@@ -2,12 +2,6 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {
-    "BlockDecisionWire": {
-      "enum": [
-        "block"
-      ],
-      "type": "string"
-    },
     "HookEventNameWire": {
       "enum": [
         "PreToolUse",
@@ -17,7 +11,14 @@
       ],
       "type": "string"
     },
-    "UserPromptSubmitHookSpecificOutputWire": {
+    "PreToolUseDecisionWire": {
+      "enum": [
+        "approve",
+        "block"
+      ],
+      "type": "string"
+    },
+    "PreToolUseHookSpecificOutputWire": {
       "additionalProperties": false,
       "properties": {
         "additionalContext": {
@@ -26,12 +27,35 @@
         },
         "hookEventName": {
           "$ref": "#/definitions/HookEventNameWire"
+        },
+        "permissionDecision": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PreToolUsePermissionDecisionWire"
+            }
+          ],
+          "default": null
+        },
+        "permissionDecisionReason": {
+          "default": null,
+          "type": "string"
+        },
+        "updatedInput": {
+          "default": null
         }
       },
       "required": [
         "hookEventName"
       ],
       "type": "object"
+    },
+    "PreToolUsePermissionDecisionWire": {
+      "enum": [
+        "allow",
+        "deny",
+        "ask"
+      ],
+      "type": "string"
     }
   },
   "properties": {
@@ -42,7 +66,7 @@
     "decision": {
       "allOf": [
         {
-          "$ref": "#/definitions/BlockDecisionWire"
+          "$ref": "#/definitions/PreToolUseDecisionWire"
         }
       ],
       "default": null
@@ -50,7 +74,7 @@
     "hookSpecificOutput": {
       "allOf": [
         {
-          "$ref": "#/definitions/UserPromptSubmitHookSpecificOutputWire"
+          "$ref": "#/definitions/PreToolUseHookSpecificOutputWire"
         }
       ],
       "default": null
@@ -72,6 +96,6 @@
       "type": "string"
     }
   },
-  "title": "user-prompt-submit.command.output",
+  "title": "pre-tool-use.command.output",
   "type": "object"
 }

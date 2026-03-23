@@ -32,6 +32,7 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
@@ -77,6 +78,33 @@ fn thread_manager() -> ThreadManager {
         CodexAuth::from_api_key("dummy"),
         built_in_model_providers(/* openai_base_url */ None)["openai"].clone(),
     )
+}
+
+fn history_contains_inter_agent_communication(
+    history_items: &[ResponseItem],
+    expected: &InterAgentCommunication,
+) -> bool {
+    history_items.iter().any(|item| {
+        let ResponseItem::Message { role, content, .. } = item else {
+            return false;
+        };
+        if role != "assistant" {
+            return false;
+        }
+        content.iter().any(|content_item| match content_item {
+            ContentItem::OutputText { text } => {
+                serde_json::from_str::<InterAgentCommunication>(text)
+                    .ok()
+                    .as_ref()
+                    == Some(expected)
+            }
+            ContentItem::InputText { .. } | ContentItem::InputImage { .. } => false,
+        })
+    })
+}
+
+fn inter_agent_message_text(recipient: &str, content: &str) -> String {
+    format!("author: /root\nrecipient: {recipient}\nother_recipients: []\nContent: {content}")
 }
 
 #[derive(Clone, Copy)]
@@ -390,6 +418,12 @@ async fn multi_agent_v2_spawn_returns_path_and_send_input_accepts_relative_path(
         .get_thread(child_thread_id)
         .await
         .expect("child thread should exist");
+    let expected_communication = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::try_from("/root/test_process").expect("agent path"),
+        Vec::new(),
+        "continue".to_string(),
+    );
     timeout(Duration::from_secs(2), async {
         loop {
             let history_items = child_thread
@@ -399,19 +433,8 @@ async fn multi_agent_v2_spawn_returns_path_and_send_input_accepts_relative_path(
                 .await
                 .raw_items()
                 .to_vec();
-            let recorded = history_items.iter().any(|item| {
-                matches!(
-                    item,
-                    ResponseItem::Message { role, content, .. }
-                        if role == "assistant"
-                            && content.iter().any(|content_item| matches!(
-                                content_item,
-                                ContentItem::OutputText { text }
-                                    if text
-                                        == "author: /root\nrecipient: /root/test_process\nother_recipients: []\nContent: continue"
-                            ))
-                )
-            });
+            let recorded =
+                history_contains_inter_agent_communication(&history_items, &expected_communication);
             let saw_user_message = history_items.iter().any(|item| {
                 matches!(
                     item,
@@ -508,6 +531,10 @@ async fn multi_agent_v2_send_input_accepts_structured_items() {
         .find(|(id, op)| *id == agent_id && *op == expected);
     assert_eq!(captured, Some((agent_id, expected)));
 
+    let expected_message = inter_agent_message_text(
+        "/root/worker",
+        "[mention:$drive](app://google_drive)\nread the folder",
+    );
     timeout(Duration::from_secs(2), async {
         loop {
             let history_items = thread
@@ -525,8 +552,7 @@ async fn multi_agent_v2_send_input_accepts_structured_items() {
                             && content.iter().any(|content_item| matches!(
                                 content_item,
                                 ContentItem::OutputText { text }
-                                    if text
-                                        == "author: /root\nrecipient: /root/worker\nother_recipients: []\nContent: [mention:$drive](app://google_drive)\nread the folder"
+                                    if text == &expected_message
                             ))
                 )
             });
@@ -659,19 +685,15 @@ async fn multi_agent_v2_send_input_interrupts_busy_child_without_losing_message(
                 .await
                 .raw_items()
                 .to_vec();
-            let saw_envelope = history_items.iter().any(|item| {
-                matches!(
-                    item,
-                    ResponseItem::Message { role, content, .. }
-                        if role == "assistant"
-                            && content.iter().any(|content_item| matches!(
-                                content_item,
-                                ContentItem::OutputText { text }
-                                    if text
-                                        == "author: /root\nrecipient: /root/worker\nother_recipients: []\nContent: continue"
-                            ))
-                )
-            });
+            let saw_envelope = history_contains_inter_agent_communication(
+                &history_items,
+                &InterAgentCommunication::new(
+                    AgentPath::root(),
+                    AgentPath::try_from("/root/worker").expect("agent path"),
+                    Vec::new(),
+                    "continue".to_string(),
+                ),
+            );
             let saw_user_message = history_items.iter().any(|item| {
                 matches!(
                     item,

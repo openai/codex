@@ -1,4 +1,5 @@
 use codex_protocol::protocol::HookCompletedEvent;
+use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
@@ -66,4 +67,114 @@ pub(crate) fn serialization_failure_hook_events(
             }
         })
         .collect()
+}
+
+pub(crate) fn matcher_pattern_for_event(
+    event_name: HookEventName,
+    matcher: Option<&str>,
+) -> Option<&str> {
+    match event_name {
+        HookEventName::PreToolUse | HookEventName::SessionStart => matcher,
+        HookEventName::UserPromptSubmit | HookEventName::Stop => None,
+    }
+}
+
+pub(crate) fn validate_matcher_pattern(matcher: &str) -> Result<(), regex::Error> {
+    if is_match_all_matcher(matcher) {
+        return Ok(());
+    }
+    regex::Regex::new(matcher).map(|_| ())
+}
+
+pub(crate) fn matches_matcher(matcher: Option<&str>, input: Option<&str>) -> bool {
+    match matcher {
+        None => true,
+        Some(matcher) if is_match_all_matcher(matcher) => true,
+        Some(matcher) => input
+            .and_then(|input| {
+                regex::Regex::new(matcher)
+                    .ok()
+                    .map(|regex| regex.is_match(input))
+            })
+            .unwrap_or(false),
+    }
+}
+
+fn is_match_all_matcher(matcher: &str) -> bool {
+    matcher.is_empty() || matcher == "*"
+}
+
+#[cfg(test)]
+mod tests {
+    use codex_protocol::protocol::HookEventName;
+    use pretty_assertions::assert_eq;
+
+    use super::matcher_pattern_for_event;
+    use super::matches_matcher;
+    use super::validate_matcher_pattern;
+
+    #[test]
+    fn matcher_omitted_matches_all_occurrences() {
+        assert!(matches_matcher(None, Some("Bash")));
+        assert!(matches_matcher(None, Some("Write")));
+    }
+
+    #[test]
+    fn matcher_star_matches_all_occurrences() {
+        assert!(matches_matcher(Some("*"), Some("Bash")));
+        assert!(matches_matcher(Some("*"), Some("Edit")));
+        assert_eq!(validate_matcher_pattern("*"), Ok(()));
+    }
+
+    #[test]
+    fn matcher_empty_string_matches_all_occurrences() {
+        assert!(matches_matcher(Some(""), Some("Bash")));
+        assert!(matches_matcher(Some(""), Some("SessionStart")));
+        assert_eq!(validate_matcher_pattern(""), Ok(()));
+    }
+
+    #[test]
+    fn matcher_uses_regex_matching() {
+        assert!(matches_matcher(Some("Edit|Write"), Some("Edit")));
+        assert!(matches_matcher(Some("Edit|Write"), Some("Write")));
+        assert!(!matches_matcher(Some("Edit|Write"), Some("Bash")));
+        assert_eq!(validate_matcher_pattern("Edit|Write"), Ok(()));
+    }
+
+    #[test]
+    fn matcher_supports_anchored_regexes() {
+        assert!(matches_matcher(Some("^Bash$"), Some("Bash")));
+        assert!(!matches_matcher(Some("^Bash$"), Some("BashOutput")));
+        assert_eq!(validate_matcher_pattern("^Bash$"), Ok(()));
+    }
+
+    #[test]
+    fn invalid_regex_is_rejected() {
+        assert!(validate_matcher_pattern("[").is_err());
+        assert!(!matches_matcher(Some("["), Some("Bash")));
+    }
+
+    #[test]
+    fn unsupported_events_ignore_matchers() {
+        assert_eq!(
+            matcher_pattern_for_event(HookEventName::UserPromptSubmit, Some("^hello")),
+            None
+        );
+        assert_eq!(
+            matcher_pattern_for_event(HookEventName::Stop, Some("^done$")),
+            None
+        );
+    }
+
+    #[test]
+    fn supported_events_keep_matchers() {
+        assert_eq!(
+            matcher_pattern_for_event(HookEventName::PreToolUse, Some("Bash")),
+            Some("Bash")
+        );
+        assert_eq!(
+            matcher_pattern_for_event(HookEventName::SessionStart, Some("startup|resume")),
+            Some("startup|resume")
+        );
+    }
 }

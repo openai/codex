@@ -266,6 +266,7 @@ impl AgentControl {
             new_thread.thread_id,
             notification_source,
             child_reference,
+            agent_metadata.agent_path.clone(),
         );
 
         Ok(LiveAgent {
@@ -437,6 +438,7 @@ impl AgentControl {
             resumed_thread.thread_id,
             Some(notification_source.clone()),
             child_reference,
+            agent_metadata.agent_path.clone(),
         );
         self.persist_thread_spawn_edge_for_source(
             resumed_thread.thread.as_ref(),
@@ -687,6 +689,7 @@ impl AgentControl {
         child_thread_id: ThreadId,
         session_source: Option<SessionSource>,
         child_reference: String,
+        child_agent_path: Option<AgentPath>,
     ) {
         let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
@@ -717,6 +720,39 @@ impl AgentControl {
             let Ok(state) = control.upgrade() else {
                 return;
             };
+            let child_thread = state.get_thread(child_thread_id).await.ok();
+            if let Some(child_agent_path) = child_agent_path
+                && child_thread
+                    .as_ref()
+                    .map(|thread| thread.enabled(Feature::MultiAgentV2))
+                    .unwrap_or(true)
+            {
+                let AgentStatus::Completed(Some(content)) = &status else {
+                    return;
+                };
+                let Some((parent_path, _)) = child_agent_path.as_str().rsplit_once('/') else {
+                    return;
+                };
+                let Ok(parent_agent_path) = AgentPath::try_from(parent_path) else {
+                    return;
+                };
+                let Some(parent_thread_id) = control.state.agent_id_for_path(&parent_agent_path)
+                else {
+                    return;
+                };
+                let _ = control
+                    .send_inter_agent_communication(
+                        parent_thread_id,
+                        InterAgentCommunication::new(
+                            child_agent_path,
+                            parent_agent_path,
+                            Vec::new(),
+                            content.clone(),
+                        ),
+                    )
+                    .await;
+                return;
+            }
             let Ok(parent_thread) = state.get_thread(parent_thread_id).await else {
                 return;
             };
