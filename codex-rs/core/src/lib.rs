@@ -90,9 +90,6 @@ pub use model_provider_info::OPENAI_PROVIDER_ID;
 pub use model_provider_info::WireApi;
 pub use model_provider_info::built_in_model_providers;
 pub use model_provider_info::create_oss_provider_with_base_url;
-pub use skills_watcher::SkillsWatcherEvent;
-#[deprecated(note = "use SkillsWatcherEvent")]
-pub type FileWatcherEvent = SkillsWatcherEvent;
 mod event_mapping;
 mod response_debug_context;
 pub mod review_format;
