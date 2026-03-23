@@ -36,7 +36,6 @@ pub(crate) struct EventProcessorWithHumanOutput {
 impl EventProcessorWithHumanOutput {
     pub(crate) fn create_with_ansi(
         with_ansi: bool,
-        _cursor_ansi: bool,
         config: &Config,
         last_message_path: Option<PathBuf>,
     ) -> Self {

@@ -136,7 +136,6 @@ struct ExecRunArgs {
     in_process_start_args: InProcessClientStartArgs,
     command: Option<ExecCommand>,
     config: Config,
-    cursor_ansi: bool,
     dangerously_bypass_approvals_and_sandbox: bool,
     exec_span: tracing::Span,
     images: Vec<PathBuf>,
@@ -184,7 +183,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         prompt,
         output_schema: output_schema_path,
         config_overrides,
-        progress_cursor,
     } = cli;
 
     let (_stdout_with_ansi, stderr_with_ansi) = match color {
@@ -195,25 +193,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             supports_color::on_cached(Stream::Stderr).is_some(),
         ),
     };
-    let cursor_ansi = if progress_cursor {
-        true
-    } else {
-        match color {
-            cli::Color::Never => false,
-            cli::Color::Always => true,
-            cli::Color::Auto => {
-                if stderr_with_ansi || std::io::stderr().is_terminal() {
-                    true
-                } else {
-                    match std::env::var("TERM") {
-                        Ok(term) => !term.is_empty() && term != "dumb",
-                        Err(_) => false,
-                    }
-                }
-            }
-        }
-    };
-
     // Build fmt layer (existing logging) to compose with OTEL layer.
     let default_level = "error";
 
@@ -454,7 +433,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         in_process_start_args,
         command,
         config,
-        cursor_ansi,
         dangerously_bypass_approvals_and_sandbox,
         exec_span: exec_span.clone(),
         images,
@@ -476,7 +454,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         in_process_start_args,
         command,
         config,
-        cursor_ansi,
         dangerously_bypass_approvals_and_sandbox,
         exec_span,
         images,
@@ -494,7 +471,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         true => Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone())),
         _ => Box::new(EventProcessorWithHumanOutput::create_with_ansi(
             stderr_with_ansi,
-            cursor_ansi,
             &config,
             last_message_file.clone(),
         )),
