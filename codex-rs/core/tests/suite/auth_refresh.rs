@@ -294,13 +294,14 @@ async fn returns_fresh_tokens_as_is() -> Result<()> {
         .await;
 
     let ctx = RefreshTokenTestContext::new(&server)?;
-    let initial_last_refresh = Utc::now() - Duration::days(1);
-    let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+    let stale_refresh = Utc::now() - Duration::days(9);
+    let fresh_access_token = access_token_with_expiration(Utc::now() + Duration::hours(1));
+    let initial_tokens = build_tokens(&fresh_access_token, INITIAL_REFRESH_TOKEN);
     let initial_auth = AuthDotJson {
         auth_mode: Some(AuthMode::Chatgpt),
         openai_api_key: None,
         tokens: Some(initial_tokens.clone()),
-        last_refresh: Some(initial_last_refresh),
+        last_refresh: Some(stale_refresh),
     };
     ctx.write_auth(&initial_auth)?;
 
@@ -325,7 +326,7 @@ async fn returns_fresh_tokens_as_is() -> Result<()> {
 
 #[serial_test::serial(auth_refresh)]
 #[tokio::test]
-async fn refreshes_token_when_last_refresh_is_stale() -> Result<()> {
+async fn refreshes_token_when_access_token_is_expired() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;
@@ -340,13 +341,14 @@ async fn refreshes_token_when_last_refresh_is_stale() -> Result<()> {
         .await;
 
     let ctx = RefreshTokenTestContext::new(&server)?;
-    let stale_refresh = Utc::now() - Duration::days(9);
-    let initial_tokens = build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN);
+    let fresh_refresh = Utc::now() - Duration::days(1);
+    let expired_access_token = access_token_with_expiration(Utc::now() - Duration::hours(1));
+    let initial_tokens = build_tokens(&expired_access_token, INITIAL_REFRESH_TOKEN);
     let initial_auth = AuthDotJson {
         auth_mode: Some(AuthMode::Chatgpt),
         openai_api_key: None,
         tokens: Some(initial_tokens.clone()),
-        last_refresh: Some(stale_refresh),
+        last_refresh: Some(fresh_refresh),
     };
     ctx.write_auth(&initial_auth)?;
 
@@ -373,7 +375,7 @@ async fn refreshes_token_when_last_refresh_is_stale() -> Result<()> {
         .as_ref()
         .context("last_refresh should be recorded")?;
     assert!(
-        *refreshed_at >= stale_refresh,
+        *refreshed_at >= fresh_refresh,
         "last_refresh should advance"
     );
 
@@ -867,7 +869,7 @@ impl Drop for EnvGuard {
     }
 }
 
-fn minimal_jwt() -> String {
+fn jwt_with_payload(payload: serde_json::Value) -> String {
     #[derive(Serialize)]
     struct Header {
         alg: &'static str,
@@ -878,7 +880,6 @@ fn minimal_jwt() -> String {
         alg: "none",
         typ: "JWT",
     };
-    let payload = json!({ "sub": "user-123" });
 
     fn b64(data: &[u8]) -> String {
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
@@ -896,6 +897,14 @@ fn minimal_jwt() -> String {
     let payload_b64 = b64(&payload_bytes);
     let signature_b64 = b64(b"sig");
     format!("{header_b64}.{payload_b64}.{signature_b64}")
+}
+
+fn minimal_jwt() -> String {
+    jwt_with_payload(json!({ "sub": "user-123" }))
+}
+
+fn access_token_with_expiration(expires_at: chrono::DateTime<Utc>) -> String {
+    jwt_with_payload(json!({ "sub": "user-123", "exp": expires_at.timestamp() }))
 }
 
 fn build_tokens(access_token: &str, refresh_token: &str) -> TokenData {

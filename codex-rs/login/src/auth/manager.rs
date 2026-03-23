@@ -28,6 +28,7 @@ use crate::token_data::KnownPlan as InternalKnownPlan;
 use crate::token_data::PlanType as InternalPlanType;
 use crate::token_data::TokenData;
 use crate::token_data::parse_chatgpt_jwt_claims;
+use crate::token_data::parse_jwt_expiration;
 use codex_client::CodexHttpClient;
 use codex_protocol::account::PlanType as AccountPlanType;
 use serde_json::Value;
@@ -69,7 +70,6 @@ impl PartialEq for CodexAuth {
     }
 }
 
-// TODO(pakrym): use token exp field to check for expiration instead
 const TOKEN_REFRESH_INTERVAL: i64 = 8;
 
 const REFRESH_TOKEN_EXPIRED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.";
@@ -1333,6 +1333,11 @@ impl AuthManager {
             Some(auth_dot_json) => auth_dot_json,
             None => return false,
         };
+        if let Some(tokens) = auth_dot_json.tokens.as_ref()
+            && let Ok(Some(expires_at)) = parse_jwt_expiration(&tokens.access_token)
+        {
+            return expires_at <= Utc::now();
+        }
         let last_refresh = match auth_dot_json.last_refresh {
             Some(last_refresh) => last_refresh,
             None => return false,
