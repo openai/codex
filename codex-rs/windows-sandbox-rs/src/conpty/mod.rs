@@ -37,7 +37,7 @@ pub struct ConptyInstance {
     pub hpc: HANDLE,
     pub input_write: HANDLE,
     pub output_read: HANDLE,
-    _desktop: LaunchDesktop,
+    _desktop: Option<LaunchDesktop>,
 }
 
 impl Drop for ConptyInstance {
@@ -76,9 +76,7 @@ pub fn create_conpty(cols: i16, rows: i16) -> Result<ConptyInstance> {
         hpc: hpc as HANDLE,
         input_write: input_write as HANDLE,
         output_read: output_read as HANDLE,
-        _desktop: LaunchDesktop::prepare(
-            /*use_private_desktop*/ false, /*logs_base_dir*/ None,
-        )?,
+        _desktop: None,
     })
 }
 
@@ -110,7 +108,14 @@ pub fn spawn_conpty_process_as_user(
     let desktop = LaunchDesktop::prepare(use_private_desktop, logs_base_dir)?;
     si.StartupInfo.lpDesktop = desktop.startup_info_desktop();
 
-    let conpty = create_conpty(/*cols*/ 80, /*rows*/ 24)?;
+    let raw = RawConPty::new(80, 24)?;
+    let (hpc, input_write, output_read) = raw.into_raw_handles();
+    let conpty = ConptyInstance {
+        hpc: hpc as HANDLE,
+        input_write: input_write as HANDLE,
+        output_read: output_read as HANDLE,
+        _desktop: Some(desktop),
+    };
     let mut attrs = ProcThreadAttributeList::new(/*attr_count*/ 1)?;
     attrs.set_pseudoconsole(conpty.hpc)?;
     si.lpAttributeList = attrs.as_mut_ptr();

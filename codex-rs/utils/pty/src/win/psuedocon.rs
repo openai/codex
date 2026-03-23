@@ -118,6 +118,8 @@ fn windows_build_number() -> Option<u32> {
 
 pub struct PsuedoCon {
     con: HPCON,
+    _input: FileDescriptor,
+    _output: FileDescriptor,
 }
 
 unsafe impl Send for PsuedoCon {}
@@ -149,7 +151,11 @@ impl PsuedoCon {
             result == S_OK,
             "failed to create psuedo console: HRESULT {result}"
         );
-        Ok(Self { con })
+        Ok(Self {
+            con,
+            _input: input,
+            _output: output,
+        })
     }
 
     pub fn resize(&self, size: COORD) -> Result<(), Error> {

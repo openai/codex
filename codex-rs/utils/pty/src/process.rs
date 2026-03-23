@@ -13,6 +13,7 @@ use portable_pty::SlavePty;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
+use tokio::sync::watch;
 use tokio::task::AbortHandle;
 use tokio::task::JoinHandle;
 
@@ -69,6 +70,8 @@ impl fmt::Debug for PtyHandles {
     }
 }
 
+type ResizeFn = Box<dyn FnMut(TerminalSize) -> anyhow::Result<()> + Send>;
+
 /// Handle for driving an interactive process (PTY or pipe).
 pub struct ProcessHandle {
     writer_tx: StdMutex<Option<mpsc::Sender<Vec<u8>>>>,
@@ -82,6 +85,7 @@ pub struct ProcessHandle {
     // PtyHandles must be preserved because the process will receive Control+C if the
     // slave is closed
     _pty_handles: StdMutex<Option<PtyHandles>>,
+    resizer: StdMutex<Option<ResizeFn>>,
 }
 
 impl fmt::Debug for ProcessHandle {
@@ -102,6 +106,7 @@ impl ProcessHandle {
         exit_status: Arc<AtomicBool>,
         exit_code: Arc<StdMutex<Option<i32>>>,
         pty_handles: Option<PtyHandles>,
+        resizer: Option<ResizeFn>,
     ) -> Self {
         Self {
             writer_tx: StdMutex::new(Some(writer_tx)),
@@ -113,6 +118,7 @@ impl ProcessHandle {
             exit_status,
             exit_code,
             _pty_handles: StdMutex::new(pty_handles),
+            resizer: StdMutex::new(resizer),
         }
     }
 
@@ -145,13 +151,23 @@ impl ProcessHandle {
             ._pty_handles
             .lock()
             .map_err(|_| anyhow!("failed to lock PTY handles"))?;
-        let handles = handles
-            .as_ref()
-            .ok_or_else(|| anyhow!("process is not attached to a PTY"))?;
-        match &handles._master {
-            PtyMasterHandle::Resizable(master) => master.resize(size.into()),
-            #[cfg(unix)]
-            PtyMasterHandle::Opaque { raw_fd, .. } => resize_raw_pty(*raw_fd, size),
+        if let Some(handles) = handles.as_ref() {
+            return match &handles._master {
+                PtyMasterHandle::Resizable(master) => master.resize(size.into()),
+                #[cfg(unix)]
+                PtyMasterHandle::Opaque { raw_fd, .. } => resize_raw_pty(*raw_fd, size),
+            };
+        }
+        drop(handles);
+
+        let mut resizer = self
+            .resizer
+            .lock()
+            .map_err(|_| anyhow!("failed to lock PTY resizer"))?;
+        if let Some(resizer) = resizer.as_mut() {
+            resizer(size)
+        } else {
+            Err(anyhow!("process is not attached to a PTY"))
         }
     }
 
@@ -202,6 +218,20 @@ impl ProcessHandle {
 impl Drop for ProcessHandle {
     fn drop(&mut self) {
         self.terminate();
+    }
+}
+
+/// Adapts a closure into a `ChildTerminator` implementation.
+struct ClosureTerminator {
+    inner: Option<Box<dyn FnMut() + Send + Sync>>,
+}
+
+impl ChildTerminator for ClosureTerminator {
+    fn kill(&mut self) -> io::Result<()> {
+        if let Some(inner) = self.inner.as_mut() {
+            (inner)();
+        }
+        Ok(())
     }
 }
 
@@ -262,4 +292,114 @@ pub struct SpawnedProcess {
     pub stdout_rx: mpsc::Receiver<Vec<u8>>,
     pub stderr_rx: mpsc::Receiver<Vec<u8>>,
     pub exit_rx: oneshot::Receiver<i32>,
+}
+
+/// Driver-backed process handles for non-standard spawn backends.
+pub struct ProcessDriver {
+    pub writer_tx: mpsc::Sender<Vec<u8>>,
+    pub stdout_rx: broadcast::Receiver<Vec<u8>>,
+    pub stderr_rx: Option<broadcast::Receiver<Vec<u8>>>,
+    pub exit_rx: oneshot::Receiver<i32>,
+    pub terminator: Option<Box<dyn FnMut() + Send + Sync>>,
+    pub writer_handle: Option<JoinHandle<()>>,
+    pub resizer: Option<ResizeFn>,
+}
+
+/// Build a `SpawnedProcess` from a driver that supplies stdin/output/exit channels.
+pub fn spawn_from_driver(driver: ProcessDriver) -> SpawnedProcess {
+    let ProcessDriver {
+        writer_tx,
+        stdout_rx: stdout_driver_rx,
+        stderr_rx: mut stderr_driver_rx,
+        exit_rx,
+        terminator,
+        writer_handle,
+        resizer,
+    } = driver;
+
+    let (stdout_tx, stdout_rx) = mpsc::channel::<Vec<u8>>(256);
+    let (stderr_tx, stderr_rx) = mpsc::channel::<Vec<u8>>(256);
+    let (exit_seen_tx, exit_seen_rx) = watch::channel(false);
+    let spawn_stream_reader =
+        |mut output_rx: broadcast::Receiver<Vec<u8>>,
+         output_tx: mpsc::Sender<Vec<u8>>,
+         mut exit_seen_rx: watch::Receiver<bool>| {
+            tokio::spawn(async move {
+                let mut process_exited = false;
+                loop {
+                    let recv_result = if process_exited {
+                        match tokio::time::timeout(
+                            std::time::Duration::from_millis(200),
+                            output_rx.recv(),
+                        )
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(_) => break,
+                        }
+                    } else {
+                        tokio::select! {
+                            _ = exit_seen_rx.changed() => {
+                                process_exited = *exit_seen_rx.borrow();
+                                continue;
+                            }
+                            result = output_rx.recv() => result,
+                        }
+                    };
+                    match recv_result {
+                        Ok(chunk) => {
+                            if output_tx.send(chunk).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            })
+        };
+    let reader_handle = spawn_stream_reader(stdout_driver_rx, stdout_tx, exit_seen_rx.clone());
+    let stderr_reader_handle = stderr_driver_rx
+        .take()
+        .map(|rx| spawn_stream_reader(rx, stderr_tx, exit_seen_rx));
+
+    let writer_handle = writer_handle.unwrap_or_else(|| tokio::spawn(async {}));
+
+    let (exit_tx, exit_rx_out) = oneshot::channel::<i32>();
+    let exit_status = Arc::new(AtomicBool::new(false));
+    let wait_exit_status = Arc::clone(&exit_status);
+    let exit_code = Arc::new(StdMutex::new(None));
+    let wait_exit_code = Arc::clone(&exit_code);
+    let wait_handle = tokio::spawn(async move {
+        let code = exit_rx.await.unwrap_or(-1);
+        wait_exit_status.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(mut guard) = wait_exit_code.lock() {
+            *guard = Some(code);
+        }
+        let _ = exit_seen_tx.send(true);
+        let _ = exit_tx.send(code);
+    });
+
+    let handle = ProcessHandle::new(
+        writer_tx,
+        Box::new(ClosureTerminator { inner: terminator }),
+        reader_handle,
+        stderr_reader_handle
+            .map(|handle| handle.abort_handle())
+            .into_iter()
+            .collect(),
+        writer_handle,
+        wait_handle,
+        exit_status,
+        exit_code,
+        None,
+        resizer,
+    );
+
+    SpawnedProcess {
+        session: handle,
+        stdout_rx,
+        stderr_rx,
+        exit_rx: exit_rx_out,
+    }
 }

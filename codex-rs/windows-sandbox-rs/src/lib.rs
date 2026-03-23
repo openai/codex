@@ -33,6 +33,10 @@ windows_modules!(
 mod conpty;
 
 #[cfg(target_os = "windows")]
+#[path = "proc_thread_attr.rs"]
+mod proc_thread_attr;
+
+#[cfg(target_os = "windows")]
 #[path = "elevated/ipc_framed.rs"]
 pub(crate) mod ipc_framed;
 
@@ -44,7 +48,23 @@ mod setup;
 mod elevated_impl;
 
 #[cfg(target_os = "windows")]
+#[path = "elevated/runner_pipe.rs"]
+mod runner_pipe;
+
+#[cfg(target_os = "windows")]
 mod setup_error;
+
+#[cfg(target_os = "windows")]
+#[path = "sandbox_utils.rs"]
+mod sandbox_utils;
+
+#[cfg(target_os = "windows")]
+#[path = "spawn_prep.rs"]
+mod spawn_prep;
+
+#[cfg(target_os = "windows")]
+#[path = "unified_exec/session.rs"]
+mod session;
 
 #[cfg(target_os = "windows")]
 pub use acl::add_deny_write_ace;
@@ -140,6 +160,10 @@ pub use setup::SandboxSetupRequest;
 #[cfg(target_os = "windows")]
 pub use setup::SetupRootOverrides;
 #[cfg(target_os = "windows")]
+pub use session::spawn_windows_sandbox_session_elevated;
+#[cfg(target_os = "windows")]
+pub use session::spawn_windows_sandbox_session_legacy;
+#[cfg(target_os = "windows")]
 pub use setup::run_elevated_setup;
 #[cfg(target_os = "windows")]
 pub use setup::run_setup_refresh;
@@ -215,16 +239,14 @@ mod windows_impl {
     use super::allow::compute_allow_paths;
     use super::cap::load_or_create_cap_sids;
     use super::cap::workspace_cap_sid_for_cwd;
-    use super::env::apply_no_network_to_env;
-    use super::env::ensure_non_interactive_pager;
-    use super::env::normalize_null_device_env;
     use super::logging::log_failure;
-    use super::logging::log_start;
     use super::logging::log_success;
     use super::path_normalization::canonicalize_path;
     use super::policy::SandboxPolicy;
     use super::policy::parse_policy;
     use super::process::create_process_as_user;
+    use super::sandbox_utils::ensure_codex_home_exists;
+    use super::spawn_prep::prepare_legacy_spawn_context;
     use super::token::convert_string_sid_to_sid;
     use super::token::create_workspace_write_token_with_caps_from;
     use super::workspace_acl::is_command_cwd_root;
@@ -248,15 +270,6 @@ mod windows_impl {
     use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
     type PipeHandles = ((HANDLE, HANDLE), (HANDLE, HANDLE), (HANDLE, HANDLE));
-
-    fn should_apply_network_block(policy: &SandboxPolicy) -> bool {
-        !policy.has_full_network_access()
-    }
-
-    fn ensure_codex_home_exists(p: &Path) -> Result<()> {
-        std::fs::create_dir_all(p)?;
-        Ok(())
-    }
 
     unsafe fn setup_stdio_pipes() -> io::Result<PipeHandles> {
         let mut in_r: HANDLE = 0;
@@ -329,27 +342,19 @@ mod windows_impl {
         additional_deny_write_paths: &[PathBuf],
         use_private_desktop: bool,
     ) -> Result<CaptureResult> {
-        let policy = parse_policy(policy_json_or_preset)?;
-        let apply_network_block = should_apply_network_block(&policy);
-        normalize_null_device_env(&mut env_map);
-        ensure_non_interactive_pager(&mut env_map);
-        if apply_network_block {
-            apply_no_network_to_env(&mut env_map)?;
-        }
-        ensure_codex_home_exists(codex_home)?;
-        let current_dir = cwd.to_path_buf();
-        let sandbox_base = codex_home.join(".sandbox");
-        std::fs::create_dir_all(&sandbox_base)?;
-        let logs_base_dir = Some(sandbox_base.as_path());
-        log_start(&command, logs_base_dir);
-        let is_workspace_write = matches!(&policy, SandboxPolicy::WorkspaceWrite { .. });
-
-        if matches!(
-            &policy,
-            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
-        ) {
-            anyhow::bail!("DangerFullAccess and ExternalSandbox are not supported for sandboxing")
-        }
+        let common = prepare_legacy_spawn_context(
+            policy_json_or_preset,
+            codex_home,
+            cwd,
+            &mut env_map,
+            &command,
+            false,
+            false,
+        )?;
+        let policy = common.policy;
+        let current_dir = common.current_dir;
+        let logs_base_dir = common.logs_base_dir.as_deref();
+        let is_workspace_write = common.is_workspace_write;
         if !policy.has_full_disk_read_access() {
             anyhow::bail!(
                 "Restricted read-only access requires the elevated Windows sandbox backend"
@@ -445,7 +450,6 @@ mod windows_impl {
                 let _ = protect_workspace_agents_dir(&current_dir, psid);
             }
         }
-
         let (stdin_pair, stdout_pair, stderr_pair) = unsafe { setup_stdio_pipes()? };
         let ((in_r, in_w), (out_r, out_w), (err_r, err_w)) = (stdin_pair, stdout_pair, stderr_pair);
         let spawn_res = unsafe {
@@ -576,7 +580,6 @@ mod windows_impl {
                 }
             }
         }
-
         Ok(CaptureResult {
             exit_code,
             stdout,
@@ -610,7 +613,6 @@ mod windows_impl {
         let AllowDenyPaths { allow, deny } =
             compute_allow_paths(sandbox_policy, sandbox_policy_cwd, &current_dir, env_map);
         let canonical_cwd = canonicalize_path(&current_dir);
-
         unsafe {
             for p in &allow {
                 let psid = if is_command_cwd_root(p, &canonical_cwd) {
@@ -634,8 +636,8 @@ mod windows_impl {
 
     #[cfg(test)]
     mod tests {
-        use super::should_apply_network_block;
         use crate::policy::SandboxPolicy;
+        use crate::spawn_prep::should_apply_network_block;
 
         fn workspace_policy(network_access: bool) -> SandboxPolicy {
             SandboxPolicy::WorkspaceWrite {
