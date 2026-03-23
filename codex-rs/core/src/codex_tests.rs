@@ -1220,27 +1220,6 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
             .strip_capability_instructions()
             .strip_agents_md_user_context(),
     );
-    let snapshot = snapshot
-        .lines()
-        .map(|line| {
-            let mut line = line.to_string();
-            for (tag, replacement) in [
-                ("cwd", "<CWD>"),
-                ("shell", "<SHELL>"),
-                ("current_date", "<CURRENT_DATE>"),
-                ("timezone", "<TIMEZONE>"),
-            ] {
-                let open_tag = format!("<{tag}>");
-                let close_tag = format!("</{tag}>");
-                if let (Some(start), Some(end)) = (line.find(&open_tag), line.find(&close_tag)) {
-                    let start = start + open_tag.len();
-                    line = format!("{}{replacement}{}", &line[..start], &line[end..]);
-                }
-            }
-            line
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
 
     let mut settings = insta::Settings::clone_current();
     settings.set_snapshot_path("snapshots");
