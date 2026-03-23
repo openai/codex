@@ -224,25 +224,33 @@ async fn new_uses_configured_openai_provider_for_model_refresh() {
 }
 
 #[test]
-fn interrupted_fork_snapshot_appends_interrupt_marker() {
+fn interrupted_fork_snapshot_appends_interrupt_boundary() {
     let committed_history =
         InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("hello"))]);
 
     assert_eq!(
-        serde_json::to_value(inject_interrupted_marker(committed_history).get_rollout_items())
+        serde_json::to_value(append_interrupted_boundary(committed_history).get_rollout_items())
             .expect("serialize interrupted fork history"),
         serde_json::to_value(vec![
             RolloutItem::ResponseItem(user_msg("hello")),
             RolloutItem::ResponseItem(interrupted_turn_history_marker()),
+            RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id: None,
+                reason: TurnAbortReason::Interrupted,
+            })),
         ])
         .expect("serialize expected interrupted fork history"),
     );
     assert_eq!(
-        serde_json::to_value(inject_interrupted_marker(InitialHistory::New).get_rollout_items())
+        serde_json::to_value(append_interrupted_boundary(InitialHistory::New).get_rollout_items())
             .expect("serialize interrupted empty fork history"),
-        serde_json::to_value(vec![RolloutItem::ResponseItem(
-            interrupted_turn_history_marker()
-        )])
+        serde_json::to_value(vec![
+            RolloutItem::ResponseItem(interrupted_turn_history_marker()),
+            RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id: None,
+                reason: TurnAbortReason::Interrupted,
+            })),
+        ])
         .expect("serialize expected interrupted empty history"),
     );
 }
@@ -290,7 +298,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
     let forked = manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            config,
+            config.clone(),
             source_path,
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,
@@ -304,6 +312,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
     let history = RolloutRecorder::get_rollout_history(&forked_path)
         .await
         .expect("read forked rollout history");
+    assert!(!snapshot_ends_mid_turn(&history));
 
     let forked_rollout_items: Vec<_> = history
         .get_rollout_items()
@@ -319,6 +328,56 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
             .filter(|item| {
                 serde_json::to_value(item).expect("serialize forked rollout item")
                     == interrupted_marker_json
+            })
+            .count(),
+        1,
+    );
+
+    manager.remove_thread(&forked.thread_id).await;
+    let reforked = manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            config,
+            forked_path,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("re-fork interrupted snapshot");
+    let reforked_path = reforked
+        .thread
+        .rollout_path()
+        .expect("re-forked rollout path should exist");
+    let reforked_history = RolloutRecorder::get_rollout_history(&reforked_path)
+        .await
+        .expect("read re-forked rollout history");
+    let reforked_rollout_items: Vec<_> = reforked_history
+        .get_rollout_items()
+        .into_iter()
+        .filter(|item| !matches!(item, RolloutItem::SessionMeta(_)))
+        .collect();
+
+    assert_eq!(
+        reforked_rollout_items
+            .iter()
+            .filter(|item| {
+                serde_json::to_value(item).expect("serialize re-forked rollout item")
+                    == interrupted_marker_json
+            })
+            .count(),
+        1,
+    );
+    assert_eq!(
+        reforked_rollout_items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
+                        reason: TurnAbortReason::Interrupted,
+                        ..
+                    }))
+                )
             })
             .count(),
         1,

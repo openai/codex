@@ -34,6 +34,8 @@ use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::W3cTraceContext;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -597,7 +599,7 @@ impl ThreadManager {
                     InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
                 };
                 if snapshot_mid_turn {
-                    inject_interrupted_marker(history)
+                    append_interrupted_boundary(history)
                 } else {
                     history
                 }
@@ -932,22 +934,42 @@ fn snapshot_ends_mid_turn(history: &InitialHistory) -> bool {
     })
 }
 
-/// Append the same model-visible interruption marker used by the live interrupt
-/// path to an existing fork snapshot after the source thread has been confirmed
-/// to be mid-turn.
-fn inject_interrupted_marker(history: InitialHistory) -> InitialHistory {
+/// Append the same persisted interrupt boundary used by the live interrupt path
+/// to an existing fork snapshot after the source thread has been confirmed to
+/// be mid-turn.
+fn append_interrupted_boundary(history: InitialHistory) -> InitialHistory {
+    let turn_id = {
+        let rollout_items = history.get_rollout_items();
+        let mut builder = ThreadHistoryBuilder::new();
+        for item in &rollout_items {
+            builder.handle_rollout_item(item);
+        }
+        if builder.has_active_turn() {
+            builder.active_turn_snapshot().map(|turn| turn.id)
+        } else {
+            None
+        }
+    };
+    let aborted_event = RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
+        turn_id,
+        reason: TurnAbortReason::Interrupted,
+    }));
+
     match history {
-        InitialHistory::New => InitialHistory::Forked(vec![RolloutItem::ResponseItem(
-            interrupted_turn_history_marker(),
-        )]),
+        InitialHistory::New => InitialHistory::Forked(vec![
+            RolloutItem::ResponseItem(interrupted_turn_history_marker()),
+            aborted_event,
+        ]),
         InitialHistory::Forked(mut history) => {
             history.push(RolloutItem::ResponseItem(interrupted_turn_history_marker()));
+            history.push(aborted_event);
             InitialHistory::Forked(history)
         }
         InitialHistory::Resumed(mut resumed) => {
             resumed
                 .history
                 .push(RolloutItem::ResponseItem(interrupted_turn_history_marker()));
+            resumed.history.push(aborted_event);
             InitialHistory::Forked(resumed.history)
         }
     }
