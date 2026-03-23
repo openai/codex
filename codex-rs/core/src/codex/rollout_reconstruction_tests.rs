@@ -3,9 +3,11 @@ use super::*;
 use crate::protocol::CompactedItem;
 use crate::protocol::InitialHistory;
 use crate::protocol::ResumedHistory;
+use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::InterAgentCommunication;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
 
@@ -38,7 +40,15 @@ fn inter_agent_assistant_message(text: &str) -> ResponseItem {
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
-            text: text.to_string(),
+            text: serde_json::to_string(&InterAgentCommunication::new(
+                AgentPath::root(),
+                AgentPath::root()
+                    .join("worker")
+                    .expect("worker path should be valid"),
+                Vec::new(),
+                text.to_string(),
+            ))
+            .expect("inter-agent communication should serialize"),
         }],
         end_turn: None,
         phase: None,
@@ -455,9 +465,7 @@ async fn reconstruct_history_rollback_counts_inter_agent_assistant_turns() {
         turn_id: Some(assistant_turn_id.clone()),
         ..first_context_item.clone()
     };
-    let assistant_instruction = inter_agent_assistant_message(
-        "author: /root\nrecipient: /root/worker\nother_recipients: []\nContent: continue",
-    );
+    let assistant_instruction = inter_agent_assistant_message("continue");
     let assistant_reply = assistant_message("worker reply");
 
     let rollout_items = vec![
