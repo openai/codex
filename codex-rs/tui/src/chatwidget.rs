@@ -4481,7 +4481,7 @@ impl ChatWidget {
                     return;
                 }
                 if self.realtime_conversation.is_live() {
-                    self.request_realtime_conversation_close(/*info_message*/ None);
+                    self.stop_realtime_conversation_from_ui();
                 } else {
                     self.start_realtime_conversation();
                 }
@@ -8626,7 +8626,7 @@ impl ChatWidget {
             self.bottom_pane.clear_quit_shortcut_hint();
             self.quit_shortcut_expires_at = None;
             self.quit_shortcut_key = None;
-            self.request_realtime_conversation_close(/*info_message*/ None);
+            self.stop_realtime_conversation_from_ui();
             return;
         }
         let modal_or_popup_active = !self.bottom_pane.no_modal_or_popup_active();
@@ -9297,13 +9297,6 @@ impl ChatWidget {
     }
 
     pub(crate) fn remove_transcription_placeholder(&mut self, id: &str) {
-        #[cfg(not(target_os = "linux"))]
-        if self.realtime_conversation.is_live()
-            && self.realtime_conversation.meter_placeholder_id.as_deref() == Some(id)
-        {
-            self.realtime_conversation.meter_placeholder_id = None;
-            self.request_realtime_conversation_close(/*info_message*/ None);
-        }
         self.bottom_pane.remove_transcription_placeholder(id);
         // Ensure the UI redraws to reflect placeholder removal.
         self.request_redraw();
