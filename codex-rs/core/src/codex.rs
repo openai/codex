@@ -91,9 +91,11 @@ use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::format_allow_prefixes;
+use codex_protocol::models::summarize_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::ApprovedCommandPrefixesSnapshot;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
@@ -1457,6 +1459,9 @@ impl Session {
         let (conversation_id, rollout_params) = match &initial_history {
             InitialHistory::New | InitialHistory::Forked(_) => {
                 let conversation_id = ThreadId::default();
+                let approved_command_prefixes = exec_policy.current().get_allowed_prefixes();
+                let allow_prefix_summary =
+                    summarize_allow_prefixes(approved_command_prefixes.clone());
                 (
                     conversation_id,
                     RolloutRecorderParams::new(
@@ -1467,6 +1472,12 @@ impl Session {
                             text: session_configuration.base_instructions.clone(),
                         },
                         session_configuration.dynamic_tools.clone(),
+                        ApprovedCommandPrefixesSnapshot {
+                            prefixes: approved_command_prefixes,
+                            prompt_truncated: allow_prefix_summary.prompt_truncated,
+                            total_count: allow_prefix_summary.total_count,
+                            prompt_visible_count: allow_prefix_summary.prompt_visible_count,
+                        },
                         if session_configuration.persist_extended_history {
                             EventPersistenceMode::Extended
                         } else {

@@ -4,6 +4,7 @@ use chrono::TimeZone;
 use codex_features::Feature;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::ApprovedCommandPrefixesSnapshot;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SandboxPolicy;
@@ -59,6 +60,15 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
         .build()
         .await?;
     let thread_id = ThreadId::new();
+    let approved_command_prefixes = ApprovedCommandPrefixesSnapshot {
+        prefixes: vec![
+            vec!["cargo".to_string(), "test".to_string()],
+            vec!["git".to_string(), "fetch".to_string()],
+        ],
+        prompt_truncated: true,
+        total_count: 101,
+        prompt_visible_count: 100,
+    };
     let recorder = RolloutRecorder::new(
         &config,
         RolloutRecorderParams::new(
@@ -67,6 +77,7 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
             SessionSource::Exec,
             BaseInstructions::default(),
             Vec::new(),
+            approved_command_prefixes.clone(),
             EventPersistenceMode::Limited,
         ),
         None,
@@ -121,6 +132,10 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
         text.contains("\"type\":\"session_meta\""),
         "expected session metadata in rollout"
     );
+    assert!(
+        text.contains(&serde_json::to_string(&approved_command_prefixes)?),
+        "expected approved command prefixes snapshot in rollout"
+    );
     let buffered_idx = text
         .find("buffered-event")
         .expect("buffered event in rollout");
@@ -167,6 +182,7 @@ async fn metadata_irrelevant_events_touch_state_db_updated_at() -> std::io::Resu
             SessionSource::Cli,
             BaseInstructions::default(),
             Vec::new(),
+            Default::default(),
             EventPersistenceMode::Limited,
         ),
         Some(state_db.clone()),

@@ -329,6 +329,7 @@ stream_max_retries = 0
         base_instructions: None,
         dynamic_tools: None,
         memory_mode: None,
+        approved_command_prefixes: None,
     };
     std::fs::write(
         &rollout_path,
