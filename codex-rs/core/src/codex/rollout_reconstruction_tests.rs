@@ -42,6 +42,7 @@ fn inter_agent_assistant_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::OutputText {
             text: text.to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     }

@@ -38,6 +38,7 @@ impl InterAgentInstruction {
             content: vec![ContentItem::OutputText {
                 text: self.as_text(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         }

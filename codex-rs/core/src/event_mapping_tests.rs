@@ -106,6 +106,7 @@ fn parses_assistant_message_input_text_for_backward_compatibility() {
             text: "author: /root\nrecipient: /root/worker\nother_recipients: []\nContent: continue"
                 .to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };

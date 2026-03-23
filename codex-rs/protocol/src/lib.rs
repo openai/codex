@@ -7,6 +7,7 @@ pub mod approvals;
 pub mod config_types;
 pub mod custom_prompts;
 pub mod dynamic_tools;
+pub mod item_metadata;
 pub mod items;
 pub mod mcp;
 pub mod memory_citation;

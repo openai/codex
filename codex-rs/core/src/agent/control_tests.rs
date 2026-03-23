@@ -399,6 +399,7 @@ async fn append_message_records_assistant_message() {
                 content: vec![ContentItem::InputText {
                     text: message.to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
