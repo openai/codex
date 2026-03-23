@@ -1,6 +1,7 @@
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::AppServerRequestHandle;
+use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
@@ -429,7 +430,7 @@ impl AppServerSession {
         thread_id: ThreadId,
         turn_id: String,
         items: Vec<codex_protocol::user_input::UserInput>,
-    ) -> Result<TurnSteerResponse> {
+    ) -> std::result::Result<TurnSteerResponse, TypedRequestError> {
         let request_id = self.next_request_id();
         self.client
             .request_typed(ClientRequest::TurnSteer {
@@ -441,7 +442,6 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("turn/steer failed in app-server TUI")
     }
 
     pub(crate) async fn thread_set_name(
