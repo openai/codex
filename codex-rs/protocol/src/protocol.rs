@@ -1312,6 +1312,9 @@ pub enum EventMsg {
     /// Incremental chunk of output from a running command.
     ExecCommandOutputDelta(ExecCommandOutputDeltaEvent),
 
+    /// Incremental payload text for a pending tool call before its authoritative item begins.
+    ToolCallPayloadDelta(ToolCallPayloadDeltaEvent),
+
     /// Terminal interaction for an in-progress command (stdin sent and stdout observed).
     TerminalInteraction(TerminalInteractionEvent),
 
@@ -1757,6 +1760,26 @@ pub struct PlanDeltaEvent {
     pub delta: String,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum ToolCallPayloadKind {
+    CommandExecution,
+    FileChange,
+    McpToolCall,
+    DynamicToolCall,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct ToolCallPayloadDeltaEvent {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub kind: ToolCallPayloadKind,
+    pub label: String,
+    pub delta: String,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct ReasoningContentDeltaEvent {
     pub thread_id: String,
@@ -1805,6 +1828,7 @@ impl HasLegacyEvent for EventMsg {
             EventMsg::AgentMessageContentDelta(event) => {
                 event.as_legacy_events(show_raw_agent_reasoning)
             }
+            EventMsg::ToolCallPayloadDelta(_) => Vec::new(),
             EventMsg::ReasoningContentDelta(event) => {
                 event.as_legacy_events(show_raw_agent_reasoning)
             }

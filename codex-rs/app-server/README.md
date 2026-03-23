@@ -845,7 +845,7 @@ Because audio is intentionally separate from `ThreadItem`, clients can opt out o
 
 ### Turn events
 
-The app-server streams JSON-RPC notifications while a turn is running. Each turn emits `turn/started` when it begins running and ends with `turn/completed` (final `turn` status). Token usage events stream separately via `thread/tokenUsage/updated`. Clients subscribe to the events they care about, rendering each item incrementally as updates arrive. The per-item lifecycle is always: `item/started` → zero or more item-specific deltas → `item/completed`.
+The app-server streams JSON-RPC notifications while a turn is running. Each turn emits `turn/started` when it begins running and ends with `turn/completed` (final `turn` status). Token usage events stream separately via `thread/tokenUsage/updated`. Clients subscribe to the events they care about, rendering each item incrementally as updates arrive. Most items follow `item/started` → zero or more item-specific deltas → `item/completed`. The live-only `pendingToolCall` item is the exception: the server may resend `item/started` with the same `item.id` and an updated `payload` while tool-call input is still streaming, then finish with `item/completed`.
 
 - `turn/started` — `{ turn }` with the turn id, empty `items`, and `status: "inProgress"`.
 - `turn/completed` — `{ turn }` where `turn.status` is `completed`, `interrupted`, or `failed`; failures carry `{ error: { message, codexErrorInfo?, additionalDetails? } }`.
@@ -863,6 +863,7 @@ Today both notifications carry an empty `items` array even when item events were
 - `agentMessage` — `{id, text}` containing the accumulated agent reply.
 - `plan` — `{id, text}` emitted for plan-mode turns; plan text can stream via `item/plan/delta` (experimental).
 - `reasoning` — `{id, summary, content}` where `summary` holds streamed reasoning summaries (applicable for most OpenAI models) and `content` holds raw reasoning blocks (applicable for e.g. open source models).
+- `pendingToolCall` — live-only `{id, kind, label, payload, status}` while tool-call input is still streaming. `kind` is one of `commandExecution`, `fileChange`, `mcpToolCall`, or `dynamicToolCall`, and `status` is `inProgress`, `completed`, `failed`, or `superseded`. This item is not reconstructed by `thread/read`, `thread/resume`, or `thread/fork`.
 - `commandExecution` — `{id, command, cwd, status, commandActions, aggregatedOutput?, exitCode?, durationMs?}` for sandboxed commands; `status` is `inProgress`, `completed`, `failed`, or `declined`.
 - `fileChange` — `{id, changes, status}` describing proposed edits; `changes` list `{path, kind, diff}` and `status` is `inProgress`, `completed`, `failed`, or `declined`.
 - `mcpToolCall` — `{id, server, tool, status, arguments, result?, error?}` describing MCP calls; `status` is `inProgress`, `completed`, or `failed`.
@@ -880,6 +881,8 @@ All items emit shared lifecycle events:
 - `item/completed` — sends the final `item` once that work itself finishes (for example, after a tool call or message completes); treat this as the authoritative execution/result state.
 - `item/autoApprovalReview/started` — [UNSTABLE] temporary guardian notification carrying `{threadId, turnId, targetItemId, review, action?}` when guardian approval review begins. This shape is expected to change soon.
 - `item/autoApprovalReview/completed` — [UNSTABLE] temporary guardian notification carrying `{threadId, turnId, targetItemId, review, action?}` when guardian approval review resolves. This shape is expected to change soon.
+
+For `pendingToolCall`, treat repeated `item/started` notifications with the same `item.id` as an in-place refresh of the same live item, not a duplicate row. When a concrete `commandExecution`, `fileChange`, or `mcpToolCall` item starts with that same id, the preceding `pendingToolCall` may complete with `status: "superseded"` and should be replaced by the concrete item in the UI. Dynamic tool calls keep the generic pending surface and complete through the normal `dynamicToolCall` lifecycle.
 
 `review` is [UNSTABLE] and currently has `{status, riskScore?, riskLevel?, rationale?}`, where `status` is one of `inProgress`, `approved`, `denied`, or `aborted`. `action` is the guardian action summary payload from core when available and is intended to support temporary standalone pending-review UI. These notifications are separate from the target item's own `item/completed` lifecycle and are intentionally temporary while the guardian app protocol is still being designed.
 

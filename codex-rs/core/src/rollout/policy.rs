@@ -148,6 +148,7 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
         | EventMsg::ExecCommandBegin(_)
         | EventMsg::TerminalInteraction(_)
         | EventMsg::ExecCommandOutputDelta(_)
+        | EventMsg::ToolCallPayloadDelta(_)
         | EventMsg::ExecApprovalRequest(_)
         | EventMsg::RequestPermissions(_)
         | EventMsg::RequestUserInput(_)

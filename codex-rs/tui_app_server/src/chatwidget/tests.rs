@@ -24,6 +24,9 @@ use codex_app_server_protocol::CollabAgentState as AppServerCollabAgentState;
 use codex_app_server_protocol::CollabAgentStatus as AppServerCollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool as AppServerCollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus as AppServerCollabAgentToolCallStatus;
+use codex_app_server_protocol::CommandExecutionSource as AppServerCommandExecutionSource;
+use codex_app_server_protocol::CommandExecutionStatus as AppServerCommandExecutionStatus;
+use codex_app_server_protocol::DynamicToolCallStatus as AppServerDynamicToolCallStatus;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::GuardianApprovalReview;
@@ -36,6 +39,7 @@ use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::MarketplaceInterface;
 use codex_app_server_protocol::PatchApplyStatus as AppServerPatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
+use codex_app_server_protocol::PendingToolCallStatus as AppServerPendingToolCallStatus;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginDetail;
 use codex_app_server_protocol::PluginInstallPolicy;
@@ -49,6 +53,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SkillSummary;
 use codex_app_server_protocol::ThreadClosedNotification;
 use codex_app_server_protocol::ThreadItem as AppServerThreadItem;
+use codex_app_server_protocol::ToolCallPayloadKind as AppServerToolCallPayloadKind;
 use codex_app_server_protocol::Turn as AppServerTurn;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
@@ -4642,6 +4647,205 @@ async fn live_app_server_file_change_item_started_preserves_changes() {
     assert!(
         transcript.contains("Added foo.txt") || transcript.contains("Edited foo.txt"),
         "expected patch summary to include foo.txt, got: {transcript}"
+    );
+}
+
+#[tokio::test]
+async fn live_app_server_pending_tool_call_started_refreshes_active_payload() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.show_welcome_banner = false;
+    chat.config.animations = false;
+
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::PendingToolCall {
+                id: "tool-1".to_string(),
+                kind: AppServerToolCallPayloadKind::CommandExecution,
+                label: "Calling shell".to_string(),
+                payload: "{\"command\":\"ls\"}".to_string(),
+                status: AppServerPendingToolCallStatus::InProgress,
+            },
+        }),
+        None,
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::PendingToolCall {
+                id: "tool-1".to_string(),
+                kind: AppServerToolCallPayloadKind::CommandExecution,
+                label: "Calling shell".to_string(),
+                payload: "{\"command\":\"pwd\"}".to_string(),
+                status: AppServerPendingToolCallStatus::InProgress,
+            },
+        }),
+        None,
+    );
+
+    let active = chat.active_cell.as_ref().expect("pending tool cell");
+    let rendered = lines_to_single_string(&active.display_lines(80));
+    assert!(
+        rendered.contains("{\"command\":\"pwd\"}"),
+        "expected refreshed payload in active cell: {rendered}"
+    );
+    assert!(
+        !rendered.contains("{\"command\":\"ls\"}"),
+        "expected previous payload to be replaced, got: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn live_app_server_pending_tool_call_superseded_replaces_active_cell_with_exec() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.show_welcome_banner = false;
+    chat.config.animations = false;
+
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::PendingToolCall {
+                id: "tool-1".to_string(),
+                kind: AppServerToolCallPayloadKind::CommandExecution,
+                label: "Calling shell".to_string(),
+                payload: "{\"command\":\"pwd\"}".to_string(),
+                status: AppServerPendingToolCallStatus::InProgress,
+            },
+        }),
+        None,
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::PendingToolCall {
+                id: "tool-1".to_string(),
+                kind: AppServerToolCallPayloadKind::CommandExecution,
+                label: "Calling shell".to_string(),
+                payload: "{\"command\":\"pwd\"}".to_string(),
+                status: AppServerPendingToolCallStatus::Superseded,
+            },
+        }),
+        None,
+    );
+
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "superseded pending tool call should not leave history behind"
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::CommandExecution {
+                id: "tool-1".to_string(),
+                command: "pwd".to_string(),
+                cwd: PathBuf::from("/tmp"),
+                process_id: None,
+                source: AppServerCommandExecutionSource::UserShell,
+                status: AppServerCommandExecutionStatus::InProgress,
+                command_actions: Vec::new(),
+                aggregated_output: None,
+                exit_code: None,
+                duration_ms: None,
+            },
+        }),
+        None,
+    );
+
+    let active = chat.active_cell.as_ref().expect("exec cell");
+    let rendered = lines_to_single_string(&active.display_lines(80));
+    assert!(
+        rendered.contains("pwd"),
+        "expected exec cell to replace pending tool payload: {rendered}"
+    );
+    assert!(
+        !rendered.contains("Calling shell"),
+        "expected pending tool label to be gone after supersede: {rendered}"
+    );
+    assert!(
+        !rendered.contains("{\"command\":\"pwd\"}"),
+        "expected raw pending payload to be removed after supersede: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn live_app_server_dynamic_tool_call_completion_preserves_streamed_payload() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.show_welcome_banner = false;
+    chat.config.animations = false;
+
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::PendingToolCall {
+                id: "tool-1".to_string(),
+                kind: AppServerToolCallPayloadKind::DynamicToolCall,
+                label: "Calling lookup_ticket".to_string(),
+                payload: "{\"id\":\"abc\",\"includeComments\":true}".to_string(),
+                status: AppServerPendingToolCallStatus::InProgress,
+            },
+        }),
+        None,
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::DynamicToolCall {
+                id: "tool-1".to_string(),
+                tool: "lookup_ticket".to_string(),
+                arguments: serde_json::json!({ "id": "abc" }),
+                status: AppServerDynamicToolCallStatus::InProgress,
+                content_items: None,
+                success: None,
+                duration_ms: None,
+            },
+        }),
+        None,
+    );
+
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "dynamic tool start should keep the pending payload cell active"
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::DynamicToolCall {
+                id: "tool-1".to_string(),
+                tool: "lookup_ticket".to_string(),
+                arguments: serde_json::json!({ "id": "abc" }),
+                status: AppServerDynamicToolCallStatus::Completed,
+                content_items: None,
+                success: Some(true),
+                duration_ms: Some(1),
+            },
+        }),
+        None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    let [cell] = cells.as_slice() else {
+        panic!("expected one completed generic tool cell");
+    };
+    assert_snapshot!(
+        lines_to_single_string(cell),
+        @r#"
+• Calling lookup_ticket
+  └ {"id":"abc","includeComments":true}
+
+"#
     );
 }
 

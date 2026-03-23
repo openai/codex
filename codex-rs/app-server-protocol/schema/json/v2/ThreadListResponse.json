@@ -616,6 +616,15 @@
         }
       ]
     },
+    "PendingToolCallStatus": {
+      "enum": [
+        "inProgress",
+        "completed",
+        "failed",
+        "superseded"
+      ],
+      "type": "string"
+    },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
       "enum": [
@@ -1049,6 +1058,42 @@
             "type"
           ],
           "title": "ReasoningThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/definitions/ToolCallPayloadKind"
+            },
+            "label": {
+              "type": "string"
+            },
+            "payload": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/definitions/PendingToolCallStatus"
+            },
+            "type": {
+              "enum": [
+                "pendingToolCall"
+              ],
+              "title": "PendingToolCallThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "label",
+            "payload",
+            "status",
+            "type"
+          ],
+          "title": "PendingToolCallThreadItem",
           "type": "object"
         },
         {
@@ -1604,6 +1649,15 @@
           "type": "object"
         }
       ]
+    },
+    "ToolCallPayloadKind": {
+      "enum": [
+        "commandExecution",
+        "fileChange",
+        "mcpToolCall",
+        "dynamicToolCall"
+      ],
+      "type": "string"
     },
     "Turn": {
       "properties": {

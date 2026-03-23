@@ -84,6 +84,7 @@ use codex_protocol::protocol::SkillToolDependency as CoreSkillToolDependency;
 use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
+use codex_protocol::protocol::ToolCallPayloadKind as CoreToolCallPayloadKind;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
@@ -410,6 +411,22 @@ v2_enum_from_core!(
         Warning, Stop, Feedback, Context, Error
     }
 );
+
+v2_enum_from_core!(
+    pub enum ToolCallPayloadKind from CoreToolCallPayloadKind {
+        CommandExecution, FileChange, McpToolCall, DynamicToolCall
+    }
+);
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum PendingToolCallStatus {
+    InProgress,
+    Completed,
+    Failed,
+    Superseded,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -4206,6 +4223,15 @@ pub enum ThreadItem {
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
+    PendingToolCall {
+        id: String,
+        kind: ToolCallPayloadKind,
+        label: String,
+        payload: String,
+        status: PendingToolCallStatus,
+    },
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
     CommandExecution {
         id: String,
         /// The command to be executed.
@@ -4334,6 +4360,7 @@ impl ThreadItem {
             | ThreadItem::AgentMessage { id, .. }
             | ThreadItem::Plan { id, .. }
             | ThreadItem::Reasoning { id, .. }
+            | ThreadItem::PendingToolCall { id, .. }
             | ThreadItem::CommandExecution { id, .. }
             | ThreadItem::FileChange { id, .. }
             | ThreadItem::McpToolCall { id, .. }
@@ -6805,6 +6832,33 @@ mod tests {
         let decoded = serde_json::from_value::<CommandExecutionOutputDeltaNotification>(value)
             .expect("deserialize round-trip");
         assert_eq!(decoded, notification);
+    }
+
+    #[test]
+    fn pending_tool_call_item_round_trips() {
+        let item = ThreadItem::PendingToolCall {
+            id: "item-1".to_string(),
+            kind: ToolCallPayloadKind::DynamicToolCall,
+            label: "Calling custom_tool".to_string(),
+            payload: "{\"foo\":".to_string(),
+            status: PendingToolCallStatus::InProgress,
+        };
+
+        let value = serde_json::to_value(&item).expect("serialize pending tool call item");
+        assert_eq!(
+            value,
+            json!({
+                "type": "pendingToolCall",
+                "id": "item-1",
+                "kind": "dynamicToolCall",
+                "label": "Calling custom_tool",
+                "payload": "{\"foo\":",
+                "status": "inProgress",
+            })
+        );
+
+        let decoded = serde_json::from_value::<ThreadItem>(value).expect("deserialize round-trip");
+        assert_eq!(decoded, item);
     }
 
     #[test]

@@ -1588,6 +1588,102 @@ pub(crate) fn new_active_mcp_tool_call(
     McpToolCallCell::new(call_id, invocation, animations_enabled)
 }
 
+#[derive(Debug)]
+pub(crate) struct PendingToolPayloadCell {
+    call_id: String,
+    label: String,
+    payload: String,
+    start_time: Instant,
+    success: Option<bool>,
+    animations_enabled: bool,
+}
+
+impl PendingToolPayloadCell {
+    pub(crate) fn new(
+        call_id: String,
+        label: String,
+        payload: String,
+        animations_enabled: bool,
+    ) -> Self {
+        Self {
+            call_id,
+            label,
+            payload,
+            start_time: Instant::now(),
+            success: None,
+            animations_enabled,
+        }
+    }
+
+    pub(crate) fn call_id(&self) -> &str {
+        &self.call_id
+    }
+
+    pub(crate) fn append_payload(&mut self, delta: &str) -> bool {
+        if delta.is_empty() {
+            return false;
+        }
+        self.payload.push_str(delta);
+        true
+    }
+
+    pub(crate) fn set_payload(&mut self, payload: String) -> bool {
+        if self.payload == payload {
+            return false;
+        }
+        self.payload = payload;
+        true
+    }
+
+    pub(crate) fn complete(&mut self, success: bool) {
+        self.success = Some(success);
+    }
+}
+
+impl HistoryCell for PendingToolPayloadCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let bullet = match self.success {
+            Some(true) => "•".green().bold(),
+            Some(false) => "•".red().bold(),
+            None => spinner(Some(self.start_time), self.animations_enabled),
+        };
+        let mut lines = PrefixedWrappedHistoryCell::new(
+            Line::from(self.label.clone().bold()),
+            vec![bullet, " ".into()],
+            "  ",
+        )
+        .display_lines(width);
+
+        if self.payload.is_empty() {
+            return lines;
+        }
+
+        let body_lines: Vec<Line<'static>> = self
+            .payload
+            .split('\n')
+            .map(|segment| Line::from(segment.to_string().dim()))
+            .collect();
+        lines.extend(prefix_lines(body_lines, "  └ ".dim(), "    ".into()));
+        lines
+    }
+
+    fn transcript_animation_tick(&self) -> Option<u64> {
+        if !self.animations_enabled || self.success.is_some() {
+            return None;
+        }
+        Some((self.start_time.elapsed().as_millis() / 50) as u64)
+    }
+}
+
+pub(crate) fn new_pending_tool_payload(
+    call_id: String,
+    label: String,
+    payload: String,
+    animations_enabled: bool,
+) -> PendingToolPayloadCell {
+    PendingToolPayloadCell::new(call_id, label, payload, animations_enabled)
+}
+
 fn web_search_header(completed: bool) -> &'static str {
     if completed {
         "Searched"

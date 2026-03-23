@@ -305,6 +305,15 @@ impl SessionTelemetry {
                     handle_responses_span.record("tool_name", name.as_str());
                 }
             }
+            ResponseEvent::FunctionCallArgumentsDelta { .. } => {
+                handle_responses_span.record("from", "function_call_arguments_delta");
+            }
+            ResponseEvent::CustomToolCallInputDelta { .. } => {
+                handle_responses_span.record("from", "custom_tool_call_input_delta");
+            }
+            ResponseEvent::McpCallArgumentsDelta { .. } => {
+                handle_responses_span.record("from", "mcp_call_arguments_delta");
+            }
             _ => {}
         }
     }
@@ -1051,6 +1060,11 @@ impl SessionTelemetry {
             }
             ResponseEvent::Completed { .. } => "completed".into(),
             ResponseEvent::OutputTextDelta(_) => "text_delta".into(),
+            ResponseEvent::FunctionCallArgumentsDelta { .. } => {
+                "function_call_arguments_delta".into()
+            }
+            ResponseEvent::CustomToolCallInputDelta { .. } => "custom_tool_call_input_delta".into(),
+            ResponseEvent::McpCallArgumentsDelta { .. } => "mcp_call_arguments_delta".into(),
             ResponseEvent::ReasoningSummaryDelta { .. } => "reasoning_summary_delta".into(),
             ResponseEvent::ReasoningContentDelta { .. } => "reasoning_content_delta".into(),
             ResponseEvent::ReasoningSummaryPartAdded { .. } => {

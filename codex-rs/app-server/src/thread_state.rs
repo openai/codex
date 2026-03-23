@@ -2,6 +2,7 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadHistoryBuilder;
+use codex_app_server_protocol::ToolCallPayloadKind;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_core::CodexThread;
@@ -41,11 +42,19 @@ pub(crate) enum ThreadListenerCommand {
     },
 }
 
+#[derive(Clone)]
+pub(crate) struct PendingToolCallState {
+    pub(crate) kind: ToolCallPayloadKind,
+    pub(crate) label: String,
+    pub(crate) payload: String,
+}
+
 /// Per-conversation accumulation of the latest states e.g. error message while a turn runs.
 #[derive(Default, Clone)]
 pub(crate) struct TurnSummary {
     pub(crate) file_change_started: HashSet<String>,
     pub(crate) command_execution_started: HashSet<String>,
+    pub(crate) pending_tool_calls: HashMap<String, PendingToolCallState>,
     pub(crate) last_error: Option<TurnError>,
 }
 

@@ -342,6 +342,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::ExecCommandBegin(_)
                     | EventMsg::TerminalInteraction(_)
                     | EventMsg::ExecCommandOutputDelta(_)
+                    | EventMsg::ToolCallPayloadDelta(_)
                     | EventMsg::ExecCommandEnd(_)
                     | EventMsg::BackgroundEvent(_)
                     | EventMsg::StreamError(_)

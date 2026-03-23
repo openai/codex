@@ -105,6 +105,9 @@ fn response_event_records_turn_ttft(event: &ResponseEvent) -> bool {
             response_item_records_turn_ttft(item)
         }
         ResponseEvent::OutputTextDelta(_)
+        | ResponseEvent::FunctionCallArgumentsDelta { .. }
+        | ResponseEvent::CustomToolCallInputDelta { .. }
+        | ResponseEvent::McpCallArgumentsDelta { .. }
         | ResponseEvent::ReasoningSummaryDelta { .. }
         | ResponseEvent::ReasoningContentDelta { .. } => true,
         ResponseEvent::Created

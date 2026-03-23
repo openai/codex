@@ -79,6 +79,18 @@ pub enum ResponseEvent {
         token_usage: Option<TokenUsage>,
     },
     OutputTextDelta(String),
+    FunctionCallArgumentsDelta {
+        item_id: String,
+        delta: String,
+    },
+    CustomToolCallInputDelta {
+        item_id: String,
+        delta: String,
+    },
+    McpCallArgumentsDelta {
+        item_id: String,
+        delta: String,
+    },
     ReasoningSummaryDelta {
         delta: String,
         summary_index: i64,

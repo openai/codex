@@ -300,6 +300,8 @@ use crate::protocol::Submission;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
+use crate::protocol::ToolCallPayloadDeltaEvent;
+use crate::protocol::ToolCallPayloadKind;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WarningEvent;
 use crate::rollout::RolloutRecorder;
@@ -332,6 +334,7 @@ use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::context::ToolPayload;
 use crate::tools::js_repl::JsReplHandle;
 use crate::tools::js_repl::resolve_compatible_node;
 use crate::tools::network_approval::NetworkApprovalService;
@@ -5469,6 +5472,122 @@ fn errors_to_info(errors: &[SkillError]) -> Vec<SkillErrorInfo> {
         .collect()
 }
 
+#[derive(Clone)]
+struct PendingToolPayloadStream {
+    call_id: String,
+    kind: ToolCallPayloadKind,
+    label: String,
+}
+
+fn response_item_stream_id(item: &ResponseItem) -> Option<&str> {
+    match item {
+        ResponseItem::Message { id, .. } => id.as_deref(),
+        ResponseItem::Reasoning { id, .. } => Some(id.as_str()),
+        ResponseItem::LocalShellCall { id, .. } => id.as_deref(),
+        ResponseItem::FunctionCall { id, .. } => id.as_deref(),
+        ResponseItem::ToolSearchCall { id, .. } => id.as_deref(),
+        ResponseItem::CustomToolCall { id, .. } => id.as_deref(),
+        _ => None,
+    }
+}
+
+fn is_command_execution_tool_name(name: &str) -> bool {
+    matches!(
+        name,
+        "shell" | "container.exec" | "exec_command" | "local_shell" | "shell_command"
+    )
+}
+
+async fn pending_tool_payload_stream_for_item(
+    sess: &Session,
+    item: &ResponseItem,
+) -> Option<(String, PendingToolPayloadStream, String)> {
+    let item_id = response_item_stream_id(item)?.to_string();
+    let call = ToolRouter::build_tool_call(sess, item.clone())
+        .await
+        .ok()??;
+    let (kind, label, initial_payload) = match (call.tool_name.as_str(), &call.payload) {
+        ("apply_patch", ToolPayload::Function { arguments }) => (
+            ToolCallPayloadKind::FileChange,
+            "Updating files".to_string(),
+            arguments.clone(),
+        ),
+        ("apply_patch", ToolPayload::Custom { input }) => (
+            ToolCallPayloadKind::FileChange,
+            "Updating files".to_string(),
+            input.clone(),
+        ),
+        (tool_name, ToolPayload::Function { arguments })
+            if is_command_execution_tool_name(tool_name) =>
+        {
+            (
+                ToolCallPayloadKind::CommandExecution,
+                "Running command".to_string(),
+                arguments.clone(),
+            )
+        }
+        (tool_name, ToolPayload::Custom { input }) if is_command_execution_tool_name(tool_name) => {
+            (
+                ToolCallPayloadKind::CommandExecution,
+                "Running command".to_string(),
+                input.clone(),
+            )
+        }
+        (
+            _,
+            ToolPayload::Mcp {
+                tool,
+                raw_arguments,
+                ..
+            },
+        ) => (
+            ToolCallPayloadKind::McpToolCall,
+            format!("Calling {tool}"),
+            raw_arguments.clone(),
+        ),
+        (tool_name, ToolPayload::Custom { input }) => (
+            ToolCallPayloadKind::DynamicToolCall,
+            format!("Calling {tool_name}"),
+            input.clone(),
+        ),
+        _ => return None,
+    };
+
+    Some((
+        item_id,
+        PendingToolPayloadStream {
+            call_id: call.call_id,
+            kind,
+            label,
+        },
+        initial_payload,
+    ))
+}
+
+async fn emit_tool_call_payload_delta(
+    sess: &Session,
+    turn_context: &TurnContext,
+    pending: &PendingToolPayloadStream,
+    delta: String,
+) {
+    if delta.is_empty() {
+        return;
+    }
+
+    sess.send_event(
+        turn_context,
+        EventMsg::ToolCallPayloadDelta(ToolCallPayloadDeltaEvent {
+            thread_id: sess.conversation_id.to_string(),
+            turn_id: turn_context.sub_id.clone(),
+            item_id: pending.call_id.clone(),
+            kind: pending.kind,
+            label: pending.label.clone(),
+            delta,
+        }),
+    )
+    .await;
+}
+
 /// Takes a user message as input and runs a loop where, at each sampling request, the model
 /// replies with either:
 ///
@@ -6740,6 +6859,7 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::WebSearchEnd(_)
         | EventMsg::ExecCommandBegin(_)
         | EventMsg::ExecCommandOutputDelta(_)
+        | EventMsg::ToolCallPayloadDelta(_)
         | EventMsg::TerminalInteraction(_)
         | EventMsg::ExecCommandEnd(_)
         | EventMsg::PatchApplyBegin(_)
@@ -7120,6 +7240,7 @@ async fn try_run_sampling_request(
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
+    let mut pending_tool_payloads: HashMap<String, PendingToolPayloadStream> = HashMap::new();
     let receiving_span = trace_span!("receiving_stream");
     let outcome: CodexResult<SamplingRequestResult> = loop {
         let handle_responses = trace_span!(
@@ -7158,6 +7279,9 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
+                if let Some(item_id) = response_item_stream_id(&item) {
+                    pending_tool_payloads.remove(item_id);
+                }
                 let previously_active_item = active_item.take();
                 if let Some(previous) = previously_active_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
@@ -7205,6 +7329,18 @@ async fn try_run_sampling_request(
                 needs_follow_up |= output_result.needs_follow_up;
             }
             ResponseEvent::OutputItemAdded(item) => {
+                if let Some((item_id, pending, initial_payload)) =
+                    pending_tool_payload_stream_for_item(sess.as_ref(), &item).await
+                {
+                    emit_tool_call_payload_delta(
+                        sess.as_ref(),
+                        turn_context.as_ref(),
+                        &pending,
+                        initial_payload,
+                    )
+                    .await;
+                    pending_tool_payloads.insert(item_id, pending);
+                }
                 if let Some(turn_item) = handle_non_tool_response_item(
                     sess.as_ref(),
                     turn_context.as_ref(),
@@ -7332,6 +7468,19 @@ async fn try_run_sampling_request(
                     }
                 } else {
                     error_or_panic("OutputTextDelta without active item".to_string());
+                }
+            }
+            ResponseEvent::FunctionCallArgumentsDelta { item_id, delta }
+            | ResponseEvent::CustomToolCallInputDelta { item_id, delta }
+            | ResponseEvent::McpCallArgumentsDelta { item_id, delta } => {
+                if let Some(pending) = pending_tool_payloads.get(&item_id) {
+                    emit_tool_call_payload_delta(
+                        sess.as_ref(),
+                        turn_context.as_ref(),
+                        pending,
+                        delta,
+                    )
+                    .await;
                 }
             }
             ResponseEvent::ReasoningSummaryDelta {

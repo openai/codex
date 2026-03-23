@@ -8,6 +8,7 @@ use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
+use codex_protocol::protocol::ToolCallPayloadDeltaEvent;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 
@@ -25,6 +26,7 @@ pub(crate) enum QueuedInterrupt {
     McpBegin(McpToolCallBeginEvent),
     McpEnd(McpToolCallEndEvent),
     PatchEnd(PatchApplyEndEvent),
+    ToolCallPayloadDelta(ToolCallPayloadDeltaEvent),
 }
 
 #[derive(Default)]
@@ -86,6 +88,11 @@ impl InterruptManager {
         self.queue.push_back(QueuedInterrupt::PatchEnd(ev));
     }
 
+    pub(crate) fn push_tool_call_payload_delta(&mut self, ev: ToolCallPayloadDeltaEvent) {
+        self.queue
+            .push_back(QueuedInterrupt::ToolCallPayloadDelta(ev));
+    }
+
     pub(crate) fn flush_all(&mut self, chat: &mut ChatWidget) {
         while let Some(q) = self.queue.pop_front() {
             match q {
@@ -99,6 +106,9 @@ impl InterruptManager {
                 QueuedInterrupt::McpBegin(ev) => chat.handle_mcp_begin_now(ev),
                 QueuedInterrupt::McpEnd(ev) => chat.handle_mcp_end_now(ev),
                 QueuedInterrupt::PatchEnd(ev) => chat.handle_patch_apply_end_now(ev),
+                QueuedInterrupt::ToolCallPayloadDelta(ev) => {
+                    chat.handle_tool_call_payload_delta_now(ev)
+                }
             }
         }
     }

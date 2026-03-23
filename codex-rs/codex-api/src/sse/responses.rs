@@ -167,6 +167,7 @@ pub struct ResponsesStreamEvent {
     headers: Option<Value>,
     response: Option<Value>,
     item: Option<Value>,
+    item_id: Option<String>,
     delta: Option<String>,
     summary_index: Option<i64>,
     content_index: Option<i64>,
@@ -248,6 +249,30 @@ pub fn process_responses_event(
         "response.output_text.delta" => {
             if let Some(delta) = event.delta {
                 return Ok(Some(ResponseEvent::OutputTextDelta(delta)));
+            }
+        }
+        "response.function_call_arguments.delta" => {
+            if let (Some(item_id), Some(delta)) = (event.item_id, event.delta) {
+                return Ok(Some(ResponseEvent::FunctionCallArgumentsDelta {
+                    item_id,
+                    delta,
+                }));
+            }
+        }
+        "response.custom_tool_call_input.delta" => {
+            if let (Some(item_id), Some(delta)) = (event.item_id, event.delta) {
+                return Ok(Some(ResponseEvent::CustomToolCallInputDelta {
+                    item_id,
+                    delta,
+                }));
+            }
+        }
+        "response.mcp_call_arguments.delta" => {
+            if let (Some(item_id), Some(delta)) = (event.item_id, event.delta) {
+                return Ok(Some(ResponseEvent::McpCallArgumentsDelta {
+                    item_id,
+                    delta,
+                }));
             }
         }
         "response.reasoning_summary_text.delta" => {
@@ -1012,6 +1037,66 @@ mod tests {
         assert_eq!(
             ev.response_model().as_deref(),
             Some(CYBER_RESTRICTED_MODEL_FOR_TESTS)
+        );
+    }
+
+    #[test]
+    fn process_responses_event_emits_function_call_arguments_delta() {
+        let event: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "response.function_call_arguments.delta",
+            "item_id": "item-1",
+            "delta": "{\"cmd\":\"ls"
+        }))
+        .expect("deserialize function call delta");
+
+        let actual = process_responses_event(event)
+            .expect("process event")
+            .expect("response event");
+
+        assert_matches!(
+            actual,
+            ResponseEvent::FunctionCallArgumentsDelta { item_id, delta }
+                if item_id == "item-1" && delta == "{\"cmd\":\"ls"
+        );
+    }
+
+    #[test]
+    fn process_responses_event_emits_custom_tool_call_input_delta() {
+        let event: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "response.custom_tool_call_input.delta",
+            "item_id": "item-2",
+            "delta": "*** Begin Patch\n"
+        }))
+        .expect("deserialize custom tool call delta");
+
+        let actual = process_responses_event(event)
+            .expect("process event")
+            .expect("response event");
+
+        assert_matches!(
+            actual,
+            ResponseEvent::CustomToolCallInputDelta { item_id, delta }
+                if item_id == "item-2" && delta == "*** Begin Patch\n"
+        );
+    }
+
+    #[test]
+    fn process_responses_event_emits_mcp_call_arguments_delta() {
+        let event: ResponsesStreamEvent = serde_json::from_value(json!({
+            "type": "response.mcp_call_arguments.delta",
+            "item_id": "item-3",
+            "delta": "{\"path\":\"/tmp\"}"
+        }))
+        .expect("deserialize mcp call delta");
+
+        let actual = process_responses_event(event)
+            .expect("process event")
+            .expect("response event");
+
+        assert_matches!(
+            actual,
+            ResponseEvent::McpCallArgumentsDelta { item_id, delta }
+                if item_id == "item-3" && delta == "{\"path\":\"/tmp\"}"
         );
     }
 

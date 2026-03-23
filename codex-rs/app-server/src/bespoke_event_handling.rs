@@ -7,6 +7,7 @@ use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::ClientRequestResult;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::server_request_error::is_turn_transition_server_request_error;
+use crate::thread_state::PendingToolCallState;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::TurnSummary;
@@ -67,6 +68,7 @@ use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContex
 use codex_app_server_protocol::NetworkPolicyAmendment as V2NetworkPolicyAmendment;
 use codex_app_server_protocol::NetworkPolicyRuleAction as V2NetworkPolicyRuleAction;
 use codex_app_server_protocol::PatchApplyStatus;
+use codex_app_server_protocol::PendingToolCallStatus;
 use codex_app_server_protocol::PermissionsRequestApprovalParams;
 use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::PlanDeltaNotification;
@@ -299,6 +301,18 @@ pub(crate) async fn apply_bespoke_event_handling(
             // All per-thread requests are bound to a turn, so abort them.
             outgoing.abort_pending_server_requests().await;
             let turn_failed = thread_state.lock().await.turn_summary.last_error.is_some();
+            drain_pending_tool_call_items(
+                conversation_id,
+                &event_turn_id,
+                if turn_failed {
+                    PendingToolCallStatus::Failed
+                } else {
+                    PendingToolCallStatus::Completed
+                },
+                &outgoing,
+                &thread_state,
+            )
+            .await;
             thread_watch_manager
                 .note_turn_completed(&conversation_id.to_string(), turn_failed)
                 .await;
@@ -952,6 +966,13 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         EventMsg::DynamicToolCallResponse(response) => {
             if matches!(api_version, ApiVersion::V2) {
+                {
+                    let mut state = thread_state.lock().await;
+                    state
+                        .turn_summary
+                        .pending_tool_calls
+                        .remove(&response.call_id);
+                }
                 let status = if response.success {
                     DynamicToolCallStatus::Completed
                 } else {
@@ -992,6 +1013,15 @@ pub(crate) async fn apply_bespoke_event_handling(
         }
         // TODO(celia): properly construct McpToolCall TurnItem in core.
         EventMsg::McpToolCallBegin(begin_event) => {
+            complete_pending_tool_call_item(
+                conversation_id,
+                &event_turn_id,
+                &begin_event.call_id,
+                PendingToolCallStatus::Superseded,
+                &outgoing,
+                &thread_state,
+            )
+            .await;
             let notification = construct_mcp_tool_call_notification(
                 begin_event,
                 conversation_id.to_string(),
@@ -1296,6 +1326,16 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::PlanDelta(notification))
                 .await;
         }
+        EventMsg::ToolCallPayloadDelta(event) => {
+            update_pending_tool_call_item(
+                conversation_id,
+                &event_turn_id,
+                event,
+                &outgoing,
+                &thread_state,
+            )
+            .await;
+        }
         EventMsg::ContextCompacted(..) => {
             let notification = ContextCompactedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1561,6 +1601,16 @@ pub(crate) async fn apply_bespoke_event_handling(
             let item_id = patch_begin_event.call_id.clone();
             let changes = convert_patch_changes(&patch_begin_event.changes);
 
+            complete_pending_tool_call_item(
+                conversation_id,
+                &event_turn_id,
+                &item_id,
+                PendingToolCallStatus::Superseded,
+                &outgoing,
+                &thread_state,
+            )
+            .await;
+
             let first_start = {
                 let mut state = thread_state.lock().await;
                 state
@@ -1612,6 +1662,16 @@ pub(crate) async fn apply_bespoke_event_handling(
             let command = shlex_join(&exec_command_begin_event.command);
             let cwd = exec_command_begin_event.cwd;
             let process_id = exec_command_begin_event.process_id;
+
+            complete_pending_tool_call_item(
+                conversation_id,
+                &event_turn_id,
+                &item_id,
+                PendingToolCallStatus::Superseded,
+                &outgoing,
+                &thread_state,
+            )
+            .await;
 
             {
                 let mut state = thread_state.lock().await;
@@ -1760,6 +1820,14 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::TurnAborted(turn_aborted_event) => {
             // All per-thread requests are bound to a turn, so abort them.
             outgoing.abort_pending_server_requests().await;
+            drain_pending_tool_call_items(
+                conversation_id,
+                &event_turn_id,
+                PendingToolCallStatus::Failed,
+                &outgoing,
+                &thread_state,
+            )
+            .await;
             let pending = {
                 let mut state = thread_state.lock().await;
                 std::mem::take(&mut state.pending_interrupts)
@@ -1965,6 +2033,110 @@ async fn emit_turn_completed_with_status(
     outgoing
         .send_server_notification(ServerNotification::TurnCompleted(notification))
         .await;
+}
+
+fn pending_tool_call_item(
+    item_id: String,
+    pending: PendingToolCallState,
+    status: PendingToolCallStatus,
+) -> ThreadItem {
+    ThreadItem::PendingToolCall {
+        id: item_id,
+        kind: pending.kind,
+        label: pending.label,
+        payload: pending.payload,
+        status,
+    }
+}
+
+async fn update_pending_tool_call_item(
+    conversation_id: ThreadId,
+    turn_id: &str,
+    event: codex_protocol::protocol::ToolCallPayloadDeltaEvent,
+    outgoing: &ThreadScopedOutgoingMessageSender,
+    thread_state: &Arc<Mutex<ThreadState>>,
+) {
+    let item = {
+        let mut state = thread_state.lock().await;
+        let pending = state
+            .turn_summary
+            .pending_tool_calls
+            .entry(event.item_id.clone())
+            .or_insert_with(|| PendingToolCallState {
+                kind: event.kind.into(),
+                label: event.label.clone(),
+                payload: String::new(),
+            });
+        pending.payload.push_str(&event.delta);
+        pending.label = event.label.clone();
+        pending_tool_call_item(
+            event.item_id,
+            pending.clone(),
+            PendingToolCallStatus::InProgress,
+        )
+    };
+
+    let notification = ItemStartedNotification {
+        thread_id: conversation_id.to_string(),
+        turn_id: turn_id.to_string(),
+        item,
+    };
+    outgoing
+        .send_server_notification(ServerNotification::ItemStarted(notification))
+        .await;
+}
+
+async fn complete_pending_tool_call_item(
+    conversation_id: ThreadId,
+    turn_id: &str,
+    item_id: &str,
+    status: PendingToolCallStatus,
+    outgoing: &ThreadScopedOutgoingMessageSender,
+    thread_state: &Arc<Mutex<ThreadState>>,
+) {
+    let Some(item) = ({
+        let mut state = thread_state.lock().await;
+        state
+            .turn_summary
+            .pending_tool_calls
+            .remove(item_id)
+            .map(|pending| pending_tool_call_item(item_id.to_string(), pending, status))
+    }) else {
+        return;
+    };
+
+    let notification = ItemCompletedNotification {
+        thread_id: conversation_id.to_string(),
+        turn_id: turn_id.to_string(),
+        item,
+    };
+    outgoing
+        .send_server_notification(ServerNotification::ItemCompleted(notification))
+        .await;
+}
+
+async fn drain_pending_tool_call_items(
+    conversation_id: ThreadId,
+    turn_id: &str,
+    status: PendingToolCallStatus,
+    outgoing: &ThreadScopedOutgoingMessageSender,
+    thread_state: &Arc<Mutex<ThreadState>>,
+) {
+    let pending_items = {
+        let mut state = thread_state.lock().await;
+        std::mem::take(&mut state.turn_summary.pending_tool_calls)
+    };
+
+    for (item_id, pending) in pending_items {
+        let notification = ItemCompletedNotification {
+            thread_id: conversation_id.to_string(),
+            turn_id: turn_id.to_string(),
+            item: pending_tool_call_item(item_id, pending, status),
+        };
+        outgoing
+            .send_server_notification(ServerNotification::ItemCompleted(notification))
+            .await;
+    }
 }
 
 async fn complete_file_change_item(

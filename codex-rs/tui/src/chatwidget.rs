@@ -94,6 +94,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::dynamic_tools::DynamicToolCallRequest;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::models::MessagePhase;
@@ -111,6 +112,7 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::DeprecationNoticeEvent;
+use codex_protocol::protocol::DynamicToolCallResponseEvent;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -142,6 +144,7 @@ use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::ToolCallPayloadDeltaEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnDiffEvent;
@@ -2750,6 +2753,97 @@ impl ChatWidget {
         );
     }
 
+    fn active_pending_tool_payload_cell_mut(
+        &mut self,
+    ) -> Option<&mut history_cell::PendingToolPayloadCell> {
+        self.active_cell.as_mut().and_then(|cell| {
+            cell.as_any_mut()
+                .downcast_mut::<history_cell::PendingToolPayloadCell>()
+        })
+    }
+
+    fn discard_matching_pending_tool_payload_cell(&mut self, call_id: &str) -> bool {
+        let should_discard = self
+            .active_cell
+            .as_ref()
+            .and_then(|cell| {
+                cell.as_any()
+                    .downcast_ref::<history_cell::PendingToolPayloadCell>()
+            })
+            .is_some_and(|cell| cell.call_id() == call_id);
+        if should_discard {
+            self.active_cell = None;
+            self.bump_active_cell_revision();
+        }
+        should_discard
+    }
+
+    fn on_tool_call_payload_delta(&mut self, ev: ToolCallPayloadDeltaEvent) {
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| q.push_tool_call_payload_delta(ev),
+            |s| s.handle_tool_call_payload_delta_now(ev2),
+        );
+    }
+
+    fn on_dynamic_tool_call_request(&mut self, request: DynamicToolCallRequest) {
+        if self
+            .active_cell
+            .as_ref()
+            .and_then(|cell| {
+                cell.as_any()
+                    .downcast_ref::<history_cell::PendingToolPayloadCell>()
+            })
+            .is_some_and(|cell| cell.call_id() == request.call_id)
+        {
+            return;
+        }
+
+        self.flush_answer_stream_with_separator();
+        self.flush_active_cell();
+        self.active_cell = Some(Box::new(history_cell::new_pending_tool_payload(
+            request.call_id,
+            format!("Calling {}", request.tool),
+            request.arguments.to_string(),
+            self.config.animations,
+        )));
+        self.bump_active_cell_revision();
+        self.request_redraw();
+    }
+
+    fn on_dynamic_tool_call_response(&mut self, response: DynamicToolCallResponseEvent) {
+        self.flush_answer_stream_with_separator();
+
+        let completed_active = {
+            if let Some(cell) = self.active_pending_tool_payload_cell_mut() {
+                if cell.call_id() == response.call_id {
+                    cell.complete(response.success);
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+
+        if completed_active {
+            self.bump_active_cell_revision();
+            self.flush_active_cell();
+        } else {
+            let mut cell = history_cell::new_pending_tool_payload(
+                response.call_id,
+                format!("Calling {}", response.tool),
+                response.arguments.to_string(),
+                self.config.animations,
+            );
+            cell.complete(response.success);
+            self.add_to_history(cell);
+        }
+
+        self.request_redraw();
+    }
+
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
         self.flush_answer_stream_with_separator();
         if is_unified_exec_source(ev.source) {
@@ -2842,6 +2936,7 @@ impl ChatWidget {
     }
 
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
+        self.discard_matching_pending_tool_payload_cell(&event.call_id);
         self.add_to_history(history_cell::new_patch_event(
             event.changes,
             &self.config.cwd,
@@ -3572,6 +3667,7 @@ impl ChatWidget {
             self.suppressed_exec_calls.insert(ev.call_id);
             return;
         }
+        self.discard_matching_pending_tool_payload_cell(&ev.call_id);
         let interaction_input = ev.interaction_input.clone();
         if let Some(cell) = self
             .active_cell
@@ -3604,9 +3700,42 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn handle_tool_call_payload_delta_now(&mut self, ev: ToolCallPayloadDeltaEvent) {
+        self.flush_answer_stream_with_separator();
+
+        let appended = {
+            if let Some(cell) = self.active_pending_tool_payload_cell_mut() {
+                if cell.call_id() == ev.item_id {
+                    cell.append_payload(&ev.delta)
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+
+        if appended {
+            self.bump_active_cell_revision();
+        } else {
+            self.flush_active_cell();
+            self.active_cell = Some(Box::new(history_cell::new_pending_tool_payload(
+                ev.item_id,
+                ev.label,
+                ev.delta,
+                self.config.animations,
+            )));
+            self.bump_active_cell_revision();
+        }
+
+        self.request_redraw();
+    }
+
     pub(crate) fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
         self.flush_answer_stream_with_separator();
-        self.flush_active_cell();
+        if !self.discard_matching_pending_tool_payload_cell(&ev.call_id) {
+            self.flush_active_cell();
+        }
         self.active_cell = Some(Box::new(history_cell::new_active_mcp_tool_call(
             ev.call_id,
             ev.invocation,
@@ -5532,6 +5661,7 @@ impl ChatWidget {
             EventMsg::RequestPermissions(ev) => {
                 self.on_request_permissions(ev);
             }
+            EventMsg::ToolCallPayloadDelta(ev) => self.on_tool_call_payload_delta(ev),
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
@@ -5627,9 +5757,11 @@ impl ChatWidget {
             | EventMsg::ItemStarted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
-            | EventMsg::ReasoningRawContentDelta(_)
-            | EventMsg::DynamicToolCallRequest(_)
-            | EventMsg::DynamicToolCallResponse(_) => {}
+            | EventMsg::ReasoningRawContentDelta(_) => {}
+            EventMsg::DynamicToolCallRequest(request) => self.on_dynamic_tool_call_request(request),
+            EventMsg::DynamicToolCallResponse(response) => {
+                self.on_dynamic_tool_call_response(response)
+            }
             EventMsg::HookStarted(event) => self.on_hook_started(event),
             EventMsg::HookCompleted(event) => self.on_hook_completed(event),
             EventMsg::RealtimeConversationStarted(ev) => {

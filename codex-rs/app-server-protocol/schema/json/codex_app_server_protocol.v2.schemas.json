@@ -5977,6 +5977,15 @@
         }
       ]
     },
+    "PendingToolCallStatus": {
+      "enum": [
+        "inProgress",
+        "completed",
+        "failed",
+        "superseded"
+      ],
+      "type": "string"
+    },
     "Personality": {
       "enum": [
         "none",
@@ -10001,6 +10010,42 @@
         },
         {
           "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/definitions/ToolCallPayloadKind"
+            },
+            "label": {
+              "type": "string"
+            },
+            "payload": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/definitions/PendingToolCallStatus"
+            },
+            "type": {
+              "enum": [
+                "pendingToolCall"
+              ],
+              "title": "PendingToolCallThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "label",
+            "payload",
+            "status",
+            "type"
+          ],
+          "title": "PendingToolCallThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
             "aggregatedOutput": {
               "description": "The command's output, aggregated from stdout and stderr.",
               "type": [
@@ -11633,6 +11678,15 @@
         "name"
       ],
       "type": "object"
+    },
+    "ToolCallPayloadKind": {
+      "enum": [
+        "commandExecution",
+        "fileChange",
+        "mcpToolCall",
+        "dynamicToolCall"
+      ],
+      "type": "string"
     },
     "ToolsV2": {
       "properties": {
