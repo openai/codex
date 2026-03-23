@@ -88,7 +88,29 @@ pub fn argv_to_command_line(argv: &[String]) -> String {
         if args.is_empty() {
             return quote_windows_arg(program);
         }
-        return format!("{} {}", quote_windows_arg(program), args.join(" "));
+
+        let cmd_switch_index = args
+            .iter()
+            .position(|arg| arg.eq_ignore_ascii_case("/c") || arg.eq_ignore_ascii_case("/k"));
+        let rendered_args = if let Some(index) = cmd_switch_index {
+            let mut rendered = args[..=index]
+                .iter()
+                .map(|arg| quote_windows_arg(arg))
+                .collect::<Vec<_>>();
+            let suffix = &args[index + 1..];
+            if suffix.len() == 1 {
+                rendered.push(suffix[0].clone());
+            } else {
+                rendered.extend(suffix.iter().map(|arg| quote_windows_arg(arg)));
+            }
+            rendered.join(" ")
+        } else {
+            args.iter()
+                .map(|arg| quote_windows_arg(arg))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        return format!("{} {rendered_args}", quote_windows_arg(program));
     }
 
     argv.iter()
@@ -177,6 +199,21 @@ mod tests {
         assert_eq!(
             argv_to_command_line(&argv),
             "pwsh.exe -Command \"Write-Output \\\"hello world\\\"\""
+        );
+    }
+
+    #[test]
+    fn argv_to_command_line_quotes_cmd_suffix_tokens_with_spaces() {
+        let argv = vec![
+            "cmd.exe".to_string(),
+            "/c".to_string(),
+            "type".to_string(),
+            "C:\\Program Files\\a.txt".to_string(),
+        ];
+
+        assert_eq!(
+            argv_to_command_line(&argv),
+            "cmd.exe /c type \"C:\\Program Files\\a.txt\""
         );
     }
 }
