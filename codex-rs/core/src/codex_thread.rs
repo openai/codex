@@ -128,6 +128,7 @@ impl CodexThread {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText { text: message }],
+            metadata: None,
             end_turn: None,
             phase: None,
         };
@@ -264,9 +265,15 @@ impl CodexThread {
 
 fn pending_message_input_item(message: &ResponseItem) -> CodexResult<ResponseInputItem> {
     match message {
-        ResponseItem::Message { role, content, .. } => Ok(ResponseInputItem::Message {
+        ResponseItem::Message {
+            role,
+            content,
+            metadata,
+            ..
+        } => Ok(ResponseInputItem::Message {
             role: role.clone(),
             content: content.clone(),
+            metadata: metadata.clone(),
         }),
         _ => Err(CodexErr::InvalidRequest(
             "append_message only supports ResponseItem::Message".to_string(),

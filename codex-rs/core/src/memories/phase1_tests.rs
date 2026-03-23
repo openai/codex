@@ -22,6 +22,7 @@ fn serializes_memory_rollout_with_agents_removed_but_environment_kept() {
                 text: "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>".to_string(),
             },
         ],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -32,6 +33,7 @@ fn serializes_memory_rollout_with_agents_removed_but_environment_kept() {
             text: "<skill>\n<name>demo</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>"
                 .to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -42,6 +44,7 @@ fn serializes_memory_rollout_with_agents_removed_but_environment_kept() {
             text: "<subagent_notification>{\"agent_id\":\"a\",\"status\":\"completed\"}</subagent_notification>"
                 .to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -64,6 +67,7 @@ fn serializes_memory_rollout_with_agents_removed_but_environment_kept() {
                     text: "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>"
                         .to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },

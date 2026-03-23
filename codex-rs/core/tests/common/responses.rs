@@ -637,6 +637,7 @@ pub fn user_message_item(text: &str) -> ResponseItem {
         content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     }

@@ -340,7 +340,16 @@ async fn persist_user_shell_output(
     }
 
     let response_input_item = match output_item {
-        ResponseItem::Message { role, content, .. } => ResponseInputItem::Message { role, content },
+        ResponseItem::Message {
+            role,
+            content,
+            metadata,
+            ..
+        } => ResponseInputItem::Message {
+            role,
+            content,
+            metadata,
+        },
         _ => unreachable!("user shell command output record should always be a message"),
     };
 

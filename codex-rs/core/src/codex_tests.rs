@@ -15,6 +15,7 @@ use crate::models_manager::model_info;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
 
+use codex_features::Feature;
 use codex_features::Features;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -128,6 +129,7 @@ fn user_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     }
@@ -140,6 +142,7 @@ fn assistant_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::OutputText {
             text: text.to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     }
@@ -152,6 +155,7 @@ fn skill_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     }
@@ -883,6 +887,7 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
         content: vec![ContentItem::InputText {
             text: "summary".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -894,6 +899,7 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
             content: vec![ContentItem::InputText {
                 text: "stale developer instructions".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         },
@@ -4007,6 +4013,7 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
         content: vec![ContentItem::InputText {
             text: format!("{}\nsummary", crate::compact::SUMMARY_PREFIX),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -4370,6 +4377,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         content: vec![ContentItem::InputText {
             text: "late pending input".to_string(),
         }],
+        metadata: None,
     }])
     .await
     .expect("inject pending input into active turn");
@@ -4383,6 +4391,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         content: vec![ContentItem::InputText {
             text: "late pending input".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -4578,6 +4587,37 @@ async fn steer_input_returns_active_turn_id() {
 }
 
 #[tokio::test]
+async fn record_into_history_generates_message_metadata_id_when_item_metadata_enabled() {
+    let (mut sess, tc) = make_session_and_context().await;
+    let _ = sess.features.enable(Feature::ItemMetadata);
+
+    let item = ResponseItem::Message {
+        id: Some("msg_123".to_string()),
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "hello".to_string(),
+        }],
+        metadata: None,
+        end_turn: None,
+        phase: None,
+    };
+
+    sess.record_into_history(std::slice::from_ref(&item), &tc)
+        .await;
+
+    let history = sess.state.lock().await.clone_history();
+    let [ResponseItem::Message { metadata, .. }] = history.raw_items() else {
+        panic!("expected a single message item in history");
+    };
+
+    let metadata_id = metadata
+        .as_ref()
+        .map(|metadata| metadata.metadata_id.as_str())
+        .expect("metadata_id should be generated when item metadata is enabled");
+    uuid::Uuid::parse_str(metadata_id).expect("metadata_id should be valid");
+}
+
+#[tokio::test]
 async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
     let input = vec![UserInput::Text {
@@ -4599,18 +4639,21 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
         content: vec![ContentItem::InputText {
             text: "blocked queued prompt".to_string(),
         }],
+        metadata: None,
     };
     let later = ResponseInputItem::Message {
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: "later queued prompt".to_string(),
         }],
+        metadata: None,
     };
     let newer = ResponseInputItem::Message {
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: "newer queued prompt".to_string(),
         }],
+        metadata: None,
     };
 
     sess.inject_response_items(vec![blocked.clone(), later.clone()])
@@ -4845,6 +4888,7 @@ async fn sample_rollout(
         content: vec![ContentItem::InputText {
             text: "first user".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -4860,6 +4904,7 @@ async fn sample_rollout(
         content: vec![ContentItem::OutputText {
             text: "assistant reply one".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -4887,6 +4932,7 @@ async fn sample_rollout(
         content: vec![ContentItem::InputText {
             text: "second user".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -4902,6 +4948,7 @@ async fn sample_rollout(
         content: vec![ContentItem::OutputText {
             text: "assistant reply two".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -4929,6 +4976,7 @@ async fn sample_rollout(
         content: vec![ContentItem::InputText {
             text: "third user".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -4944,6 +4992,7 @@ async fn sample_rollout(
         content: vec![ContentItem::OutputText {
             text: "assistant reply three".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };

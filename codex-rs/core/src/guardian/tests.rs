@@ -87,6 +87,7 @@ async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnCon
                         text: "Please check the repo visibility and push the docs fix if needed."
                             .to_string(),
                     }],
+                    metadata: None,
                     end_turn: None,
                     phase: None,
                 },
@@ -110,6 +111,7 @@ async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnCon
                         text: "The repo is public; I now need approval to push the docs fix."
                             .to_string(),
                     }],
+                    metadata: None,
                     end_turn: None,
                     phase: None,
                 },
@@ -163,6 +165,7 @@ fn collect_guardian_transcript_entries_skips_contextual_user_messages() {
             content: vec![ContentItem::InputText {
                 text: "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         },
@@ -172,6 +175,7 @@ fn collect_guardian_transcript_entries_skips_contextual_user_messages() {
             content: vec![ContentItem::OutputText {
                 text: "hello".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         },
@@ -198,6 +202,7 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
             content: vec![ContentItem::InputText {
                 text: "check the repo".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         },
@@ -220,6 +225,7 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
             content: vec![ContentItem::OutputText {
                 text: "I need to push a fix".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         },

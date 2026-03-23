@@ -33,6 +33,7 @@ fn assistant_msg(text: &str) -> ResponseItem {
         content: vec![ContentItem::OutputText {
             text: text.to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     }
@@ -65,6 +66,7 @@ fn user_msg(text: &str) -> ResponseItem {
         content: vec![ContentItem::OutputText {
             text: text.to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     }
@@ -77,6 +79,7 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
         content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     }
@@ -133,6 +136,7 @@ fn filters_non_api_messages() {
         content: vec![ContentItem::OutputText {
             text: "ignored".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -164,6 +168,7 @@ fn filters_non_api_messages() {
                 content: vec![ContentItem::OutputText {
                     text: "hi".to_string()
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -173,6 +178,7 @@ fn filters_non_api_messages() {
                 content: vec![ContentItem::OutputText {
                     text: "hello".to_string()
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             }
@@ -307,6 +313,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                     text: "caption".to_string(),
                 },
             ],
+            metadata: None,
             end_turn: None,
             phase: None,
         },
@@ -370,6 +377,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                     text: "caption".to_string(),
                 },
             ],
+            metadata: None,
             end_turn: None,
             phase: None,
         },
@@ -428,6 +436,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
                 image_url: "https://example.com/img.png".to_string(),
             },
         ],
+        metadata: None,
         end_turn: None,
         phase: None,
     }]);
@@ -456,6 +465,7 @@ fn for_prompt_preserves_image_generation_calls_when_images_are_supported() {
             content: vec![ContentItem::InputText {
                 text: "hi".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         },
@@ -476,6 +486,7 @@ fn for_prompt_preserves_image_generation_calls_when_images_are_supported() {
                 content: vec![ContentItem::InputText {
                     text: "hi".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             }
@@ -492,6 +503,7 @@ fn for_prompt_clears_image_generation_result_when_images_are_unsupported() {
             content: vec![ContentItem::InputText {
                 text: "generate a lobster".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         },
@@ -512,6 +524,7 @@ fn for_prompt_clears_image_generation_result_when_images_are_unsupported() {
                 content: vec![ContentItem::InputText {
                     text: "generate a lobster".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -668,6 +681,7 @@ fn replace_last_turn_images_does_not_touch_user_images() {
         content: vec![ContentItem::InputImage {
             image_url: "data:image/png;base64,AAA".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     }];
@@ -1528,6 +1542,7 @@ fn image_data_url_payload_does_not_dominate_message_estimate() {
             },
             ContentItem::InputImage { image_url },
         ],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -1537,6 +1552,7 @@ fn image_data_url_payload_does_not_dominate_message_estimate() {
         content: vec![ContentItem::InputText {
             text: "Here is the screenshot".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -1610,6 +1626,7 @@ fn non_base64_image_urls_are_unchanged() {
         content: vec![ContentItem::InputImage {
             image_url: "https://example.com/foo.png".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -1641,6 +1658,7 @@ fn data_url_without_base64_marker_is_unchanged() {
         content: vec![ContentItem::InputImage {
             image_url: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -1679,6 +1697,7 @@ fn mixed_case_data_url_markers_are_adjusted() {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputImage { image_url }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -1710,6 +1729,7 @@ fn multiple_inline_images_apply_multiple_fixed_costs() {
                 image_url: image_url_two,
             },
         ],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
@@ -1793,6 +1813,7 @@ fn text_only_items_unchanged() {
         content: vec![ContentItem::OutputText {
             text: "Hello world, this is a response.".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     };

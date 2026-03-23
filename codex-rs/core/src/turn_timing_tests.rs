@@ -102,6 +102,7 @@ fn response_item_records_turn_ttft_for_first_output_signals() {
         content: vec![ContentItem::OutputText {
             text: "hello".to_string(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     }));
@@ -115,6 +116,7 @@ fn response_item_records_turn_ttft_ignores_empty_non_output_items() {
         content: vec![ContentItem::OutputText {
             text: String::new(),
         }],
+        metadata: None,
         end_turn: None,
         phase: None,
     }));

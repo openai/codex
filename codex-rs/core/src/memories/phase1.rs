@@ -331,6 +331,7 @@ mod job {
                         &rollout_contents,
                     )?,
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             }],
@@ -487,8 +488,10 @@ mod job {
             id,
             role,
             content,
+            metadata,
             end_turn,
             phase,
+            ..
         } = item
         else {
             return should_persist_response_item_for_memories(item).then(|| item.clone());
@@ -515,6 +518,7 @@ mod job {
             id: id.clone(),
             role: role.clone(),
             content,
+            metadata: metadata.clone(),
             end_turn: *end_turn,
             phase: phase.clone(),
         })
