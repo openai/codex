@@ -1183,7 +1183,7 @@ async fn interrupt_remains_responsive_during_resized_table_stream() {
     let resized_tail = {
         let controller = chat
             .stream_controller
-            .as_ref()
+            .as_mut()
             .expect("expected stream controller after resize");
         lines_to_single_string(&controller.current_tail_lines())
     };
@@ -1199,7 +1199,7 @@ async fn interrupt_remains_responsive_during_resized_table_stream() {
     let tail_after_stale_delta = {
         let controller = chat
             .stream_controller
-            .as_ref()
+            .as_mut()
             .expect("expected stream controller after stale delta");
         lines_to_single_string(&controller.current_tail_lines())
     };

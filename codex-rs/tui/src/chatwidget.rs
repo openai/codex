@@ -4235,6 +4235,9 @@ impl ChatWidget {
             self.stream_controller = Some(StreamController::new(
                 self.current_stream_width(2),
                 &self.config.cwd,
+                self.config
+                    .features
+                    .enabled(Feature::StreamTableLiveTailReflow),
             ));
         }
         if let Some(controller) = self.stream_controller.as_mut()
@@ -5683,7 +5686,7 @@ impl ChatWidget {
 
     fn sync_active_stream_tail(&mut self) {
         let Some((tail_lines, tail_starts_stream)) =
-            self.stream_controller.as_ref().map(|controller| {
+            self.stream_controller.as_mut().map(|controller| {
                 (
                     controller.current_tail_lines(),
                     controller.tail_starts_stream(),

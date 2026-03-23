@@ -198,6 +198,7 @@ async fn on_error_does_not_persist_transient_stream_tail_during_finalize_turn() 
     chat.stream_controller = Some(crate::streaming::controller::StreamController::new(
         Some(80),
         chat.config.cwd.as_path(),
+        false,
     ));
     chat.active_cell = Some(Box::new(
         crate::history_cell::StreamingAgentTailCell::new(
@@ -248,6 +249,7 @@ async fn flush_answer_stream_does_not_stop_animation_while_plan_stream_is_active
     chat.stream_controller = Some(crate::streaming::controller::StreamController::new(
         Some(80),
         cwd.as_path(),
+        false,
     ));
 
     while rx.try_recv().is_ok() {}
@@ -286,6 +288,7 @@ async fn flush_answer_stream_does_not_stop_animation_while_plan_table_stream_is_
     chat.stream_controller = Some(crate::streaming::controller::StreamController::new(
         Some(80),
         cwd.as_path(),
+        false,
     ));
 
     while rx.try_recv().is_ok() {}

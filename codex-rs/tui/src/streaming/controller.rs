@@ -57,6 +57,8 @@ use crate::table_detect::strip_blockquote_prefix;
 
 use super::StreamState;
 
+const SPECULATIVE_TAIL_RENDER_THROTTLE: Duration = Duration::from_millis(16);
+
 // ---------------------------------------------------------------------------
 // StreamCore — shared bookkeeping for both stream controllers
 // ---------------------------------------------------------------------------
@@ -74,6 +76,8 @@ struct StreamCore {
     state: StreamState,
     /// Whether table holdback is active for this stream type.
     table_holdback_mode: TableHoldbackMode,
+    /// Whether speculative live table-tail reflow is enabled.
+    live_tail_reflow_enabled: bool,
     /// Current rendering width (columns available for markdown content).
     width: Option<usize>,
     /// Accumulated raw markdown source for the current stream.
@@ -88,6 +92,8 @@ struct StreamCore {
     cwd: PathBuf,
     /// Cached rendered line count for prefix-before-table keyed by source start and width.
     stable_prefix_len_cache: Option<StablePrefixLenCache>,
+    /// Cache for speculative table-tail rendering (raw + uncommitted source).
+    speculative_tail_cache: Option<SpeculativeTailCache>,
     /// Incremental holdback scanner state for append-only source updates.
     holdback_scanner: TableHoldbackScanner,
 }
@@ -98,6 +104,15 @@ struct StablePrefixLenCache {
     stable_prefix_len: usize,
 }
 
+struct SpeculativeTailCache {
+    raw_source_len: usize,
+    uncommitted_len: usize,
+    enqueued_stable_len: usize,
+    width: Option<usize>,
+    lines: Vec<Line<'static>>,
+    rendered_at: Instant,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TableHoldbackMode {
     Enabled,
@@ -105,10 +120,16 @@ enum TableHoldbackMode {
 }
 
 impl StreamCore {
-    fn new(width: Option<usize>, table_holdback_mode: TableHoldbackMode, cwd: &Path) -> Self {
+    fn new(
+        width: Option<usize>,
+        table_holdback_mode: TableHoldbackMode,
+        cwd: &Path,
+        live_tail_reflow_enabled: bool,
+    ) -> Self {
         Self {
             state: StreamState::new(width, cwd),
             table_holdback_mode,
+            live_tail_reflow_enabled,
             width,
             raw_source: String::with_capacity(1024),
             rendered_lines: Vec::with_capacity(64),
@@ -116,6 +137,7 @@ impl StreamCore {
             emitted_stable_len: 0,
             cwd: cwd.to_path_buf(),
             stable_prefix_len_cache: None,
+            speculative_tail_cache: None,
             holdback_scanner: TableHoldbackScanner::new(),
         }
     }
@@ -125,6 +147,7 @@ impl StreamCore {
     fn push_delta(&mut self, delta: &str) -> bool {
         if !delta.is_empty() {
             self.state.has_seen_delta = true;
+            self.speculative_tail_cache = None;
         }
         self.state.collector.push_delta(delta);
 
@@ -214,9 +237,97 @@ impl StreamCore {
         self.rendered_lines[start..].to_vec()
     }
 
+    fn current_tail_lines_with_partial(&mut self) -> Vec<Line<'static>> {
+        if !self.can_speculatively_render_table_tail() {
+            self.speculative_tail_cache = None;
+            return self.current_tail_lines();
+        }
+
+        let raw_source_len = self.raw_source.len();
+        let uncommitted_len = self.state.collector.peek_uncommitted().len();
+        let enqueued_stable_len = self.enqueued_stable_len;
+        let width = self.width;
+
+        if let Some(cache) = &self.speculative_tail_cache
+            && cache.raw_source_len == raw_source_len
+            && cache.uncommitted_len == uncommitted_len
+            && cache.enqueued_stable_len == enqueued_stable_len
+            && cache.width == width
+        {
+            return cache.lines.clone();
+        }
+
+        if let Some(cache) = &self.speculative_tail_cache
+            && cache.rendered_at.elapsed() < SPECULATIVE_TAIL_RENDER_THROTTLE
+        {
+            return cache.lines.clone();
+        }
+
+        let mut speculative_source = String::with_capacity(raw_source_len + uncommitted_len);
+        speculative_source.push_str(&self.raw_source);
+        speculative_source.push_str(self.state.collector.peek_uncommitted());
+
+        let mut speculative_rendered = Vec::new();
+        append_markdown_agent_with_cwd(
+            &speculative_source,
+            self.width,
+            Some(self.cwd.as_path()),
+            &mut speculative_rendered,
+        );
+        let start = enqueued_stable_len.min(speculative_rendered.len());
+        let lines = speculative_rendered[start..].to_vec();
+
+        self.speculative_tail_cache = Some(SpeculativeTailCache {
+            raw_source_len,
+            uncommitted_len,
+            enqueued_stable_len,
+            width,
+            lines: lines.clone(),
+            rendered_at: Instant::now(),
+        });
+
+        lines
+    }
+
     #[inline]
     fn has_tail(&self) -> bool {
         self.enqueued_stable_len < self.rendered_lines.len()
+    }
+
+    #[inline]
+    fn has_tail_with_partial(&self) -> bool {
+        if self.has_tail() {
+            return true;
+        }
+
+        if !self.can_speculatively_render_table_tail() {
+            return false;
+        }
+
+        if let Some(cache) = &self.speculative_tail_cache
+            && cache.raw_source_len == self.raw_source.len()
+            && cache.uncommitted_len == self.state.collector.peek_uncommitted().len()
+            && cache.enqueued_stable_len == self.enqueued_stable_len
+            && cache.width == self.width
+        {
+            return !cache.lines.is_empty();
+        }
+
+        if let Some(cache) = &self.speculative_tail_cache
+            && cache.rendered_at.elapsed() < SPECULATIVE_TAIL_RENDER_THROTTLE
+        {
+            return !cache.lines.is_empty();
+        }
+
+        true
+    }
+
+    #[inline]
+    fn can_speculatively_render_table_tail(&self) -> bool {
+        self.live_tail_reflow_enabled
+            && self.table_holdback_mode == TableHoldbackMode::Enabled
+            && !self.state.collector.peek_uncommitted().is_empty()
+            && !matches!(self.holdback_scanner.state(), TableHoldbackState::None)
     }
 
     /// Update rendering width and rebuild queued stable lines for the new layout.
@@ -230,6 +341,7 @@ impl StreamCore {
         let had_pending_queue = self.state.queued_len() > 0;
         let had_live_tail = self.has_tail();
         self.width = width;
+        self.speculative_tail_cache = None;
         self.state.collector.set_width(width);
         if self.raw_source.is_empty() {
             return;
@@ -265,12 +377,14 @@ impl StreamCore {
         self.enqueued_stable_len = 0;
         self.emitted_stable_len = 0;
         self.stable_prefix_len_cache = None;
+        self.speculative_tail_cache = None;
         self.holdback_scanner.reset();
     }
 
     /// Re-render the full `raw_source` at current `width`.
     fn recompute_streaming_render(&mut self) {
         self.rendered_lines.clear();
+        self.speculative_tail_cache = None;
         append_markdown_agent_with_cwd(
             &self.raw_source,
             self.width,
@@ -419,9 +533,14 @@ impl StreamController {
     ///
     /// The controller snapshots the path into stream state so later commit ticks and finalization
     /// render against the same session cwd that was active when streaming started.
-    pub(crate) fn new(width: Option<usize>, cwd: &Path) -> Self {
+    pub(crate) fn new(width: Option<usize>, cwd: &Path, live_tail_reflow_enabled: bool) -> Self {
         Self {
-            core: StreamCore::new(width, TableHoldbackMode::Enabled, cwd),
+            core: StreamCore::new(
+                width,
+                TableHoldbackMode::Enabled,
+                cwd,
+                live_tail_reflow_enabled,
+            ),
             header_emitted: false,
         }
     }
@@ -472,8 +591,8 @@ impl StreamController {
     }
 
     #[inline]
-    pub(crate) fn current_tail_lines(&self) -> Vec<Line<'static>> {
-        self.core.current_tail_lines()
+    pub(crate) fn current_tail_lines(&mut self) -> Vec<Line<'static>> {
+        self.core.current_tail_lines_with_partial()
     }
 
     #[inline]
@@ -483,7 +602,7 @@ impl StreamController {
 
     #[inline]
     pub(crate) fn has_live_tail(&self) -> bool {
-        self.core.has_tail()
+        self.core.has_tail_with_partial()
     }
 
     pub(crate) fn clear_queue(&mut self) {
@@ -528,7 +647,7 @@ impl PlanStreamController {
     /// render against the same session cwd that was active when streaming started.
     pub(crate) fn new(width: Option<usize>, cwd: &Path) -> Self {
         Self {
-            core: StreamCore::new(width, TableHoldbackMode::Disabled, cwd),
+            core: StreamCore::new(width, TableHoldbackMode::Disabled, cwd, false),
             header_emitted: false,
             top_padding_emitted: false,
         }
@@ -861,7 +980,12 @@ mod tests {
 
     fn stream_controller(width: Option<usize>) -> StreamController {
         let cwd = test_cwd();
-        StreamController::new(width, &cwd)
+        StreamController::new(width, &cwd, false)
+    }
+
+    fn stream_controller_with_live_tail_reflow(width: Option<usize>) -> StreamController {
+        let cwd = test_cwd();
+        StreamController::new(width, &cwd, true)
     }
 
     fn plan_stream_controller(width: Option<usize>) -> PlanStreamController {
@@ -1002,6 +1126,113 @@ mod tests {
 
         ctrl.core.enqueued_stable_len = 1;
         assert!(!ctrl.has_live_tail());
+    }
+
+    #[test]
+    fn controller_live_tail_reflow_shows_uncommitted_table_cell_content() {
+        let mut ctrl = stream_controller_with_live_tail_reflow(Some(80));
+        ctrl.push("| A | B |\n");
+        ctrl.push("| --- | --- |\n");
+        ctrl.push("| partial");
+
+        let tail = lines_to_plain_strings(&ctrl.current_tail_lines()).join("\n");
+        assert!(
+            tail.contains("partial"),
+            "expected speculative tail to include uncommitted content: {tail:?}",
+        );
+    }
+
+    #[test]
+    fn controller_live_tail_reflow_disabled_keeps_newline_gated_tail() {
+        let mut ctrl = stream_controller(Some(80));
+        ctrl.push("| A | B |\n");
+        ctrl.push("| --- | --- |\n");
+        ctrl.push("| partial");
+
+        let tail = lines_to_plain_strings(&ctrl.current_tail_lines()).join("\n");
+        assert!(
+            !tail.contains("partial"),
+            "expected newline-gated tail when live reflow is disabled: {tail:?}",
+        );
+    }
+
+    #[test]
+    fn controller_live_tail_reflow_requires_table_holdback_state() {
+        let mut ctrl = stream_controller_with_live_tail_reflow(Some(80));
+        ctrl.push("plain text without newline");
+
+        assert!(
+            ctrl.current_tail_lines().is_empty(),
+            "expected no speculative tail outside table holdback state",
+        );
+        assert!(!ctrl.has_live_tail());
+    }
+
+    #[test]
+    fn controller_live_tail_reflow_throttle_reuses_stale_cache() {
+        let mut ctrl = stream_controller_with_live_tail_reflow(Some(80));
+        ctrl.push("| A | B |\n");
+        ctrl.push("| --- | --- |\n");
+        ctrl.push("| fresh");
+
+        ctrl.core.speculative_tail_cache = Some(SpeculativeTailCache {
+            raw_source_len: 0,
+            uncommitted_len: 0,
+            enqueued_stable_len: 0,
+            width: None,
+            lines: vec![Line::from("stale-cache-line")],
+            rendered_at: Instant::now(),
+        });
+
+        let tail = lines_to_plain_strings(&ctrl.current_tail_lines());
+        assert_eq!(tail, vec!["stale-cache-line".to_string()]);
+    }
+
+    #[test]
+    fn controller_live_tail_reflow_invalidates_cache_on_push_resize_and_reset() {
+        let mut ctrl = stream_controller_with_live_tail_reflow(Some(80));
+        ctrl.core.speculative_tail_cache = Some(SpeculativeTailCache {
+            raw_source_len: 0,
+            uncommitted_len: 0,
+            enqueued_stable_len: 0,
+            width: None,
+            lines: vec![Line::from("stale-cache-line")],
+            rendered_at: Instant::now(),
+        });
+
+        ctrl.push("x");
+        assert!(
+            ctrl.core.speculative_tail_cache.is_none(),
+            "expected push to invalidate speculative cache",
+        );
+
+        ctrl.core.speculative_tail_cache = Some(SpeculativeTailCache {
+            raw_source_len: 0,
+            uncommitted_len: 0,
+            enqueued_stable_len: 0,
+            width: None,
+            lines: vec![Line::from("stale-cache-line")],
+            rendered_at: Instant::now(),
+        });
+        ctrl.set_width(Some(40));
+        assert!(
+            ctrl.core.speculative_tail_cache.is_none(),
+            "expected resize to invalidate speculative cache",
+        );
+
+        ctrl.core.speculative_tail_cache = Some(SpeculativeTailCache {
+            raw_source_len: 0,
+            uncommitted_len: 0,
+            enqueued_stable_len: 0,
+            width: None,
+            lines: vec![Line::from("stale-cache-line")],
+            rendered_at: Instant::now(),
+        });
+        ctrl.core.reset();
+        assert!(
+            ctrl.core.speculative_tail_cache.is_none(),
+            "expected reset to clear speculative cache",
+        );
     }
 
     #[test]

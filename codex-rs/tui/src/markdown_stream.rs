@@ -88,6 +88,11 @@ impl MarkdownStreamCollector {
         Some(out)
     }
 
+    /// Peek at uncommitted source content beyond the latest commit boundary.
+    pub fn peek_uncommitted(&self) -> &str {
+        &self.buffer[self.committed_source_len..]
+    }
+
     /// Finalize the stream and return any remaining raw source.
     ///
     /// Ensures the returned source chunk is newline-terminated when non-empty so callers can
@@ -230,6 +235,21 @@ mod tests {
         c.push_delta("Line without newline");
         let out = c.finalize_and_drain();
         assert_eq!(out.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn peek_uncommitted_tracks_buffer_after_commits() {
+        let mut c = super::MarkdownStreamCollector::new(None);
+
+        c.push_delta("alpha");
+        assert_eq!(c.peek_uncommitted(), "alpha");
+
+        c.push_delta("\n");
+        assert_eq!(c.commit_complete_source(), Some("alpha\n".to_string()));
+        assert_eq!(c.peek_uncommitted(), "");
+
+        c.push_delta("beta");
+        assert_eq!(c.peek_uncommitted(), "beta");
     }
 
     #[tokio::test]

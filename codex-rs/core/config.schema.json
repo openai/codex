@@ -482,6 +482,9 @@
             "steer": {
               "type": "boolean"
             },
+            "stream_table_live_tail_reflow": {
+              "type": "boolean"
+            },
             "tool_call_mcp_elicitation": {
               "type": "boolean"
             },
@@ -2187,6 +2190,9 @@
           "type": "boolean"
         },
         "steer": {
+          "type": "boolean"
+        },
+        "stream_table_live_tail_reflow": {
           "type": "boolean"
         },
         "tool_call_mcp_elicitation": {
