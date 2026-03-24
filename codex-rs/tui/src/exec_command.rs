@@ -1,18 +1,19 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_shell_command::parse_command::command_for_display;
+use codex_shell_command::parse_command::extract_shell_command;
 use dirs::home_dir;
-#[cfg(test)]
 use shlex::try_join;
 
-#[cfg(test)]
 pub(crate) fn escape_command(command: &[String]) -> String {
     try_join(command.iter().map(String::as_str)).unwrap_or_else(|_| command.join(" "))
 }
 
 pub(crate) fn strip_bash_lc_and_escape(command: &[String]) -> String {
-    command_for_display(command)
+    if let Some((_, script)) = extract_shell_command(command) {
+        return script.to_string();
+    }
+    escape_command(command)
 }
 
 /// If `path` is absolute and inside $HOME, return the part *after* the home

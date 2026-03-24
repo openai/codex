@@ -12,17 +12,6 @@ pub fn shlex_join(tokens: &[String]) -> String {
         .unwrap_or_else(|_| "<command included NUL byte>".to_string())
 }
 
-/// Formats a command the same way Codex surfaces it in the UI: unwrap
-/// shell launcher shims like `bash -lc <script>` when possible, otherwise
-/// fall back to a shell-escaped command line.
-pub fn command_for_display(command: &[String]) -> String {
-    if let Some((_, script)) = extract_shell_command(command) {
-        script.to_string()
-    } else {
-        shlex_try_join(command.iter().map(String::as_str)).unwrap_or_else(|_| command.join(" "))
-    }
-}
-
 /// Extracts the shell and script from a command, regardless of platform
 pub fn extract_shell_command(command: &[String]) -> Option<(&str, &str)> {
     extract_bash_command(command).or_else(|| extract_powershell_command(command))
@@ -90,18 +79,6 @@ mod tests {
     fn assert_parsed(args: &[String], expected: Vec<ParsedCommand>) {
         let out = parse_command(args);
         assert_eq!(out, expected);
-    }
-
-    #[test]
-    fn command_for_display_unwraps_shell_wrapper() {
-        let command = vec_str(&["/bin/zsh", "-lc", "echo hello"]);
-        assert_eq!(command_for_display(&command), "echo hello");
-    }
-
-    #[test]
-    fn command_for_display_escapes_plain_argv() {
-        let command = vec_str(&["git", "commit", "-m", "surf's up"]);
-        assert_eq!(command_for_display(&command), "git commit -m \"surf's up\"");
     }
 
     #[test]

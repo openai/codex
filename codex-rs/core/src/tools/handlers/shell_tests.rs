@@ -20,7 +20,7 @@ use crate::tools::registry::AnyToolResult;
 use serde_json::json;
 use tokio::sync::watch;
 
-use super::bash_post_tool_use_payload;
+use super::build_post_tool_use_payload;
 use super::shell_command_pre_tool_use_payload;
 use super::shell_pre_tool_use_payload;
 
@@ -188,7 +188,7 @@ fn shell_command_handler_rejects_login_when_disallowed() {
 }
 
 #[test]
-fn shell_pre_tool_use_payload_uses_displayed_command() {
+fn shell_pre_tool_use_payload_uses_joined_command() {
     let payload = ToolPayload::LocalShell {
         params: codex_protocol::models::ShellToolCallParams {
             command: vec![
@@ -208,7 +208,7 @@ fn shell_pre_tool_use_payload_uses_displayed_command() {
     assert_eq!(
         shell_pre_tool_use_payload(&payload),
         Some(crate::tools::registry::PreToolUsePayload {
-            command: "printf hi".to_string(),
+            command: "bash -lc 'printf hi'".to_string(),
         })
     );
 }
@@ -228,12 +228,11 @@ fn shell_command_pre_tool_use_payload_uses_raw_command() {
 }
 
 #[test]
-fn bash_post_tool_use_payload_uses_tool_output_wire_value() {
+fn build_post_tool_use_payload_uses_tool_output_wire_value() {
     let payload = ToolPayload::Function {
         arguments: json!({ "command": "printf shell command" }).to_string(),
     };
     let result = AnyToolResult {
-        tool_name: "shell_command".to_string(),
         call_id: "call-42".to_string(),
         payload,
         result: Box::new(FunctionToolOutput {
@@ -244,7 +243,7 @@ fn bash_post_tool_use_payload_uses_tool_output_wire_value() {
     };
 
     assert_eq!(
-        bash_post_tool_use_payload(&result, shell_command_pre_tool_use_payload(&result.payload),),
+        build_post_tool_use_payload(&result, Some("printf shell command".to_string()),),
         Some(crate::tools::registry::PostToolUsePayload {
             command: "printf shell command".to_string(),
             tool_response: json!("shell output"),

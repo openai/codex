@@ -71,46 +71,42 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
             }
         };
 
-        append_matcher_groups(
-            &mut handlers,
-            &mut warnings,
-            &mut display_order,
-            source_path.as_path(),
-            codex_protocol::protocol::HookEventName::PreToolUse,
-            parsed.hooks.pre_tool_use,
-        );
-        append_matcher_groups(
-            &mut handlers,
-            &mut warnings,
-            &mut display_order,
-            source_path.as_path(),
-            codex_protocol::protocol::HookEventName::PostToolUse,
-            parsed.hooks.post_tool_use,
-        );
-        append_matcher_groups(
-            &mut handlers,
-            &mut warnings,
-            &mut display_order,
-            source_path.as_path(),
-            codex_protocol::protocol::HookEventName::SessionStart,
-            parsed.hooks.session_start,
-        );
-        append_matcher_groups(
-            &mut handlers,
-            &mut warnings,
-            &mut display_order,
-            source_path.as_path(),
-            codex_protocol::protocol::HookEventName::UserPromptSubmit,
-            parsed.hooks.user_prompt_submit,
-        );
-        append_matcher_groups(
-            &mut handlers,
-            &mut warnings,
-            &mut display_order,
-            source_path.as_path(),
-            codex_protocol::protocol::HookEventName::Stop,
-            parsed.hooks.stop,
-        );
+        let super::config::HookEvents {
+            pre_tool_use,
+            post_tool_use,
+            session_start,
+            user_prompt_submit,
+            stop,
+        } = parsed.hooks;
+
+        for (event_name, groups) in [
+            (
+                codex_protocol::protocol::HookEventName::PreToolUse,
+                pre_tool_use,
+            ),
+            (
+                codex_protocol::protocol::HookEventName::PostToolUse,
+                post_tool_use,
+            ),
+            (
+                codex_protocol::protocol::HookEventName::SessionStart,
+                session_start,
+            ),
+            (
+                codex_protocol::protocol::HookEventName::UserPromptSubmit,
+                user_prompt_submit,
+            ),
+            (codex_protocol::protocol::HookEventName::Stop, stop),
+        ] {
+            append_matcher_groups(
+                &mut handlers,
+                &mut warnings,
+                &mut display_order,
+                source_path.as_path(),
+                event_name,
+                groups,
+            );
+        }
     }
 
     DiscoveryResult { handlers, warnings }

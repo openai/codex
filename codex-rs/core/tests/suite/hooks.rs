@@ -1175,7 +1175,7 @@ async fn pre_tool_use_blocks_local_shell_before_execution() -> Result<()> {
     assert!(
         output.contains(&format!(
             "Command: {}",
-            codex_shell_command::parse_command::command_for_display(&command)
+            codex_shell_command::parse_command::shlex_join(&command)
         )),
         "blocked local shell output should surface the blocked command",
     );
@@ -1188,7 +1188,7 @@ async fn pre_tool_use_blocks_local_shell_before_execution() -> Result<()> {
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(
         hook_inputs[0]["tool_input"]["command"],
-        codex_shell_command::parse_command::command_for_display(&command),
+        codex_shell_command::parse_command::shlex_join(&command),
     );
     assert!(
         hook_inputs[0]["turn_id"]
@@ -1655,7 +1655,7 @@ async fn post_tool_use_records_additional_context_for_local_shell() -> Result<()
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(
         hook_inputs[0]["tool_input"]["command"],
-        codex_shell_command::parse_command::command_for_display(&command),
+        codex_shell_command::parse_command::shlex_join(&command),
     );
     assert_eq!(
         hook_inputs[0]["tool_response"],
@@ -1666,16 +1666,12 @@ async fn post_tool_use_records_additional_context_for_local_shell() -> Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn post_tool_use_exit_two_replaces_exec_command_output_with_feedback() -> Result<()> {
+async fn post_tool_use_does_not_fire_for_exec_command() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let call_id = "posttooluse-exec-command";
-    let marker = std::env::temp_dir().join("posttooluse-exec-command-marker");
-    let command = format!(
-        "printf post-hook-output && printf ran > {}",
-        marker.display()
-    );
+    let command = "printf post-hook-output".to_string();
     let args = serde_json::json!({ "cmd": command });
     let responses = mount_sse_sequence(
         &server,
@@ -1691,7 +1687,7 @@ async fn post_tool_use_exit_two_replaces_exec_command_output_with_feedback() -> 
             ]),
             sse(vec![
                 ev_response_created("resp-2"),
-                ev_assistant_message("msg-1", "post hook blocked the exec result"),
+                ev_assistant_message("msg-1", "exec command completed"),
                 ev_completed("resp-2"),
             ]),
         ],
@@ -1719,10 +1715,6 @@ async fn post_tool_use_exit_two_replaces_exec_command_output_with_feedback() -> 
         });
     let test = builder.build(&server).await?;
 
-    if marker.exists() {
-        fs::remove_file(&marker).context("remove leftover post exec marker")?;
-    }
-
     test.submit_turn("run the exec command with post hook")
         .await?;
 
@@ -1733,19 +1725,15 @@ async fn post_tool_use_exit_two_replaces_exec_command_output_with_feedback() -> 
         .get("output")
         .and_then(Value::as_str)
         .expect("exec command output string");
-    assert_eq!(output, "blocked by post hook");
     assert!(
-        marker.exists(),
-        "post tool use should run after command execution"
+        output.contains("post-hook-output"),
+        "exec command output should reach the model unchanged",
     );
 
-    let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
-    assert_eq!(hook_inputs.len(), 1);
-    assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
-    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
-    assert_eq!(
-        hook_inputs[0]["tool_response"],
-        Value::String("post-hook-output".to_string())
+    let hook_log_path = test.codex_home_path().join("post_tool_use_hook_log.jsonl");
+    assert!(
+        !hook_log_path.exists(),
+        "exec_command should not trigger post tool use hooks",
     );
 
     Ok(())

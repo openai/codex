@@ -162,7 +162,6 @@ impl ToolCallRuntime {
 
     fn aborted_response(call: &ToolCall, secs: f32) -> AnyToolResult {
         AnyToolResult {
-            tool_name: call.tool_name.clone(),
             call_id: call.call_id.clone(),
             payload: call.payload.clone(),
             result: Box::new(AbortedToolOutput {

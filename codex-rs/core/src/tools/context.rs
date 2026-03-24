@@ -84,8 +84,8 @@ pub trait ToolOutput: Send {
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem;
 
-    fn post_tool_use_response(&self, call_id: &str, payload: &ToolPayload) -> Option<JsonValue> {
-        response_item_to_post_tool_use_response(self.to_response_item(call_id, payload))
+    fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
+        None
     }
 
     fn code_mode_result(&self, payload: &ToolPayload) -> JsonValue {
@@ -205,10 +205,8 @@ impl ToolOutput for FunctionToolOutput {
         function_tool_response(call_id, payload, self.body.clone(), self.success)
     }
 
-    fn post_tool_use_response(&self, call_id: &str, payload: &ToolPayload) -> Option<JsonValue> {
-        self.post_tool_use_response.clone().or_else(|| {
-            response_item_to_post_tool_use_response(self.to_response_item(call_id, payload))
-        })
+    fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
+        self.post_tool_use_response.clone()
     }
 }
 
@@ -318,10 +316,6 @@ impl ToolOutput for ExecCommandToolOutput {
         )
     }
 
-    fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
-        Some(JsonValue::String(self.truncated_output()))
-    }
-
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
         #[derive(Serialize)]
         struct UnifiedExecCodeModeResult {
@@ -392,15 +386,6 @@ impl ExecCommandToolOutput {
         sections.push(self.truncated_output());
 
         sections.join("\n")
-    }
-}
-
-fn response_item_to_post_tool_use_response(response_item: ResponseInputItem) -> Option<JsonValue> {
-    match response_item {
-        ResponseInputItem::FunctionCallOutput { output, .. } => serde_json::to_value(output).ok(),
-        ResponseInputItem::McpToolCallOutput { output, .. } => serde_json::to_value(output).ok(),
-        ResponseInputItem::ToolSearchOutput { tools, .. } => Some(JsonValue::Array(tools)),
-        _ => None,
     }
 }
 

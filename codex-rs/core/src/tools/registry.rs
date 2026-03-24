@@ -71,7 +71,6 @@ pub trait ToolHandler: Send + Sync {
 }
 
 pub(crate) struct AnyToolResult {
-    pub(crate) tool_name: String,
     pub(crate) call_id: String,
     pub(crate) payload: ToolPayload,
     pub(crate) result: Box<dyn ToolOutput>,
@@ -148,12 +147,10 @@ where
         &self,
         invocation: ToolInvocation,
     ) -> Result<AnyToolResult, FunctionCallError> {
-        let tool_name = invocation.tool_name.clone();
         let call_id = invocation.call_id.clone();
         let payload = invocation.payload.clone();
         let output = self.handle(invocation).await?;
         Ok(AnyToolResult {
-            tool_name,
             call_id,
             payload,
             result: Box::new(output),

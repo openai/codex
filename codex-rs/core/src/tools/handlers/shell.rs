@@ -52,48 +52,49 @@ pub struct ShellCommandHandler {
     backend: ShellCommandBackend,
 }
 
-fn bash_post_tool_use_payload(
+fn build_post_tool_use_payload(
     result: &AnyToolResult,
-    pre_tool_use_payload: Option<PreToolUsePayload>,
+    command: Option<String>,
 ) -> Option<PostToolUsePayload> {
-    let command = pre_tool_use_payload?.command;
     let tool_response = result
         .result
         .post_tool_use_response(&result.call_id, &result.payload)?;
     Some(PostToolUsePayload {
-        command,
+        command: command?,
         tool_response,
     })
 }
 
-fn shell_pre_tool_use_payload(payload: &ToolPayload) -> Option<PreToolUsePayload> {
+fn shell_payload_command(payload: &ToolPayload) -> Option<String> {
     match payload {
         ToolPayload::Function { arguments } => {
             serde_json::from_str::<ShellToolCallParams>(arguments)
                 .ok()
-                .map(|params| PreToolUsePayload {
-                    command: codex_shell_command::parse_command::command_for_display(
-                        &params.command,
-                    ),
-                })
+                .map(|params| codex_shell_command::parse_command::shlex_join(&params.command))
         }
-        ToolPayload::LocalShell { params } => Some(PreToolUsePayload {
-            command: codex_shell_command::parse_command::command_for_display(&params.command),
-        }),
+        ToolPayload::LocalShell { params } => Some(codex_shell_command::parse_command::shlex_join(
+            &params.command,
+        )),
         _ => None,
     }
 }
 
-fn shell_command_pre_tool_use_payload(payload: &ToolPayload) -> Option<PreToolUsePayload> {
+fn shell_pre_tool_use_payload(payload: &ToolPayload) -> Option<PreToolUsePayload> {
+    shell_payload_command(payload).map(|command| PreToolUsePayload { command })
+}
+
+fn shell_command_payload_command(payload: &ToolPayload) -> Option<String> {
     let ToolPayload::Function { arguments } = payload else {
         return None;
     };
 
     serde_json::from_str::<ShellCommandToolCallParams>(arguments)
         .ok()
-        .map(|params| PreToolUsePayload {
-            command: params.command,
-        })
+        .map(|params| params.command)
+}
+
+fn shell_command_pre_tool_use_payload(payload: &ToolPayload) -> Option<PreToolUsePayload> {
+    shell_command_payload_command(payload).map(|command| PreToolUsePayload { command })
 }
 
 struct RunExecLikeArgs {
@@ -231,7 +232,7 @@ impl ToolHandler for ShellHandler {
     }
 
     fn post_tool_use_payload(&self, result: &AnyToolResult) -> Option<PostToolUsePayload> {
-        bash_post_tool_use_payload(result, shell_pre_tool_use_payload(&result.payload))
+        build_post_tool_use_payload(result, shell_payload_command(&result.payload))
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -329,7 +330,7 @@ impl ToolHandler for ShellCommandHandler {
     }
 
     fn post_tool_use_payload(&self, result: &AnyToolResult) -> Option<PostToolUsePayload> {
-        bash_post_tool_use_payload(result, shell_command_pre_tool_use_payload(&result.payload))
+        build_post_tool_use_payload(result, shell_command_payload_command(&result.payload))
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
