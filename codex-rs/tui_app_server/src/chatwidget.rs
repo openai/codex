@@ -10305,7 +10305,7 @@ impl ChatWidget {
         self.bottom_pane.set_connectors_snapshot(Some(snapshot));
     }
 
-    fn refresh_plugin_mentions(&mut self) {
+    pub(crate) fn refresh_plugin_mentions(&mut self) {
         if !self.config.features.enabled(Feature::Plugins) {
             self.bottom_pane.set_plugin_mentions(/*plugins*/ None);
             return;
@@ -10316,6 +10316,11 @@ impl ChatWidget {
             .capability_summaries()
             .to_vec();
         self.bottom_pane.set_plugin_mentions(Some(plugins));
+    }
+
+    pub(crate) fn sync_plugin_mentions_config(&mut self, config: &Config) {
+        self.config.features = config.features.clone();
+        self.config.config_layer_stack = config.config_layer_stack.clone();
     }
 
     pub(crate) fn open_review_popup(&mut self) {

@@ -8949,6 +8949,10 @@ impl ChatWidget {
 
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
         if self.connectors_enabled() {
+            let plugin_provenance = McpManager::new(Arc::new(PluginsManager::new(
+                self.config.codex_home.clone(),
+            )))
+            .tool_plugin_provenance(&self.config);
             let mut connectors_by_id: HashMap<String, connectors::AppInfo> = HashMap::new();
             for tool in ev.tools.values() {
                 let Some(meta) = tool.meta.as_ref().and_then(serde_json::Value::as_object) else {
@@ -8991,7 +8995,9 @@ impl ChatWidget {
                             install_url: None,
                             is_accessible: true,
                             is_enabled: true,
-                            plugin_display_names: Vec::new(),
+                            plugin_display_names: plugin_provenance
+                                .plugin_display_names_for_connector_id(connector_id)
+                                .to_vec(),
                         }
                     });
             }
@@ -9127,7 +9133,7 @@ impl ChatWidget {
         self.bottom_pane.set_connectors_snapshot(Some(snapshot));
     }
 
-    fn refresh_plugin_mentions(&mut self) {
+    pub(crate) fn refresh_plugin_mentions(&mut self) {
         if !self.config.features.enabled(Feature::Plugins) {
             self.bottom_pane.set_plugin_mentions(/*plugins*/ None);
             return;
@@ -9138,6 +9144,11 @@ impl ChatWidget {
             .capability_summaries()
             .to_vec();
         self.bottom_pane.set_plugin_mentions(Some(plugins));
+    }
+
+    pub(crate) fn sync_plugin_mentions_config(&mut self, config: &Config) {
+        self.config.features = config.features.clone();
+        self.config.config_layer_stack = config.config_layer_stack.clone();
     }
 
     pub(crate) fn open_review_popup(&mut self) {

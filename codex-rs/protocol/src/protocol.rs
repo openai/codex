@@ -549,7 +549,7 @@ impl InterAgentCommunication {
         Self::from_message_content(content).is_some()
     }
 
-    fn from_message_content(content: &[ContentItem]) -> Option<Self> {
+    pub fn from_message_content(content: &[ContentItem]) -> Option<Self> {
         match content {
             [ContentItem::InputText { text }] | [ContentItem::OutputText { text }] => {
                 serde_json::from_str(text).ok()

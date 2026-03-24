@@ -649,44 +649,66 @@ impl ChatWidget {
             ));
         }
 
-        let mut items: Vec<SelectionItem> = Vec::new();
-        for marketplace in marketplaces {
-            let marketplace_label = marketplace_display_name(marketplace);
-            for plugin in &marketplace.plugins {
-                let display_name = plugin_display_name(plugin);
-                let status_label = plugin_status_label(plugin);
-                let description = plugin_brief_description(plugin, &marketplace_label);
-                let selected_description =
-                    format!("{status_label}. Press Enter to view plugin details.");
-                let search_value = format!(
-                    "{display_name} {} {} {}",
-                    plugin.id, plugin.name, marketplace_label
-                );
-                let cwd = self.config.cwd.clone();
-                let plugin_display_name = display_name.clone();
-                let marketplace_path = marketplace.path.clone();
-                let plugin_name = plugin.name.clone();
+        let mut plugin_entries: Vec<(&PluginMarketplaceEntry, &PluginSummary, String)> =
+            marketplaces
+                .iter()
+                .flat_map(|marketplace| {
+                    marketplace
+                        .plugins
+                        .iter()
+                        .map(move |plugin| (*marketplace, plugin, plugin_display_name(plugin)))
+                })
+                .collect();
+        plugin_entries.sort_by(|left, right| {
+            right
+                .1
+                .installed
+                .cmp(&left.1.installed)
+                .then_with(|| {
+                    left.2
+                        .to_ascii_lowercase()
+                        .cmp(&right.2.to_ascii_lowercase())
+                })
+                .then_with(|| left.2.cmp(&right.2))
+                .then_with(|| left.1.name.cmp(&right.1.name))
+                .then_with(|| left.1.id.cmp(&right.1.id))
+        });
 
-                items.push(SelectionItem {
-                    name: format!("{display_name} · {marketplace_label}"),
-                    description: Some(description),
-                    selected_description: Some(selected_description),
-                    search_value: Some(search_value),
-                    actions: vec![Box::new(move |tx| {
-                        tx.send(AppEvent::OpenPluginDetailLoading {
-                            plugin_display_name: plugin_display_name.clone(),
-                        });
-                        tx.send(AppEvent::FetchPluginDetail {
-                            cwd: cwd.clone(),
-                            params: codex_app_server_protocol::PluginReadParams {
-                                marketplace_path: marketplace_path.clone(),
-                                plugin_name: plugin_name.clone(),
-                            },
-                        });
-                    })],
-                    ..Default::default()
-                });
-            }
+        let mut items: Vec<SelectionItem> = Vec::new();
+        for (marketplace, plugin, display_name) in plugin_entries {
+            let marketplace_label = marketplace_display_name(marketplace);
+            let status_label = plugin_status_label(plugin);
+            let description = plugin_brief_description(plugin, &marketplace_label);
+            let selected_description =
+                format!("{status_label}. Press Enter to view plugin details.");
+            let search_value = format!(
+                "{display_name} {} {} {}",
+                plugin.id, plugin.name, marketplace_label
+            );
+            let cwd = self.config.cwd.clone();
+            let plugin_display_name = display_name.clone();
+            let marketplace_path = marketplace.path.clone();
+            let plugin_name = plugin.name.clone();
+
+            items.push(SelectionItem {
+                name: format!("{display_name} · {marketplace_label}"),
+                description: Some(description),
+                selected_description: Some(selected_description),
+                search_value: Some(search_value),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::OpenPluginDetailLoading {
+                        plugin_display_name: plugin_display_name.clone(),
+                    });
+                    tx.send(AppEvent::FetchPluginDetail {
+                        cwd: cwd.clone(),
+                        params: codex_app_server_protocol::PluginReadParams {
+                            marketplace_path: marketplace_path.clone(),
+                            plugin_name: plugin_name.clone(),
+                        },
+                    });
+                })],
+                ..Default::default()
+            });
         }
 
         if items.is_empty() {

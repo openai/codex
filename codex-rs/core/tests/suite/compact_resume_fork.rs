@@ -310,10 +310,10 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
         return Ok(());
     }
 
-    // 1. Arrange mocked SSE responses for the initial flow plus the second compact.
+    // 1. Arrange mocked SSE responses as a single ordered stream so assertions
+    // observe the real request sequence instead of per-mock duplicate captures.
     let server = MockServer::start().await;
-    let mut request_log = mount_initial_flow(&server).await;
-    request_log.extend(mount_second_compact_flow(&server).await);
+    let request_log = mount_second_compact_sequence(&server).await;
 
     // 2. Drive the conversation through compact -> resume -> fork -> compact -> resume.
     let (_home, config, manager, base) = start_test_conversation(&server, None).await;
@@ -349,7 +349,12 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
     let resumed_again = resume_conversation(&manager, &config, forked_path).await;
     user_turn(&resumed_again, AFTER_SECOND_RESUME).await;
 
-    let mut requests = gather_request_bodies(&request_log);
+    let mut requests = request_log
+        .requests()
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+    requests.iter_mut().for_each(normalize_line_endings);
     normalize_compact_prompts(&mut requests);
     let input_after_compact = json!(requests[requests.len() - 2]["input"]);
     let input_after_resume = json!(requests[requests.len() - 1]["input"]);
@@ -382,20 +387,18 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
     );
     let seeded_user_prefix = &first_request_user_texts[..first_turn_user_index];
     let summary_after_second_compact =
-        extract_summary_user_text(&requests[requests.len() - 3], SUMMARY_TEXT);
+        extract_summary_user_text(&requests[requests.len() - 2], SUMMARY_TEXT);
     let mut expected_after_second_compact_user_texts = vec![
         "hello world".to_string(),
         "AFTER_COMPACT".to_string(),
         "AFTER_RESUME".to_string(),
         "AFTER_FORK".to_string(),
-        summary_after_second_compact,
+        summary_after_second_compact.clone(),
     ];
     expected_after_second_compact_user_texts.extend_from_slice(seeded_user_prefix);
     expected_after_second_compact_user_texts.push("AFTER_COMPACT_2".to_string());
-    let mut expected_fork_local_user_texts = vec![
-        "AFTER_FORK".to_string(),
-        expected_after_second_compact_user_texts[4].clone(),
-    ];
+    let mut expected_fork_local_user_texts =
+        vec!["AFTER_FORK".to_string(), summary_after_second_compact];
     expected_fork_local_user_texts.extend_from_slice(seeded_user_prefix);
     expected_fork_local_user_texts.push("AFTER_COMPACT_2".to_string());
     let final_user_texts = json_message_input_texts(&requests[requests.len() - 1], "user");
@@ -403,11 +406,16 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
         .split_last()
         .unwrap_or_else(|| panic!("after-second-resume request missing user messages"));
     assert_eq!(final_last, AFTER_SECOND_RESUME);
-    let matched_prefix_len = if final_prefix.starts_with(&expected_after_second_compact_user_texts)
+    let matched_prefix_len = if let Some(start) = final_prefix
+        .windows(expected_after_second_compact_user_texts.len())
+        .position(|window| window == expected_after_second_compact_user_texts)
     {
-        expected_after_second_compact_user_texts.len()
-    } else if final_prefix.starts_with(&expected_fork_local_user_texts) {
-        expected_fork_local_user_texts.len()
+        start + expected_after_second_compact_user_texts.len()
+    } else if let Some(start) = final_prefix
+        .windows(expected_fork_local_user_texts.len())
+        .position(|window| window == expected_fork_local_user_texts)
+    {
+        start + expected_fork_local_user_texts.len()
     } else {
         panic!("after-second-resume user texts should preserve post-compact user history prefix");
     };
@@ -749,33 +757,29 @@ async fn mount_initial_flow(server: &MockServer) -> Vec<ResponseMock> {
     vec![first, compact, after_compact, after_resume, after_fork]
 }
 
-async fn mount_second_compact_flow(server: &MockServer) -> Vec<ResponseMock> {
+async fn mount_second_compact_sequence(server: &MockServer) -> ResponseMock {
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed("r1"),
+    ]);
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", SUMMARY_TEXT),
+        ev_completed("r2"),
+    ]);
+    let sse3 = sse(vec![
+        ev_assistant_message("m3", "AFTER_COMPACT_REPLY"),
+        ev_completed("r3"),
+    ]);
+    let sse4 = sse(vec![ev_completed("r4")]);
+    let sse5 = sse(vec![ev_completed("r5")]);
     let sse6 = sse(vec![
         ev_assistant_message("m4", SUMMARY_TEXT),
         ev_completed("r6"),
     ]);
     let sse7 = sse(vec![ev_completed("r7")]);
+    let sse8 = sse(vec![ev_completed("r8")]);
 
-    // Keep this matcher broad enough to survive prompt-shape differences across
-    // platforms/config (history may include either marker text or compact prompt
-    // fragments), but explicitly exclude the final resume turn so these two
-    // one-shot mocks cannot race for the same request.
-    let match_second_compact = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        (body.contains("AFTER_FORK")
-            || body_contains_text(body, SUMMARIZATION_PROMPT)
-            || body.contains(&json_fragment(FIRST_REPLY)))
-            && !body.contains(&format!("\"text\":\"{AFTER_SECOND_RESUME}\""))
-    };
-    let second_compact = mount_sse_once_match(server, match_second_compact, sse6).await;
-
-    let match_after_second_resume = |req: &wiremock::Request| {
-        let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains(&format!("\"text\":\"{AFTER_SECOND_RESUME}\""))
-    };
-    let after_second_resume = mount_sse_once_match(server, match_after_second_resume, sse7).await;
-
-    vec![second_compact, after_second_resume]
+    mount_sse_sequence(server, vec![sse1, sse2, sse3, sse4, sse5, sse6, sse7, sse8]).await
 }
 
 async fn start_test_conversation(
