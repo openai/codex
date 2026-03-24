@@ -191,7 +191,10 @@ impl SandboxManager {
         let additional_permissions = command.additional_permissions.take();
         let EffectiveSandboxPermissions {
             sandbox_policy: effective_policy,
-            macos_seatbelt_profile_extensions: effective_macos_seatbelt_profile_extensions,
+            #[cfg(target_os = "macos")]
+                macos_seatbelt_profile_extensions: effective_macos_seatbelt_profile_extensions,
+            #[cfg(not(target_os = "macos"))]
+                macos_seatbelt_profile_extensions: _,
         } = EffectiveSandboxPermissions::new(
             policy,
             macos_seatbelt_profile_extensions,
