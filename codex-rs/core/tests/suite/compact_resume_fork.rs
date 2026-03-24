@@ -12,7 +12,6 @@ use super::compact::FIRST_REPLY;
 use super::compact::SUMMARY_TEXT;
 use anyhow::Result;
 use codex_core::CodexThread;
-use codex_core::ForkSnapshot;
 use codex_core::ThreadManager;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
@@ -384,13 +383,8 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
     let seeded_user_prefix = &first_request_user_texts[..first_turn_user_index];
     let summary_after_second_compact =
         extract_summary_user_text(&requests[requests.len() - 3], SUMMARY_TEXT);
-    let mut expected_after_second_compact_user_texts = vec![
-        "hello world".to_string(),
-        "AFTER_COMPACT".to_string(),
-        "AFTER_RESUME".to_string(),
-        "AFTER_FORK".to_string(),
-        summary_after_second_compact,
-    ];
+    let mut expected_after_second_compact_user_texts =
+        vec!["AFTER_FORK".to_string(), summary_after_second_compact];
     expected_after_second_compact_user_texts.extend_from_slice(seeded_user_prefix);
     expected_after_second_compact_user_texts.push("AFTER_COMPACT_2".to_string());
     let final_user_texts = json_message_input_texts(&requests[requests.len() - 1], "user");
@@ -847,14 +841,8 @@ async fn fork_thread(
     path: std::path::PathBuf,
     nth_user_message: usize,
 ) -> Arc<CodexThread> {
-    Box::pin(manager.fork_thread(
-        ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message),
-        config.clone(),
-        path,
-        /*persist_extended_history*/ false,
-        /*parent_trace*/ None,
-    ))
-    .await
-    .expect("fork conversation")
-    .thread
+    Box::pin(manager.fork_thread(nth_user_message, config.clone(), path, false, None))
+        .await
+        .expect("fork conversation")
+        .thread
 }
