@@ -356,7 +356,7 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: install_label.to_string(),
                 description: Some(
-                    "Open the same ChatGPT app management link used by /apps.".to_string(),
+                    "Open the ChatGPT app management page".to_string(),
                 ),
                 selected_description: Some("Open the app page in your browser.".to_string()),
                 actions: vec![Box::new(move |tx| {
@@ -368,7 +368,7 @@ impl ChatWidget {
             });
         } else {
             items.push(SelectionItem {
-                name: "ChatGPT link unavailable".to_string(),
+                name: "ChatGPT apps link unavailable".to_string(),
                 description: Some("This app did not provide an install/manage URL.".to_string()),
                 is_disabled: true,
                 ..Default::default()
@@ -509,7 +509,7 @@ impl ChatWidget {
             items: vec![SelectionItem {
                 name: "Loading plugin details...".to_string(),
                 description: Some(
-                    "This updates when the plugin detail request finishes.".to_string(),
+                    "This updates when plugin details have been loaded.".to_string(),
                 ),
                 is_disabled: true,
                 ..Default::default()
@@ -556,7 +556,7 @@ impl ChatWidget {
             header: Box::new(header),
             items: vec![SelectionItem {
                 name: "Uninstalling plugin...".to_string(),
-                description: Some("This updates when plugin removal completes.".to_string()),
+                description: Some("This updates when the plugin removal completes.".to_string()),
                 is_disabled: true,
                 ..Default::default()
             }],
