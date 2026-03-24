@@ -147,10 +147,10 @@ impl SandboxManager {
     ) -> SandboxType {
         match pref {
             SandboxablePreference::Forbid => SandboxType::None,
-            SandboxablePreference::Require => get_platform_sandbox(
-                windows_sandbox_level != WindowsSandboxLevel::Disabled,
-            )
-            .unwrap_or(SandboxType::None),
+            SandboxablePreference::Require => {
+                get_platform_sandbox(windows_sandbox_level != WindowsSandboxLevel::Disabled)
+                    .unwrap_or(SandboxType::None)
+            }
             SandboxablePreference::Auto => {
                 if should_require_platform_sandbox(
                     file_system_policy,

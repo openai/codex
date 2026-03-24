@@ -24,8 +24,8 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::SandboxPolicy;
-use crate::sandboxing::CommandSpec;
 use crate::sandboxing::ExecRequest;
+use crate::sandboxing::ExecRequestMetadata;
 use crate::sandboxing::SandboxPermissions;
 use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
@@ -36,6 +36,7 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
@@ -256,20 +257,20 @@ pub fn build_exec_request(
         ))
     })?;
 
-    let spec = CommandSpec {
+    let manager = SandboxManager::new();
+    let command = SandboxCommand {
         program: program.clone(),
         args: args.to_vec(),
         cwd,
         env,
+        additional_permissions: None,
+    };
+    let metadata = ExecRequestMetadata {
         expiration,
         capture_policy,
         sandbox_permissions,
-        additional_permissions: None,
         justification,
     };
-
-    let manager = SandboxManager::new();
-    let (command, config) = spec.into_sandbox_command();
     let exec_req = manager
         .transform(SandboxTransformRequest {
             command,
@@ -287,7 +288,7 @@ pub fn build_exec_request(
             windows_sandbox_level,
             windows_sandbox_private_desktop,
         })
-        .map(|request| ExecRequest::from_sandbox_exec_request(request, config))
+        .map(|request| ExecRequest::from_sandbox_exec_request(request, metadata))
         .map_err(CodexErr::from)?;
     Ok(exec_req)
 }

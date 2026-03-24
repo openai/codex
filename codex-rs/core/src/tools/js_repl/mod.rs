@@ -39,15 +39,16 @@ use crate::exec::ExecExpiration;
 use crate::exec_env::create_env;
 use crate::function_tool::FunctionCallError;
 use crate::original_image_detail::normalize_output_image_detail;
-use crate::sandboxing::CommandSpec;
+use crate::sandboxing::ExecRequestMetadata;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::truncate::TruncationPolicy;
+use crate::truncate::truncate_text;
+use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxablePreference;
-use crate::truncate::TruncationPolicy;
-use crate::truncate::truncate_text;
 
 pub(crate) const JS_REPL_PRAGMA_PREFIX: &str = "// codex-js-repl:";
 const KERNEL_SOURCE: &str = include_str!("kernel.js");
@@ -1030,21 +1031,6 @@ impl JsReplManager {
             );
         }
 
-        let spec = CommandSpec {
-            program: node_path.to_string_lossy().to_string(),
-            args: vec![
-                "--experimental-vm-modules".to_string(),
-                kernel_path.to_string_lossy().to_string(),
-            ],
-            cwd: turn.cwd.clone(),
-            env,
-            expiration: ExecExpiration::DefaultTimeout,
-            capture_policy: ExecCapturePolicy::ShellTool,
-            sandbox_permissions: SandboxPermissions::UseDefault,
-            additional_permissions: None,
-            justification: None,
-        };
-
         let sandbox = SandboxManager::new();
         let has_managed_network_requirements = turn
             .config
@@ -1059,7 +1045,22 @@ impl JsReplManager {
             turn.windows_sandbox_level,
             has_managed_network_requirements,
         );
-        let (command, config) = spec.into_sandbox_command();
+        let command = SandboxCommand {
+            program: node_path.to_string_lossy().to_string(),
+            args: vec![
+                "--experimental-vm-modules".to_string(),
+                kernel_path.to_string_lossy().to_string(),
+            ],
+            cwd: turn.cwd.clone(),
+            env,
+            additional_permissions: None,
+        };
+        let metadata = ExecRequestMetadata {
+            expiration: ExecExpiration::DefaultTimeout,
+            capture_policy: ExecCapturePolicy::ShellTool,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            justification: None,
+        };
         let exec_env = sandbox
             .transform(SandboxTransformRequest {
                 command,
@@ -1080,7 +1081,9 @@ impl JsReplManager {
                     .permissions
                     .windows_sandbox_private_desktop,
             })
-            .map(|request| crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, config))
+            .map(|request| {
+                crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, metadata)
+            })
             .map_err(|err| format!("failed to configure sandbox for js_repl: {err}"))?;
 
         let mut cmd =

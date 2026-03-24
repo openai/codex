@@ -9,7 +9,7 @@ use crate::codex::TurnContext;
 use crate::error::CodexErr;
 #[cfg(test)]
 use crate::protocol::SandboxPolicy;
-use crate::sandboxing::CommandSpec;
+use crate::sandboxing::ExecRequestMetadata;
 use crate::sandboxing::SandboxPermissions;
 use crate::state::SessionServices;
 use crate::tools::network_approval::NetworkApprovalSpec;
@@ -21,6 +21,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
+use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformError;
 use codex_sandboxing::SandboxTransformRequest;
@@ -333,10 +334,10 @@ pub(crate) struct SandboxAttempt<'a> {
 impl<'a> SandboxAttempt<'a> {
     pub fn env_for(
         &self,
-        spec: CommandSpec,
+        command: SandboxCommand,
+        metadata: ExecRequestMetadata,
         network: Option<&NetworkProxy>,
     ) -> Result<crate::sandboxing::ExecRequest, SandboxTransformError> {
-        let (command, config) = spec.into_sandbox_command();
         self.manager
             .transform(SandboxTransformRequest {
                 command,
@@ -354,7 +355,9 @@ impl<'a> SandboxAttempt<'a> {
                 windows_sandbox_level: self.windows_sandbox_level,
                 windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
             })
-            .map(|request| crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, config))
+            .map(|request| {
+                crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, metadata)
+            })
     }
 }
 

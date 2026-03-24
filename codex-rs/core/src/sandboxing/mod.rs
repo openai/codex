@@ -17,67 +17,21 @@ use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::models::PermissionProfile;
 pub use codex_protocol::models::SandboxPermissions;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
-use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxType;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Debug)]
-pub struct CommandSpec {
-    pub program: String,
-    pub args: Vec<String>,
-    pub cwd: PathBuf,
-    pub env: HashMap<String, String>,
-    pub expiration: ExecExpiration,
-    pub capture_policy: ExecCapturePolicy,
-    pub sandbox_permissions: SandboxPermissions,
-    pub additional_permissions: Option<PermissionProfile>,
-    pub justification: Option<String>,
-}
-
-#[derive(Debug)]
-pub(crate) struct CommandSpecExecutionConfig {
-    expiration: ExecExpiration,
-    capture_policy: ExecCapturePolicy,
-    sandbox_permissions: SandboxPermissions,
-    justification: Option<String>,
-}
-
-impl CommandSpec {
-    pub(crate) fn into_sandbox_command(self) -> (SandboxCommand, CommandSpecExecutionConfig) {
-        let Self {
-            program,
-            args,
-            cwd,
-            env,
-            expiration,
-            capture_policy,
-            sandbox_permissions,
-            additional_permissions,
-            justification,
-        } = self;
-        (
-            SandboxCommand {
-                program,
-                args,
-                cwd,
-                env,
-                additional_permissions,
-            },
-            CommandSpecExecutionConfig {
-                expiration,
-                capture_policy,
-                sandbox_permissions,
-                justification,
-            },
-        )
-    }
+pub(crate) struct ExecRequestMetadata {
+    pub(crate) expiration: ExecExpiration,
+    pub(crate) capture_policy: ExecCapturePolicy,
+    pub(crate) sandbox_permissions: SandboxPermissions,
+    pub(crate) justification: Option<String>,
 }
 
 #[derive(Debug)]
@@ -102,7 +56,7 @@ pub struct ExecRequest {
 impl ExecRequest {
     pub(crate) fn from_sandbox_exec_request(
         request: SandboxExecRequest,
-        config: CommandSpecExecutionConfig,
+        metadata: ExecRequestMetadata,
     ) -> Self {
         let SandboxExecRequest {
             command,
@@ -117,12 +71,12 @@ impl ExecRequest {
             network_sandbox_policy,
             arg0,
         } = request;
-        let CommandSpecExecutionConfig {
+        let ExecRequestMetadata {
             expiration,
             capture_policy,
             sandbox_permissions,
             justification,
-        } = config;
+        } = metadata;
         if !network_sandbox_policy.is_enabled() {
             env.insert(
                 CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR.to_string(),

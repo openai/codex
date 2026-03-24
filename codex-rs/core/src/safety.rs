@@ -2,12 +2,12 @@ use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_apply_patch::ApplyPatchAction;
-use codex_apply_patch::ApplyPatchFileChange;
-use crate::util::resolve_path;
 use crate::protocol::AskForApproval;
 use crate::protocol::FileSystemSandboxPolicy;
 use crate::protocol::SandboxPolicy;
+use crate::util::resolve_path;
+use codex_apply_patch::ApplyPatchAction;
+use codex_apply_patch::ApplyPatchFileChange;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::get_platform_sandbox;
