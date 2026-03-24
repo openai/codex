@@ -40,11 +40,12 @@ use crate::exec_env::create_env;
 use crate::function_tool::FunctionCallError;
 use crate::original_image_detail::normalize_output_image_detail;
 use crate::sandboxing::CommandSpec;
-use crate::sandboxing::SandboxManager;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
-use crate::tools::sandboxing::SandboxablePreference;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxTransformRequest;
+use codex_sandboxing::SandboxablePreference;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
 
@@ -1058,9 +1059,10 @@ impl JsReplManager {
             turn.windows_sandbox_level,
             has_managed_network_requirements,
         );
+        let (command, config) = spec.into_sandbox_command();
         let exec_env = sandbox
-            .transform(crate::sandboxing::SandboxTransformRequest {
-                spec,
+            .transform(SandboxTransformRequest {
+                command,
                 policy: &turn.sandbox_policy,
                 file_system_policy: &turn.file_system_sandbox_policy,
                 network_policy: turn.network_sandbox_policy,
@@ -1078,6 +1080,7 @@ impl JsReplManager {
                     .permissions
                     .windows_sandbox_private_desktop,
             })
+            .map(|request| crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, config))
             .map_err(|err| format!("failed to configure sandbox for js_repl: {err}"))?;
 
         let mut cmd =

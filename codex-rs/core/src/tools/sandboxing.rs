@@ -10,9 +10,7 @@ use crate::error::CodexErr;
 #[cfg(test)]
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::CommandSpec;
-use crate::sandboxing::SandboxManager;
 use crate::sandboxing::SandboxPermissions;
-use crate::sandboxing::SandboxTransformError;
 use crate::state::SessionServices;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use codex_network_proxy::NetworkProxy;
@@ -23,6 +21,11 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxTransformError;
+use codex_sandboxing::SandboxTransformRequest;
+use codex_sandboxing::SandboxType;
+use codex_sandboxing::SandboxablePreference;
 use futures::Future;
 use futures::future::BoxFuture;
 use serde::Serialize;
@@ -280,15 +283,6 @@ pub(crate) trait Approvable<Req> {
     ) -> BoxFuture<'a, ReviewDecision>;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SandboxablePreference {
-    Auto,
-    #[allow(dead_code)] // Will be used by later tools.
-    Require,
-    #[allow(dead_code)] // Will be used by later tools.
-    Forbid,
-}
-
 pub(crate) trait Sandboxable {
     fn sandbox_preference(&self) -> SandboxablePreference;
     fn escalate_on_failure(&self) -> bool {
@@ -323,7 +317,7 @@ pub(crate) trait ToolRuntime<Req, Out>: Approvable<Req> + Sandboxable {
 }
 
 pub(crate) struct SandboxAttempt<'a> {
-    pub sandbox: crate::exec::SandboxType,
+    pub sandbox: SandboxType,
     pub policy: &'a crate::protocol::SandboxPolicy,
     pub file_system_policy: &'a FileSystemSandboxPolicy,
     pub network_policy: NetworkSandboxPolicy,
@@ -342,9 +336,10 @@ impl<'a> SandboxAttempt<'a> {
         spec: CommandSpec,
         network: Option<&NetworkProxy>,
     ) -> Result<crate::sandboxing::ExecRequest, SandboxTransformError> {
+        let (command, config) = spec.into_sandbox_command();
         self.manager
-            .transform(crate::sandboxing::SandboxTransformRequest {
-                spec,
+            .transform(SandboxTransformRequest {
+                command,
                 policy: self.policy,
                 file_system_policy: self.file_system_policy,
                 network_policy: self.network_policy,
@@ -359,6 +354,7 @@ impl<'a> SandboxAttempt<'a> {
                 windows_sandbox_level: self.windows_sandbox_level,
                 windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
             })
+            .map(|request| crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, config))
     }
 }
 

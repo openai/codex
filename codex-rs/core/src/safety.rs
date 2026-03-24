@@ -4,14 +4,13 @@ use std::path::PathBuf;
 
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
-
-use crate::exec::SandboxType;
 use crate::util::resolve_path;
-
 use crate::protocol::AskForApproval;
 use crate::protocol::FileSystemSandboxPolicy;
 use crate::protocol::SandboxPolicy;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_sandboxing::SandboxType;
+use codex_sandboxing::get_platform_sandbox;
 
 #[derive(Debug, PartialEq)]
 pub enum SafetyCheck {
@@ -103,22 +102,6 @@ pub fn assess_patch_safety(
         }
     } else {
         SafetyCheck::AskUser
-    }
-}
-
-pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType> {
-    if cfg!(target_os = "macos") {
-        Some(SandboxType::MacosSeatbelt)
-    } else if cfg!(target_os = "linux") {
-        Some(SandboxType::LinuxSeccomp)
-    } else if cfg!(target_os = "windows") {
-        if windows_sandbox_enabled {
-            Some(SandboxType::WindowsRestrictedToken)
-        } else {
-            None
-        }
-    } else {
-        None
     }
 }
 

@@ -14,7 +14,6 @@ use crate::config::Constrained;
 use crate::config::Permissions;
 #[cfg(target_os = "macos")]
 use crate::config::types::ShellEnvironmentPolicy;
-use crate::exec::SandboxType;
 use crate::protocol::AskForApproval;
 use crate::protocol::GranularApprovalConfig;
 use crate::protocol::ReadOnlyAccess;
@@ -25,6 +24,7 @@ use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::PolicyParser;
 use codex_execpolicy::RuleMatch;
+use codex_sandboxing::SandboxType;
 #[cfg(target_os = "macos")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::FileSystemPermissions;

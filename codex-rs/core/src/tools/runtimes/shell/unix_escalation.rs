@@ -4,7 +4,6 @@ use crate::error::SandboxErr;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
-use crate::exec::SandboxType;
 use crate::exec::is_likely_sandbox_denied;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
@@ -16,7 +15,6 @@ use crate::skills::SkillMetadata;
 use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::SandboxAttempt;
-use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use codex_execpolicy::Decision;
@@ -26,6 +24,10 @@ use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
 use codex_features::Feature;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxTransformRequest;
+use codex_sandboxing::SandboxType;
+use codex_sandboxing::SandboxablePreference;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -1029,7 +1031,7 @@ impl CoreShellCommandExecutor {
         let (program, args) = command
             .split_first()
             .ok_or_else(|| anyhow::anyhow!("prepared command must not be empty"))?;
-        let sandbox_manager = crate::sandboxing::SandboxManager::new();
+        let sandbox_manager = SandboxManager::new();
         let sandbox = sandbox_manager.select_initial(
             file_system_sandbox_policy,
             network_sandbox_policy,
@@ -1037,9 +1039,7 @@ impl CoreShellCommandExecutor {
             self.windows_sandbox_level,
             self.network.is_some(),
         );
-        let mut exec_request =
-            sandbox_manager.transform(crate::sandboxing::SandboxTransformRequest {
-                spec: crate::sandboxing::CommandSpec {
+        let spec = crate::sandboxing::CommandSpec {
                     program: program.clone(),
                     args: args.to_vec(),
                     cwd: workdir.to_path_buf(),
@@ -1053,7 +1053,11 @@ impl CoreShellCommandExecutor {
                     },
                     additional_permissions,
                     justification: self.justification.clone(),
-                },
+                };
+        let (command, config) = spec.into_sandbox_command();
+        let exec_request =
+            sandbox_manager.transform(SandboxTransformRequest {
+                command,
                 policy: sandbox_policy,
                 file_system_policy: file_system_sandbox_policy,
                 network_policy: network_sandbox_policy,
@@ -1068,6 +1072,8 @@ impl CoreShellCommandExecutor {
                 windows_sandbox_level: self.windows_sandbox_level,
                 windows_sandbox_private_desktop: false,
             })?;
+        let mut exec_request =
+            crate::sandboxing::ExecRequest::from_sandbox_exec_request(exec_request, config);
         if let Some(network) = exec_request.network.as_ref() {
             network.apply_to_env(&mut exec_request.env);
         }
