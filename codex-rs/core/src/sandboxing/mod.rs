@@ -14,8 +14,6 @@ use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::execute_exec_request;
-use crate::landlock::allow_network_for_proxy;
-use crate::landlock::create_linux_sandbox_command_args_for_policies;
 use crate::protocol::SandboxPolicy;
 #[cfg(target_os = "macos")]
 use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
@@ -40,6 +38,8 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::ReadOnlyAccess;
+use codex_sandboxing::landlock::allow_network_for_proxy;
+use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_policies;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize;
 use macos_permissions::intersect_macos_seatbelt_profile_extensions;
