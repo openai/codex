@@ -16,6 +16,8 @@ use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
+use crate::tools::registry::AnyToolResult;
+use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -99,6 +101,25 @@ fn exec_command_pre_tool_use_payload(
         .map(|args| PreToolUsePayload { command: args.cmd })
 }
 
+fn exec_command_post_tool_use_payload(result: &AnyToolResult) -> Option<PostToolUsePayload> {
+    let ToolPayload::Function { arguments } = &result.payload else {
+        return None;
+    };
+
+    let args = serde_json::from_str::<ExecCommandArgs>(arguments).ok()?;
+    if args.tty {
+        return None;
+    }
+
+    let tool_response = result
+        .result
+        .post_tool_use_response(&result.call_id, &result.payload)?;
+    Some(PostToolUsePayload {
+        command: args.cmd,
+        tool_response,
+    })
+}
+
 #[async_trait]
 impl ToolHandler for UnifiedExecHandler {
     type Output = ExecCommandToolOutput;
@@ -137,6 +158,10 @@ impl ToolHandler for UnifiedExecHandler {
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
         exec_command_pre_tool_use_payload(&invocation.tool_name, &invocation.payload)
+    }
+
+    fn post_tool_use_payload(&self, result: &AnyToolResult) -> Option<PostToolUsePayload> {
+        exec_command_post_tool_use_payload(result)
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {

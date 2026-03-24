@@ -1666,13 +1666,14 @@ async fn post_tool_use_records_additional_context_for_local_shell() -> Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn post_tool_use_does_not_fire_for_exec_command() -> Result<()> {
+async fn post_tool_use_exit_two_replaces_one_shot_exec_command_output_with_feedback() -> Result<()>
+{
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let call_id = "posttooluse-exec-command";
     let command = "printf post-hook-output".to_string();
-    let args = serde_json::json!({ "cmd": command });
+    let args = serde_json::json!({ "cmd": command, "tty": false });
     let responses = mount_sse_sequence(
         &server,
         vec![
@@ -1687,7 +1688,7 @@ async fn post_tool_use_does_not_fire_for_exec_command() -> Result<()> {
             ]),
             sse(vec![
                 ev_response_created("resp-2"),
-                ev_assistant_message("msg-1", "exec command completed"),
+                ev_assistant_message("msg-1", "post hook blocked the exec result"),
                 ev_completed("resp-2"),
             ]),
         ],
@@ -1725,15 +1726,15 @@ async fn post_tool_use_does_not_fire_for_exec_command() -> Result<()> {
         .get("output")
         .and_then(Value::as_str)
         .expect("exec command output string");
-    assert!(
-        output.contains("post-hook-output"),
-        "exec command output should reach the model unchanged",
-    );
+    assert_eq!(output, "blocked by post hook");
 
-    let hook_log_path = test.codex_home_path().join("post_tool_use_hook_log.jsonl");
-    assert!(
-        !hook_log_path.exists(),
-        "exec_command should not trigger post tool use hooks",
+    let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
+    assert_eq!(hook_inputs[0]["tool_input"]["command"], command);
+    assert_eq!(
+        hook_inputs[0]["tool_response"],
+        Value::String("post-hook-output".to_string())
     );
 
     Ok(())

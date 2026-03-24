@@ -316,6 +316,14 @@ impl ToolOutput for ExecCommandToolOutput {
         )
     }
 
+    fn post_tool_use_response(&self, _call_id: &str, _payload: &ToolPayload) -> Option<JsonValue> {
+        if self.process_id.is_some() || self.session_command.is_none() {
+            return None;
+        }
+
+        Some(JsonValue::String(self.truncated_output()))
+    }
+
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
         #[derive(Serialize)]
         struct UnifiedExecCodeModeResult {
