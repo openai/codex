@@ -41,6 +41,8 @@ mod exec_policy;
 pub mod external_agent_config;
 mod file_watcher;
 mod flags;
+#[cfg(test)]
+mod git_info_tests;
 mod guardian;
 mod hook_runtime;
 pub mod instructions;

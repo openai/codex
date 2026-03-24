@@ -1,9 +1,14 @@
-use super::*;
-
+use codex_git_utils::GitInfo;
+use codex_git_utils::collect_git_info;
+use codex_git_utils::get_has_changes;
+use codex_git_utils::git_diff_to_remote;
+use codex_git_utils::recent_commits;
+use codex_git_utils::resolve_root_git_project_for_trust;
 use core_test_support::skip_if_sandbox;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
+use tokio::process::Command;
 
 // Helper function to create a test git repository
 async fn create_test_git_repo(temp_dir: &TempDir) -> PathBuf {

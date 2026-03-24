@@ -26,6 +26,4 @@ walkdir = { workspace = true }
 
 [dev-dependencies]
 assert_matches = { workspace = true }
-core_test_support = { workspace = true }
 pretty_assertions = { workspace = true }
-serde_json = { workspace = true }

@@ -707,7 +707,3 @@ pub async fn current_branch_name(cwd: &Path) -> Option<String> {
         .map(|s| s.trim().to_string())
         .filter(|name| !name.is_empty())
 }
-
-#[cfg(test)]
-#[path = "info_tests.rs"]
-mod tests;
