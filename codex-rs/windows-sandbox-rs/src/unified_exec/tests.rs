@@ -247,10 +247,13 @@ fn runner_stdin_writer_sends_close_stdin_after_input_eof() {
             .write(true)
             .open(&frames_path)
             .expect("create frame file");
-        let pipe_write = std::sync::Arc::new(std::sync::Mutex::new(file));
+        let outbound_tx = super::start_runner_pipe_writer(file);
         let (writer_tx, writer_rx) = mpsc::channel::<Vec<u8>>(1);
         let writer_handle = super::start_runner_stdin_writer(
-            writer_rx, pipe_write, /*normalize_newlines*/ false, /*stdin_open*/ true,
+            writer_rx,
+            outbound_tx,
+            /*normalize_newlines*/ false,
+            /*stdin_open*/ true,
         );
 
         writer_tx
@@ -302,8 +305,8 @@ fn runner_resizer_sends_resize_frame() {
             .write(true)
             .open(&frames_path)
             .expect("create frame file");
-        let pipe_write = std::sync::Arc::new(std::sync::Mutex::new(file));
-        let mut resizer = super::make_runner_resizer(pipe_write);
+        let outbound_tx = super::start_runner_pipe_writer(file);
+        let mut resizer = super::make_runner_resizer(outbound_tx);
 
         resizer(codex_utils_pty::TerminalSize {
             rows: 45,
