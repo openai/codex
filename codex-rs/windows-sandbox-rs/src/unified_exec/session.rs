@@ -347,10 +347,22 @@ fn read_spawn_ready(pipe_read: &mut File) -> Result<()> {
     }
 }
 
+fn start_runner_pipe_writer(mut pipe_write: File) -> std::sync::mpsc::Sender<FramedMessage> {
+    let (outbound_tx, outbound_rx) = std::sync::mpsc::channel::<FramedMessage>();
+    tokio::task::spawn_blocking(move || {
+        while let Ok(msg) = outbound_rx.recv() {
+            if write_frame(&mut pipe_write, &msg).is_err() {
+                break;
+            }
+        }
+    });
+    outbound_tx
+}
+
 /// Forward stdin chunks from the process driver into framed IPC messages for the runner.
 fn start_runner_stdin_writer(
     mut writer_rx: mpsc::Receiver<Vec<u8>>,
-    pipe_write: Arc<StdMutex<File>>,
+    outbound_tx: std::sync::mpsc::Sender<FramedMessage>,
     normalize_newlines: bool,
     stdin_open: bool,
 ) -> tokio::task::JoinHandle<()> {
@@ -370,9 +382,7 @@ fn start_runner_stdin_writer(
                     },
                 },
             };
-            if let Ok(mut guard) = pipe_write.lock() {
-                let _ = write_frame(&mut *guard, &msg);
-            } else {
+            if outbound_tx.send(msg).is_err() {
                 break;
             }
         }
@@ -383,9 +393,7 @@ fn start_runner_stdin_writer(
                     payload: EmptyPayload::default(),
                 },
             };
-            if let Ok(mut guard) = pipe_write.lock() {
-                let _ = write_frame(&mut *guard, &msg);
-            }
+            let _ = outbound_tx.send(msg);
         }
     })
 }
@@ -462,6 +470,7 @@ fn finalize_exit(
         if let Ok(guard) = process_handle.lock() {
             if let Some(handle) = guard.as_ref() {
                 unsafe {
+                    WaitForSingleObject(*handle, INFINITE);
                     GetExitCodeProcess(*handle, &mut raw_exit);
                 }
             }
@@ -543,7 +552,7 @@ fn resize_conpty_handle(
 }
 
 fn make_runner_resizer(
-    pipe_write: Arc<StdMutex<File>>,
+    outbound_tx: std::sync::mpsc::Sender<FramedMessage>,
 ) -> Box<dyn FnMut(TerminalSize) -> anyhow::Result<()> + Send> {
     Box::new(move |size: TerminalSize| {
         let msg = FramedMessage {
@@ -555,10 +564,9 @@ fn make_runner_resizer(
                 },
             },
         };
-        let mut guard = pipe_write
-            .lock()
-            .map_err(|_| anyhow::anyhow!("runner resize pipe lock poisoned"))?;
-        write_frame(&mut *guard, &msg)
+        outbound_tx
+            .send(msg)
+            .map_err(|_| anyhow::anyhow!("runner resize pipe closed"))
     })
 }
 
@@ -780,21 +788,18 @@ pub async fn spawn_windows_sandbox_session_elevated(
     };
     let (exit_tx, exit_rx) = oneshot::channel::<i32>();
 
-    let pipe_write = Arc::new(StdMutex::new(pipe_write));
-    let writer_handle =
-        start_runner_stdin_writer(writer_rx, Arc::clone(&pipe_write), tty, stdin_open);
+    let outbound_tx = start_runner_pipe_writer(pipe_write);
+    let writer_handle = start_runner_stdin_writer(writer_rx, outbound_tx.clone(), tty, stdin_open);
     let terminator = {
-        let pipe_write = Arc::clone(&pipe_write);
+        let outbound_tx = outbound_tx.clone();
         Some(Box::new(move || {
-            if let Ok(mut guard) = pipe_write.lock() {
-                let msg = FramedMessage {
-                    version: 1,
-                    message: Message::Terminate {
-                        payload: EmptyPayload::default(),
-                    },
-                };
-                let _ = write_frame(&mut *guard, &msg);
-            }
+            let msg = FramedMessage {
+                version: 1,
+                message: Message::Terminate {
+                    payload: EmptyPayload::default(),
+                },
+            };
+            let _ = outbound_tx.send(msg);
         }) as Box<dyn FnMut() + Send + Sync>)
     };
 
@@ -814,7 +819,7 @@ pub async fn spawn_windows_sandbox_session_elevated(
             terminator,
             writer_handle: Some(writer_handle),
             resizer: if tty {
-                Some(make_runner_resizer(Arc::clone(&pipe_write)))
+                Some(make_runner_resizer(outbound_tx))
             } else {
                 None
             },
