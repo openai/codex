@@ -333,7 +333,7 @@ pub fn create_ghost_commit_with_report(
             file_count: dir.file_count,
         })
         .collect::<Vec<_>>();
-    let index_tempdir = Builder::new().prefix("codex-git-utils-index-").tempdir()?;
+    let index_tempdir = Builder::new().prefix("codex-git-index-").tempdir()?;
     let index_path = index_tempdir.path().join("index");
     let base_env = vec![(
         OsString::from("GIT_INDEX_FILE"),

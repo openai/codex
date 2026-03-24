@@ -48,6 +48,7 @@ use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
 use codex_git_utils::collect_git_info;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GitInfo as ProtocolGitInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
@@ -846,7 +847,11 @@ async fn write_session_meta(
     default_provider: &str,
     generate_memories: bool,
 ) -> std::io::Result<()> {
-    let git_info = collect_git_info(cwd).await;
+    let git_info = collect_git_info(cwd).await.map(|info| ProtocolGitInfo {
+        commit_hash: info.commit_hash,
+        branch: info.branch,
+        repository_url: info.repository_url,
+    });
     let session_meta_line = SessionMetaLine {
         meta: session_meta,
         git: git_info,
