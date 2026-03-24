@@ -23,9 +23,9 @@ use crate::tools::handlers::TOOL_SUGGEST_TOOL_NAME;
 use crate::tools::handlers::agent_jobs::BatchJobHandler;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
-use crate::tools::handlers::multi_agents::DEFAULT_WAIT_TIMEOUT_MS;
-use crate::tools::handlers::multi_agents::MAX_WAIT_TIMEOUT_MS;
-use crate::tools::handlers::multi_agents::MIN_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::request_permissions_tool_description;
 use crate::tools::handlers::request_user_input_tool_description;
 use crate::tools::registry::ToolRegistryBuilder;
@@ -178,23 +178,41 @@ fn resume_agent_output_schema() -> JsonValue {
     })
 }
 
-fn wait_output_schema() -> JsonValue {
-    json!({
-        "type": "object",
-        "properties": {
-            "status": {
-                "type": "object",
-                "description": "Final statuses keyed by canonical task name when available, otherwise by agent id.",
-                "additionalProperties": agent_status_output_schema()
+fn wait_output_schema(multi_agent_v2: bool) -> JsonValue {
+    if multi_agent_v2 {
+        json!({
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "Brief wait summary without the agent's final content."
+                },
+                "timed_out": {
+                    "type": "boolean",
+                    "description": "Whether the wait call returned due to timeout before any agent reached a final status."
+                }
             },
-            "timed_out": {
-                "type": "boolean",
-                "description": "Whether the wait call returned due to timeout before any agent reached a final status."
-            }
-        },
-        "required": ["status", "timed_out"],
-        "additionalProperties": false
-    })
+            "required": ["message", "timed_out"],
+            "additionalProperties": false
+        })
+    } else {
+        json!({
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "object",
+                    "description": "Final statuses keyed by canonical task name when available, otherwise by agent id.",
+                    "additionalProperties": agent_status_output_schema()
+                },
+                "timed_out": {
+                    "type": "boolean",
+                    "description": "Whether the wait call returned due to timeout before any agent reached a final status."
+                }
+            },
+            "required": ["status", "timed_out"],
+            "additionalProperties": false
+        })
+    }
 }
 
 fn close_agent_output_schema() -> JsonValue {
@@ -1422,7 +1440,7 @@ fn create_resume_agent_tool() -> ToolSpec {
     })
 }
 
-fn create_wait_agent_tool() -> ToolSpec {
+fn create_wait_agent_tool(multi_agent_v2: bool) -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
         "targets".to_string(),
@@ -1445,8 +1463,13 @@ fn create_wait_agent_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "wait_agent".to_string(),
-        description: "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out. Once the agent reaches a final status, a notification message will be received containing the same completed status."
-            .to_string(),
+        description: if multi_agent_v2 {
+            "Wait for agents to reach a final status. Returns a brief wait summary instead of the agent's final content. Returns a timeout summary when no agent reaches a final status before the deadline."
+                .to_string()
+        } else {
+            "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out. Once the agent reaches a final status, a notification message will be received containing the same completed status."
+                .to_string()
+        },
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::Object {
@@ -1454,7 +1477,7 @@ fn create_wait_agent_tool() -> ToolSpec {
             required: Some(vec!["targets".to_string()]),
             additional_properties: Some(false.into()),
         },
-        output_schema: Some(wait_output_schema()),
+        output_schema: Some(wait_output_schema(multi_agent_v2)),
     })
 }
 
@@ -2602,6 +2625,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents::SendInputHandler;
     use crate::tools::handlers::multi_agents::SpawnAgentHandler;
     use crate::tools::handlers::multi_agents::WaitAgentHandler;
+    use crate::tools::handlers::multi_agents_v2::SendInputHandler as SendInputHandlerV2;
+    use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
+    use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
     use std::sync::Arc;
 
     let mut builder = ToolRegistryBuilder::new();
@@ -3003,7 +3029,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         }
         push_tool_spec(
             &mut builder,
-            create_wait_agent_tool(),
+            create_wait_agent_tool(config.multi_agent_v2),
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
@@ -3013,9 +3039,15 @@ pub(crate) fn build_specs_with_discoverable_tools(
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
-        builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandler));
-        builder.register_handler("send_input", Arc::new(SendInputHandler));
-        builder.register_handler("wait_agent", Arc::new(WaitAgentHandler));
+        if config.multi_agent_v2 {
+            builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandlerV2));
+            builder.register_handler("send_input", Arc::new(SendInputHandlerV2));
+            builder.register_handler("wait_agent", Arc::new(WaitAgentHandlerV2));
+        } else {
+            builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandler));
+            builder.register_handler("send_input", Arc::new(SendInputHandler));
+            builder.register_handler("wait_agent", Arc::new(WaitAgentHandler));
+        }
         builder.register_handler("close_agent", Arc::new(CloseAgentHandler));
     }
 

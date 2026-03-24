@@ -558,6 +558,7 @@ async fn submit_turn(
             final_output_json_schema: None,
             cwd: test.cwd.path().to_path_buf(),
             approval_policy,
+            approvals_reviewer: None,
             sandbox_policy,
             model: session_model,
             effort: None,

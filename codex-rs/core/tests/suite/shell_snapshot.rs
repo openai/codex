@@ -164,6 +164,7 @@ async fn run_snapshot_command_with_options(
             final_output_json_schema: None,
             cwd,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
@@ -254,6 +255,7 @@ async fn run_shell_command_snapshot_with_options(
             final_output_json_schema: None,
             cwd,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
@@ -324,6 +326,7 @@ async fn run_tool_turn_on_harness(
             final_output_json_schema: None,
             cwd,
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
@@ -528,7 +531,9 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
     let script = "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: snapshot-apply.txt\n+hello from snapshot\n*** End Patch\nEOF\n";
     let args = json!({
         "command": script,
-        "timeout_ms": 1_000,
+        // The intercepted apply_patch path self-invokes codex, which can take
+        // longer than a second in Bazel macOS test environments.
+        "timeout_ms": 5_000,
     });
     let call_id = "shell-snapshot-apply-patch";
     let responses = vec![
@@ -555,6 +560,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
             final_output_json_schema: None,
             cwd: cwd.clone(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model,
             effort: None,

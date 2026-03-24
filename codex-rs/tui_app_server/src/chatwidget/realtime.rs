@@ -202,6 +202,23 @@ impl ChatWidget {
         vec![("/realtime".to_string(), "stop live voice".to_string())]
     }
 
+    pub(super) fn stop_realtime_conversation_from_ui(&mut self) {
+        self.request_realtime_conversation_close(/*info_message*/ None);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn stop_realtime_conversation_for_deleted_meter(&mut self, id: &str) -> bool {
+        if self.realtime_conversation.is_live()
+            && self.realtime_conversation.meter_placeholder_id.as_deref() == Some(id)
+        {
+            self.realtime_conversation.meter_placeholder_id = None;
+            self.stop_realtime_conversation_from_ui();
+            return true;
+        }
+
+        false
+    }
+
     pub(super) fn start_realtime_conversation(&mut self) {
         self.realtime_conversation.phase = RealtimeConversationPhase::Starting;
         self.realtime_conversation.requested_close = false;

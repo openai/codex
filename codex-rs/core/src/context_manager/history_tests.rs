@@ -4,6 +4,7 @@ use crate::truncate::TruncationPolicy;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_git::GhostCommit;
+use codex_protocol::AgentPath;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -17,6 +18,7 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::default_input_modalities;
+use codex_protocol::protocol::InterAgentCommunication;
 use image::ImageBuffer;
 use image::ImageFormat;
 use image::Rgba;
@@ -39,11 +41,17 @@ fn assistant_msg(text: &str) -> ResponseItem {
 }
 
 fn inter_agent_assistant_msg(text: &str) -> ResponseItem {
+    let communication = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::root().join("worker").unwrap(),
+        Vec::new(),
+        text.to_string(),
+    );
     ResponseItem::Message {
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
-            text: text.to_string(),
+            text: serde_json::to_string(&communication).unwrap(),
         }],
         end_turn: None,
         phase: None,
@@ -239,9 +247,7 @@ fn items_after_last_model_generated_tokens_are_zero_without_model_generated_item
 
 #[test]
 fn inter_agent_assistant_messages_are_turn_boundaries() {
-    let item = inter_agent_assistant_msg(
-        "author: /root\nrecipient: /root/worker\nother_recipients: []\nContent: continue",
-    );
+    let item = inter_agent_assistant_msg("continue");
 
     assert!(is_user_turn_boundary(&item));
 }
@@ -250,9 +256,7 @@ fn inter_agent_assistant_messages_are_turn_boundaries() {
 fn drop_last_n_user_turns_treats_inter_agent_assistant_messages_as_instruction_turns() {
     let first_turn = user_input_text_msg("first");
     let first_reply = assistant_msg("done");
-    let inter_agent_turn = inter_agent_assistant_msg(
-        "author: /root\nrecipient: /root/worker\nother_recipients: []\nContent: continue",
-    );
+    let inter_agent_turn = inter_agent_assistant_msg("continue");
     let inter_agent_reply = assistant_msg("worker reply");
     let mut history = create_history_with_items(vec![
         first_turn.clone(),
@@ -264,6 +268,15 @@ fn drop_last_n_user_turns_treats_inter_agent_assistant_messages_as_instruction_t
     history.drop_last_n_user_turns(1);
 
     assert_eq!(history.raw_items(), &vec![first_turn, first_reply]);
+}
+
+#[test]
+fn legacy_inter_agent_assistant_messages_are_not_turn_boundaries() {
+    let item = assistant_msg(
+        "author: /root\nrecipient: /root/worker\nother_recipients: []\nContent: continue",
+    );
+
+    assert!(!is_user_turn_boundary(&item));
 }
 
 #[test]

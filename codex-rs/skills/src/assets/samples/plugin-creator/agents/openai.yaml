@@ -1,0 +1,6 @@
+interface:
+  display_name: "Plugin Creator"
+  short_description: "Scaffold plugins and marketplace entries"
+  default_prompt: "Use $plugin-creator to scaffold a plugin with placeholder plugin.json, optional structure, and a marketplace.json entry."
+  icon_small: "./assets/plugin-creator-small.svg"
+  icon_large: "./assets/plugin-creator.png"

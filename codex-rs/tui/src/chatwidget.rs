@@ -57,6 +57,7 @@ use crate::terminal_title::clear_terminal_title;
 use crate::terminal_title::set_terminal_title;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
+use codex_app_server_protocol::AppSummary;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
@@ -537,6 +538,12 @@ struct PluginListFetchState {
     in_flight_cwd: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone)]
+struct PluginInstallAuthFlowState {
+    plugin_display_name: String,
+    next_app_index: usize,
+}
+
 #[derive(Debug)]
 enum RateLimitErrorKind {
     ServerOverloaded,
@@ -732,6 +739,8 @@ pub(crate) struct ChatWidget {
     pending_mcp_output_requests: usize,
     plugins_cache: PluginsCacheState,
     plugins_fetch_state: PluginListFetchState,
+    plugin_install_apps_needing_auth: Vec<AppSummary>,
+    plugin_install_auth_flow: Option<PluginInstallAuthFlowState>,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
     // Accumulates the current reasoning block text to extract a header
@@ -3747,6 +3756,8 @@ impl ChatWidget {
             pending_mcp_output_requests: 0,
             plugins_cache: PluginsCacheState::default(),
             plugins_fetch_state: PluginListFetchState::default(),
+            plugin_install_apps_needing_auth: Vec::new(),
+            plugin_install_auth_flow: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -3949,6 +3960,8 @@ impl ChatWidget {
             pending_mcp_output_requests: 0,
             plugins_cache: PluginsCacheState::default(),
             plugins_fetch_state: PluginListFetchState::default(),
+            plugin_install_apps_needing_auth: Vec::new(),
+            plugin_install_auth_flow: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -4143,6 +4156,8 @@ impl ChatWidget {
             pending_mcp_output_requests: 0,
             plugins_cache: PluginsCacheState::default(),
             plugins_fetch_state: PluginListFetchState::default(),
+            plugin_install_apps_needing_auth: Vec::new(),
+            plugin_install_auth_flow: None,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
@@ -4554,7 +4569,7 @@ impl ChatWidget {
                     return;
                 }
                 if self.realtime_conversation.is_live() {
-                    self.request_realtime_conversation_close(/*info_message*/ None);
+                    self.stop_realtime_conversation_from_ui();
                 } else {
                     self.start_realtime_conversation();
                 }
@@ -5245,6 +5260,7 @@ impl ChatWidget {
             items,
             cwd: self.config.cwd.clone(),
             approval_policy: self.config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
             sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
             model: effective_mode.model().to_string(),
             effort: effective_mode.reasoning_effort(),
@@ -8703,7 +8719,7 @@ impl ChatWidget {
             self.bottom_pane.clear_quit_shortcut_hint();
             self.quit_shortcut_expires_at = None;
             self.quit_shortcut_key = None;
-            self.request_realtime_conversation_close(/*info_message*/ None);
+            self.stop_realtime_conversation_from_ui();
             return;
         }
         let modal_or_popup_active = !self.bottom_pane.no_modal_or_popup_active();
@@ -9379,13 +9395,6 @@ impl ChatWidget {
     }
 
     pub(crate) fn remove_transcription_placeholder(&mut self, id: &str) {
-        #[cfg(not(target_os = "linux"))]
-        if self.realtime_conversation.is_live()
-            && self.realtime_conversation.meter_placeholder_id.as_deref() == Some(id)
-        {
-            self.realtime_conversation.meter_placeholder_id = None;
-            self.request_realtime_conversation_close(/*info_message*/ None);
-        }
         self.bottom_pane.remove_transcription_placeholder(id);
         // Ensure the UI redraws to reflect placeholder removal.
         self.request_redraw();
@@ -9595,6 +9604,7 @@ fn extract_first_bold(s: &str) -> Option<String> {
 
 fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {
     match event_name {
+        codex_protocol::protocol::HookEventName::PreToolUse => "PreToolUse",
         codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
         codex_protocol::protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
         codex_protocol::protocol::HookEventName::Stop => "Stop",
