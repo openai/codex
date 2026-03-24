@@ -1376,6 +1376,9 @@ impl Session {
             conversation_id.to_string(),
             sub_id.clone(),
             cwd.clone(),
+            per_turn_config
+                .features
+                .enabled(Feature::GitWorkspaceSnapshot),
             session_configuration.sandbox_policy.get(),
             session_configuration.windows_sandbox_level,
         ));
@@ -5364,6 +5367,9 @@ async fn spawn_review_thread(
         sess.conversation_id.to_string(),
         review_turn_id.clone(),
         parent_turn_context.cwd.clone(),
+        parent_turn_context
+            .features
+            .enabled(Feature::GitWorkspaceSnapshot),
         parent_turn_context.sandbox_policy.get(),
         parent_turn_context.windows_sandbox_level,
     ));

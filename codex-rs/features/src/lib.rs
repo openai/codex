@@ -95,6 +95,8 @@ pub enum Feature {
     ExecPermissionApprovals,
     /// Enable Claude-style lifecycle hooks loaded from hooks.json files.
     CodexHooks,
+    /// Attach a synthetic commit hash for the current dirty worktree to turn metadata.
+    GitWorkspaceSnapshot,
     /// Expose the built-in request_permissions tool.
     RequestPermissionsTool,
     /// Allow the model to request web searches that fetch live content.
@@ -642,6 +644,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CodexHooks,
         key: "codex_hooks",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::GitWorkspaceSnapshot,
+        key: "git_workspace_snapshot",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

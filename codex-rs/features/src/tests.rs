@@ -115,6 +115,15 @@ fn request_permissions_tool_is_under_development() {
 }
 
 #[test]
+fn git_workspace_snapshot_is_under_development() {
+    assert_eq!(
+        Feature::GitWorkspaceSnapshot.stage(),
+        Stage::UnderDevelopment
+    );
+    assert_eq!(Feature::GitWorkspaceSnapshot.default_enabled(), false);
+}
+
+#[test]
 fn tool_suggest_is_under_development() {
     assert_eq!(Feature::ToolSuggest.stage(), Stage::UnderDevelopment);
     assert_eq!(Feature::ToolSuggest.default_enabled(), false);

@@ -7,6 +7,7 @@ use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::WireApi;
+use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -545,4 +546,113 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
             .and_then(serde_json::Value::as_bool),
         Some(false)
     );
+}
+
+#[tokio::test]
+async fn responses_stream_includes_workspace_snapshot_commit_hash_when_feature_enabled() {
+    core_test_support::skip_if_no_network!();
+
+    let server = responses::start_mock_server().await;
+
+    let test = test_codex()
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::GitWorkspaceSnapshot);
+        })
+        .build(&server)
+        .await
+        .expect("build test codex");
+    let cwd = test.cwd_path();
+
+    let git_config_global = cwd.join("empty-git-config");
+    std::fs::write(&git_config_global, "").expect("write empty git config");
+    let run_git = |args: &[&str]| {
+        let output = Command::new("git")
+            .env("GIT_CONFIG_GLOBAL", &git_config_global)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("git command should run");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: stdout={} stderr={}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    };
+
+    run_git(&["init"]);
+    std::fs::write(cwd.join("README.md"), "hello").expect("write README");
+    run_git(&[
+        "-c",
+        "user.name=Test User",
+        "-c",
+        "user.email=test@example.com",
+        "add",
+        ".",
+    ]);
+    run_git(&[
+        "-c",
+        "user.name=Test User",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "initial commit",
+    ]);
+    std::fs::write(cwd.join("README.md"), "updated").expect("update README");
+
+    let first_response = responses::sse(vec![
+        responses::ev_response_created("resp-2"),
+        responses::ev_reasoning_item("rsn-1", &["thinking"], &[]),
+        responses::ev_shell_command_call("call-1", "echo turn-metadata"),
+        responses::ev_completed("resp-2"),
+    ]);
+    let follow_up_response = responses::sse(vec![
+        responses::ev_response_created("resp-3"),
+        responses::ev_assistant_message("msg-1", "done"),
+        responses::ev_completed("resp-3"),
+    ]);
+    let request_log = responses::mount_response_sequence(
+        &server,
+        vec![
+            responses::sse_response(first_response),
+            responses::sse_response(follow_up_response),
+        ],
+    )
+    .await;
+
+    test.submit_turn("hello")
+        .await
+        .expect("submit post-git turn prompt");
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 2, "expected two requests in one turn");
+
+    let second_parsed: serde_json::Value = serde_json::from_str(
+        &requests[1]
+            .header("x-codex-turn-metadata")
+            .expect("second request should include turn metadata"),
+    )
+    .expect("second metadata should be valid json");
+
+    let second_workspace = second_parsed
+        .get("workspaces")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|workspaces| workspaces.values().next())
+        .cloned()
+        .expect("second request should include git workspace metadata");
+
+    let snapshot_commit_hash = second_workspace
+        .get("workspace_snapshot_commit_hash")
+        .and_then(serde_json::Value::as_str)
+        .expect("second request should include workspace snapshot commit hash");
+    let head_commit_hash = second_workspace
+        .get("latest_git_commit_hash")
+        .and_then(serde_json::Value::as_str)
+        .expect("second request should include latest git commit hash");
+
+    assert_ne!(snapshot_commit_hash, head_commit_hash);
 }

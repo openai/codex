@@ -42,6 +42,7 @@ pub mod external_agent_config;
 mod file_watcher;
 mod flags;
 pub mod git_info;
+mod git_snapshot;
 mod guardian;
 mod hook_runtime;
 pub mod instructions;

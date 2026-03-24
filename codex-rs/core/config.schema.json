@@ -395,6 +395,9 @@
             "fast_mode": {
               "type": "boolean"
             },
+            "git_workspace_snapshot": {
+              "type": "boolean"
+            },
             "guardian_approval": {
               "type": "boolean"
             },
@@ -2007,6 +2010,9 @@
           "type": "boolean"
         },
         "fast_mode": {
+          "type": "boolean"
+        },
+        "git_workspace_snapshot": {
           "type": "boolean"
         },
         "guardian_approval": {
