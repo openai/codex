@@ -285,9 +285,11 @@ pub async fn load_config_layers_state(
         ));
     }
     if let Some(config) = managed_config_from_mdm {
+        let managed_config =
+            expand_home_directory_paths_in_config_toml(config.managed_config, codex_home)?;
         layers.push(ConfigLayerEntry::new_with_raw_toml(
             ConfigLayerSource::LegacyManagedConfigTomlFromMdm,
-            config.managed_config,
+            managed_config,
             config.raw_toml,
         ));
     }
@@ -718,6 +720,29 @@ pub(crate) fn resolve_relative_paths_in_config_toml(
     // Use the serialize/deserialize round-trip to convert the
     // `toml::Value` into a `ConfigToml` with `AbsolutePath
     let _guard = AbsolutePathBufGuard::new(base_dir);
+    let Ok(resolved) = value_from_config_toml.clone().try_into::<ConfigToml>() else {
+        return Ok(value_from_config_toml);
+    };
+    drop(_guard);
+
+    let resolved_value = TomlValue::try_from(resolved).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Failed to serialize resolved config: {e}"),
+        )
+    })?;
+
+    Ok(copy_shape_from_original(
+        &value_from_config_toml,
+        &resolved_value,
+    ))
+}
+
+fn expand_home_directory_paths_in_config_toml(
+    value_from_config_toml: TomlValue,
+    base_dir: &Path,
+) -> io::Result<TomlValue> {
+    let _guard = AbsolutePathBufGuard::home_expansion_only(base_dir);
     let Ok(resolved) = value_from_config_toml.clone().try_into::<ConfigToml>() else {
         return Ok(value_from_config_toml);
     };

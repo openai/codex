@@ -1778,7 +1778,7 @@ async fn managed_config_overrides_oauth_store_mode() -> anyhow::Result<()> {
     )
     .await?;
     let cfg =
-        deserialize_merged_config_toml(config_layer_stack.effective_config(), codex_home.path())
+        deserialize_config_toml_with_base(config_layer_stack.effective_config(), codex_home.path())
             .map_err(|e| {
                 tracing::error!("Failed to deserialize overridden config: {e}");
                 std::io::Error::new(std::io::ErrorKind::InvalidData, e)
@@ -1908,7 +1908,7 @@ async fn managed_config_wins_over_cli_overrides() -> anyhow::Result<()> {
     .await?;
 
     let cfg =
-        deserialize_merged_config_toml(config_layer_stack.effective_config(), codex_home.path())
+        deserialize_config_toml_with_base(config_layer_stack.effective_config(), codex_home.path())
             .map_err(|e| {
                 tracing::error!("Failed to deserialize overridden config: {e}");
                 std::io::Error::new(std::io::ErrorKind::InvalidData, e)
