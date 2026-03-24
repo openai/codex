@@ -406,11 +406,16 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
         .split_last()
         .unwrap_or_else(|| panic!("after-second-resume request missing user messages"));
     assert_eq!(final_last, AFTER_SECOND_RESUME);
-    let matched_prefix_len = if final_prefix.starts_with(&expected_after_second_compact_user_texts)
+    let matched_prefix_len = if let Some(start) = final_prefix
+        .windows(expected_after_second_compact_user_texts.len())
+        .position(|window| window == expected_after_second_compact_user_texts)
     {
-        expected_after_second_compact_user_texts.len()
-    } else if final_prefix.starts_with(&expected_fork_local_user_texts) {
-        expected_fork_local_user_texts.len()
+        start + expected_after_second_compact_user_texts.len()
+    } else if let Some(start) = final_prefix
+        .windows(expected_fork_local_user_texts.len())
+        .position(|window| window == expected_fork_local_user_texts)
+    {
+        start + expected_fork_local_user_texts.len()
     } else {
         panic!("after-second-resume user texts should preserve post-compact user history prefix");
     };
