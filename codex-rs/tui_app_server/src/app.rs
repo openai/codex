@@ -55,10 +55,14 @@ use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::PluginInstallParams;
+use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
+use codex_app_server_protocol::PluginUninstallParams;
+use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
@@ -1831,6 +1835,57 @@ impl App {
         });
     }
 
+    fn fetch_plugin_install(
+        &mut self,
+        app_server: &AppServerSession,
+        cwd: PathBuf,
+        marketplace_path: AbsolutePathBuf,
+        plugin_name: String,
+        plugin_display_name: String,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let cwd_for_event = cwd.clone();
+            let marketplace_path_for_event = marketplace_path.clone();
+            let plugin_name_for_event = plugin_name.clone();
+            let result = fetch_plugin_install(request_handle, marketplace_path, plugin_name)
+                .await
+                .map_err(|err| format!("Failed to install plugin: {err}"));
+            app_event_tx.send(AppEvent::PluginInstallLoaded {
+                cwd: cwd_for_event,
+                marketplace_path: marketplace_path_for_event,
+                plugin_name: plugin_name_for_event,
+                plugin_display_name,
+                result,
+            });
+        });
+    }
+
+    fn fetch_plugin_uninstall(
+        &mut self,
+        app_server: &AppServerSession,
+        cwd: PathBuf,
+        plugin_id: String,
+        plugin_display_name: String,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let cwd_for_event = cwd.clone();
+            let plugin_id_for_event = plugin_id.clone();
+            let result = fetch_plugin_uninstall(request_handle, plugin_id)
+                .await
+                .map_err(|err| format!("Failed to uninstall plugin: {err}"));
+            app_event_tx.send(AppEvent::PluginUninstallLoaded {
+                cwd: cwd_for_event,
+                plugin_id: plugin_id_for_event,
+                plugin_display_name,
+                result,
+            });
+        });
+    }
+
     /// Process the completed MCP inventory fetch: clear the loading spinner, then
     /// render either the full tool/resource listing or an error into chat history.
     ///
@@ -1955,6 +2010,7 @@ impl App {
                 items,
                 cwd,
                 approval_policy,
+                approvals_reviewer,
                 sandbox_policy,
                 model,
                 effort,
@@ -1987,7 +2043,8 @@ impl App {
                             items.to_vec(),
                             cwd.clone(),
                             approval_policy,
-                            self.chat_widget.config_ref().approvals_reviewer,
+                            approvals_reviewer
+                                .unwrap_or(self.chat_widget.config_ref().approvals_reviewer),
                             sandbox_policy.clone(),
                             model.to_string(),
                             effort,
@@ -3555,6 +3612,15 @@ impl App {
             AppEvent::RefreshConnectors { force_refetch } => {
                 self.chat_widget.refresh_connectors(force_refetch);
             }
+            AppEvent::PluginInstallAuthAdvance { refresh_connectors } => {
+                if refresh_connectors {
+                    self.chat_widget.refresh_connectors(/*force_refetch*/ true);
+                }
+                self.chat_widget.advance_plugin_install_auth_flow();
+            }
+            AppEvent::PluginInstallAuthAbandon => {
+                self.chat_widget.abandon_plugin_install_auth_flow();
+            }
             AppEvent::FetchPluginsList { cwd } => {
                 self.fetch_plugins_list(app_server, cwd);
             }
@@ -3564,6 +3630,18 @@ impl App {
                 self.chat_widget
                     .open_plugin_detail_loading_popup(&plugin_display_name);
             }
+            AppEvent::OpenPluginInstallLoading {
+                plugin_display_name,
+            } => {
+                self.chat_widget
+                    .open_plugin_install_loading_popup(&plugin_display_name);
+            }
+            AppEvent::OpenPluginUninstallLoading {
+                plugin_display_name,
+            } => {
+                self.chat_widget
+                    .open_plugin_uninstall_loading_popup(&plugin_display_name);
+            }
             AppEvent::PluginsLoaded { cwd, result } => {
                 self.chat_widget.on_plugins_loaded(cwd, result);
             }
@@ -3572,6 +3650,62 @@ impl App {
             }
             AppEvent::PluginDetailLoaded { cwd, result } => {
                 self.chat_widget.on_plugin_detail_loaded(cwd, result);
+            }
+            AppEvent::FetchPluginInstall {
+                cwd,
+                marketplace_path,
+                plugin_name,
+                plugin_display_name,
+            } => {
+                self.fetch_plugin_install(
+                    app_server,
+                    cwd,
+                    marketplace_path,
+                    plugin_name,
+                    plugin_display_name,
+                );
+            }
+            AppEvent::FetchPluginUninstall {
+                cwd,
+                plugin_id,
+                plugin_display_name,
+            } => {
+                self.fetch_plugin_uninstall(app_server, cwd, plugin_id, plugin_display_name);
+            }
+            AppEvent::PluginInstallLoaded {
+                cwd,
+                marketplace_path,
+                plugin_name,
+                plugin_display_name,
+                result,
+            } => {
+                let install_succeeded = result.is_ok();
+                if install_succeeded {
+                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                        tracing::warn!(error = %err, "failed to refresh config after plugin install");
+                    }
+                    self.chat_widget.submit_op(AppCommand::reload_user_config());
+                }
+                let should_refresh_plugin_detail = self.chat_widget.on_plugin_install_loaded(
+                    cwd.clone(),
+                    marketplace_path.clone(),
+                    plugin_name.clone(),
+                    plugin_display_name,
+                    result,
+                );
+                if install_succeeded && self.chat_widget.config_ref().cwd == cwd {
+                    self.fetch_plugins_list(app_server, cwd.clone());
+                    if should_refresh_plugin_detail {
+                        self.fetch_plugin_detail(
+                            app_server,
+                            cwd,
+                            PluginReadParams {
+                                marketplace_path,
+                                plugin_name,
+                            },
+                        );
+                    }
+                }
             }
             AppEvent::FetchMcpInventory => {
                 self.fetch_mcp_inventory(app_server);
@@ -4010,6 +4144,31 @@ impl App {
                                 .add_error_message(format!("Failed to save default model: {err}"));
                         }
                     }
+                }
+            }
+            AppEvent::PluginUninstallLoaded {
+                cwd,
+                plugin_id: _plugin_id,
+                plugin_display_name,
+                result,
+            } => {
+                let uninstall_succeeded = result.is_ok();
+                if uninstall_succeeded {
+                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                        tracing::warn!(
+                            error = %err,
+                            "failed to refresh config after plugin uninstall"
+                        );
+                    }
+                    self.chat_widget.submit_op(AppCommand::reload_user_config());
+                }
+                self.chat_widget.on_plugin_uninstall_loaded(
+                    cwd.clone(),
+                    plugin_display_name,
+                    result,
+                );
+                if uninstall_succeeded && self.chat_widget.config_ref().cwd == cwd {
+                    self.fetch_plugins_list(app_server, cwd);
                 }
             }
             AppEvent::PersistPersonalitySelection { personality } => {
@@ -4542,7 +4701,11 @@ impl App {
             AppEvent::UpdateRecordingMeter { id, text } => {
                 // Update in place to preserve the element id for subsequent frames.
                 let updated = self.chat_widget.update_transcription_in_place(&id, &text);
-                if updated {
+                if updated
+                    || self
+                        .chat_widget
+                        .stop_realtime_conversation_for_deleted_meter(&id)
+                {
                     tui.frame_requester().schedule_frame();
                 }
             }
@@ -5131,6 +5294,42 @@ async fn fetch_plugin_detail(
         .request_typed(ClientRequest::PluginRead { request_id, params })
         .await
         .wrap_err("plugin/read failed in app-server TUI")
+}
+
+async fn fetch_plugin_install(
+    request_handle: AppServerRequestHandle,
+    marketplace_path: AbsolutePathBuf,
+    plugin_name: String,
+) -> Result<PluginInstallResponse> {
+    let request_id = RequestId::String(format!("plugin-install-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::PluginInstall {
+            request_id,
+            params: PluginInstallParams {
+                marketplace_path,
+                plugin_name,
+                force_remote_sync: false,
+            },
+        })
+        .await
+        .wrap_err("plugin/install failed in app-server TUI")
+}
+
+async fn fetch_plugin_uninstall(
+    request_handle: AppServerRequestHandle,
+    plugin_id: String,
+) -> Result<PluginUninstallResponse> {
+    let request_id = RequestId::String(format!("plugin-uninstall-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::PluginUninstall {
+            request_id,
+            params: PluginUninstallParams {
+                plugin_id,
+                force_remote_sync: false,
+            },
+        })
+        .await
+        .wrap_err("plugin/uninstall failed in app-server TUI")
 }
 
 /// Convert flat `McpServerStatus` responses into the per-server maps used by the

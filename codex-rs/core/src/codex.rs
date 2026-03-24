@@ -798,6 +798,7 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    idle_pending_input: Mutex<Vec<ResponseInputItem>>,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
@@ -809,6 +810,7 @@ pub(crate) struct TurnSkillsContext {
     pub(crate) outcome: Arc<SkillLoadOutcome>,
     pub(crate) implicit_invocation_seen_skills: Arc<Mutex<HashSet<String>>>,
 }
+
 impl TurnSkillsContext {
     pub(crate) fn new(outcome: Arc<SkillLoadOutcome>) -> Self {
         Self {
@@ -1895,6 +1897,7 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
+            idle_pending_input: Mutex::new(Vec::new()),
             guardian_review_session: GuardianReviewSessionManager::default(),
             services,
             js_repl,
@@ -3912,7 +3915,7 @@ impl Session {
         Ok(active_turn_id.clone())
     }
 
-    /// Returns the input if there was no task running to inject into
+    /// Returns the input if there was no task running to inject into.
     pub async fn inject_response_items(
         &self,
         input: Vec<ResponseInputItem>,
@@ -3951,6 +3954,41 @@ impl Session {
             }
             None => Vec::with_capacity(0),
         }
+    }
+
+    pub(crate) async fn pending_input_snapshot(&self) -> Vec<ResponseInputItem> {
+        let active = self.active_turn.lock().await;
+        match active.as_ref() {
+            Some(at) => {
+                let ts = at.turn_state.lock().await;
+                ts.pending_input_snapshot()
+            }
+            None => Vec::with_capacity(0),
+        }
+    }
+
+    /// Queue response items to be injected into the next active turn created for this session.
+    pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {
+        if items.is_empty() {
+            return;
+        }
+
+        let mut idle_pending_input = self.idle_pending_input.lock().await;
+        idle_pending_input.extend(items);
+    }
+
+    pub(crate) async fn take_queued_response_items_for_next_turn(&self) -> Vec<ResponseInputItem> {
+        std::mem::take(&mut *self.idle_pending_input.lock().await)
+    }
+
+    pub(crate) async fn queued_response_items_for_next_turn_snapshot(
+        &self,
+    ) -> Vec<ResponseInputItem> {
+        self.idle_pending_input.lock().await.clone()
+    }
+
+    pub(crate) async fn has_queued_response_items_for_next_turn(&self) -> bool {
+        !self.idle_pending_input.lock().await.is_empty()
     }
 
     pub async fn has_pending_input(&self) -> bool {
@@ -4285,6 +4323,10 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
                     false
                 }
+                Op::InterAgentCommunication { communication } => {
+                    handlers::inter_agent_communication(&sess, sub.id.clone(), communication).await;
+                    false
+                }
                 Op::ExecApproval {
                     id: approval_id,
                     turn_id,
@@ -4464,6 +4506,7 @@ mod handlers {
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::InterAgentCommunication;
     use codex_protocol::protocol::ListCustomPromptsResponseEvent;
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
@@ -4524,6 +4567,7 @@ mod handlers {
             Op::UserTurn {
                 cwd,
                 approval_policy,
+                approvals_reviewer,
                 sandbox_policy,
                 model,
                 effort,
@@ -4549,7 +4593,7 @@ mod handlers {
                     SessionSettingsUpdate {
                         cwd: Some(cwd),
                         approval_policy: Some(approval_policy),
-                        approvals_reviewer: None,
+                        approvals_reviewer,
                         sandbox_policy: Some(sandbox_policy),
                         windows_sandbox_level: None,
                         collaboration_mode,
@@ -4604,6 +4648,29 @@ mod handlers {
                 .await;
             }
         }
+    }
+
+    pub async fn inter_agent_communication(
+        sess: &Arc<Session>,
+        sub_id: String,
+        communication: InterAgentCommunication,
+    ) {
+        let pending_item = communication.to_response_input_item();
+        if sess
+            .inject_response_items(vec![pending_item.clone()])
+            .await
+            .is_ok()
+        {
+            return;
+        }
+
+        let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+        sess.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
+            .await;
+        sess.queue_response_items_for_next_turn(vec![pending_item])
+            .await;
+        sess.spawn_task(turn_context, Vec::new(), crate::tasks::RegularTask::new())
+            .await;
     }
 
     pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command: String) {
@@ -5441,7 +5508,7 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
-    if input.is_empty() {
+    if input.is_empty() && !sess.has_pending_input().await {
         return None;
     }
 
@@ -5583,25 +5650,33 @@ pub(crate) async fn run_turn(
         })
         .collect::<Vec<_>>();
 
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-    let response_item: ResponseItem = initial_input_for_turn.clone().into();
-    let mut last_agent_message: Option<String> = None;
     if run_pending_session_start_hooks(&sess, &turn_context).await {
-        return last_agent_message;
+        return None;
     }
-    let user_prompt_submit_outcome =
-        run_user_prompt_submit_hooks(&sess, &turn_context, UserMessageItem::new(&input).message())
-            .await;
-    if user_prompt_submit_outcome.should_stop {
-        record_additional_contexts(
+    let additional_contexts = if input.is_empty() {
+        Vec::new()
+    } else {
+        let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
+        let response_item: ResponseItem = initial_input_for_turn.clone().into();
+        let user_prompt_submit_outcome = run_user_prompt_submit_hooks(
             &sess,
             &turn_context,
-            user_prompt_submit_outcome.additional_contexts,
+            UserMessageItem::new(&input).message(),
         )
         .await;
-        return last_agent_message;
-    }
-    let additional_contexts = user_prompt_submit_outcome.additional_contexts;
+        if user_prompt_submit_outcome.should_stop {
+            record_additional_contexts(
+                &sess,
+                &turn_context,
+                user_prompt_submit_outcome.additional_contexts,
+            )
+            .await;
+            return None;
+        }
+        sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
+            .await;
+        user_prompt_submit_outcome.additional_contexts
+    };
     sess.services
         .analytics_events_client
         .track_app_mentioned(tracking.clone(), mentioned_app_invocations);
@@ -5612,17 +5687,17 @@ pub(crate) async fn run_turn(
     }
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
-    sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
-        .await;
     record_additional_contexts(&sess, &turn_context, additional_contexts).await;
-    // Track the previous-turn baseline from the regular user-turn path only so
-    // standalone tasks (compact/shell/review/undo) cannot suppress future
-    // model/realtime injections.
-    sess.set_previous_turn_settings(Some(PreviousTurnSettings {
-        model: turn_context.model_info.slug.clone(),
-        realtime_active: Some(turn_context.realtime_active),
-    }))
-    .await;
+    if !input.is_empty() {
+        // Track the previous-turn baseline from the regular user-turn path only so
+        // standalone tasks (compact/shell/review/undo) cannot suppress future
+        // model/realtime injections.
+        sess.set_previous_turn_settings(Some(PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            realtime_active: Some(turn_context.realtime_active),
+        }))
+        .await;
+    }
 
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
@@ -5633,8 +5708,10 @@ pub(crate) async fn run_turn(
             .await;
     }
 
+    let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
     sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
         .await;
+    let mut last_agent_message: Option<String> = None;
     let mut stop_hook_active = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
