@@ -253,6 +253,26 @@ fn inter_agent_assistant_messages_are_turn_boundaries() {
 }
 
 #[test]
+fn for_prompt_rewrites_inter_agent_assistant_messages_to_user_prompt_messages() {
+    let item = inter_agent_assistant_msg("continue");
+    let history = create_history_with_items(vec![item.clone()]);
+
+    assert_eq!(history.raw_items(), &[item]);
+    assert_eq!(
+        history.for_prompt(&default_input_modalities()),
+        vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "continue".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }]
+    );
+}
+
+#[test]
 fn drop_last_n_user_turns_treats_inter_agent_assistant_messages_as_instruction_turns() {
     let first_turn = user_input_text_msg("first");
     let first_reply = assistant_msg("done");

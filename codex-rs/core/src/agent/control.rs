@@ -811,36 +811,14 @@ impl AgentControl {
                 return;
             };
             let child_thread = state.get_thread(child_thread_id).await.ok();
-            if let Some(child_agent_path) = child_agent_path
+            if child_agent_path.is_some()
                 && child_thread
                     .as_ref()
                     .map(|thread| thread.enabled(Feature::MultiAgentV2))
                     .unwrap_or(true)
             {
-                let AgentStatus::Completed(Some(content)) = &status else {
-                    return;
-                };
-                let Some((parent_path, _)) = child_agent_path.as_str().rsplit_once('/') else {
-                    return;
-                };
-                let Ok(parent_agent_path) = AgentPath::try_from(parent_path) else {
-                    return;
-                };
-                let Some(parent_thread_id) = control.state.agent_id_for_path(&parent_agent_path)
-                else {
-                    return;
-                };
-                let _ = control
-                    .send_inter_agent_communication(
-                        parent_thread_id,
-                        InterAgentCommunication::new(
-                            child_agent_path,
-                            parent_agent_path,
-                            Vec::new(),
-                            content.clone(),
-                        ),
-                    )
-                    .await;
+                // Disable v2 completion notifications for now so child turns do
+                // not enqueue synthetic parent messages on completion.
                 return;
             }
             let Ok(parent_thread) = state.get_thread(parent_thread_id).await else {
