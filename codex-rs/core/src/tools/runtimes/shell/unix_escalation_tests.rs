@@ -651,6 +651,7 @@ host_executable(name = "git", paths = ["{allowed_git_literal}"])
 async fn prepare_escalated_exec_turn_default_preserves_macos_seatbelt_extensions() {
     let cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir()).unwrap();
     let executor = CoreShellCommandExecutor {
+        session: None,
         command: vec!["echo".to_string(), "ok".to_string()],
         cwd: cwd.to_path_buf(),
         env: HashMap::new(),
@@ -703,6 +704,7 @@ async fn prepare_escalated_exec_turn_default_preserves_macos_seatbelt_extensions
 async fn prepare_escalated_exec_permissions_preserve_macos_seatbelt_extensions() {
     let cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir()).unwrap();
     let executor = CoreShellCommandExecutor {
+        session: None,
         command: vec!["echo".to_string(), "ok".to_string()],
         cwd: cwd.to_path_buf(),
         env: HashMap::new(),
@@ -778,6 +780,7 @@ async fn prepare_escalated_exec_permission_profile_unions_turn_and_requested_mac
     let cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir()).unwrap();
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let executor = CoreShellCommandExecutor {
+        session: None,
         command: vec!["echo".to_string(), "ok".to_string()],
         cwd: cwd.to_path_buf(),
         env: HashMap::new(),
