@@ -1,4 +1,5 @@
 use codex_git_utils::GitInfo;
+use codex_git_utils::GitSha;
 use codex_git_utils::collect_git_info;
 use codex_git_utils::get_has_changes;
 use codex_git_utils::git_diff_to_remote;

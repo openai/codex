@@ -64,7 +64,6 @@ use codex_app_server_protocol::GetConversationSummaryParams;
 use codex_app_server_protocol::GetConversationSummaryResponse;
 use codex_app_server_protocol::GitDiffToRemoteResponse;
 use codex_app_server_protocol::GitInfo as ApiGitInfo;
-use codex_app_server_protocol::GitSha;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
@@ -6895,7 +6894,7 @@ impl CodexMessageProcessor {
         match diff {
             Some(value) => {
                 let response = GitDiffToRemoteResponse {
-                    sha: GitSha::new(&value.sha),
+                    sha: value.sha,
                     diff: value.diff,
                 };
                 self.outgoing.send_response(request_id, response).await;
