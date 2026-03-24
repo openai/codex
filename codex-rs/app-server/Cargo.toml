@@ -23,7 +23,6 @@ workspace = true
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
-biscuit = { workspace = true }
 axum = { workspace = true, default-features = false, features = [
     "http1",
     "json",
@@ -56,6 +55,7 @@ clap = { workspace = true, features = ["derive"] }
 constant_time_eq = { workspace = true }
 futures = { workspace = true }
 hmac = { workspace = true }
+jsonwebtoken = { workspace = true }
 owo-colors = { workspace = true, features = ["supports-colors"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

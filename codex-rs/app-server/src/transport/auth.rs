@@ -2,16 +2,14 @@ use anyhow::Context;
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use biscuit::Empty;
-use biscuit::JWT;
-use biscuit::jwa::SignatureAlgorithm;
-use biscuit::jws::Secret;
 use clap::Args;
 use clap::ValueEnum;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use constant_time_eq::constant_time_eq_32;
+use jsonwebtoken::Algorithm;
+use jsonwebtoken::DecodingKey;
+use jsonwebtoken::Validation;
+use jsonwebtoken::decode;
 use serde::Deserialize;
 use sha2::Digest;
 use sha2::Sha256;
@@ -25,7 +23,6 @@ use time::OffsetDateTime;
 const DEFAULT_MAX_CLOCK_SKEW_SECONDS: u64 = 30;
 const MIN_SIGNED_BEARER_SECRET_BYTES: usize = 32;
 const INVALID_AUTHORIZATION_HEADER_MESSAGE: &str = "invalid authorization header";
-const MALFORMED_WEBSOCKET_JWT_MESSAGE: &str = "malformed websocket jwt";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Args)]
 pub struct AppServerWebsocketAuthArgs {
@@ -278,40 +275,20 @@ fn verify_signed_bearer_token(
     audience: Option<&str>,
     max_clock_skew_seconds: i64,
 ) -> Result<(), WebsocketAuthError> {
-    verify_jwt_signature(token, shared_secret)?;
-    let claims = parse_jwt_claims(token)?;
+    let claims = decode_jwt_claims(token, shared_secret)?;
     validate_jwt_claims(&claims, issuer, audience, max_clock_skew_seconds)
 }
 
-fn verify_jwt_signature(token: &str, shared_secret: &[u8]) -> Result<(), WebsocketAuthError> {
-    JWT::<Empty, Empty>::new_encoded(token)
-        .into_decoded(
-            &Secret::Bytes(shared_secret.to_vec()),
-            SignatureAlgorithm::HS256,
-        )
-        .map_err(|_| unauthorized("invalid websocket jwt"))?;
-    Ok(())
-}
+fn decode_jwt_claims(token: &str, shared_secret: &[u8]) -> Result<JwtClaims, WebsocketAuthError> {
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.required_spec_claims.clear();
+    validation.validate_exp = false;
+    validation.validate_nbf = false;
+    validation.validate_aud = false;
 
-fn parse_jwt_claims(token: &str) -> Result<JwtClaims, WebsocketAuthError> {
-    let mut parts = token.split('.');
-    let Some(_header_segment) = parts.next() else {
-        return Err(unauthorized(MALFORMED_WEBSOCKET_JWT_MESSAGE));
-    };
-    let Some(claims_segment) = parts.next() else {
-        return Err(unauthorized(MALFORMED_WEBSOCKET_JWT_MESSAGE));
-    };
-    let Some(_signature_segment) = parts.next() else {
-        return Err(unauthorized(MALFORMED_WEBSOCKET_JWT_MESSAGE));
-    };
-    if parts.next().is_some() {
-        return Err(unauthorized(MALFORMED_WEBSOCKET_JWT_MESSAGE));
-    }
-
-    let claims_bytes = URL_SAFE_NO_PAD
-        .decode(claims_segment)
-        .map_err(|_| unauthorized(MALFORMED_WEBSOCKET_JWT_MESSAGE))?;
-    serde_json::from_slice(&claims_bytes).map_err(|_| unauthorized(MALFORMED_WEBSOCKET_JWT_MESSAGE))
+    decode::<JwtClaims>(token, &DecodingKey::from_secret(shared_secret), &validation)
+        .map(|token_data| token_data.claims)
+        .map_err(|_| unauthorized("invalid websocket jwt"))
 }
 
 fn validate_jwt_claims(
@@ -427,6 +404,7 @@ fn unauthorized(message: &'static str) -> WebsocketAuthError {
 mod tests {
     use super::*;
     use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use hmac::Hmac;
     use hmac::Mac;
     use serde_json::json;
