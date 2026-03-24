@@ -757,13 +757,14 @@ impl AgentControl {
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_else(|| thread_id.to_string());
+            let last_task_message = match metadata.last_task_message.clone() {
+                Some(last_task_message) => Some(last_task_message),
+                None => last_task_message_for_thread(thread.as_ref()).await,
+            };
             agents.push(ListedAgent {
                 agent_name,
                 agent_status: thread.agent_status().await,
-                last_task_message: metadata
-                    .last_task_message
-                    .clone()
-                    .or(last_task_message_for_thread(thread.as_ref()).await),
+                last_task_message,
             });
         }
 
