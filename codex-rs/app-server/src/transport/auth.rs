@@ -360,9 +360,12 @@ fn bearer_token_from_headers(headers: &HeaderMap) -> Result<&str, WebsocketAuthE
     let header = raw_header
         .to_str()
         .map_err(|_| unauthorized(INVALID_AUTHORIZATION_HEADER_MESSAGE))?;
-    let Some(token) = header.strip_prefix("Bearer ") else {
+    let Some((scheme, token)) = header.split_once(' ') else {
         return Err(unauthorized(INVALID_AUTHORIZATION_HEADER_MESSAGE));
     };
+    if !scheme.eq_ignore_ascii_case("Bearer") {
+        return Err(unauthorized(INVALID_AUTHORIZATION_HEADER_MESSAGE));
+    }
     let token = token.trim();
     if token.is_empty() {
         return Err(unauthorized(INVALID_AUTHORIZATION_HEADER_MESSAGE));
