@@ -78,6 +78,7 @@ use codex_core::skills::model::SkillMetadata;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_features::FEATURES;
 use codex_features::Feature;
+#[cfg(test)]
 use codex_git_utils::CommitLogEntry;
 use codex_git_utils::current_branch_name;
 use codex_git_utils::get_git_repo_root;
