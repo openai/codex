@@ -5639,8 +5639,15 @@ fn write_fake_bwrap(contents: &str) -> tempfile::TempPath {
     use std::os::unix::fs::PermissionsExt;
     use tempfile::NamedTempFile;
 
+    // Bazel can mount the OS temp directory `noexec`, so prefer the current
+    // working directory for fake executables and fall back to the default temp
+    // dir outside that environment.
+    let temp_file = std::env::current_dir()
+        .ok()
+        .and_then(|dir| NamedTempFile::new_in(dir).ok())
+        .unwrap_or_else(|| NamedTempFile::new().expect("temp file"));
     // Linux rejects exec-ing a file that is still open for writing.
-    let path = NamedTempFile::new().expect("temp file").into_temp_path();
+    let path = temp_file.into_temp_path();
     fs::write(&path, contents).expect("write fake bwrap");
     let permissions = fs::Permissions::from_mode(0o755);
     fs::set_permissions(&path, permissions).expect("chmod fake bwrap");
