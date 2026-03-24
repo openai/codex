@@ -609,24 +609,6 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn effective_cli_overrides_or_send_error(
-        &self,
-        request_id: &ConnectionRequestId,
-        fallback_cwd: Option<PathBuf>,
-        cloud_requirements: CloudRequirementsLoader,
-    ) -> Option<Vec<(String, TomlValue)>> {
-        match self
-            .effective_cli_overrides(fallback_cwd, cloud_requirements)
-            .await
-        {
-            Ok(cli_overrides) => Some(cli_overrides),
-            Err(err) => {
-                self.outgoing.send_error(request_id.clone(), err).await;
-                None
-            }
-        }
-    }
-
     /// If a client sends `developer_instructions: null` during a mode switch,
     /// use the built-in instructions for that mode.
     fn normalize_turn_start_collaboration_mode(
@@ -1977,16 +1959,13 @@ impl CodexMessageProcessor {
         );
         typesafe_overrides.ephemeral = ephemeral;
         let cloud_requirements = self.current_cloud_requirements();
-        let Some(cli_overrides) = self
-            .effective_cli_overrides_or_send_error(
-                &request_id,
+        let cli_overrides = self
+            .effective_cli_overrides_or_current(
                 typesafe_overrides.cwd.clone(),
                 cloud_requirements.clone(),
+                "thread start",
             )
-            .await
-        else {
-            return;
-        };
+            .await;
         let listener_task_context = ListenerTaskContext {
             thread_manager: Arc::clone(&self.thread_manager),
             thread_state_manager: self.thread_state_manager.clone(),
@@ -3583,16 +3562,13 @@ impl CodexMessageProcessor {
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let cloud_requirements = self.current_cloud_requirements();
-        let Some(effective_cli_overrides) = self
-            .effective_cli_overrides_or_send_error(
-                &request_id,
+        let effective_cli_overrides = self
+            .effective_cli_overrides_or_current(
                 history_cwd.clone(),
                 cloud_requirements.clone(),
+                "thread resume",
             )
-            .await
-        else {
-            return;
-        };
+            .await;
         let config = match derive_config_for_cwd(
             &effective_cli_overrides,
             request_overrides,
@@ -4135,16 +4111,13 @@ impl CodexMessageProcessor {
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let cloud_requirements = self.current_cloud_requirements();
-        let Some(effective_cli_overrides) = self
-            .effective_cli_overrides_or_send_error(
-                &request_id,
+        let effective_cli_overrides = self
+            .effective_cli_overrides_or_current(
                 history_cwd.clone(),
                 cloud_requirements.clone(),
+                "thread fork",
             )
-            .await
-        else {
-            return;
-        };
+            .await;
         let config = match derive_config_for_cwd(
             &effective_cli_overrides,
             request_overrides,
