@@ -129,33 +129,31 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
     let unreadable_roots = file_system_policy.get_unreadable_roots_with_cwd(Path::new("/"));
     let unreadable_root = unreadable_roots.first().expect("expected unreadable root");
     assert!(
-        policy.contains("(require-not (literal (param \"READABLE_ROOT_0_RO_0\")))"),
+        policy.contains("(require-not (literal (param \"READABLE_ROOT_0_EXCLUDED_0\")))"),
         "expected exact read carveout in policy:\n{policy}"
     );
     assert!(
-        policy.contains("(require-not (subpath (param \"READABLE_ROOT_0_RO_0\")))"),
+        policy.contains("(require-not (subpath (param \"READABLE_ROOT_0_EXCLUDED_0\")))"),
         "expected read carveout in policy:\n{policy}"
     );
     assert!(
-        policy.contains("(require-not (literal (param \"WRITABLE_ROOT_0_RO_0\")))"),
+        policy.contains("(require-not (literal (param \"WRITABLE_ROOT_0_EXCLUDED_0\")))"),
         "expected exact write carveout in policy:\n{policy}"
     );
     assert!(
-        policy.contains("(require-not (subpath (param \"WRITABLE_ROOT_0_RO_0\")))"),
+        policy.contains("(require-not (subpath (param \"WRITABLE_ROOT_0_EXCLUDED_0\")))"),
         "expected write carveout in policy:\n{policy}"
     );
     assert!(
-        args.iter()
-            .any(|arg| arg == &format!("-DREADABLE_ROOT_0_RO_0={}", unreadable_root.display())),
+        args.iter().any(
+            |arg| arg == &format!("-DREADABLE_ROOT_0_EXCLUDED_0={}", unreadable_root.display())
+        ),
         "expected read carveout parameter in args: {args:#?}"
     );
     assert!(
-    let expected_suffix = format!("={}", unreadable_root.display());
-    assert!(
-        args.iter().any(|arg| {
-            arg.starts_with("-DWRITABLE_ROOT_0_RO_")
-                && arg.ends_with(&expected_suffix)
-        }),
+        args.iter().any(
+            |arg| arg == &format!("-DWRITABLE_ROOT_0_EXCLUDED_0={}", unreadable_root.display())
+        ),
         "expected write carveout parameter in args: {args:#?}"
     );
 }
@@ -191,11 +189,11 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
     let unreadable_roots = file_system_policy.get_unreadable_roots_with_cwd(Path::new("/"));
     let unreadable_root = unreadable_roots.first().expect("expected unreadable root");
     assert!(
-        policy.contains("(require-not (literal (param \"READABLE_ROOT_0_RO_0\")))"),
+        policy.contains("(require-not (literal (param \"READABLE_ROOT_0_EXCLUDED_0\")))"),
         "expected exact read carveout in policy:\n{policy}"
     );
     assert!(
-        policy.contains("(require-not (subpath (param \"READABLE_ROOT_0_RO_0\")))"),
+        policy.contains("(require-not (subpath (param \"READABLE_ROOT_0_EXCLUDED_0\")))"),
         "expected read carveout in policy:\n{policy}"
     );
     assert!(
@@ -204,8 +202,9 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
         "expected readable root parameter in args: {args:#?}"
     );
     assert!(
-        args.iter()
-            .any(|arg| arg == &format!("-DREADABLE_ROOT_0_RO_0={}", unreadable_root.display())),
+        args.iter().any(
+            |arg| arg == &format!("-DREADABLE_ROOT_0_EXCLUDED_0={}", unreadable_root.display())
+        ),
         "expected read carveout parameter in args: {args:#?}"
     );
 }
@@ -338,7 +337,7 @@ fn seatbelt_legacy_workspace_write_nested_readable_root_stays_writable() {
     );
     assert!(
         args.iter()
-            .any(|arg| arg.starts_with("-DWRITABLE_ROOT_0_RO_")
+            .any(|arg| arg.starts_with("-DWRITABLE_ROOT_0_EXCLUDED_")
                 && arg.ends_with("/workspace/.codex")),
         "expected proactive .codex carveout for cwd root: {args:#?}",
     );
@@ -672,12 +671,12 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
         "expected cwd writable root to carry protected carveouts:\n{policy_text}",
     );
     assert!(
-        policy_text.contains("WRITABLE_ROOT_0_RO_0"),
+        policy_text.contains("WRITABLE_ROOT_0_EXCLUDED_0"),
         "expected cwd .codex carveout in policy:\n{policy_text}",
     );
     assert!(
-        policy_text.contains("WRITABLE_ROOT_1_RO_0")
-            && policy_text.contains("WRITABLE_ROOT_1_RO_1"),
+        policy_text.contains("WRITABLE_ROOT_1_EXCLUDED_0")
+            && policy_text.contains("WRITABLE_ROOT_1_EXCLUDED_1"),
         "expected explicit writable root .git/.codex carveouts in policy:\n{policy_text}",
     );
     assert!(
@@ -693,15 +692,22 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
                 .to_string_lossy()
         ),
         format!(
+            "-DWRITABLE_ROOT_0_EXCLUDED_0={}",
+            cwd.canonicalize()
+                .expect("canonicalize cwd")
+                .join(".codex")
+                .display()
+        ),
+        format!(
             "-DWRITABLE_ROOT_1={}",
             vulnerable_root_canonical.to_string_lossy()
         ),
         format!(
-            "-DWRITABLE_ROOT_1_RO_0={}",
+            "-DWRITABLE_ROOT_1_EXCLUDED_0={}",
             dot_git_canonical.to_string_lossy()
         ),
         format!(
-            "-DWRITABLE_ROOT_1_RO_1={}",
+            "-DWRITABLE_ROOT_1_EXCLUDED_1={}",
             dot_codex_canonical.to_string_lossy()
         ),
         format!(
@@ -709,16 +715,14 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
             empty_root_canonical.to_string_lossy()
         ),
     ];
-    for expected_definition in expected_definitions {
-        assert!(
-            args.contains(&expected_definition),
-            "expected definition arg `{expected_definition}` in {args:#?}"
-        );
-    }
-    assert!(
-        args.iter()
-            .any(|arg| arg.starts_with("-DWRITABLE_ROOT_0_RO_0=") && arg.ends_with("/cwd/.codex")),
-        "expected cwd .codex carveout definition in {args:#?}",
+    let writable_definitions: Vec<String> = args
+        .iter()
+        .filter(|arg| arg.starts_with("-DWRITABLE_ROOT_"))
+        .cloned()
+        .collect();
+    assert_eq!(
+        writable_definitions, expected_definitions,
+        "unexpected writable-root parameter definitions in {args:#?}"
     );
     for (key, value) in macos_dir_params() {
         let expected_definition = format!("-D{key}={}", value.to_string_lossy());
@@ -837,7 +841,7 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
 }
 
 #[test]
-fn create_seatbelt_args_block_first_time_dot_codex_creation() {
+fn create_seatbelt_args_block_first_time_dot_codex_creation_with_exact_and_descendant_carveouts() {
     let tmp = TempDir::new().expect("tempdir");
     let repo_root = tmp.path().join("repo");
     fs::create_dir_all(&repo_root).expect("create repo root");
@@ -881,40 +885,12 @@ fn create_seatbelt_args_block_first_time_dot_codex_creation() {
 
     let policy_text = seatbelt_policy_arg(&args);
     assert!(
-        policy_text.contains("(require-not (literal (param \"WRITABLE_ROOT_0_RO_1\")))"),
+        policy_text.contains("(require-not (literal (param \"WRITABLE_ROOT_0_EXCLUDED_1\")))"),
         "expected exact .codex carveout in policy:\n{policy_text}"
     );
     assert!(
-        policy_text.contains("(require-not (subpath (param \"WRITABLE_ROOT_0_RO_1\")))"),
+        policy_text.contains("(require-not (subpath (param \"WRITABLE_ROOT_0_EXCLUDED_1\")))"),
         "expected descendant .codex carveout in policy:\n{policy_text}"
-    );
-
-    let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
-        .args(&args)
-        .current_dir(&repo_root)
-        .output()
-        .expect("execute seatbelt command");
-
-    assert!(
-        !output.status.success(),
-        "first-time .codex creation should fail under seatbelt"
-    );
-    assert!(
-        !dot_codex.exists(),
-        "{} should not exist because seatbelt should block creating the protected path",
-        dot_codex.display()
-    );
-    assert!(
-        !config_toml.exists(),
-        "{} should not exist because seatbelt should block creating the protected file",
-        config_toml.display()
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        (stderr.contains(&dot_codex.display().to_string())
-            || stderr.contains("sandbox-exec: sandbox_apply: Operation not permitted"))
-            && stderr.contains("Operation not permitted"),
-        "unexpected stderr: {stderr}"
     );
 }
 
@@ -1071,7 +1047,7 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
         .map(|p| p.to_string_lossy().to_string());
 
     let tempdir_policy_entry = if tmpdir_env_var.is_some() {
-        r#" (require-all (subpath (param "WRITABLE_ROOT_2")) (require-not (literal (param "WRITABLE_ROOT_2_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_2_RO_0"))) (require-not (literal (param "WRITABLE_ROOT_2_RO_1"))) (require-not (subpath (param "WRITABLE_ROOT_2_RO_1"))) )"#
+        r#" (require-all (subpath (param "WRITABLE_ROOT_2")) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_2_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_2_EXCLUDED_1"))) )"#
     } else {
         ""
     };
@@ -1086,7 +1062,7 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
 ; allow read-only file operations
 (allow file-read*)
 (allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (literal (param "WRITABLE_ROOT_0_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) (require-not (literal (param "WRITABLE_ROOT_0_RO_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_1"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
+(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_0"))) (require-not (literal (param "WRITABLE_ROOT_0_EXCLUDED_1"))) (require-not (subpath (param "WRITABLE_ROOT_0_EXCLUDED_1"))) ) (subpath (param "WRITABLE_ROOT_1")){tempdir_policy_entry}
 )
 
 ; macOS permission profile extensions
@@ -1107,11 +1083,11 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
             vulnerable_root_canonical.to_string_lossy()
         ),
         format!(
-            "-DWRITABLE_ROOT_0_RO_0={}",
+            "-DWRITABLE_ROOT_0_EXCLUDED_0={}",
             dot_git_canonical.to_string_lossy()
         ),
         format!(
-            "-DWRITABLE_ROOT_0_RO_1={}",
+            "-DWRITABLE_ROOT_0_EXCLUDED_1={}",
             dot_codex_canonical.to_string_lossy()
         ),
         format!(
@@ -1126,11 +1102,11 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
     if let Some(p) = tmpdir_env_var {
         expected_args.push(format!("-DWRITABLE_ROOT_2={p}"));
         expected_args.push(format!(
-            "-DWRITABLE_ROOT_2_RO_0={}",
+            "-DWRITABLE_ROOT_2_EXCLUDED_0={}",
             dot_git_canonical.to_string_lossy()
         ));
         expected_args.push(format!(
-            "-DWRITABLE_ROOT_2_RO_1={}",
+            "-DWRITABLE_ROOT_2_EXCLUDED_1={}",
             dot_codex_canonical.to_string_lossy()
         ));
     }

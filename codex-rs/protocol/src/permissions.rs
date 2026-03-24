@@ -283,10 +283,9 @@ impl FileSystemSandboxPolicy {
                 for protected_path in default_read_only_subpaths_for_writable_root(
                     &cwd_root, /*protect_missing_dot_codex*/ true,
                 ) {
-                    append_path_entry_if_missing(
+                    append_default_read_only_path_if_no_explicit_rule(
                         &mut file_system_policy.entries,
                         protected_path,
-                        FileSystemAccessMode::Read,
                     );
                 }
             }
@@ -295,10 +294,9 @@ impl FileSystemSandboxPolicy {
                     writable_root,
                     /*protect_missing_dot_codex*/ false,
                 ) {
-                    append_path_entry_if_missing(
+                    append_default_read_only_path_if_no_explicit_rule(
                         &mut file_system_policy.entries,
                         protected_path,
-                        FileSystemAccessMode::Read,
                     );
                 }
             }
@@ -481,8 +479,11 @@ impl FileSystemSandboxPolicy {
             let protect_missing_dot_codex = AbsolutePathBuf::from_absolute_path(cwd)
                 .ok()
                 .is_some_and(|cwd| normalize_effective_absolute_path(cwd) == root);
-            let mut read_only_subpaths =
-                default_read_only_subpaths_for_writable_root(&root, protect_missing_dot_codex);
+            let mut read_only_subpaths: Vec<AbsolutePathBuf> =
+                default_read_only_subpaths_for_writable_root(&root, protect_missing_dot_codex)
+                    .into_iter()
+                    .filter(|path| !has_explicit_resolved_path_entry(&resolved_entries, path))
+                    .collect();
             // Narrower explicit non-write entries carve out broader writable roots.
             // More specific write entries still remain writable because they appear
             // as separate WritableRoot values and are checked independently.
@@ -1158,6 +1159,29 @@ fn append_path_entry_if_missing(
     });
 }
 
+fn append_default_read_only_path_if_no_explicit_rule(
+    entries: &mut Vec<FileSystemSandboxEntry>,
+    path: AbsolutePathBuf,
+) {
+    if entries.iter().any(|entry| {
+        matches!(
+            &entry.path,
+            FileSystemPath::Path { path: existing } if existing == &path
+        )
+    }) {
+        return;
+    }
+
+    append_path_entry_if_missing(entries, path, FileSystemAccessMode::Read);
+}
+
+fn has_explicit_resolved_path_entry(
+    entries: &[ResolvedFileSystemEntry],
+    path: &AbsolutePathBuf,
+) -> bool {
+    entries.iter().any(|entry| &entry.path == path)
+}
+
 fn is_git_pointer_file(path: &AbsolutePathBuf) -> bool {
     path.as_path().is_file() && path.as_path().file_name() == Some(OsStr::new(".git"))
 }
@@ -1291,6 +1315,53 @@ mod tests {
             writable_roots[0]
                 .read_only_subpaths
                 .contains(&expected_dot_codex)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writable_roots_skip_default_dot_codex_when_explicit_user_rule_exists() {
+        let cwd = TempDir::new().expect("tempdir");
+        let expected_root = AbsolutePathBuf::from_absolute_path(
+            cwd.path().canonicalize().expect("canonicalize cwd"),
+        )
+        .expect("absolute canonical root");
+        let explicit_dot_codex = expected_root.join(".codex").expect("expected .codex path");
+
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::CurrentWorkingDirectory,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: explicit_dot_codex.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+        ]);
+
+        let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
+        let workspace_root = writable_roots
+            .iter()
+            .find(|root| root.root == expected_root)
+            .expect("workspace writable root");
+        assert!(
+            !workspace_root
+                .read_only_subpaths
+                .contains(&explicit_dot_codex),
+            "explicit .codex rule should win over the default protected carveout"
+        );
+        assert!(
+            policy.can_write_path_with_cwd(
+                explicit_dot_codex
+                    .join("config.toml")
+                    .expect("config.toml")
+                    .as_path(),
+                cwd.path()
+            )
         );
     }
 

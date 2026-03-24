@@ -330,7 +330,7 @@ fn build_seatbelt_access_policy(
         {
             let excluded_subpath =
                 normalize_path_for_sandbox(excluded_subpath.as_path()).unwrap_or(excluded_subpath);
-            let excluded_param = format!("{param_prefix}_{index}_RO_{excluded_index}");
+            let excluded_param = format!("{param_prefix}_{index}_EXCLUDED_{excluded_index}");
             params.push((excluded_param.clone(), excluded_subpath.into_path_buf()));
             // Exclude both the exact protected path and anything beneath it.
             // `subpath` alone leaves a gap for first-time creation of the
