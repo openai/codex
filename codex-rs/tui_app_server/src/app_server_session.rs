@@ -80,8 +80,6 @@ use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tracing::debug;
-
 use crate::bottom_pane::FeedbackAudience;
 use crate::status::StatusAccountDisplay;
 
@@ -254,8 +252,8 @@ impl AppServerSession {
                 .await
             {
                 Ok(rate_limits) => app_server_rate_limit_snapshots_to_core(rate_limits),
-                Err(error) => {
-                    debug!(error = ?error, "failed to fetch rate limits during TUI bootstrap");
+                Err(err) => {
+                    tracing::warn!("account/rateLimits/read failed during TUI bootstrap: {err}");
                     Vec::new()
                 }
             }
