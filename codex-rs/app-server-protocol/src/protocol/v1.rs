@@ -14,6 +14,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnAbortReason;
+use codex_git_utils::GitSha;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -21,7 +22,6 @@ use serde::Serialize;
 use ts_rs::TS;
 
 use crate::protocol::common::AuthMode;
-use crate::protocol::common::GitSha;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

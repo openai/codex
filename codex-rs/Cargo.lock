@@ -1510,6 +1510,7 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-experimental-api-macros",
+ "codex-git-utils",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",

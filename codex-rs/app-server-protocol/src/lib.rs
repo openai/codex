@@ -5,6 +5,7 @@ mod protocol;
 mod schema_fixtures;
 
 pub use experimental_api::*;
+pub use codex_git_utils::GitSha;
 pub use export::GenerateTsOptions;
 pub use export::generate_internal_json_schema;
 pub use export::generate_json;

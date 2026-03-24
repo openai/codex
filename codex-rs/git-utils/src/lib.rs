@@ -52,6 +52,16 @@ use ts_rs::TS;
 
 type CommitID = String;
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
+#[ts(type = "string")]
+pub struct GitSha(pub String);
+
+impl GitSha {
+    pub fn new(sha: &str) -> Self {
+        Self(sha.to_string())
+    }
+}
+
 /// Details of a ghost commit created from a repository state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 pub struct GhostCommit {
