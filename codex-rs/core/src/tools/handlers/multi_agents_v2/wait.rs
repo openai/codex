@@ -35,21 +35,12 @@ impl ToolHandler for Handler {
         let args: WaitArgs = parse_arguments(&arguments)?;
         let receiver_thread_ids = resolve_agent_targets(&session, &turn, args.targets).await?;
         let mut receiver_agents = Vec::with_capacity(receiver_thread_ids.len());
-        let mut target_by_thread_id = HashMap::with_capacity(receiver_thread_ids.len());
         for receiver_thread_id in &receiver_thread_ids {
             let agent_metadata = session
                 .services
                 .agent_control
                 .get_agent_metadata(*receiver_thread_id)
                 .unwrap_or_default();
-            target_by_thread_id.insert(
-                *receiver_thread_id,
-                agent_metadata
-                    .agent_path
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .unwrap_or_else(|| receiver_thread_id.to_string()),
-            );
             receiver_agents.push(CollabAgentRef {
                 thread_id: *receiver_thread_id,
                 agent_nickname: agent_metadata.agent_nickname,
@@ -152,18 +143,7 @@ impl ToolHandler for Handler {
         let timed_out = statuses.is_empty();
         let statuses_by_id = statuses.clone().into_iter().collect::<HashMap<_, _>>();
         let agent_statuses = build_wait_agent_statuses(&statuses_by_id, &receiver_agents);
-        let result = WaitAgentResult {
-            status: statuses
-                .into_iter()
-                .filter_map(|(thread_id, status)| {
-                    target_by_thread_id
-                        .get(&thread_id)
-                        .cloned()
-                        .map(|target| (target, status))
-                })
-                .collect(),
-            timed_out,
-        };
+        let result = WaitAgentResult::from_timed_out(timed_out);
 
         session
             .send_event(
@@ -191,8 +171,22 @@ struct WaitArgs {
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct WaitAgentResult {
-    pub(crate) status: HashMap<String, AgentStatus>,
+    pub(crate) message: String,
     pub(crate) timed_out: bool,
+}
+
+impl WaitAgentResult {
+    fn from_timed_out(timed_out: bool) -> Self {
+        let message = if timed_out {
+            "Wait timed out."
+        } else {
+            "Wait completed."
+        };
+        Self {
+            message: message.to_string(),
+            timed_out,
+        }
+    }
 }
 
 impl ToolOutput for WaitAgentResult {

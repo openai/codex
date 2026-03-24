@@ -1448,6 +1448,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-sandboxing",
  "codex-shell-command",
  "codex-state",
  "codex-utils-absolute-path",
@@ -1488,7 +1489,6 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-arg0",
  "codex-core",
- "codex-features",
  "codex-feedback",
  "codex-protocol",
  "futures",
@@ -1678,6 +1678,7 @@ dependencies = [
  "codex-protocol",
  "codex-responses-api-proxy",
  "codex-rmcp-client",
+ "codex-sandboxing",
  "codex-state",
  "codex-stdio-to-uds",
  "codex-terminal-detection",
@@ -1885,6 +1886,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-sandboxing",
  "codex-secrets",
  "codex-shell-command",
  "codex-shell-escalation",
@@ -1996,9 +1998,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
- "codex-utils-elapsed",
  "codex-utils-oss",
- "codex-utils-sandbox-summary",
  "core_test_support",
  "libc",
  "opentelemetry",
@@ -2006,10 +2006,8 @@ dependencies = [
  "owo-colors",
  "predicates",
  "pretty_assertions",
- "rmcp",
  "serde",
  "serde_json",
- "shlex",
  "supports-color 3.0.2",
  "tempfile",
  "tokio",
@@ -2460,6 +2458,23 @@ dependencies = [
  "urlencoding",
  "webbrowser",
  "which 8.0.0",
+]
+
+[[package]]
+name = "codex-sandboxing"
+version = "0.0.0"
+dependencies = [
+ "codex-network-proxy",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "dirs",
+ "dunce",
+ "libc",
+ "pretty_assertions",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "url",
 ]
 
 [[package]]
