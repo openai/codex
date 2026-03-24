@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_message_processor::CodexMessageProcessorArgs;
 use crate::config_api::ConfigApi;
+use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::external_agent_config_api::ExternalAgentConfigApi;
 use crate::fs_api::FsApi;
@@ -579,9 +580,21 @@ impl MessageProcessor {
                 }
 
                 let user_agent = get_codex_user_agent();
+                let codex_home = match self.config.codex_home.clone().try_into() {
+                    Ok(codex_home) => codex_home,
+                    Err(err) => {
+                        let error = JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!("Invalid CODEX_HOME: {err}"),
+                            data: None,
+                        };
+                        self.outgoing.send_error(connection_request_id, error).await;
+                        return;
+                    }
+                };
                 let response = InitializeResponse {
                     user_agent,
-                    codex_home: self.config.codex_home.clone(),
+                    codex_home,
                     platform_family: std::env::consts::FAMILY.to_string(),
                     platform_os: std::env::consts::OS.to_string(),
                 };
