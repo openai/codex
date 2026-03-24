@@ -834,7 +834,7 @@ impl AgentControl {
                     parent_agent_path,
                     Vec::new(),
                     message,
-                    false,
+                    /*trigger_turn*/ false,
                 );
                 let _ = control
                     .send_inter_agent_communication(parent_thread_id, communication)

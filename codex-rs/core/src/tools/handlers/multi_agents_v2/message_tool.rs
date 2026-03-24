@@ -141,7 +141,7 @@ pub(crate) async fn handle_message_tool(
         receiver_agent_path,
         Vec::new(),
         prompt.clone(),
-        true,
+        /*trigger_turn*/ true,
     );
     let result = session
         .services
