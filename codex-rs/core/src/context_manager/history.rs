@@ -17,6 +17,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnContextItem;
@@ -204,9 +205,10 @@ impl ContextManager {
         }
     }
 
-    /// Drop the last `num_turns` user turns from this history.
+    /// Drop the last `num_turns` instruction turns from this history.
     ///
-    /// "User turns" are identified as `ResponseItem::Message` entries whose role is `"user"`.
+    /// Instruction turns are history messages that should behave like a new prompt boundary:
+    /// ordinary user messages and structured assistant inter-agent instructions.
     ///
     /// This mirrors thread-rollback semantics:
     /// - `num_turns == 0` is a no-op
@@ -248,7 +250,7 @@ impl ContextManager {
     }
 
     fn get_non_last_reasoning_items_tokens(&self) -> i64 {
-        // Get reasoning items excluding all the ones after the last user message.
+        // Get reasoning items excluding all the ones after the last instruction boundary.
         let Some(last_user_index) = self.items.iter().rposition(is_user_turn_boundary) else {
             return 0;
         };
@@ -631,7 +633,12 @@ pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
         return false;
     };
 
-    role == "user" && !is_contextual_user_message_content(content)
+    (role == "user" && !is_contextual_user_message_content(content))
+        || (role == "assistant" && is_inter_agent_instruction_content(content))
+}
+
+fn is_inter_agent_instruction_content(content: &[ContentItem]) -> bool {
+    InterAgentCommunication::is_message_content(content)
 }
 
 fn user_message_positions(items: &[ResponseItem]) -> Vec<usize> {

@@ -31,6 +31,7 @@ use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_response_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -713,6 +714,100 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
             )
         );
     });
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let error_message =
+        "Item 'rs_test' of type 'reasoning' was provided without its required following item.";
+    let _request_log = mount_response_once(
+        &server,
+        wiremock::ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "error": {
+                "message": error_message,
+                "type": "invalid_request_error",
+                "param": "input"
+            }
+        })),
+    )
+    .await;
+
+    let (mut session, mut turn, rx) = crate::codex::make_session_and_context_with_rx().await;
+    let mut config = (*turn.config).clone();
+    config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    config.user_instructions = None;
+    let config = Arc::new(config);
+    let models_manager = Arc::new(test_support::models_manager_with_provider(
+        config.codex_home.clone(),
+        Arc::clone(&session.services.auth_manager),
+        config.model_provider.clone(),
+    ));
+    Arc::get_mut(&mut session)
+        .expect("session should be uniquely owned")
+        .services
+        .models_manager = models_manager;
+    let turn_mut = Arc::get_mut(&mut turn).expect("turn should be uniquely owned");
+    turn_mut.config = Arc::clone(&config);
+    turn_mut.provider = config.model_provider.clone();
+    turn_mut.user_instructions = None;
+
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let decision = review_approval_request(
+        &session,
+        &turn,
+        GuardianApprovalRequest::Shell {
+            id: "shell-guardian-error".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: PathBuf::from("/repo/codex-rs/core"),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the reviewed docs fix.".to_string()),
+        },
+        None,
+    )
+    .await;
+
+    assert_eq!(decision, ReviewDecision::Denied);
+
+    let mut warnings = Vec::new();
+    let mut denial_rationales = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        match event.msg {
+            EventMsg::Warning(event) => warnings.push(event.message),
+            EventMsg::GuardianAssessment(event)
+                if event.status == GuardianAssessmentStatus::Denied =>
+            {
+                denial_rationales.push(event.rationale)
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        warnings
+            .iter()
+            .any(|message| message.contains(error_message)),
+        "warning should include the underlying responses api error"
+    );
+    assert!(
+        denial_rationales
+            .iter()
+            .flatten()
+            .any(|message| message.contains(error_message)),
+        "denial rationale should include the underlying responses api error"
+    );
+    assert!(
+        denial_rationales.iter().flatten().all(|message| {
+            !message.contains("guardian review completed without an assessment payload")
+        }),
+        "denial rationale should not fall back to the generic missing payload error"
+    );
 
     Ok(())
 }

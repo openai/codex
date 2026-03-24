@@ -52,9 +52,8 @@ impl ToolHandler for Handler {
                 .into(),
             )
             .await;
-        let result = session
-            .services
-            .agent_control
+        let agent_control = session.services.agent_control.clone();
+        let result = agent_control
             .send_input(receiver_thread_id, input_items)
             .await
             .map_err(|err| collab_agent_error(receiver_thread_id, err));

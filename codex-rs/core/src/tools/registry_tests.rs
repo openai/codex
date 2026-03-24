@@ -1,6 +1,8 @@
 use super::*;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolPayload;
 use async_trait::async_trait;
+use codex_protocol::models::ShellToolCallParams;
 use pretty_assertions::assert_eq;
 
 struct TestHandler;
@@ -47,4 +49,64 @@ fn handler_looks_up_namespaced_aliases_explicitly() {
             .as_ref()
             .is_some_and(|handler| Arc::ptr_eq(handler, &namespaced_handler))
     );
+}
+
+#[test]
+fn pre_tool_use_command_uses_raw_shell_command_input() {
+    let payload = ToolPayload::Function {
+        arguments: serde_json::json!({ "command": "printf shell command" }).to_string(),
+    };
+
+    assert_eq!(
+        pre_tool_use_command("shell_command", &payload),
+        Some("printf shell command".to_string())
+    );
+}
+
+#[test]
+fn pre_tool_use_command_shell_joins_vector_input() {
+    let payload = ToolPayload::LocalShell {
+        params: ShellToolCallParams {
+            command: vec![
+                "bash".to_string(),
+                "-lc".to_string(),
+                "printf hi".to_string(),
+            ],
+            workdir: None,
+            timeout_ms: None,
+            sandbox_permissions: None,
+            prefix_rule: None,
+            additional_permissions: None,
+            justification: None,
+        },
+    };
+
+    assert_eq!(
+        pre_tool_use_command("local_shell", &payload),
+        Some("bash -lc 'printf hi'".to_string())
+    );
+}
+
+#[test]
+fn pre_tool_use_command_uses_raw_exec_command_input() {
+    let payload = ToolPayload::Function {
+        arguments: serde_json::json!({ "cmd": "printf exec command" }).to_string(),
+    };
+
+    assert_eq!(
+        pre_tool_use_command("exec_command", &payload),
+        Some("printf exec command".to_string())
+    );
+}
+
+#[test]
+fn pre_tool_use_command_skips_non_shell_tools() {
+    let payload = ToolPayload::Function {
+        arguments: serde_json::json!({
+            "plan": [{ "step": "watch the tide", "status": "pending" }]
+        })
+        .to_string(),
+    };
+
+    assert_eq!(pre_tool_use_command("update_plan", &payload), None);
 }

@@ -23,9 +23,9 @@ use crate::tools::handlers::TOOL_SUGGEST_TOOL_NAME;
 use crate::tools::handlers::agent_jobs::BatchJobHandler;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
-use crate::tools::handlers::multi_agents::DEFAULT_WAIT_TIMEOUT_MS;
-use crate::tools::handlers::multi_agents::MAX_WAIT_TIMEOUT_MS;
-use crate::tools::handlers::multi_agents::MIN_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::request_permissions_tool_description;
 use crate::tools::handlers::request_user_input_tool_description;
 use crate::tools::registry::ToolRegistryBuilder;
@@ -167,6 +167,39 @@ fn send_input_output_schema() -> JsonValue {
     })
 }
 
+fn list_agents_output_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "agents": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "agent_name": {
+                            "type": "string",
+                            "description": "Canonical task name for the agent when available, otherwise the agent id."
+                        },
+                        "agent_status": {
+                            "description": "Last known status of the agent.",
+                            "allOf": [agent_status_output_schema()]
+                        },
+                        "last_task_message": {
+                            "type": ["string", "null"],
+                            "description": "Most recent user or inter-agent instruction received by the agent, when available."
+                        }
+                    },
+                    "required": ["agent_name", "agent_status", "last_task_message"],
+                    "additionalProperties": false
+                },
+                "description": "Live agents visible in the current root thread tree."
+            }
+        },
+        "required": ["agents"],
+        "additionalProperties": false
+    })
+}
+
 fn resume_agent_output_schema() -> JsonValue {
     json!({
         "type": "object",
@@ -178,7 +211,7 @@ fn resume_agent_output_schema() -> JsonValue {
     })
 }
 
-fn wait_output_schema() -> JsonValue {
+fn wait_output_schema_v1() -> JsonValue {
     json!({
         "type": "object",
         "properties": {
@@ -193,6 +226,24 @@ fn wait_output_schema() -> JsonValue {
             }
         },
         "required": ["status", "timed_out"],
+        "additionalProperties": false
+    })
+}
+
+fn wait_output_schema_v2() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "message": {
+                "type": "string",
+                "description": "Brief wait summary without the agent's final content."
+            },
+            "timed_out": {
+                "type": "boolean",
+                "description": "Whether the wait call returned due to timeout before any agent reached a final status."
+            }
+        },
+        "required": ["message", "timed_out"],
         "additionalProperties": false
     })
 }
@@ -1422,7 +1473,7 @@ fn create_resume_agent_tool() -> ToolSpec {
     })
 }
 
-fn create_wait_agent_tool() -> ToolSpec {
+fn wait_agent_tool_parameters() -> JsonSchema {
     let mut properties = BTreeMap::new();
     properties.insert(
         "targets".to_string(),
@@ -1443,18 +1494,60 @@ fn create_wait_agent_tool() -> ToolSpec {
         },
     );
 
+    JsonSchema::Object {
+        properties,
+        required: Some(vec!["targets".to_string()]),
+        additional_properties: Some(false.into()),
+    }
+}
+
+fn create_wait_agent_tool_v1() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "wait_agent".to_string(),
         description: "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out. Once the agent reaches a final status, a notification message will be received containing the same completed status."
             .to_string(),
         strict: false,
         defer_loading: None,
+        parameters: wait_agent_tool_parameters(),
+        output_schema: Some(wait_output_schema_v1()),
+    })
+}
+
+fn create_wait_agent_tool_v2() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: "wait_agent".to_string(),
+        description: "Wait for agents to reach a final status. Returns a brief wait summary instead of the agent's final content. Returns a timeout summary when no agent reaches a final status before the deadline."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: wait_agent_tool_parameters(),
+        output_schema: Some(wait_output_schema_v2()),
+    })
+}
+
+fn create_list_agents_tool() -> ToolSpec {
+    let properties = BTreeMap::from([(
+        "path_prefix".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional task-path prefix. Accepts the same relative or absolute task-path syntax as other MultiAgentV2 agent targets."
+                    .to_string(),
+            ),
+        },
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "list_agents".to_string(),
+        description: "List live agents in the current root thread tree. Optionally filter by task-path prefix."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["targets".to_string()]),
+            required: None,
             additional_properties: Some(false.into()),
         },
-        output_schema: Some(wait_output_schema()),
+        output_schema: Some(list_agents_output_schema()),
     })
 }
 
@@ -2602,6 +2695,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents::SendInputHandler;
     use crate::tools::handlers::multi_agents::SpawnAgentHandler;
     use crate::tools::handlers::multi_agents::WaitAgentHandler;
+    use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
+    use crate::tools::handlers::multi_agents_v2::SendInputHandler as SendInputHandlerV2;
+    use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
+    use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
     use std::sync::Arc;
 
     let mut builder = ToolRegistryBuilder::new();
@@ -3003,7 +3100,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
         }
         push_tool_spec(
             &mut builder,
-            create_wait_agent_tool(),
+            if config.multi_agent_v2 {
+                create_wait_agent_tool_v2()
+            } else {
+                create_wait_agent_tool_v1()
+            },
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
@@ -3013,9 +3114,22 @@ pub(crate) fn build_specs_with_discoverable_tools(
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
-        builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandler));
-        builder.register_handler("send_input", Arc::new(SendInputHandler));
-        builder.register_handler("wait_agent", Arc::new(WaitAgentHandler));
+        if config.multi_agent_v2 {
+            push_tool_spec(
+                &mut builder,
+                create_list_agents_tool(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandlerV2));
+            builder.register_handler("send_input", Arc::new(SendInputHandlerV2));
+            builder.register_handler("wait_agent", Arc::new(WaitAgentHandlerV2));
+            builder.register_handler("list_agents", Arc::new(ListAgentsHandlerV2));
+        } else {
+            builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandler));
+            builder.register_handler("send_input", Arc::new(SendInputHandler));
+            builder.register_handler("wait_agent", Arc::new(WaitAgentHandler));
+        }
         builder.register_handler("close_agent", Arc::new(CloseAgentHandler));
     }
 

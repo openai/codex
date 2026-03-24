@@ -22,6 +22,7 @@ use tracing::warn;
 use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::contextual_user_message::TURN_ABORTED_CLOSE_TAG;
 use crate::contextual_user_message::TURN_ABORTED_OPEN_TAG;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
@@ -29,7 +30,6 @@ use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
-use crate::protocol::TokenUsage;
 use crate::protocol::TurnAbortReason;
 use crate::protocol::TurnAbortedEvent;
 use crate::protocol::TurnCompleteEvent;
@@ -59,6 +59,22 @@ pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
+
+/// Shared model-visible marker used by both the real interrupt path and
+/// interrupted fork snapshots.
+pub(crate) fn interrupted_turn_history_marker() -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: format!(
+                "{TURN_ABORTED_OPEN_TAG}\n{TURN_ABORTED_INTERRUPTED_GUIDANCE}\n{TURN_ABORTED_CLOSE_TAG}"
+            ),
+        }],
+        end_turn: None,
+        phase: None,
+    }
+}
 
 fn emit_turn_network_proxy_metric(
     session_telemetry: &SessionTelemetry,
@@ -153,7 +169,15 @@ impl Session {
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
+        self.start_task(turn_context, input, task).await;
+    }
 
+    async fn start_task<T: SessionTask>(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        input: Vec<UserInput>,
+        task: T,
+    ) {
         let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
@@ -166,11 +190,6 @@ impl Session {
 
         let cancellation_token = CancellationToken::new();
         let done = Arc::new(Notify::new());
-
-        let timer = turn_context
-            .session_telemetry
-            .start_timer(TURN_E2E_DURATION_METRIC, &[])
-            .ok();
 
         let done_clone = Arc::clone(&done);
         let handle = {
@@ -211,6 +230,21 @@ impl Session {
             )
         };
 
+        let queued_response_items = self.take_queued_response_items_for_next_turn().await;
+        let mut active = self.active_turn.lock().await;
+        let mut turn = ActiveTurn::default();
+        let mut turn_state = turn.turn_state.lock().await;
+        turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
+        for item in queued_response_items {
+            turn_state.push_pending_input(item);
+        }
+        drop(turn_state);
+
+        let timer = turn_context
+            .session_telemetry
+            .start_timer(TURN_E2E_DURATION_METRIC, &[])
+            .ok();
+
         let running_task = RunningTask {
             done,
             handle: Arc::new(AbortOnDropHandle::new(handle)),
@@ -220,7 +254,23 @@ impl Session {
             turn_context: Arc::clone(&turn_context),
             _timer: timer,
         };
-        self.register_new_active_task(running_task, token_usage_at_turn_start)
+        turn.add_task(running_task);
+        *active = Some(turn);
+    }
+
+    pub(crate) async fn ensure_task_for_queued_response_items(self: &Arc<Self>) {
+        if !self.has_queued_response_items_for_next_turn().await {
+            return;
+        }
+
+        if self.active_turn.lock().await.is_some() {
+            return;
+        }
+
+        let turn_context = self.new_default_turn().await;
+        self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
+            .await;
+        self.start_task(turn_context, Vec::new(), RegularTask::new())
             .await;
     }
 
@@ -232,6 +282,9 @@ impl Session {
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             active_turn.clear_pending().await;
+        }
+        if reason == TurnAbortReason::Interrupted {
+            self.ensure_task_for_queued_response_items().await;
         }
     }
 
@@ -362,19 +415,6 @@ impl Session {
         self.send_event(turn_context.as_ref(), event).await;
     }
 
-    async fn register_new_active_task(
-        &self,
-        task: RunningTask,
-        token_usage_at_turn_start: TokenUsage,
-    ) {
-        let mut active = self.active_turn.lock().await;
-        let mut turn = ActiveTurn::default();
-        let mut turn_state = turn.turn_state.lock().await;
-        turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
-        drop(turn_state);
-        turn.add_task(task);
-        *active = Some(turn);
-    }
     async fn take_active_turn(&self) -> Option<ActiveTurn> {
         let mut active = self.active_turn.lock().await;
         active.take()
@@ -426,17 +466,7 @@ impl Session {
         if reason == TurnAbortReason::Interrupted {
             self.cleanup_after_interrupt(&task.turn_context).await;
 
-            let marker = ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: format!(
-                        "{TURN_ABORTED_OPEN_TAG}\n{TURN_ABORTED_INTERRUPTED_GUIDANCE}\n</turn_aborted>"
-                    ),
-                }],
-                end_turn: None,
-                phase: None,
-            };
+            let marker = interrupted_turn_history_marker();
             self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
                 .await;
             self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])

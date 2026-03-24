@@ -1,9 +1,9 @@
 use super::sandbox_tag;
-use crate::exec::SandboxType;
 use crate::protocol::SandboxPolicy;
-use crate::safety::get_platform_sandbox;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::NetworkAccess;
+use codex_sandboxing::SandboxType;
+use codex_sandboxing::get_platform_sandbox;
 use pretty_assertions::assert_eq;
 
 #[test]
