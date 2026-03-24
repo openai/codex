@@ -3,7 +3,8 @@ use crate::config::ConfigBuilder;
 use chrono::TimeZone;
 use codex_features::Feature;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::items::AgentMessageContent;
+use codex_protocol::items::AgentMessageItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SandboxPolicy;
@@ -51,6 +52,48 @@ fn write_session_file(root: &Path, ts: &str, uuid: Uuid) -> std::io::Result<Path
     Ok(path)
 }
 
+fn test_rollout_agent_message(message: &str) -> RolloutItem {
+    let mut events = AgentMessageItem::new(&[AgentMessageContent::Text {
+        text: message.to_string(),
+    }])
+    .as_legacy_events();
+    RolloutItem::EventMsg(events.pop().expect("single agent message event"))
+}
+
+async fn queue_test_rollout_agent_message(
+    tx: &mpsc::Sender<RolloutCmd>,
+    message: &str,
+) -> Result<(), mpsc::error::SendError<RolloutCmd>> {
+    tx.send(RolloutCmd::AddItems(vec![test_rollout_agent_message(
+        message,
+    )]))
+    .await
+}
+
+async fn flush_test_rollout_writer(tx: &mpsc::Sender<RolloutCmd>) -> std::io::Result<()> {
+    let (flush_tx, flush_rx) = oneshot::channel();
+    tx.send(RolloutCmd::Flush { ack: flush_tx })
+        .await
+        .map_err(|e| IoError::other(format!("flush should queue: {e}")))?;
+    flush_rx
+        .await
+        .map_err(|e| IoError::other(format!("flush ack should be sent: {e}")))?
+}
+
+async fn open_read_only_rollout_writer(path: &Path) -> std::io::Result<JsonlWriter> {
+    std::fs::write(path, "")?;
+    let file = tokio::fs::OpenOptions::new().read(true).open(path).await?;
+    Ok(JsonlWriter::new(file))
+}
+
+fn assert_rollout_message_count(text: &str, message: &str, expected: usize) {
+    assert_eq!(
+        text.matches(message).count(),
+        expected,
+        "unexpected rollout count for {message:?}"
+    );
+}
+
 #[tokio::test]
 async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
@@ -81,13 +124,7 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
     );
 
     recorder
-        .record_items(&[RolloutItem::EventMsg(EventMsg::AgentMessage(
-            AgentMessageEvent {
-                message: "buffered-event".to_string(),
-                phase: None,
-                memory_citation: None,
-            },
-        ))])
+        .record_items(&[test_rollout_agent_message("buffered-event")])
         .await?;
     recorder.flush().await?;
     assert!(
@@ -133,6 +170,111 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
     );
     let text_after_second_persist = std::fs::read_to_string(&rollout_path)?;
     assert_eq!(text_after_second_persist, text);
+
+    recorder.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn rollout_writer_reopens_after_initial_write_error_and_retries_pending_items()
+-> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let rollout_path = home.path().join("rollout.jsonl");
+    let writer = open_read_only_rollout_writer(&rollout_path).await?;
+    let (tx, rx) = mpsc::channel::<RolloutCmd>(256);
+    let writer_task = tokio::spawn(rollout_writer(
+        Some(writer),
+        None,
+        rx,
+        None,
+        home.path().to_path_buf(),
+        rollout_path.clone(),
+        None,
+        None,
+        "test-provider".to_string(),
+        false,
+    ));
+
+    queue_test_rollout_agent_message(&tx, "first-write-fails")
+        .await
+        .expect("first write should queue");
+    queue_test_rollout_agent_message(&tx, "second-write-succeeds")
+        .await
+        .expect("second write should queue after reopen");
+    flush_test_rollout_writer(&tx).await?;
+
+    drop(tx);
+
+    let text = std::fs::read_to_string(&rollout_path)?;
+    assert!(
+        text.contains("second-write-succeeds"),
+        "expected the message sent after a failure to show up in the rollout"
+    );
+    assert!(
+        text.contains("first-write-fails"),
+        "expected the message from the failed batch to be retried into the rollout"
+    );
+
+    writer_task
+        .await
+        .expect("writer task should join cleanly")
+        .expect("writer task should exit cleanly after channel closes");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn recorder_retries_persist_after_materialization_failure() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .build()
+        .await?;
+    let recorder = RolloutRecorder::new(
+        &config,
+        RolloutRecorderParams::new(
+            ThreadId::new(),
+            None,
+            SessionSource::Exec,
+            BaseInstructions::default(),
+            Vec::new(),
+            EventPersistenceMode::Limited,
+        ),
+        None,
+        None,
+    )
+    .await?;
+    let rollout_path = recorder.rollout_path().to_path_buf();
+    std::fs::create_dir_all(
+        rollout_path
+            .parent()
+            .expect("rollout path should have a parent directory"),
+    )?;
+    std::fs::create_dir(&rollout_path)?;
+
+    recorder
+        .record_items(&[test_rollout_agent_message("buffered-before-failure")])
+        .await?;
+    let persist_error = recorder
+        .persist()
+        .await
+        .expect_err("materialization should fail while the rollout path is a directory");
+    assert!(
+        persist_error.to_string().contains("Is a directory"),
+        "expected a real open failure, got: {persist_error}"
+    );
+
+    std::fs::remove_dir(&rollout_path)?;
+
+    recorder
+        .record_items(&[test_rollout_agent_message("buffered-after-failure")])
+        .await?;
+    recorder.persist().await?;
+    recorder.flush().await?;
+
+    let text = std::fs::read_to_string(&rollout_path)?;
+    assert_rollout_message_count(&text, "buffered-before-failure", 1);
+    assert_rollout_message_count(&text, "buffered-after-failure", 1);
 
     recorder.shutdown().await?;
     Ok(())
@@ -198,13 +340,7 @@ async fn metadata_irrelevant_events_touch_state_db_updated_at() -> std::io::Resu
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     recorder
-        .record_items(&[RolloutItem::EventMsg(EventMsg::AgentMessage(
-            AgentMessageEvent {
-                message: "assistant text".to_string(),
-                phase: None,
-                memory_citation: None,
-            },
-        ))])
+        .record_items(&[test_rollout_agent_message("assistant text")])
         .await?;
     recorder.flush().await?;
 
@@ -249,13 +385,7 @@ async fn metadata_irrelevant_events_fall_back_to_upsert_when_thread_missing() ->
         Utc::now(),
         SessionSource::Cli,
     );
-    let items = vec![RolloutItem::EventMsg(EventMsg::AgentMessage(
-        AgentMessageEvent {
-            message: "assistant text".to_string(),
-            phase: None,
-            memory_citation: None,
-        },
-    ))];
+    let items = vec![test_rollout_agent_message("assistant text")];
 
     sync_thread_state_after_write(
         Some(state_db.as_ref()),
