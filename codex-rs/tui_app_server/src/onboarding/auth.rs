@@ -771,6 +771,7 @@ impl AuthModeWidget {
                 .await
             {
                 Ok(LoginAccountResponse::Chatgpt { login_id, auth_url }) => {
+                    maybe_open_auth_url_in_browser(&request_handle, &auth_url);
                     *error.write().unwrap() = None;
                     *sign_in_state.write().unwrap() =
                         SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
@@ -877,6 +878,16 @@ impl WidgetRef for AuthModeWidget {
                 self.render_api_key_configured(area, buf);
             }
         }
+    }
+}
+
+pub(super) fn maybe_open_auth_url_in_browser(request_handle: &AppServerRequestHandle, url: &str) {
+    if !matches!(request_handle, AppServerRequestHandle::InProcess(_)) {
+        return;
+    }
+
+    if let Err(err) = webbrowser::open(url) {
+        tracing::warn!("failed to open browser for login URL: {err}");
     }
 }
 
