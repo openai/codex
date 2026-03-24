@@ -17,6 +17,7 @@ use codex_core::config::ConfigBuilder;
 use codex_features::FEATURES;
 use codex_features::Stage;
 use pretty_assertions::assert_eq;
+use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::collections::BTreeMap;
 use tempfile::TempDir;
@@ -40,13 +41,7 @@ async fn experimental_feature_list_returns_feature_metadata_with_stage() -> Resu
         .send_experimental_feature_list_request(ExperimentalFeatureListParams::default())
         .await?;
 
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-
-    let actual = to_response::<ExperimentalFeatureListResponse>(response)?;
+    let actual = read_response::<ExperimentalFeatureListResponse>(&mut mcp, request_id).await?;
     let expected_data = FEATURES
         .iter()
         .map(|spec| {
@@ -99,17 +94,9 @@ async fn experimental_feature_overrides_set_applies_to_global_and_thread_config_
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
-    let request_id = mcp
-        .send_experimental_feature_overrides_set_request(ExperimentalFeatureOverridesSetParams {
-            overrides: BTreeMap::from([("apps".to_string(), true)]),
-        })
-        .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let actual = to_response::<ExperimentalFeatureOverridesSetResponse>(response)?;
+    let actual =
+        set_experimental_feature_overrides(&mut mcp, BTreeMap::from([("apps".to_string(), true)]))
+            .await?;
     assert_eq!(
         actual,
         ExperimentalFeatureOverridesSetResponse {
@@ -118,18 +105,7 @@ async fn experimental_feature_overrides_set_applies_to_global_and_thread_config_
     );
 
     for cwd in [None, Some(project_cwd.display().to_string())] {
-        let request_id = mcp
-            .send_config_read_request(ConfigReadParams {
-                include_layers: false,
-                cwd,
-            })
-            .await?;
-        let response: JSONRPCResponse = timeout(
-            DEFAULT_TIMEOUT,
-            mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-        )
-        .await??;
-        let ConfigReadResponse { config, .. } = to_response(response)?;
+        let ConfigReadResponse { config, .. } = read_config(&mut mcp, cwd).await?;
 
         assert_eq!(
             config
@@ -153,17 +129,9 @@ async fn experimental_feature_overrides_set_does_not_override_user_config() -> R
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
-    let request_id = mcp
-        .send_experimental_feature_overrides_set_request(ExperimentalFeatureOverridesSetParams {
-            overrides: BTreeMap::from([("apps".to_string(), true)]),
-        })
-        .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let actual = to_response::<ExperimentalFeatureOverridesSetResponse>(response)?;
+    let actual =
+        set_experimental_feature_overrides(&mut mcp, BTreeMap::from([("apps".to_string(), true)]))
+            .await?;
     assert_eq!(
         actual,
         ExperimentalFeatureOverridesSetResponse {
@@ -171,18 +139,7 @@ async fn experimental_feature_overrides_set_does_not_override_user_config() -> R
         }
     );
 
-    let request_id = mcp
-        .send_config_read_request(ConfigReadParams {
-            include_layers: false,
-            cwd: None,
-        })
-        .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    let ConfigReadResponse { config, .. } = to_response(response)?;
+    let ConfigReadResponse { config, .. } = read_config(&mut mcp, /*cwd*/ None).await?;
 
     assert_eq!(
         config
@@ -193,4 +150,35 @@ async fn experimental_feature_overrides_set_does_not_override_user_config() -> R
     );
 
     Ok(())
+}
+
+async fn set_experimental_feature_overrides(
+    mcp: &mut McpProcess,
+    overrides: BTreeMap<String, bool>,
+) -> Result<ExperimentalFeatureOverridesSetResponse> {
+    let request_id = mcp
+        .send_experimental_feature_overrides_set_request(ExperimentalFeatureOverridesSetParams {
+            overrides,
+        })
+        .await?;
+    read_response(mcp, request_id).await
+}
+
+async fn read_config(mcp: &mut McpProcess, cwd: Option<String>) -> Result<ConfigReadResponse> {
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd,
+        })
+        .await?;
+    read_response(mcp, request_id).await
+}
+
+async fn read_response<T: DeserializeOwned>(mcp: &mut McpProcess, request_id: i64) -> Result<T> {
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    to_response(response)
 }

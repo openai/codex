@@ -134,7 +134,7 @@ impl ConfigApi {
             return Ok(cli_overrides);
         }
 
-        let mut config = codex_core::config::ConfigBuilder::default()
+        let config = codex_core::config::ConfigBuilder::default()
             .codex_home(self.codex_home.clone())
             .cli_overrides(non_feature_cli_overrides(&cli_overrides))
             .loader_overrides(self.loader_overrides.clone())
@@ -147,8 +147,6 @@ impl ConfigApi {
                 message: format!("failed to resolve feature override precedence: {err}"),
                 data: None,
             })?;
-        config.codex_linux_sandbox_exe = None;
-        config.main_execve_wrapper_exe = None;
         let protected_features = protected_feature_keys(&config.config_layer_stack);
 
         Ok(merge_feature_cli_overrides(
@@ -249,15 +247,14 @@ impl ConfigApi {
             });
         }
 
-        if let Ok(mut current) = self.feature_flag_overrides.write() {
-            *current = overrides.clone();
-        } else {
-            return Err(JSONRPCErrorError {
+        *self
+            .feature_flag_overrides
+            .write()
+            .map_err(|_| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: "failed to update feature flag overrides".to_string(),
                 data: None,
-            });
-        }
+            })? = overrides.clone();
 
         self.config_service(/*fallback_cwd*/ None)
             .await?
