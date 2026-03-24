@@ -9,7 +9,7 @@ use crate::exec::ExecToolCallOutput;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
-use crate::sandboxing::ExecRequestMetadata;
+use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
 use crate::tools::sandboxing::Approvable;
@@ -203,14 +203,14 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
         let command = Self::build_sandbox_command(req, &ctx.turn.config.codex_home)?;
-        let metadata = ExecRequestMetadata {
+        let options = ExecOptions {
             expiration: req.timeout_ms.into(),
             capture_policy: ExecCapturePolicy::ShellTool,
             sandbox_permissions: req.sandbox_permissions,
             justification: None,
         };
         let env = attempt
-            .env_for(command, metadata, /*network*/ None)
+            .env_for(command, options, /*network*/ None)
             .map_err(|err| ToolError::Codex(err.into()))?;
         let out = execute_env(env, Self::stdout_stream(ctx))
             .await

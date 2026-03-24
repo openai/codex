@@ -13,7 +13,7 @@ use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::powershell::prefix_powershell_script_with_utf8;
-use crate::sandboxing::ExecRequestMetadata;
+use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::tools::network_approval::NetworkApprovalMode;
@@ -215,14 +215,14 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             let command =
                 build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())
                     .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
-            let metadata = ExecRequestMetadata {
+            let options = ExecOptions {
                 expiration: ExecExpiration::DefaultTimeout,
                 capture_policy: ExecCapturePolicy::ShellTool,
                 sandbox_permissions: req.sandbox_permissions,
                 justification: req.justification.clone(),
             };
             let exec_env = attempt
-                .env_for(command, metadata, req.network.as_ref())
+                .env_for(command, options, req.network.as_ref())
                 .map_err(|err| ToolError::Codex(err.into()))?;
             match zsh_fork_backend::maybe_prepare_unified_exec(
                 req,
@@ -262,14 +262,14 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         let command =
             build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())
                 .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
-        let metadata = ExecRequestMetadata {
+        let options = ExecOptions {
             expiration: ExecExpiration::DefaultTimeout,
             capture_policy: ExecCapturePolicy::ShellTool,
             sandbox_permissions: req.sandbox_permissions,
             justification: req.justification.clone(),
         };
         let exec_env = attempt
-            .env_for(command, metadata, req.network.as_ref())
+            .env_for(command, options, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
         self.manager
             .open_session_with_exec_env(&exec_env, req.tty, Box::new(NoopSpawnLifecycle))

@@ -24,8 +24,8 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::SandboxPolicy;
+use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
-use crate::sandboxing::ExecRequestMetadata;
 use crate::sandboxing::SandboxPermissions;
 use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
@@ -265,7 +265,7 @@ pub fn build_exec_request(
         env,
         additional_permissions: None,
     };
-    let metadata = ExecRequestMetadata {
+    let options = ExecOptions {
         expiration,
         capture_policy,
         sandbox_permissions,
@@ -288,7 +288,7 @@ pub fn build_exec_request(
             windows_sandbox_level,
             windows_sandbox_private_desktop,
         })
-        .map(|request| ExecRequest::from_sandbox_exec_request(request, metadata))
+        .map(|request| ExecRequest::from_sandbox_exec_request(request, options))
         .map_err(CodexErr::from)?;
     Ok(exec_req)
 }

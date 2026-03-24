@@ -39,7 +39,7 @@ use crate::exec::ExecExpiration;
 use crate::exec_env::create_env;
 use crate::function_tool::FunctionCallError;
 use crate::original_image_detail::normalize_output_image_detail;
-use crate::sandboxing::ExecRequestMetadata;
+use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
@@ -1055,7 +1055,7 @@ impl JsReplManager {
             env,
             additional_permissions: None,
         };
-        let metadata = ExecRequestMetadata {
+        let options = ExecOptions {
             expiration: ExecExpiration::DefaultTimeout,
             capture_policy: ExecCapturePolicy::ShellTool,
             sandbox_permissions: SandboxPermissions::UseDefault,
@@ -1082,7 +1082,7 @@ impl JsReplManager {
                     .windows_sandbox_private_desktop,
             })
             .map(|request| {
-                crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, metadata)
+                crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options)
             })
             .map_err(|err| format!("failed to configure sandbox for js_repl: {err}"))?;
 

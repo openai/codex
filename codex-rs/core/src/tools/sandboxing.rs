@@ -9,7 +9,7 @@ use crate::codex::TurnContext;
 use crate::error::CodexErr;
 #[cfg(test)]
 use crate::protocol::SandboxPolicy;
-use crate::sandboxing::ExecRequestMetadata;
+use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::state::SessionServices;
 use crate::tools::network_approval::NetworkApprovalSpec;
@@ -335,7 +335,7 @@ impl<'a> SandboxAttempt<'a> {
     pub fn env_for(
         &self,
         command: SandboxCommand,
-        metadata: ExecRequestMetadata,
+        options: ExecOptions,
         network: Option<&NetworkProxy>,
     ) -> Result<crate::sandboxing::ExecRequest, SandboxTransformError> {
         self.manager
@@ -356,7 +356,7 @@ impl<'a> SandboxAttempt<'a> {
                 windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
             })
             .map(|request| {
-                crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, metadata)
+                crate::sandboxing::ExecRequest::from_sandbox_exec_request(request, options)
             })
     }
 }

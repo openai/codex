@@ -15,7 +15,7 @@ use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::powershell::prefix_powershell_script_with_utf8;
-use crate::sandboxing::ExecRequestMetadata;
+use crate::sandboxing::ExecOptions;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
 use crate::shell::ShellType;
@@ -251,14 +251,14 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             &req.env,
             req.additional_permissions.clone(),
         )?;
-        let metadata = ExecRequestMetadata {
+        let options = ExecOptions {
             expiration: req.timeout_ms.into(),
             capture_policy: ExecCapturePolicy::ShellTool,
             sandbox_permissions: req.sandbox_permissions,
             justification: req.justification.clone(),
         };
         let env = attempt
-            .env_for(command, metadata, req.network.as_ref())
+            .env_for(command, options, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
         let out = execute_env(env, Self::stdout_stream(ctx))
             .await

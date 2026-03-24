@@ -8,8 +8,8 @@ use crate::exec::is_likely_sandbox_denied;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
+use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
-use crate::sandboxing::ExecRequestMetadata;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::skills::SkillMetadata;
@@ -117,14 +117,14 @@ pub(super) async fn try_run_zsh_fork(
         &req.env,
         req.additional_permissions.clone(),
     )?;
-    let metadata = ExecRequestMetadata {
+    let options = ExecOptions {
         expiration: req.timeout_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
         sandbox_permissions: req.sandbox_permissions,
         justification: req.justification.clone(),
     };
     let sandbox_exec_request = attempt
-        .env_for(command, metadata, req.network.as_ref())
+        .env_for(command, options, req.network.as_ref())
         .map_err(|err| ToolError::Codex(err.into()))?;
     let crate::sandboxing::ExecRequest {
         command,
@@ -1056,7 +1056,7 @@ impl CoreShellCommandExecutor {
             env,
             additional_permissions,
         };
-        let metadata = ExecRequestMetadata {
+        let options = ExecOptions {
             expiration: ExecExpiration::DefaultTimeout,
             capture_policy: ExecCapturePolicy::ShellTool,
             sandbox_permissions,
@@ -1079,7 +1079,7 @@ impl CoreShellCommandExecutor {
             windows_sandbox_private_desktop: false,
         })?;
         let mut exec_request =
-            crate::sandboxing::ExecRequest::from_sandbox_exec_request(exec_request, metadata);
+            crate::sandboxing::ExecRequest::from_sandbox_exec_request(exec_request, options);
         if let Some(network) = exec_request.network.as_ref() {
             network.apply_to_env(&mut exec_request.env);
         }

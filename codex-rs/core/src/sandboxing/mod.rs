@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Debug)]
-pub(crate) struct ExecRequestMetadata {
+pub(crate) struct ExecOptions {
     pub(crate) expiration: ExecExpiration,
     pub(crate) capture_policy: ExecCapturePolicy,
     pub(crate) sandbox_permissions: SandboxPermissions,
@@ -56,7 +56,7 @@ pub struct ExecRequest {
 impl ExecRequest {
     pub(crate) fn from_sandbox_exec_request(
         request: SandboxExecRequest,
-        metadata: ExecRequestMetadata,
+        options: ExecOptions,
     ) -> Self {
         let SandboxExecRequest {
             command,
@@ -71,12 +71,12 @@ impl ExecRequest {
             network_sandbox_policy,
             arg0,
         } = request;
-        let ExecRequestMetadata {
+        let ExecOptions {
             expiration,
             capture_policy,
             sandbox_permissions,
             justification,
-        } = metadata;
+        } = options;
         if !network_sandbox_policy.is_enabled() {
             env.insert(
                 CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR.to_string(),
