@@ -93,7 +93,6 @@ mod event_mapping;
 mod response_debug_context;
 pub mod review_format;
 pub mod review_prompts;
-mod seatbelt_permissions;
 mod thread_manager;
 pub mod web_search;
 pub mod windows_sandbox_read_grants;
