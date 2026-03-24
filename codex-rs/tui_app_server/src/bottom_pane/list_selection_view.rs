@@ -378,7 +378,7 @@ impl ListSelectionView {
                         // numbers be used for the search query).
                         format!("{prefix} ")
                     } else if is_disabled {
-                        format!("{prefix} ")
+                        format!("{prefix} {}", " ".repeat(n.to_string().len() + 2))
                     } else {
                         format!("{prefix} {n}. ")
                     };

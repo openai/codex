@@ -9,8 +9,8 @@ expression: popup
 
 › 1. Back to plugins  Return to the plugin list.
   2. Install plugin   Install this plugin now.
-  Skills              design-review, extract-copy
-  Apps                Figma, Slack
-  MCP Servers         figma-mcp, docs-mcp
+     Skills           design-review, extract-copy
+     Apps             Figma, Slack
+     MCP Servers      figma-mcp, docs-mcp
 
   Press esc to close.
