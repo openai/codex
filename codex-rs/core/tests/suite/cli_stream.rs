@@ -609,7 +609,7 @@ async fn integration_git_info_unit_test() {
         git_info.commit_hash.is_some(),
         "Git info should contain commit_hash"
     );
-    let commit_hash = git_info.commit_hash.as_ref().unwrap();
+    let commit_hash = &git_info.commit_hash.as_ref().unwrap().0;
     assert_eq!(commit_hash.len(), 40, "Commit hash should be 40 characters");
     assert!(
         commit_hash.chars().all(|c| c.is_ascii_hexdigit()),

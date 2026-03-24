@@ -8188,7 +8188,7 @@ fn extract_conversation_summary(
 
 fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
     ConversationGitInfo {
-        sha: git_info.commit_hash.clone(),
+        sha: git_info.commit_hash.as_ref().map(|sha| sha.0.clone()),
         branch: git_info.branch.clone(),
         origin_url: git_info.repository_url.clone(),
     }

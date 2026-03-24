@@ -4,6 +4,7 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::join_all;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -43,7 +44,7 @@ const GIT_COMMAND_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
 pub struct GitInfo {
     /// Current commit hash (SHA)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub commit_hash: Option<String>,
+    pub commit_hash: Option<GitSha>,
     /// Current branch name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
@@ -91,7 +92,7 @@ pub async fn collect_git_info(cwd: &Path) -> Option<GitInfo> {
         && output.status.success()
         && let Ok(hash) = String::from_utf8(output.stdout)
     {
-        git_info.commit_hash = Some(hash.trim().to_string());
+        git_info.commit_hash = Some(GitSha::new(hash.trim()));
     }
 
     // Process branch name
@@ -141,7 +142,7 @@ pub async fn get_git_remote_urls_assume_git_repo(cwd: &Path) -> Option<BTreeMap<
 }
 
 /// Return the current HEAD commit hash without checking whether `cwd` is in a git repo.
-pub async fn get_head_commit_hash(cwd: &Path) -> Option<String> {
+pub async fn get_head_commit_hash(cwd: &Path) -> Option<GitSha> {
     let output = run_git_command_with_timeout(&["rev-parse", "HEAD"], cwd).await?;
     if !output.status.success() {
         return None;
@@ -152,7 +153,7 @@ pub async fn get_head_commit_hash(cwd: &Path) -> Option<String> {
     if hash.is_empty() {
         None
     } else {
-        Some(hash.to_string())
+        Some(GitSha::new(hash))
     }
 }
 
@@ -630,14 +631,11 @@ pub fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
         return None;
     }
 
-    let git_dir_path = canonicalize_or_raw({
-        let git_dir_rel = PathBuf::from(git_dir_rel);
-        if git_dir_rel.is_absolute() {
-            git_dir_rel
-        } else {
-            repo_root.join(git_dir_rel)
-        }
-    });
+    let git_dir_path = canonicalize_or_raw(
+        AbsolutePathBuf::resolve_path_against_base(git_dir_rel, &repo_root)
+            .ok()?
+            .into_path_buf(),
+    );
     let worktrees_dir = git_dir_path.parent()?;
     if worktrees_dir.file_name() != Some(OsStr::new("worktrees")) {
         return None;

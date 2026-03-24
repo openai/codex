@@ -49,6 +49,7 @@ use crate::request_permissions::RequestPermissionsEvent;
 use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
 use crate::user_input::UserInput;
+use codex_git_utils::GitSha;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -2636,7 +2637,7 @@ pub struct RolloutLine {
 pub struct GitInfo {
     /// Current commit hash (SHA)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub commit_hash: Option<String>,
+    pub commit_hash: Option<GitSha>,
     /// Current branch name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,

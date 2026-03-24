@@ -2141,6 +2141,7 @@ name = "codex-git-utils"
 version = "0.0.0"
 dependencies = [
  "assert_matches",
+ "codex-utils-absolute-path",
  "futures",
  "once_cell",
  "pretty_assertions",
@@ -2561,6 +2562,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "codex-git-utils",
  "codex-protocol",
  "dirs",
  "log",

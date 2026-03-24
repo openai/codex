@@ -197,7 +197,7 @@ async fn test_collect_git_info_git_repository() {
 
     // Should have commit hash
     assert!(git_info.commit_hash.is_some());
-    let commit_hash = git_info.commit_hash.unwrap();
+    let commit_hash = git_info.commit_hash.unwrap().0;
     assert_eq!(commit_hash.len(), 40); // SHA-1 hash should be 40 characters
     assert!(commit_hash.chars().all(|c| c.is_ascii_hexdigit()));
 
@@ -564,7 +564,7 @@ async fn test_get_git_working_tree_state_unpushed_commit() {
 #[test]
 fn test_git_info_serialization() {
     let git_info = GitInfo {
-        commit_hash: Some("abc123def456".to_string()),
+        commit_hash: Some(GitSha::new("abc123def456")),
         branch: Some("main".to_string()),
         repository_url: Some("https://github.com/example/repo.git".to_string()),
     };

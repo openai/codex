@@ -55,7 +55,7 @@ pub(crate) fn builder_from_session_meta(
     builder.sandbox_policy = SandboxPolicy::new_read_only_policy();
     builder.approval_mode = AskForApproval::OnRequest;
     if let Some(git) = session_meta.git.as_ref() {
-        builder.git_sha = git.commit_hash.clone();
+        builder.git_sha = git.commit_hash.as_ref().map(|sha| sha.0.clone());
         builder.git_branch = git.branch.clone();
         builder.git_origin_url = git.repository_url.clone();
     }

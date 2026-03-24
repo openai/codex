@@ -94,11 +94,12 @@ fn build_turn_metadata_bag(
 pub async fn build_turn_metadata_header(cwd: &Path, sandbox: Option<&str>) -> Option<String> {
     let repo_root = get_git_repo_root(cwd).map(|root| root.to_string_lossy().into_owned());
 
-    let (latest_git_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
+    let (head_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
         get_head_commit_hash(cwd),
         get_git_remote_urls_assume_git_repo(cwd),
         get_has_changes(cwd),
     );
+    let latest_git_commit_hash = head_commit_hash.map(|sha| sha.0);
     if latest_git_commit_hash.is_none()
         && associated_remote_urls.is_none()
         && has_changes.is_none()
@@ -231,11 +232,12 @@ impl TurnMetadataState {
     }
 
     async fn fetch_workspace_git_metadata(&self) -> WorkspaceGitMetadata {
-        let (latest_git_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
+        let (head_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
             get_head_commit_hash(&self.cwd),
             get_git_remote_urls_assume_git_repo(&self.cwd),
             get_has_changes(&self.cwd),
         );
+        let latest_git_commit_hash = head_commit_hash.map(|sha| sha.0);
 
         WorkspaceGitMetadata {
             associated_remote_urls,

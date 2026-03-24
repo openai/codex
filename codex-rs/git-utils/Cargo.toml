@@ -9,6 +9,7 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
+codex-utils-absolute-path = { workspace = true }
 futures = { workspace = true, features = ["alloc"] }
 once_cell = { workspace = true }
 regex = "1"

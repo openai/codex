@@ -53,6 +53,7 @@ use ts_rs::TS;
 type CommitID = String;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
+#[serde(transparent)]
 #[ts(type = "string")]
 pub struct GitSha(pub String);
 
