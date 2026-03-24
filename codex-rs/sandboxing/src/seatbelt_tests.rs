@@ -150,11 +150,19 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
         ),
         "expected read carveout parameter in args: {args:#?}"
     );
-    assert!(
-        args.iter().any(
-            |arg| arg == &format!("-DWRITABLE_ROOT_0_EXCLUDED_0={}", unreadable_root.display())
-        ),
-        "expected write carveout parameter in args: {args:#?}"
+    let writable_definitions: Vec<String> = args
+        .iter()
+        .filter(|arg| arg.starts_with("-DWRITABLE_ROOT_"))
+        .cloned()
+        .collect();
+    assert_eq!(
+        writable_definitions,
+        vec![
+            "-DWRITABLE_ROOT_0=/".to_string(),
+            "-DWRITABLE_ROOT_0_EXCLUDED_0=/.codex".to_string(),
+            format!("-DWRITABLE_ROOT_0_EXCLUDED_1={}", unreadable_root.display()),
+        ],
+        "unexpected write carveout parameters in args: {args:#?}"
     );
 }
 
