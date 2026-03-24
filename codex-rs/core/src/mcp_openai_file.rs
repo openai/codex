@@ -112,10 +112,8 @@ async fn build_uploaded_local_argument_value(
     let token_data = auth
         .get_token_data()
         .map_err(|error| format!("failed to read ChatGPT auth for file upload: {error}"))?;
-    let upload_auth = CoreAuthProvider {
-        token: Some(token_data.access_token),
-        account_id: token_data.account_id,
-    };
+    let upload_auth =
+        CoreAuthProvider::from_bearer_token(Some(token_data.access_token), token_data.account_id);
     let uploaded = upload_local_file(
         turn_context.config.chatgpt_base_url.trim_end_matches('/'),
         &upload_auth,
