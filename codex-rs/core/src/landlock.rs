@@ -48,11 +48,14 @@ where
         use_legacy_landlock,
         allow_network_for_proxy(/*enforce_managed_network*/ false),
     );
-    let arg0 = Some("codex-linux-sandbox");
+    let arg0 = codex_linux_sandbox_exe
+        .as_ref()
+        .to_string_lossy()
+        .into_owned();
     spawn_child_async(SpawnChildRequest {
         program: codex_linux_sandbox_exe.as_ref().to_path_buf(),
         args,
-        arg0,
+        arg0: Some(&arg0),
         cwd: command_cwd,
         network_sandbox_policy,
         network,

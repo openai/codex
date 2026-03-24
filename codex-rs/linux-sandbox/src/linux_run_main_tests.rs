@@ -40,7 +40,7 @@ fn ignores_non_proc_mount_errors() {
 #[test]
 fn inserts_bwrap_argv0_before_command_separator() {
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
-    let argv = build_bwrap_argv(
+    let mut argv = build_bwrap_argv(
         vec!["/bin/true".to_string()],
         &FileSystemSandboxPolicy::from(&sandbox_policy),
         Path::new("/"),
@@ -51,6 +51,11 @@ fn inserts_bwrap_argv0_before_command_separator() {
         },
     )
     .args;
+    apply_inner_command_argv0_for_launcher(
+        &mut argv,
+        true,
+        "/tmp/codex-arg0-session/codex-linux-sandbox".to_string(),
+    );
     assert_eq!(
         argv,
         vec![
@@ -71,6 +76,33 @@ fn inserts_bwrap_argv0_before_command_separator() {
             "--".to_string(),
             "/bin/true".to_string(),
         ]
+    );
+}
+
+#[test]
+fn rewrites_inner_command_path_when_bwrap_lacks_argv0() {
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let mut argv = build_bwrap_argv(
+        vec!["/bin/true".to_string()],
+        &FileSystemSandboxPolicy::from(&sandbox_policy),
+        Path::new("/"),
+        Path::new("/"),
+        BwrapOptions {
+            mount_proc: true,
+            network_mode: BwrapNetworkMode::FullAccess,
+        },
+    )
+    .args;
+    apply_inner_command_argv0_for_launcher(
+        &mut argv,
+        false,
+        "/tmp/codex-arg0-session/codex-linux-sandbox".to_string(),
+    );
+
+    assert!(!argv.iter().any(|arg| arg == "--argv0"));
+    assert!(
+        argv.windows(2)
+            .any(|window| { window == ["--", "/tmp/codex-arg0-session/codex-linux-sandbox"] })
     );
 }
 

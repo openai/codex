@@ -96,8 +96,6 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
-#[cfg(target_os = "linux")]
-use std::process::Command;
 
 use crate::config::permissions::compile_permission_profile;
 use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
@@ -172,27 +170,8 @@ fn system_bwrap_warning_for_path(system_bwrap_path: &Path) -> Option<String> {
             system_bwrap_path.display()
         ));
     }
-    if system_bwrap_supports_argv0(system_bwrap_path) {
-        return None;
-    }
 
-    Some(format!(
-        "Codex found system bubblewrap at {}, but it is too old to support `--argv0`. Please upgrade bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime.",
-        system_bwrap_path.display()
-    ))
-}
-
-#[cfg(target_os = "linux")]
-fn system_bwrap_supports_argv0(system_bwrap_path: &Path) -> bool {
-    // bubblewrap added `--argv0` in v0.9.0:
-    // https://github.com/containers/bubblewrap/releases/tag/v0.9.0
-    let output = match Command::new(system_bwrap_path).arg("--help").output() {
-        Ok(output) => output,
-        Err(_) => return false,
-    };
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    stdout.contains("--argv0") || stderr.contains("--argv0")
+    None
 }
 
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {

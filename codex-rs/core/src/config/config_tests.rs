@@ -5593,7 +5593,7 @@ fn system_bwrap_warning_reports_missing_system_bwrap() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn system_bwrap_warning_reports_too_old_system_bwrap() {
+fn system_bwrap_warning_skips_too_old_system_bwrap() {
     let fake_bwrap = write_fake_bwrap(
         r#"#!/bin/sh
 if [ "$1" = "--help" ]; then
@@ -5604,10 +5604,8 @@ exit 1
 "#,
     );
     let fake_bwrap_path: &Path = fake_bwrap.as_ref();
-    let warning = system_bwrap_warning_for_path(fake_bwrap_path)
-        .expect("old system bwrap should emit a warning");
 
-    assert!(warning.contains("too old to support `--argv0`"));
+    assert_eq!(system_bwrap_warning_for_path(fake_bwrap_path), None);
 }
 
 #[cfg(target_os = "linux")]

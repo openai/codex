@@ -14,13 +14,21 @@ const SYSTEM_BWRAP_PATH: &str = "/usr/bin/bwrap";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum BubblewrapLauncher {
-    System(AbsolutePathBuf),
+    System(SystemBwrapLauncher),
     Vendored,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SystemBwrapLauncher {
+    program: AbsolutePathBuf,
+    supports_argv0: bool,
 }
 
 pub(crate) fn exec_bwrap(argv: Vec<String>, preserved_files: Vec<File>) -> ! {
     match preferred_bwrap_launcher() {
-        BubblewrapLauncher::System(program) => exec_system_bwrap(&program, argv, preserved_files),
+        BubblewrapLauncher::System(launcher) => {
+            exec_system_bwrap(&launcher.program, argv, preserved_files)
+        }
         BubblewrapLauncher::Vendored => exec_vendored_bwrap(argv, preserved_files),
     }
 }
@@ -33,10 +41,11 @@ fn preferred_bwrap_launcher() -> BubblewrapLauncher {
 }
 
 fn preferred_bwrap_launcher_for_path(system_bwrap_path: &Path) -> BubblewrapLauncher {
-    if !system_bwrap_supports_argv0(system_bwrap_path) {
+    if !system_bwrap_path.is_file() {
         return BubblewrapLauncher::Vendored;
     }
 
+    let supports_argv0 = system_bwrap_supports_argv0(system_bwrap_path);
     let system_bwrap_path = match AbsolutePathBuf::from_absolute_path(system_bwrap_path) {
         Ok(path) => path,
         Err(err) => panic!(
@@ -44,14 +53,25 @@ fn preferred_bwrap_launcher_for_path(system_bwrap_path: &Path) -> BubblewrapLaun
             system_bwrap_path.display()
         ),
     };
-    BubblewrapLauncher::System(system_bwrap_path)
+    BubblewrapLauncher::System(SystemBwrapLauncher {
+        program: system_bwrap_path,
+        supports_argv0,
+    })
+}
+
+pub(crate) fn preferred_bwrap_supports_argv0() -> bool {
+    match preferred_bwrap_launcher() {
+        BubblewrapLauncher::System(launcher) => launcher.supports_argv0,
+        BubblewrapLauncher::Vendored => true,
+    }
 }
 
 fn system_bwrap_supports_argv0(system_bwrap_path: &Path) -> bool {
     // bubblewrap added `--argv0` in v0.9.0:
     // https://github.com/containers/bubblewrap/releases/tag/v0.9.0
     // Older distro packages (for example Ubuntu 20.04/22.04) ship builds that
-    // reject `--argv0`, so prefer the vendored build in that case.
+    // reject `--argv0`, so use the system binary's no-argv0 compatibility path
+    // in that case.
     let output = match Command::new(system_bwrap_path).arg("--help").output() {
         Ok(output) => output,
         Err(_) => return false,
@@ -147,12 +167,15 @@ exit 1
 
         assert_eq!(
             preferred_bwrap_launcher_for_path(fake_bwrap_path),
-            BubblewrapLauncher::System(expected)
+            BubblewrapLauncher::System(SystemBwrapLauncher {
+                program: expected,
+                supports_argv0: true,
+            })
         );
     }
 
     #[test]
-    fn falls_back_to_vendored_when_system_bwrap_lacks_argv0() {
+    fn prefers_system_bwrap_when_system_bwrap_lacks_argv0() {
         let fake_bwrap = write_fake_bwrap(
             r#"#!/bin/sh
 if [ "$1" = "--help" ]; then
@@ -166,7 +189,10 @@ exit 1
 
         assert_eq!(
             preferred_bwrap_launcher_for_path(fake_bwrap_path),
-            BubblewrapLauncher::Vendored
+            BubblewrapLauncher::System(SystemBwrapLauncher {
+                program: AbsolutePathBuf::from_absolute_path(fake_bwrap_path).expect("absolute"),
+                supports_argv0: false,
+            })
         );
     }
 
