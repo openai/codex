@@ -150,9 +150,11 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
         "expected read carveout parameter in args: {args:#?}"
     );
     assert!(
+    let expected_suffix = format!("={}", unreadable_root.display());
+    assert!(
         args.iter().any(|arg| {
             arg.starts_with("-DWRITABLE_ROOT_0_RO_")
-                && arg.ends_with(&format!("={}", unreadable_root.display()))
+                && arg.ends_with(&expected_suffix)
         }),
         "expected write carveout parameter in args: {args:#?}"
     );
