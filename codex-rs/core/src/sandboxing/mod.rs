@@ -6,8 +6,6 @@ sandbox placement and transformation of portable CommandSpec into a
 ready‑to‑spawn environment.
 */
 
-pub(crate) mod macos_permissions;
-
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
@@ -15,10 +13,6 @@ use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::execute_exec_request;
 use crate::protocol::SandboxPolicy;
-#[cfg(target_os = "macos")]
-use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
-#[cfg(target_os = "macos")]
-use crate::seatbelt::create_seatbelt_command_args_for_policies_with_extensions;
 #[cfg(target_os = "macos")]
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
@@ -40,10 +34,14 @@ use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_sandboxing::landlock::allow_network_for_proxy;
 use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_policies;
+use codex_sandboxing::macos_permissions::intersect_macos_seatbelt_profile_extensions;
+use codex_sandboxing::macos_permissions::merge_macos_seatbelt_profile_extensions;
+#[cfg(target_os = "macos")]
+use codex_sandboxing::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
+#[cfg(target_os = "macos")]
+use codex_sandboxing::seatbelt::create_seatbelt_command_args_for_policies_with_extensions;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize;
-use macos_permissions::intersect_macos_seatbelt_profile_extensions;
-use macos_permissions::merge_macos_seatbelt_profile_extensions;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;

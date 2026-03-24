@@ -2468,9 +2468,16 @@ dependencies = [
 name = "codex-sandboxing"
 version = "0.0.0"
 dependencies = [
+ "codex-network-proxy",
  "codex-protocol",
+ "codex-utils-absolute-path",
+ "dirs",
+ "libc",
  "pretty_assertions",
  "serde_json",
+ "tempfile",
+ "tracing",
+ "url",
 ]
 
 [[package]]
