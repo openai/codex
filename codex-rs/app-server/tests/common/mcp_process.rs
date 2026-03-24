@@ -463,13 +463,13 @@ impl McpProcess {
         self.send_request("experimentalFeature/list", params).await
     }
 
-    /// Send an `experimentalFeature/overrides/set` JSON-RPC request.
-    pub async fn send_experimental_feature_overrides_set_request(
+    /// Send an `experimentalFeature/enablement/set` JSON-RPC request.
+    pub async fn send_experimental_feature_enablement_set_request(
         &mut self,
-        params: codex_app_server_protocol::ExperimentalFeatureOverridesSetParams,
+        params: codex_app_server_protocol::ExperimentalFeatureEnablementSetParams,
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
-        self.send_request("experimentalFeature/overrides/set", params)
+        self.send_request("experimentalFeature/enablement/set", params)
             .await
     }
 

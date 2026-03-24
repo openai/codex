@@ -6,11 +6,12 @@ use app_test_support::to_response;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ExperimentalFeature;
+use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
+use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
 use codex_app_server_protocol::ExperimentalFeatureListParams;
 use codex_app_server_protocol::ExperimentalFeatureListResponse;
-use codex_app_server_protocol::ExperimentalFeatureOverridesSetParams;
-use codex_app_server_protocol::ExperimentalFeatureOverridesSetResponse;
 use codex_app_server_protocol::ExperimentalFeatureStage;
+use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_core::config::ConfigBuilder;
@@ -85,8 +86,8 @@ async fn experimental_feature_list_returns_feature_metadata_with_stage() -> Resu
 }
 
 #[tokio::test]
-async fn experimental_feature_overrides_set_applies_to_global_and_thread_config_reads() -> Result<()>
-{
+async fn experimental_feature_enablement_set_applies_to_global_and_thread_config_reads()
+-> Result<()> {
     let codex_home = TempDir::new()?;
     let project_cwd = codex_home.path().join("project");
     std::fs::create_dir_all(&project_cwd)?;
@@ -95,12 +96,12 @@ async fn experimental_feature_overrides_set_applies_to_global_and_thread_config_
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let actual =
-        set_experimental_feature_overrides(&mut mcp, BTreeMap::from([("apps".to_string(), true)]))
+        set_experimental_feature_enablement(&mut mcp, BTreeMap::from([("apps".to_string(), true)]))
             .await?;
     assert_eq!(
         actual,
-        ExperimentalFeatureOverridesSetResponse {
-            overrides: BTreeMap::from([("apps".to_string(), true)]),
+        ExperimentalFeatureEnablementSetResponse {
+            enablement: BTreeMap::from([("apps".to_string(), true)]),
         }
     );
 
@@ -120,7 +121,7 @@ async fn experimental_feature_overrides_set_applies_to_global_and_thread_config_
 }
 
 #[tokio::test]
-async fn experimental_feature_overrides_set_does_not_override_user_config() -> Result<()> {
+async fn experimental_feature_enablement_set_does_not_override_user_config() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join("config.toml"),
@@ -130,12 +131,12 @@ async fn experimental_feature_overrides_set_does_not_override_user_config() -> R
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let actual =
-        set_experimental_feature_overrides(&mut mcp, BTreeMap::from([("apps".to_string(), true)]))
+        set_experimental_feature_enablement(&mut mcp, BTreeMap::from([("apps".to_string(), true)]))
             .await?;
     assert_eq!(
         actual,
-        ExperimentalFeatureOverridesSetResponse {
-            overrides: BTreeMap::from([("apps".to_string(), true)]),
+        ExperimentalFeatureEnablementSetResponse {
+            enablement: BTreeMap::from([("apps".to_string(), true)]),
         }
     );
 
@@ -152,13 +153,114 @@ async fn experimental_feature_overrides_set_does_not_override_user_config() -> R
     Ok(())
 }
 
-async fn set_experimental_feature_overrides(
-    mcp: &mut McpProcess,
-    overrides: BTreeMap<String, bool>,
-) -> Result<ExperimentalFeatureOverridesSetResponse> {
+#[tokio::test]
+async fn experimental_feature_enablement_set_only_updates_named_features() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    set_experimental_feature_enablement(&mut mcp, BTreeMap::from([("apps".to_string(), true)]))
+        .await?;
+    let actual = set_experimental_feature_enablement(
+        &mut mcp,
+        BTreeMap::from([("plugins".to_string(), true)]),
+    )
+    .await?;
+
+    assert_eq!(
+        actual,
+        ExperimentalFeatureEnablementSetResponse {
+            enablement: BTreeMap::from([("plugins".to_string(), true)]),
+        }
+    );
+
+    let ConfigReadResponse { config, .. } = read_config(&mut mcp, /*cwd*/ None).await?;
+
+    assert_eq!(
+        config
+            .additional
+            .get("features")
+            .and_then(|features| features.get("apps")),
+        Some(&json!(true))
+    );
+    assert_eq!(
+        config
+            .additional
+            .get("features")
+            .and_then(|features| features.get("plugins")),
+        Some(&json!(true))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn experimental_feature_enablement_set_empty_map_is_no_op() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    set_experimental_feature_enablement(&mut mcp, BTreeMap::from([("apps".to_string(), true)]))
+        .await?;
+    let actual = set_experimental_feature_enablement(&mut mcp, BTreeMap::new()).await?;
+
+    assert_eq!(
+        actual,
+        ExperimentalFeatureEnablementSetResponse {
+            enablement: BTreeMap::new(),
+        }
+    );
+
+    let ConfigReadResponse { config, .. } = read_config(&mut mcp, /*cwd*/ None).await?;
+
+    assert_eq!(
+        config
+            .additional
+            .get("features")
+            .and_then(|features| features.get("apps")),
+        Some(&json!(true))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn experimental_feature_enablement_set_rejects_non_allowlisted_feature() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
     let request_id = mcp
-        .send_experimental_feature_overrides_set_request(ExperimentalFeatureOverridesSetParams {
-            overrides,
+        .send_experimental_feature_enablement_set_request(ExperimentalFeatureEnablementSetParams {
+            enablement: BTreeMap::from([("personality".to_string(), true)]),
+        })
+        .await?;
+    let JSONRPCError { error, .. } = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(error.code, -32600);
+    assert!(
+        error
+            .message
+            .contains("unsupported feature enablement `personality`"),
+        "{}",
+        error.message
+    );
+    assert!(error.message.contains("apps, plugins"), "{}", error.message);
+
+    Ok(())
+}
+
+async fn set_experimental_feature_enablement(
+    mcp: &mut McpProcess,
+    enablement: BTreeMap<String, bool>,
+) -> Result<ExperimentalFeatureEnablementSetResponse> {
+    let request_id = mcp
+        .send_experimental_feature_enablement_set_request(ExperimentalFeatureEnablementSetParams {
+            enablement,
         })
         .await?;
     read_response(mcp, request_id).await

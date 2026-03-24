@@ -524,6 +524,21 @@
       ],
       "type": "object"
     },
+    "ExperimentalFeatureEnablementSetParams": {
+      "properties": {
+        "enablement": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "description": "Process-wide runtime feature enablement keyed by canonical feature name.\n\nOnly named features are updated. Omitted features are left unchanged. Send an empty map for a no-op.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "enablement"
+      ],
+      "type": "object"
+    },
     "ExperimentalFeatureListParams": {
       "properties": {
         "cursor": {
@@ -543,21 +558,6 @@
           ]
         }
       },
-      "type": "object"
-    },
-    "ExperimentalFeatureOverridesSetParams": {
-      "properties": {
-        "overrides": {
-          "additionalProperties": {
-            "type": "boolean"
-          },
-          "description": "Process-wide feature flag overrides keyed by canonical feature name.\n\nThis replaces the current in-memory override set. Send an empty map to clear all overrides.",
-          "type": "object"
-        }
-      },
-      "required": [
-        "overrides"
-      ],
       "type": "object"
     },
     "ExternalAgentConfigDetectParams": {
@@ -4238,13 +4238,13 @@
         },
         "method": {
           "enum": [
-            "experimentalFeature/overrides/set"
+            "experimentalFeature/enablement/set"
           ],
-          "title": "ExperimentalFeature/overrides/setRequestMethod",
+          "title": "ExperimentalFeature/enablement/setRequestMethod",
           "type": "string"
         },
         "params": {
-          "$ref": "#/definitions/ExperimentalFeatureOverridesSetParams"
+          "$ref": "#/definitions/ExperimentalFeatureEnablementSetParams"
         }
       },
       "required": [
@@ -4252,7 +4252,7 @@
         "method",
         "params"
       ],
-      "title": "ExperimentalFeature/overrides/setRequest",
+      "title": "ExperimentalFeature/enablement/setRequest",
       "type": "object"
     },
     {

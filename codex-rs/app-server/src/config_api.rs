@@ -9,8 +9,8 @@ use codex_app_server_protocol::ConfigRequirementsReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteErrorCode;
 use codex_app_server_protocol::ConfigWriteResponse;
-use codex_app_server_protocol::ExperimentalFeatureOverridesSetParams;
-use codex_app_server_protocol::ExperimentalFeatureOverridesSetResponse;
+use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
+use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::SandboxMode;
@@ -31,13 +31,14 @@ use codex_features::feature_for_key;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::Op;
 use serde_json::json;
-use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 use toml::Value as TomlValue;
 use tracing::warn;
+
+const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &["apps", "plugins"];
 
 #[async_trait]
 pub(crate) trait UserConfigReloader: Send + Sync {
@@ -63,7 +64,6 @@ impl UserConfigReloader for ThreadManager {
 pub(crate) struct ConfigApi {
     codex_home: PathBuf,
     cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
-    feature_flag_overrides: Arc<RwLock<BTreeMap<String, bool>>>,
     loader_overrides: LoaderOverrides,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     user_config_reloader: Arc<dyn UserConfigReloader>,
@@ -74,7 +74,6 @@ impl ConfigApi {
     pub(crate) fn new(
         codex_home: PathBuf,
         cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
-        feature_flag_overrides: Arc<RwLock<BTreeMap<String, bool>>>,
         loader_overrides: LoaderOverrides,
         cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
         user_config_reloader: Arc<dyn UserConfigReloader>,
@@ -83,7 +82,6 @@ impl ConfigApi {
         Self {
             codex_home,
             cli_overrides,
-            feature_flag_overrides,
             loader_overrides,
             cloud_requirements,
             user_config_reloader,
@@ -116,21 +114,13 @@ impl ConfigApi {
             .unwrap_or_default()
     }
 
-    fn current_feature_flag_overrides(&self) -> BTreeMap<String, bool> {
-        self.feature_flag_overrides
-            .read()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
-    }
-
     async fn effective_cli_overrides(
         &self,
         fallback_cwd: Option<PathBuf>,
         cloud_requirements: CloudRequirementsLoader,
     ) -> Result<Vec<(String, TomlValue)>, JSONRPCErrorError> {
         let cli_overrides = self.current_cli_overrides();
-        let feature_flag_overrides = self.current_feature_flag_overrides();
-        if !has_feature_cli_overrides(&cli_overrides) && feature_flag_overrides.is_empty() {
+        if !has_feature_cli_overrides(&cli_overrides) {
             return Ok(cli_overrides);
         }
 
@@ -149,9 +139,8 @@ impl ConfigApi {
             })?;
         let protected_features = protected_feature_keys(&config.config_layer_stack);
 
-        Ok(merge_feature_cli_overrides(
+        Ok(filter_protected_feature_cli_overrides(
             cli_overrides,
-            feature_flag_overrides,
             &protected_features,
         ))
     }
@@ -222,23 +211,34 @@ impl ConfigApi {
         Ok(response)
     }
 
-    pub(crate) async fn set_experimental_feature_overrides(
+    pub(crate) async fn set_experimental_feature_enablement(
         &self,
-        params: ExperimentalFeatureOverridesSetParams,
-    ) -> Result<ExperimentalFeatureOverridesSetResponse, JSONRPCErrorError> {
-        let ExperimentalFeatureOverridesSetParams { overrides } = params;
-        for key in overrides.keys() {
+        params: ExperimentalFeatureEnablementSetParams,
+    ) -> Result<ExperimentalFeatureEnablementSetResponse, JSONRPCErrorError> {
+        let ExperimentalFeatureEnablementSetParams { enablement } = params;
+        for key in enablement.keys() {
             if canonical_feature_for_key(key).is_some() {
-                continue;
+                if SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT.contains(&key.as_str()) {
+                    continue;
+                }
+
+                return Err(JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!(
+                        "unsupported feature enablement `{key}`: currently supported features are {}",
+                        SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT.join(", ")
+                    ),
+                    data: None,
+                });
             }
 
             let message = if let Some(feature) = feature_for_key(key) {
                 format!(
-                    "invalid feature override `{key}`: use canonical feature key `{}`",
+                    "invalid feature enablement `{key}`: use canonical feature key `{}`",
                     feature.key()
                 )
             } else {
-                format!("invalid feature override `{key}`")
+                format!("invalid feature enablement `{key}`")
             };
             return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -247,14 +247,27 @@ impl ConfigApi {
             });
         }
 
-        *self
-            .feature_flag_overrides
-            .write()
-            .map_err(|_| JSONRPCErrorError {
+        if enablement.is_empty() {
+            return Ok(ExperimentalFeatureEnablementSetResponse { enablement });
+        }
+
+        let feature_keys = enablement
+            .keys()
+            .map(|name| format!("features.{name}"))
+            .collect::<BTreeSet<_>>();
+        {
+            let mut cli_overrides = self.cli_overrides.write().map_err(|_| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
-                message: "failed to update feature flag overrides".to_string(),
+                message: "failed to update feature enablement".to_string(),
                 data: None,
-            })? = overrides.clone();
+            })?;
+            cli_overrides.retain(|(key, _)| !feature_keys.contains(key));
+            cli_overrides.extend(
+                enablement.iter().map(|(name, enabled)| {
+                    (format!("features.{name}"), TomlValue::Boolean(*enabled))
+                }),
+            );
+        }
 
         self.config_service(/*fallback_cwd*/ None)
             .await?
@@ -266,7 +279,7 @@ impl ConfigApi {
             .map_err(map_error)?;
         self.user_config_reloader.reload_user_config().await;
 
-        Ok(ExperimentalFeatureOverridesSetResponse { overrides })
+        Ok(ExperimentalFeatureEnablementSetResponse { enablement })
     }
 
     fn emit_plugin_toggle_events(&self, pending_changes: std::collections::BTreeMap<String, bool>) {
@@ -322,29 +335,19 @@ pub(crate) fn protected_feature_keys(
     protected_features
 }
 
-pub(crate) fn merge_feature_cli_overrides(
+pub(crate) fn filter_protected_feature_cli_overrides(
     cli_overrides: Vec<(String, TomlValue)>,
-    feature_flag_overrides: BTreeMap<String, bool>,
     protected_features: &BTreeSet<String>,
 ) -> Vec<(String, TomlValue)> {
-    let mut merged = cli_overrides
+    cli_overrides
         .into_iter()
         .filter(|(key, _)| {
             let Some(feature) = key.strip_prefix("features.") else {
                 return true;
             };
-            !protected_features.contains(feature) && !feature_flag_overrides.contains_key(feature)
+            !protected_features.contains(feature)
         })
-        .collect::<Vec<_>>();
-
-    merged.extend(
-        feature_flag_overrides
-            .into_iter()
-            .filter(|(feature, _)| !protected_features.contains(feature))
-            .map(|(name, enabled)| (format!("features.{name}"), TomlValue::Boolean(enabled))),
-    );
-
-    merged
+        .collect()
 }
 
 fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigRequirements {
@@ -584,7 +587,6 @@ mod tests {
         let config_api = ConfigApi::new(
             codex_home.path().to_path_buf(),
             Arc::new(RwLock::new(Vec::new())),
-            Arc::new(RwLock::new(BTreeMap::new())),
             LoaderOverrides::default(),
             Arc::new(RwLock::new(CloudRequirementsLoader::default())),
             reloader.clone(),

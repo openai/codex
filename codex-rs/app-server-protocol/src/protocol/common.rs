@@ -394,9 +394,9 @@ client_request_definitions! {
         params: v2::ExperimentalFeatureListParams,
         response: v2::ExperimentalFeatureListResponse,
     },
-    ExperimentalFeatureOverridesSet => "experimentalFeature/overrides/set" {
-        params: v2::ExperimentalFeatureOverridesSetParams,
-        response: v2::ExperimentalFeatureOverridesSetResponse,
+    ExperimentalFeatureEnablementSet => "experimentalFeature/enablement/set" {
+        params: v2::ExperimentalFeatureEnablementSetParams,
+        response: v2::ExperimentalFeatureEnablementSetResponse,
     },
     #[experimental("collaborationMode/list")]
     /// Lists collaboration mode presets.

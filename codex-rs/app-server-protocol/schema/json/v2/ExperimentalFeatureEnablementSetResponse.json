@@ -1,17 +1,17 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "properties": {
-    "overrides": {
+    "enablement": {
       "additionalProperties": {
         "type": "boolean"
       },
-      "description": "The active process-wide feature flag overrides after the update.",
+      "description": "Feature enablement entries updated by this request.",
       "type": "object"
     }
   },
   "required": [
-    "overrides"
+    "enablement"
   ],
-  "title": "ExperimentalFeatureOverridesSetResponse",
+  "title": "ExperimentalFeatureEnablementSetResponse",
   "type": "object"
 }

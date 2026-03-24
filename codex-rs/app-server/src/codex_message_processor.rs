@@ -1,8 +1,8 @@
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
 use crate::command_exec::CommandExecManager;
 use crate::command_exec::StartCommandExecParams;
+use crate::config_api::filter_protected_feature_cli_overrides;
 use crate::config_api::has_feature_cli_overrides;
-use crate::config_api::merge_feature_cli_overrides;
 use crate::config_api::non_feature_cli_overrides;
 use crate::config_api::protected_feature_keys;
 use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
@@ -288,7 +288,6 @@ use codex_state::ThreadMetadataBuilder;
 use codex_state::log_db::LogDbLayer;
 use codex_utils_json_to_toml::json_to_toml;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -378,7 +377,6 @@ pub(crate) struct CodexMessageProcessor {
     arg0_paths: Arg0DispatchPaths,
     config: Arc<Config>,
     cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
-    feature_flag_overrides: Arc<RwLock<BTreeMap<String, bool>>>,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
@@ -423,7 +421,6 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) config: Arc<Config>,
     pub(crate) cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
-    pub(crate) feature_flag_overrides: Arc<RwLock<BTreeMap<String, bool>>>,
     pub(crate) cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
@@ -487,7 +484,6 @@ impl CodexMessageProcessor {
             arg0_paths,
             config,
             cli_overrides,
-            feature_flag_overrides,
             cloud_requirements,
             feedback,
             log_db,
@@ -499,7 +495,6 @@ impl CodexMessageProcessor {
             arg0_paths,
             config,
             cli_overrides,
-            feature_flag_overrides,
             cloud_requirements,
             active_login: Arc::new(Mutex::new(None)),
             pending_thread_unloads: Arc::new(Mutex::new(HashSet::new())),
@@ -552,21 +547,13 @@ impl CodexMessageProcessor {
             .unwrap_or_default()
     }
 
-    fn current_feature_flag_overrides(&self) -> BTreeMap<String, bool> {
-        self.feature_flag_overrides
-            .read()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
-    }
-
     async fn effective_cli_overrides(
         &self,
         fallback_cwd: Option<PathBuf>,
         cloud_requirements: CloudRequirementsLoader,
     ) -> Result<Vec<(String, TomlValue)>, JSONRPCErrorError> {
         let cli_overrides = self.current_cli_overrides();
-        let feature_flag_overrides = self.current_feature_flag_overrides();
-        if !has_feature_cli_overrides(&cli_overrides) && feature_flag_overrides.is_empty() {
+        if !has_feature_cli_overrides(&cli_overrides) {
             return Ok(cli_overrides);
         }
 
@@ -584,9 +571,8 @@ impl CodexMessageProcessor {
             })?;
         let protected_features = protected_feature_keys(&config.config_layer_stack);
 
-        Ok(merge_feature_cli_overrides(
+        Ok(filter_protected_feature_cli_overrides(
             cli_overrides,
-            feature_flag_overrides,
             &protected_features,
         ))
     }
@@ -955,7 +941,7 @@ impl CodexMessageProcessor {
             ClientRequest::ConfigRead { .. }
             | ClientRequest::ConfigValueWrite { .. }
             | ClientRequest::ConfigBatchWrite { .. }
-            | ClientRequest::ExperimentalFeatureOverridesSet { .. } => {
+            | ClientRequest::ExperimentalFeatureEnablementSet { .. } => {
                 warn!("Config request reached CodexMessageProcessor unexpectedly");
             }
             ClientRequest::FsReadFile { .. }

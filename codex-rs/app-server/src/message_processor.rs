@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
@@ -29,7 +28,7 @@ use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::ExperimentalApi;
-use codex_app_server_protocol::ExperimentalFeatureOverridesSetParams;
+use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
 use codex_app_server_protocol::FsCopyParams;
@@ -235,7 +234,6 @@ impl MessageProcessor {
             .set_analytics_events_client(analytics_events_client.clone());
 
         let cli_overrides = Arc::new(RwLock::new(cli_overrides));
-        let feature_flag_overrides = Arc::new(RwLock::new(BTreeMap::new()));
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager: auth_manager.clone(),
@@ -244,7 +242,6 @@ impl MessageProcessor {
             arg0_paths,
             config: Arc::clone(&config),
             cli_overrides: cli_overrides.clone(),
-            feature_flag_overrides: feature_flag_overrides.clone(),
             cloud_requirements: cloud_requirements.clone(),
             feedback,
             log_db,
@@ -257,7 +254,6 @@ impl MessageProcessor {
         let config_api = ConfigApi::new(
             config.codex_home.clone(),
             cli_overrides,
-            feature_flag_overrides,
             loader_overrides,
             cloud_requirements,
             thread_manager,
@@ -692,8 +688,8 @@ impl MessageProcessor {
                 )
                 .await;
             }
-            ClientRequest::ExperimentalFeatureOverridesSet { request_id, params } => {
-                self.handle_experimental_feature_overrides_set(
+            ClientRequest::ExperimentalFeatureEnablementSet { request_id, params } => {
+                self.handle_experimental_feature_enablement_set(
                     ConnectionRequestId {
                         connection_id,
                         request_id,
@@ -832,15 +828,15 @@ impl MessageProcessor {
             .await;
     }
 
-    async fn handle_experimental_feature_overrides_set(
+    async fn handle_experimental_feature_enablement_set(
         &self,
         request_id: ConnectionRequestId,
-        params: ExperimentalFeatureOverridesSetParams,
+        params: ExperimentalFeatureEnablementSetParams,
     ) {
         self.handle_config_mutation_result(
             request_id,
             self.config_api
-                .set_experimental_feature_overrides(params)
+                .set_experimental_feature_enablement(params)
                 .await,
         )
         .await;
