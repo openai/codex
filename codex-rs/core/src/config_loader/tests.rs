@@ -955,41 +955,6 @@ async fn cli_override_model_instructions_file_sets_base_instructions() -> std::i
 }
 
 #[tokio::test]
-async fn user_config_model_instructions_file_parent_relative_to_codex_home() -> std::io::Result<()>
-{
-    let tmp = tempdir()?;
-    let codex_home = tmp.path().join("home");
-    tokio::fs::create_dir_all(&codex_home).await?;
-    tokio::fs::write(
-        codex_home.join(CONFIG_TOML_FILE),
-        "model_instructions_file = \"../instr.md\"\n",
-    )
-    .await?;
-
-    let instructions_path = tmp.path().join("instr.md");
-    tokio::fs::write(&instructions_path, "parent relative instructions").await?;
-
-    let cwd = tmp.path().join("work");
-    tokio::fs::create_dir_all(&cwd).await?;
-
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home)
-        .harness_overrides(ConfigOverrides {
-            cwd: Some(cwd),
-            ..ConfigOverrides::default()
-        })
-        .build()
-        .await?;
-
-    assert_eq!(
-        config.base_instructions.as_deref(),
-        Some("parent relative instructions")
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> std::io::Result<()> {
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");

@@ -286,7 +286,7 @@ pub async fn load_config_layers_state(
     }
     if let Some(config) = managed_config_from_mdm {
         let managed_config =
-            expand_home_directory_paths_in_config_toml(config.managed_config, codex_home)?;
+            expand_home_directory_paths_in_mdm_writable_roots(config.managed_config)?;
         layers.push(ConfigLayerEntry::new_with_raw_toml(
             ConfigLayerSource::LegacyManagedConfigTomlFromMdm,
             managed_config,
@@ -738,27 +738,48 @@ pub(crate) fn resolve_relative_paths_in_config_toml(
     ))
 }
 
-fn expand_home_directory_paths_in_config_toml(
-    value_from_config_toml: TomlValue,
-    base_dir: &Path,
+fn expand_home_directory_paths_in_mdm_writable_roots(
+    mut value_from_config_toml: TomlValue,
 ) -> io::Result<TomlValue> {
-    let _guard = AbsolutePathBufGuard::home_expansion_only(base_dir);
-    let Ok(resolved) = value_from_config_toml.clone().try_into::<ConfigToml>() else {
+    let Some(home_dir) = dirs::home_dir() else {
         return Ok(value_from_config_toml);
     };
-    drop(_guard);
+    let Some(writable_roots) = value_from_config_toml
+        .get_mut("sandbox_workspace_write")
+        .and_then(TomlValue::as_table_mut)
+        .and_then(|section| section.get_mut("writable_roots"))
+        .and_then(TomlValue::as_array_mut)
+    else {
+        return Ok(value_from_config_toml);
+    };
 
-    let resolved_value = TomlValue::try_from(resolved).map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("Failed to serialize resolved config: {e}"),
-        )
-    })?;
+    for writable_root in writable_roots {
+        let Some(path) = writable_root.as_str() else {
+            continue;
+        };
+        if let Some(rest) = path
+            .strip_prefix("~/")
+            .or_else(|| path.strip_prefix("~\\"))
+            .map(|rest| rest.trim_start_matches(['/', '\\']))
+            .or_else(|| (path == "~").then_some(""))
+        {
+            let expanded = if rest.is_empty() {
+                home_dir.to_path_buf()
+            } else {
+                home_dir.join(rest)
+            };
+            *writable_root = TomlValue::String(expanded.to_string_lossy().into_owned());
+            continue;
+        }
+        if Path::new(path).is_relative() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "AbsolutePathBuf deserialized without an absolute path",
+            ));
+        }
+    }
 
-    Ok(copy_shape_from_original(
-        &value_from_config_toml,
-        &resolved_value,
-    ))
+    Ok(value_from_config_toml)
 }
 
 /// Ensure that every field in `original` is present in the returned

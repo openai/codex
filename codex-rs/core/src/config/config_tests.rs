@@ -1781,7 +1781,7 @@ async fn managed_config_overrides_oauth_store_mode() -> anyhow::Result<()> {
         deserialize_config_toml_with_base(config_layer_stack.effective_config(), codex_home.path())
             .map_err(|e| {
                 tracing::error!("Failed to deserialize overridden config: {e}");
-                std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+                e
             })?;
     assert_eq!(
         cfg.mcp_oauth_credentials_store,
@@ -1911,7 +1911,7 @@ async fn managed_config_wins_over_cli_overrides() -> anyhow::Result<()> {
         deserialize_config_toml_with_base(config_layer_stack.effective_config(), codex_home.path())
             .map_err(|e| {
                 tracing::error!("Failed to deserialize overridden config: {e}");
-                std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+                e
             })?;
 
     assert_eq!(cfg.model.as_deref(), Some("managed_config"));

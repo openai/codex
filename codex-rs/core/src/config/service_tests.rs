@@ -239,56 +239,6 @@ async fn read_includes_origins_and_layers() {
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
-async fn read_expands_home_directory_paths_from_managed_preferences() -> Result<()> {
-    use base64::Engine;
-
-    let Some(home) = dirs::home_dir() else {
-        return Ok(());
-    };
-    let tmp = tempdir().expect("tempdir");
-
-    let service = ConfigService::new(
-        tmp.path().to_path_buf(),
-        vec![],
-        LoaderOverrides {
-            managed_config_path: Some(tmp.path().join("managed_config.toml")),
-            managed_preferences_base64: Some(
-                base64::prelude::BASE64_STANDARD.encode(
-                    r#"
-sandbox_mode = "workspace-write"
-[sandbox_workspace_write]
-writable_roots = ["~/code"]
-"#
-                    .as_bytes(),
-                ),
-            ),
-            macos_managed_config_requirements_base64: None,
-        },
-        CloudRequirementsLoader::default(),
-    );
-
-    let response = service
-        .read(ConfigReadParams {
-            include_layers: false,
-            cwd: None,
-        })
-        .await
-        .expect("config read succeeds");
-
-    assert_eq!(
-        response
-            .config
-            .sandbox_workspace_write
-            .expect("workspace-write settings")
-            .writable_roots,
-        vec![home.join("code")]
-    );
-
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-#[tokio::test]
 async fn write_value_succeeds_when_managed_preferences_expand_home_directory_paths() -> Result<()> {
     use base64::Engine;
 
