@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "overrides": {
+      "additionalProperties": {
+        "type": "boolean"
+      },
+      "description": "Process-wide feature flag overrides keyed by canonical feature name.\n\nThis replaces the current in-memory override set. Send an empty map to clear all overrides.",
+      "type": "object"
+    }
+  },
+  "required": [
+    "overrides"
+  ],
+  "title": "ExperimentalFeatureOverridesSetParams",
+  "type": "object"
+}

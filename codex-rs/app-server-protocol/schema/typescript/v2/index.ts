@@ -83,6 +83,8 @@ export type { ExecPolicyAmendment } from "./ExecPolicyAmendment";
 export type { ExperimentalFeature } from "./ExperimentalFeature";
 export type { ExperimentalFeatureListParams } from "./ExperimentalFeatureListParams";
 export type { ExperimentalFeatureListResponse } from "./ExperimentalFeatureListResponse";
+export type { ExperimentalFeatureOverridesSetParams } from "./ExperimentalFeatureOverridesSetParams";
+export type { ExperimentalFeatureOverridesSetResponse } from "./ExperimentalFeatureOverridesSetResponse";
 export type { ExperimentalFeatureStage } from "./ExperimentalFeatureStage";
 export type { ExternalAgentConfigDetectParams } from "./ExternalAgentConfigDetectParams";
 export type { ExternalAgentConfigDetectResponse } from "./ExternalAgentConfigDetectResponse";

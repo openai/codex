@@ -1926,6 +1926,25 @@ pub struct ExperimentalFeatureListResponse {
     pub next_cursor: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExperimentalFeatureOverridesSetParams {
+    /// Process-wide feature flag overrides keyed by canonical feature name.
+    ///
+    /// This replaces the current in-memory override set. Send an empty map to
+    /// clear all overrides.
+    pub overrides: std::collections::BTreeMap<String, bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ExperimentalFeatureOverridesSetResponse {
+    /// The active process-wide feature flag overrides after the update.
+    pub overrides: std::collections::BTreeMap<String, bool>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

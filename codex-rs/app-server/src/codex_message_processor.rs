@@ -1,6 +1,10 @@
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
 use crate::command_exec::CommandExecManager;
 use crate::command_exec::StartCommandExecParams;
+use crate::config_api::has_feature_cli_overrides;
+use crate::config_api::merge_feature_cli_overrides;
+use crate::config_api::non_feature_cli_overrides;
+use crate::config_api::protected_feature_keys;
 use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_PARAMS_ERROR_CODE;
@@ -283,6 +287,7 @@ use codex_state::ThreadMetadataBuilder;
 use codex_state::log_db::LogDbLayer;
 use codex_utils_json_to_toml::json_to_toml;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -371,7 +376,8 @@ pub(crate) struct CodexMessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     arg0_paths: Arg0DispatchPaths,
     config: Arc<Config>,
-    cli_overrides: Vec<(String, TomlValue)>,
+    cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
+    feature_flag_overrides: Arc<RwLock<BTreeMap<String, bool>>>,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
@@ -415,7 +421,8 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) config: Arc<Config>,
-    pub(crate) cli_overrides: Vec<(String, TomlValue)>,
+    pub(crate) cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
+    pub(crate) feature_flag_overrides: Arc<RwLock<BTreeMap<String, bool>>>,
     pub(crate) cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
@@ -479,6 +486,7 @@ impl CodexMessageProcessor {
             arg0_paths,
             config,
             cli_overrides,
+            feature_flag_overrides,
             cloud_requirements,
             feedback,
             log_db,
@@ -490,6 +498,7 @@ impl CodexMessageProcessor {
             arg0_paths,
             config,
             cli_overrides,
+            feature_flag_overrides,
             cloud_requirements,
             active_login: Arc::new(Mutex::new(None)),
             pending_thread_unloads: Arc::new(Mutex::new(HashSet::new())),
@@ -510,7 +519,10 @@ impl CodexMessageProcessor {
     ) -> Result<Config, JSONRPCErrorError> {
         let cloud_requirements = self.current_cloud_requirements();
         let mut config = codex_core::config::ConfigBuilder::default()
-            .cli_overrides(self.cli_overrides.clone())
+            .cli_overrides(
+                self.effective_cli_overrides(fallback_cwd.clone(), cloud_requirements.clone())
+                    .await?,
+            )
             .fallback_cwd(fallback_cwd)
             .cloud_requirements(cloud_requirements)
             .build()
@@ -530,6 +542,52 @@ impl CodexMessageProcessor {
             .read()
             .map(|guard| guard.clone())
             .unwrap_or_default()
+    }
+
+    fn current_cli_overrides(&self) -> Vec<(String, TomlValue)> {
+        self.cli_overrides
+            .read()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
+    fn current_feature_flag_overrides(&self) -> BTreeMap<String, bool> {
+        self.feature_flag_overrides
+            .read()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
+    async fn effective_cli_overrides(
+        &self,
+        fallback_cwd: Option<PathBuf>,
+        cloud_requirements: CloudRequirementsLoader,
+    ) -> Result<Vec<(String, TomlValue)>, JSONRPCErrorError> {
+        let cli_overrides = self.current_cli_overrides();
+        let feature_flag_overrides = self.current_feature_flag_overrides();
+        if !has_feature_cli_overrides(&cli_overrides) && feature_flag_overrides.is_empty() {
+            return Ok(cli_overrides);
+        }
+
+        let config = codex_core::config::ConfigBuilder::default()
+            .codex_home(self.config.codex_home.clone())
+            .cli_overrides(non_feature_cli_overrides(&cli_overrides))
+            .fallback_cwd(fallback_cwd)
+            .cloud_requirements(cloud_requirements)
+            .build()
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to resolve feature override precedence: {err}"),
+                data: None,
+            })?;
+        let protected_features = protected_feature_keys(&config.config_layer_stack);
+
+        Ok(merge_feature_cli_overrides(
+            cli_overrides,
+            feature_flag_overrides,
+            &protected_features,
+        ))
     }
 
     /// If a client sends `developer_instructions: null` during a mode switch,
@@ -877,7 +935,8 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ConfigRead { .. }
             | ClientRequest::ConfigValueWrite { .. }
-            | ClientRequest::ConfigBatchWrite { .. } => {
+            | ClientRequest::ConfigBatchWrite { .. }
+            | ClientRequest::ExperimentalFeatureOverridesSet { .. } => {
                 warn!("Config request reached CodexMessageProcessor unexpectedly");
             }
             ClientRequest::FsReadFile { .. }
@@ -1076,7 +1135,21 @@ impl CodexMessageProcessor {
                     let cloud_requirements = self.cloud_requirements.clone();
                     let chatgpt_base_url = self.config.chatgpt_base_url.clone();
                     let codex_home = self.config.codex_home.clone();
-                    let cli_overrides = self.cli_overrides.clone();
+                    let cli_overrides = match self
+                        .effective_cli_overrides(
+                            /*fallback_cwd*/ None,
+                            self.current_cloud_requirements(),
+                        )
+                        .await
+                    {
+                        Ok(cli_overrides) => cli_overrides,
+                        Err(err) => {
+                            warn!(
+                                "failed to resolve feature overrides for login completion: {err:?}"
+                            );
+                            self.current_cli_overrides()
+                        }
+                    };
                     let auth_url = server.auth_url.clone();
                     tokio::spawn(async move {
                         let (success, error_msg) = match tokio::time::timeout(
@@ -1265,7 +1338,19 @@ impl CodexMessageProcessor {
             self.config.codex_home.clone(),
         );
         sync_default_client_residency_requirement(
-            &self.cli_overrides,
+            &match self
+                .effective_cli_overrides(
+                    /*fallback_cwd*/ None,
+                    self.current_cloud_requirements(),
+                )
+                .await
+            {
+                Ok(cli_overrides) => cli_overrides,
+                Err(err) => {
+                    warn!("failed to resolve feature overrides for residency sync: {err:?}");
+                    self.current_cli_overrides()
+                }
+            },
             self.cloud_requirements.as_ref(),
         )
         .await;
@@ -1870,8 +1955,17 @@ impl CodexMessageProcessor {
             personality,
         );
         typesafe_overrides.ephemeral = ephemeral;
-        let cli_overrides = self.cli_overrides.clone();
         let cloud_requirements = self.current_cloud_requirements();
+        let cli_overrides = match self
+            .effective_cli_overrides(/*fallback_cwd*/ None, cloud_requirements.clone())
+            .await
+        {
+            Ok(cli_overrides) => cli_overrides,
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+                return;
+            }
+        };
         let listener_task_context = ListenerTaskContext {
             thread_manager: Arc::clone(&self.thread_manager),
             thread_state_manager: self.thread_state_manager.clone(),
@@ -3468,8 +3562,18 @@ impl CodexMessageProcessor {
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let cloud_requirements = self.current_cloud_requirements();
+        let effective_cli_overrides = match self
+            .effective_cli_overrides(history_cwd.clone(), cloud_requirements.clone())
+            .await
+        {
+            Ok(cli_overrides) => cli_overrides,
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+                return;
+            }
+        };
         let config = match derive_config_for_cwd(
-            &self.cli_overrides,
+            &effective_cli_overrides,
             request_overrides,
             typesafe_overrides,
             history_cwd,
@@ -4010,8 +4114,18 @@ impl CodexMessageProcessor {
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let cloud_requirements = self.current_cloud_requirements();
+        let effective_cli_overrides = match self
+            .effective_cli_overrides(history_cwd.clone(), cloud_requirements.clone())
+            .await
+        {
+            Ok(cli_overrides) => cli_overrides,
+            Err(err) => {
+                self.outgoing.send_error(request_id, err).await;
+                return;
+            }
+        };
         let config = match derive_config_for_cwd(
-            &self.cli_overrides,
+            &effective_cli_overrides,
             request_overrides,
             typesafe_overrides,
             history_cwd,
@@ -7225,12 +7339,21 @@ impl CodexMessageProcessor {
             WindowsSandboxSetupMode::Unelevated => CoreWindowsSandboxSetupMode::Unelevated,
         };
         let config = Arc::clone(&self.config);
-        let cli_overrides = self.cli_overrides.clone();
         let cloud_requirements = self.current_cloud_requirements();
         let command_cwd = params
             .cwd
             .map(PathBuf::from)
             .unwrap_or_else(|| config.cwd.clone());
+        let cli_overrides = match self
+            .effective_cli_overrides(Some(command_cwd.clone()), cloud_requirements.clone())
+            .await
+        {
+            Ok(cli_overrides) => cli_overrides,
+            Err(err) => {
+                warn!("failed to resolve feature overrides for windows sandbox setup: {err:?}");
+                self.current_cli_overrides()
+            }
+        };
         let outgoing = Arc::clone(&self.outgoing);
         let connection_id = request_id.connection_id;
 

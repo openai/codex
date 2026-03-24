@@ -545,6 +545,21 @@
       },
       "type": "object"
     },
+    "ExperimentalFeatureOverridesSetParams": {
+      "properties": {
+        "overrides": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "description": "Process-wide feature flag overrides keyed by canonical feature name.\n\nThis replaces the current in-memory override set. Send an empty map to clear all overrides.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "overrides"
+      ],
+      "type": "object"
+    },
     "ExternalAgentConfigDetectParams": {
       "properties": {
         "cwds": {
@@ -4214,6 +4229,30 @@
         "params"
       ],
       "title": "ExperimentalFeature/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "experimentalFeature/overrides/set"
+          ],
+          "title": "ExperimentalFeature/overrides/setRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ExperimentalFeatureOverridesSetParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "ExperimentalFeature/overrides/setRequest",
       "type": "object"
     },
     {

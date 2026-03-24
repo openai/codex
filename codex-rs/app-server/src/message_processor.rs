@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
@@ -28,6 +29,7 @@ use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::ExperimentalApi;
+use codex_app_server_protocol::ExperimentalFeatureOverridesSetParams;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigImportParams;
 use codex_app_server_protocol::FsCopyParams;
@@ -232,6 +234,8 @@ impl MessageProcessor {
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());
 
+        let cli_overrides = Arc::new(RwLock::new(cli_overrides));
+        let feature_flag_overrides = Arc::new(RwLock::new(BTreeMap::new()));
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager: auth_manager.clone(),
@@ -240,6 +244,7 @@ impl MessageProcessor {
             arg0_paths,
             config: Arc::clone(&config),
             cli_overrides: cli_overrides.clone(),
+            feature_flag_overrides: feature_flag_overrides.clone(),
             cloud_requirements: cloud_requirements.clone(),
             feedback,
             log_db,
@@ -252,6 +257,7 @@ impl MessageProcessor {
         let config_api = ConfigApi::new(
             config.codex_home.clone(),
             cli_overrides,
+            feature_flag_overrides,
             loader_overrides,
             cloud_requirements,
             thread_manager,
@@ -686,6 +692,16 @@ impl MessageProcessor {
                 )
                 .await;
             }
+            ClientRequest::ExperimentalFeatureOverridesSet { request_id, params } => {
+                self.handle_experimental_feature_overrides_set(
+                    ConnectionRequestId {
+                        connection_id,
+                        request_id,
+                    },
+                    params,
+                )
+                .await;
+            }
             ClientRequest::ConfigRequirementsRead {
                 request_id,
                 params: _,
@@ -813,6 +829,27 @@ impl MessageProcessor {
         params: ConfigBatchWriteParams,
     ) {
         match self.config_api.batch_write(params).await {
+            Ok(response) => {
+                self.codex_message_processor.clear_plugin_related_caches();
+                self.codex_message_processor
+                    .maybe_start_plugin_startup_tasks_for_latest_config()
+                    .await;
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_experimental_feature_overrides_set(
+        &self,
+        request_id: ConnectionRequestId,
+        params: ExperimentalFeatureOverridesSetParams,
+    ) {
+        match self
+            .config_api
+            .set_experimental_feature_overrides(params)
+            .await
+        {
             Ok(response) => {
                 self.codex_message_processor.clear_plugin_related_caches();
                 self.codex_message_processor
