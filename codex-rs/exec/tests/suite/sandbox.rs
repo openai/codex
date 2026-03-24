@@ -357,17 +357,26 @@ async fn sandbox_blocks_first_time_dot_codex_creation() {
         !status.success(),
         "sandbox unexpectedly allowed first-time .codex creation: {status:?}"
     );
-    let dot_codex_exists = tokio::fs::try_exists(&dot_codex)
-        .await
-        .expect("try_exists .codex failed");
-    let config_toml_exists = tokio::fs::try_exists(&config_toml)
-        .await
-        .expect("try_exists config.toml failed");
-    assert!(
-        !dot_codex_exists,
-        "{} should not have been created",
-        dot_codex.display()
-    );
+    let dot_codex_metadata = tokio::fs::symlink_metadata(&dot_codex).await;
+    if let Ok(metadata) = dot_codex_metadata {
+        assert!(
+            !metadata.is_dir(),
+            "{} should not be creatable as a directory",
+            dot_codex.display()
+        );
+    } else if let Err(err) = &dot_codex_metadata {
+        assert_eq!(
+            err.kind(),
+            io::ErrorKind::NotFound,
+            "unexpected metadata error for {}: {err}",
+            dot_codex.display()
+        );
+    }
+    let config_toml_exists = match tokio::fs::try_exists(&config_toml).await {
+        Ok(exists) => exists,
+        Err(err) if err.kind() == io::ErrorKind::NotADirectory => false,
+        Err(err) => panic!("try_exists {} failed: {err}", config_toml.display()),
+    };
     assert!(
         !config_toml_exists,
         "{} should not have been created",
