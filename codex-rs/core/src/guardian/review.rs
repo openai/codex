@@ -20,6 +20,7 @@ use super::GuardianApprovalRequest;
 use super::GuardianAssessment;
 use super::approval_request::guardian_assessment_action_value;
 use super::approval_request::guardian_request_id;
+use super::approval_request::guardian_request_parent_tool_item_id;
 use super::approval_request::guardian_request_turn_id;
 use super::prompt::build_guardian_prompt_items;
 use super::prompt::guardian_output_schema;
@@ -81,12 +82,15 @@ async fn run_guardian_review(
 ) -> ReviewDecision {
     let assessment_id = guardian_request_id(&request).to_string();
     let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
+    let assessment_parent_tool_item_id =
+        guardian_request_parent_tool_item_id(&request).map(ToString::to_string);
     let action_summary = guardian_assessment_action_value(&request);
     session
         .send_event(
             turn.as_ref(),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: assessment_id.clone(),
+                parent_tool_item_id: assessment_parent_tool_item_id.clone(),
                 turn_id: assessment_turn_id.clone(),
                 status: GuardianAssessmentStatus::InProgress,
                 risk_score: None,
@@ -106,6 +110,7 @@ async fn run_guardian_review(
                 turn.as_ref(),
                 EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                     id: assessment_id,
+                    parent_tool_item_id: assessment_parent_tool_item_id.clone(),
                     turn_id: assessment_turn_id,
                     status: GuardianAssessmentStatus::Aborted,
                     risk_score: None,
@@ -156,6 +161,7 @@ async fn run_guardian_review(
                     turn.as_ref(),
                     EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                         id: assessment_id,
+                        parent_tool_item_id: assessment_parent_tool_item_id.clone(),
                         turn_id: assessment_turn_id,
                         status: GuardianAssessmentStatus::Aborted,
                         risk_score: None,
@@ -192,6 +198,7 @@ async fn run_guardian_review(
             turn.as_ref(),
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: assessment_id,
+                parent_tool_item_id: assessment_parent_tool_item_id,
                 turn_id: assessment_turn_id,
                 status,
                 risk_score: Some(assessment.risk_score),

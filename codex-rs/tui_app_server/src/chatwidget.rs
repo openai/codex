@@ -6075,16 +6075,22 @@ impl ChatWidget {
             ),
             ServerNotification::ItemGuardianApprovalReviewStarted(notification) => {
                 self.on_guardian_review_notification(
-                    notification.target_item_id,
+                    notification
+                        .review_id
+                        .unwrap_or(notification.target_item_id),
                     notification.turn_id,
+                    notification.parent_tool_item_id,
                     notification.review,
                     notification.action,
                 );
             }
             ServerNotification::ItemGuardianApprovalReviewCompleted(notification) => {
                 self.on_guardian_review_notification(
-                    notification.target_item_id,
+                    notification
+                        .review_id
+                        .unwrap_or(notification.target_item_id),
                     notification.turn_id,
+                    notification.parent_tool_item_id,
                     notification.review,
                     notification.action,
                 );
@@ -6351,11 +6357,13 @@ impl ChatWidget {
         &mut self,
         id: String,
         turn_id: String,
+        parent_tool_item_id: Option<String>,
         review: codex_app_server_protocol::GuardianApprovalReview,
         action: Option<serde_json::Value>,
     ) {
         self.on_guardian_assessment(GuardianAssessmentEvent {
             id,
+            parent_tool_item_id,
             turn_id,
             status: match review.status {
                 codex_app_server_protocol::GuardianApprovalReviewStatus::InProgress => {

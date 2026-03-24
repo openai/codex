@@ -4866,7 +4866,7 @@ pub struct ItemStartedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Temporary notification payload for guardian automatic approval
-/// review. This shape is expected to change soon.
+/// review.
 ///
 /// TODO(ccunningham): Attach guardian review state to the reviewed tool item's
 /// lifecycle instead of sending separate standalone review notifications so the
@@ -4874,7 +4874,16 @@ pub struct ItemStartedNotification {
 pub struct ItemGuardianApprovalReviewStartedNotification {
     pub thread_id: String,
     pub turn_id: String,
+    /// Deprecated alias for `review_id`, retained for backwards compatibility.
     pub target_item_id: String,
+    /// Stable guardian review identifier for matching started/completed events.
+    #[serde(default)]
+    pub review_id: Option<String>,
+    /// Reviewed parent tool item identifier. For direct tool reviews this
+    /// matches `review_id`; attributed `network_access` reviews may differ,
+    /// and unattributed `network_access` reviews may omit it.
+    #[serde(default)]
+    pub parent_tool_item_id: Option<String>,
     pub review: GuardianApprovalReview,
     pub action: Option<JsonValue>,
 }
@@ -4883,7 +4892,7 @@ pub struct ItemGuardianApprovalReviewStartedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Temporary notification payload for guardian automatic approval
-/// review. This shape is expected to change soon.
+/// review.
 ///
 /// TODO(ccunningham): Attach guardian review state to the reviewed tool item's
 /// lifecycle instead of sending separate standalone review notifications so the
@@ -4891,7 +4900,16 @@ pub struct ItemGuardianApprovalReviewStartedNotification {
 pub struct ItemGuardianApprovalReviewCompletedNotification {
     pub thread_id: String,
     pub turn_id: String,
+    /// Deprecated alias for `review_id`, retained for backwards compatibility.
     pub target_item_id: String,
+    /// Stable guardian review identifier for matching started/completed events.
+    #[serde(default)]
+    pub review_id: Option<String>,
+    /// Reviewed parent tool item identifier. For direct tool reviews this
+    /// matches `review_id`; attributed `network_access` reviews may differ,
+    /// and unattributed `network_access` reviews may omit it.
+    #[serde(default)]
+    pub parent_tool_item_id: Option<String>,
     pub review: GuardianApprovalReview,
     pub action: Option<JsonValue>,
 }

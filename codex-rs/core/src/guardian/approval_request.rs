@@ -249,6 +249,7 @@ pub(crate) fn guardian_approval_request_to_json(
         GuardianApprovalRequest::NetworkAccess {
             id: _,
             turn_id: _,
+            parent_tool_item_id: _,
             target,
             host,
             protocol,
@@ -331,7 +332,7 @@ pub(crate) fn guardian_assessment_action_value(action: &GuardianApprovalRequest)
             "tool": "network_access",
             "target": target,
             "host": host,
-            "protocol": protocol,
+            "protocol": network_approval_protocol_value(*protocol),
             "port": port,
         }),
         GuardianApprovalRequest::McpToolCall {
@@ -342,6 +343,18 @@ pub(crate) fn guardian_assessment_action_value(action: &GuardianApprovalRequest)
             "tool_name": tool_name,
         }),
     }
+}
+
+fn network_approval_protocol_value(protocol: NetworkApprovalProtocol) -> Value {
+    Value::String(
+        match protocol {
+            NetworkApprovalProtocol::Http => "http",
+            NetworkApprovalProtocol::Https => "https",
+            NetworkApprovalProtocol::Socks5Tcp => "socks5_tcp",
+            NetworkApprovalProtocol::Socks5Udp => "socks5_udp",
+        }
+        .to_string(),
+    )
 }
 
 pub(crate) fn guardian_request_id(request: &GuardianApprovalRequest) -> &str {
@@ -368,6 +381,23 @@ pub(crate) fn guardian_request_turn_id<'a>(
         | GuardianApprovalRequest::McpToolCall { .. } => default_turn_id,
         #[cfg(unix)]
         GuardianApprovalRequest::Execve { .. } => default_turn_id,
+    }
+}
+
+pub(crate) fn guardian_request_parent_tool_item_id(
+    request: &GuardianApprovalRequest,
+) -> Option<&str> {
+    match request {
+        GuardianApprovalRequest::NetworkAccess {
+            parent_tool_item_id,
+            ..
+        } => parent_tool_item_id.as_deref(),
+        GuardianApprovalRequest::Shell { id, .. }
+        | GuardianApprovalRequest::ExecCommand { id, .. }
+        | GuardianApprovalRequest::ApplyPatch { id, .. }
+        | GuardianApprovalRequest::McpToolCall { id, .. } => Some(id),
+        #[cfg(unix)]
+        GuardianApprovalRequest::Execve { id, .. } => Some(id),
     }
 }
 

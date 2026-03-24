@@ -10956,6 +10956,7 @@ async fn guardian_denied_exec_renders_warning_and_denied_request() {
         id: "guardian-in-progress".into(),
         msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
             id: "guardian-1".into(),
+            parent_tool_item_id: Some("guardian-1".into()),
             turn_id: "turn-1".into(),
             status: GuardianAssessmentStatus::InProgress,
             risk_score: None,
@@ -10974,6 +10975,7 @@ async fn guardian_denied_exec_renders_warning_and_denied_request() {
         id: "guardian-assessment".into(),
         msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
             id: "guardian-1".into(),
+            parent_tool_item_id: Some("guardian-1".into()),
             turn_id: "turn-1".into(),
             status: GuardianAssessmentStatus::Denied,
             risk_score: Some(96),
@@ -11017,6 +11019,7 @@ async fn guardian_approved_exec_renders_approved_request() {
         id: "guardian-assessment".into(),
         msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
             id: "thread:child-thread:guardian-1".into(),
+            parent_tool_item_id: Some("thread:child-thread:guardian-1".into()),
             turn_id: "turn-1".into(),
             status: GuardianAssessmentStatus::Approved,
             risk_score: Some(14),
@@ -11068,6 +11071,8 @@ async fn app_server_guardian_review_started_sets_review_status() {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 target_item_id: "guardian-1".to_string(),
+                review_id: Some("guardian-1".to_string()),
+                parent_tool_item_id: Some("guardian-1".to_string()),
                 review: GuardianApprovalReview {
                     status: GuardianApprovalReviewStatus::InProgress,
                     risk_score: None,
@@ -11106,6 +11111,8 @@ async fn app_server_guardian_review_denied_renders_denied_request_snapshot() {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 target_item_id: "guardian-1".to_string(),
+                review_id: Some("guardian-1".to_string()),
+                parent_tool_item_id: Some("guardian-1".to_string()),
                 review: GuardianApprovalReview {
                     status: GuardianApprovalReviewStatus::InProgress,
                     risk_score: None,
@@ -11124,6 +11131,8 @@ async fn app_server_guardian_review_denied_renders_denied_request_snapshot() {
                 thread_id: "thread-1".to_string(),
                 turn_id: "turn-1".to_string(),
                 target_item_id: "guardian-1".to_string(),
+                review_id: Some("guardian-1".to_string()),
+                parent_tool_item_id: Some("guardian-1".to_string()),
                 review: GuardianApprovalReview {
                     status: GuardianApprovalReviewStatus::Denied,
                     risk_score: Some(96),
@@ -11159,6 +11168,57 @@ async fn app_server_guardian_review_denied_renders_denied_request_snapshot() {
         "app_server_guardian_review_denied_renders_denied_request",
         term.backend().vt100().screen().contents()
     );
+}
+
+#[tokio::test]
+async fn app_server_guardian_review_prefers_review_id_over_target_item_id() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let action = serde_json::json!({
+        "tool": "shell",
+        "command": "curl -sS https://example.com",
+    });
+
+    chat.handle_server_notification(
+        ServerNotification::ItemGuardianApprovalReviewStarted(
+            ItemGuardianApprovalReviewStartedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                target_item_id: "deprecated-guardian-id".to_string(),
+                review_id: Some("guardian-1".to_string()),
+                parent_tool_item_id: Some("command-1".to_string()),
+                review: GuardianApprovalReview {
+                    status: GuardianApprovalReviewStatus::InProgress,
+                    risk_score: None,
+                    risk_level: None,
+                    rationale: None,
+                },
+                action: Some(action.clone()),
+            },
+        ),
+        None,
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::ItemGuardianApprovalReviewCompleted(
+            ItemGuardianApprovalReviewCompletedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                target_item_id: "different-deprecated-id".to_string(),
+                review_id: Some("guardian-1".to_string()),
+                parent_tool_item_id: Some("command-1".to_string()),
+                review: GuardianApprovalReview {
+                    status: GuardianApprovalReviewStatus::Denied,
+                    risk_score: Some(96),
+                    risk_level: Some(AppServerGuardianRiskLevel::High),
+                    rationale: Some("Would exfiltrate local source code.".to_string()),
+                },
+                action: Some(action),
+            },
+        ),
+        None,
+    );
+
+    assert!(chat.pending_guardian_review_status.is_empty());
 }
 
 // Snapshot test: status widget active (StatusIndicatorView)
@@ -11271,6 +11331,7 @@ async fn guardian_parallel_reviews_render_aggregate_status_snapshot() {
             id: format!("event-{id}"),
             msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: id.to_string(),
+                parent_tool_item_id: Some(id.to_string()),
                 turn_id: "turn-1".to_string(),
                 status: GuardianAssessmentStatus::InProgress,
                 risk_score: None,
@@ -11300,6 +11361,7 @@ async fn guardian_parallel_reviews_keep_remaining_review_visible_after_denial() 
         id: "event-guardian-1".into(),
         msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
             id: "guardian-1".to_string(),
+            parent_tool_item_id: Some("guardian-1".to_string()),
             turn_id: "turn-1".to_string(),
             status: GuardianAssessmentStatus::InProgress,
             risk_score: None,
@@ -11315,6 +11377,7 @@ async fn guardian_parallel_reviews_keep_remaining_review_visible_after_denial() 
         id: "event-guardian-2".into(),
         msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
             id: "guardian-2".to_string(),
+            parent_tool_item_id: Some("guardian-2".to_string()),
             turn_id: "turn-1".to_string(),
             status: GuardianAssessmentStatus::InProgress,
             risk_score: None,
@@ -11330,6 +11393,7 @@ async fn guardian_parallel_reviews_keep_remaining_review_visible_after_denial() 
         id: "event-guardian-1-denied".into(),
         msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
             id: "guardian-1".to_string(),
+            parent_tool_item_id: Some("guardian-1".to_string()),
             turn_id: "turn-1".to_string(),
             status: GuardianAssessmentStatus::Denied,
             risk_score: Some(92),

@@ -118,6 +118,11 @@ pub struct ExecApprovalRequestSkillMetadata {
 pub struct GuardianAssessmentEvent {
     /// Stable identifier for this guardian review lifecycle.
     pub id: String,
+    /// Parent tool item identifier when this guardian review is attached to a
+    /// specific tool call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub parent_tool_item_id: Option<String>,
     /// Turn ID that this assessment belongs to.
     /// Uses `#[serde(default)]` for backwards compatibility.
     #[serde(default)]

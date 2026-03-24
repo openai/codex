@@ -6,10 +6,24 @@ import type { GuardianApprovalReview } from "./GuardianApprovalReview";
 
 /**
  * [UNSTABLE] Temporary notification payload for guardian automatic approval
- * review. This shape is expected to change soon.
+ * review.
  *
  * TODO(ccunningham): Attach guardian review state to the reviewed tool item's
  * lifecycle instead of sending separate standalone review notifications so the
  * app-server API can persist and replay review state via `thread/read`.
  */
-export type ItemGuardianApprovalReviewCompletedNotification = { threadId: string, turnId: string, targetItemId: string, review: GuardianApprovalReview, action: JsonValue | null, };
+export type ItemGuardianApprovalReviewCompletedNotification = { threadId: string, turnId: string, 
+/**
+ * Deprecated alias for `review_id`, retained for backwards compatibility.
+ */
+targetItemId: string, 
+/**
+ * Stable guardian review identifier for matching started/completed events.
+ */
+reviewId: string | null, 
+/**
+ * Reviewed parent tool item identifier. For direct tool reviews this
+ * matches `review_id`; attributed `network_access` reviews may differ,
+ * and unattributed `network_access` reviews may omit it.
+ */
+parentToolItemId: string | null, review: GuardianApprovalReview, action: JsonValue | null, };
