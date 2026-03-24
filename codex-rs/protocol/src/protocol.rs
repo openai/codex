@@ -527,7 +527,7 @@ impl InterAgentCommunication {
         recipient: AgentPath,
         other_recipients: Vec<AgentPath>,
         content: String,
-        trigger_turn: bool
+        trigger_turn: bool,
     ) -> Self {
         Self {
             author,

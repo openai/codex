@@ -16,12 +16,8 @@ impl MessageDeliveryMode {
     /// Returns the model-visible error message for non-text inputs.
     fn unsupported_items_error(self) -> &'static str {
         match self {
-            Self::QueueOnly => {
-                "send_message only supports text content in MultiAgentV2 for now"
-            }
-            Self::TriggerTurn => {
-                "assign_task only supports text content in MultiAgentV2 for now"
-            }
+            Self::QueueOnly => "send_message only supports text content in MultiAgentV2 for now",
+            Self::TriggerTurn => "assign_task only supports text content in MultiAgentV2 for now",
         }
     }
 
@@ -74,13 +70,19 @@ impl ToolOutput for MessageToolResult {
 }
 
 /// Validates that the tool input is non-empty text-only content and returns its preview string.
-fn text_content(items: &[UserInput], mode: MessageDeliveryMode) -> Result<String, FunctionCallError> {
+fn text_content(
+    items: &[UserInput],
+    mode: MessageDeliveryMode,
+) -> Result<String, FunctionCallError> {
     if items.is_empty() {
         return Err(FunctionCallError::RespondToModel(
             "Items can't be empty".to_string(),
         ));
     }
-    if items.iter().all(|item| matches!(item, UserInput::Text { .. })) {
+    if items
+        .iter()
+        .all(|item| matches!(item, UserInput::Text { .. }))
+    {
         return Ok(input_preview(items));
     }
     Err(FunctionCallError::RespondToModel(

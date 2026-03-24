@@ -835,8 +835,7 @@ impl AgentControl {
                     Vec::new(),
                     message,
                     false,
-                )
-                ;
+                );
                 let _ = control
                     .send_inter_agent_communication(parent_thread_id, communication)
                     .await;

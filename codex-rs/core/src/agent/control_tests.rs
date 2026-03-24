@@ -426,7 +426,12 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
         .expect("send_inter_agent_communication should succeed");
     assert!(!submission_id.is_empty());
 
-    let expected = (thread_id, Op::InterAgentCommunication { communication: communication.clone() });
+    let expected = (
+        thread_id,
+        Op::InterAgentCommunication {
+            communication: communication.clone(),
+        },
+    );
     let captured = harness
         .manager
         .captured_ops()
