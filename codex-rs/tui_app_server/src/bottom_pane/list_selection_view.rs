@@ -371,10 +371,13 @@ impl ListSelectionView {
                         ""
                     };
                     let name_with_marker = format!("{name}{marker}");
+                    let is_disabled = item.is_disabled || item.disabled_reason.is_some();
                     let n = visible_idx + 1;
                     let wrap_prefix = if self.is_searchable {
                         // The number keys don't work when search is enabled (since we let the
                         // numbers be used for the search query).
+                        format!("{prefix} ")
+                    } else if is_disabled {
                         format!("{prefix} ")
                     } else {
                         format!("{prefix} {n}. ")
@@ -388,7 +391,6 @@ impl ListSelectionView {
                         .flatten()
                         .or_else(|| item.description.clone());
                     let wrap_indent = description.is_none().then_some(wrap_prefix_width);
-                    let is_disabled = item.is_disabled || item.disabled_reason.is_some();
                     GenericDisplayRow {
                         name: name_with_marker,
                         name_prefix_spans,
