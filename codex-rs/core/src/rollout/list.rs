@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::cmp::Reverse;
 use std::ffi::OsStr;
-use std::io::{self};
+use std::io;
 use std::num::NonZero;
 use std::ops::ControlFlow;
 use std::path::Path;

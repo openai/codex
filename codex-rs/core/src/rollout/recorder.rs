@@ -1,7 +1,7 @@
 //! Persist Codex session rollouts (.jsonl) so sessions can be replayed or inspected later.
 
+use std::fs;
 use std::fs::File;
-use std::fs::{self};
 use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
@@ -17,8 +17,8 @@ use time::format_description::FormatItem;
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
-use tokio::sync::mpsc::{self};
 use tokio::sync::oneshot;
 use tracing::info;
 use tracing::trace;
@@ -44,8 +44,6 @@ use crate::default_client::originator;
 use crate::path_utils;
 use crate::state_db;
 use crate::state_db::StateDbHandle;
-use crate::truncate::TruncationPolicy;
-use crate::truncate::truncate_text;
 use codex_git_utils::collect_git_info;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GitInfo as ProtocolGitInfo;
@@ -58,6 +56,8 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadataBuilder;
+use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::truncate_text;
 
 /// Records all [`ResponseItem`]s for a session and flushes them to disk after
 /// every update.
