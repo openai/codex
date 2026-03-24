@@ -818,12 +818,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::TuiAppServer,
         key: "tui_app_server",
-        stage: Stage::Experimental {
-            name: "App-server TUI",
-            menu_description: "Use the app-server-backed TUI implementation.",
-            announcement: "",
-        },
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::PreventIdleSleep,
