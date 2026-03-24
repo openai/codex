@@ -97,8 +97,12 @@ def pinned_runtime_version() -> str:
     return module.pinned_runtime_version()  # type: ignore[no-any-return]
 
 
+def runtime_git_ref(version: str) -> str:
+    return f"rust-v{version}"
+
+
 def pinned_runtime_git_ref() -> str:
-    return f"rust-v{pinned_runtime_version()}"
+    return runtime_git_ref(pinned_runtime_version())
 
 
 def ensure_git_ref_available(git_ref: str) -> None:
@@ -1090,7 +1094,7 @@ def run_command(args: argparse.Namespace, ops: CliOps) -> None:
     elif args.command == "generate-types-for-pinned-runtime":
         ops.generate_types_for_pinned_runtime(args.git_ref)
     elif args.command == "stage-sdk":
-        ops.generate_types()
+        ops.generate_types_for_pinned_runtime(runtime_git_ref(args.runtime_version))
         ops.stage_python_sdk_package(
             args.staging_dir,
             args.sdk_version or ops.current_sdk_version(),

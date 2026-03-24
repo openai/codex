@@ -333,10 +333,10 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
     )
 
     def fake_generate_types() -> None:
-        calls.append("generate_types")
+        raise AssertionError("stage-sdk should use pinned-runtime generation")
 
-    def fake_generate_types_for_pinned_runtime(_git_ref: str | None = None) -> None:
-        calls.append("generate_types_for_pinned_runtime")
+    def fake_generate_types_for_pinned_runtime(git_ref: str | None = None) -> None:
+        calls.append(f"generate_types_for_pinned_runtime:{git_ref}")
 
     def fake_stage_sdk_package(
         _staging_dir: Path, _sdk_version: str, _runtime_version: str
@@ -362,7 +362,7 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
 
     script.run_command(args, ops)
 
-    assert calls == ["generate_types", "stage_sdk"]
+    assert calls == ["generate_types_for_pinned_runtime:rust-v1.2.3", "stage_sdk"]
 
 
 def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> None:
