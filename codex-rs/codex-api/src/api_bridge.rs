@@ -178,13 +178,33 @@ struct UsageErrorBody {
 pub struct CoreAuthProvider {
     pub token: Option<String>,
     pub account_id: Option<String>,
+    authorization_header_override: Option<String>,
 }
 
 impl CoreAuthProvider {
+    pub fn from_bearer_token(token: Option<String>, account_id: Option<String>) -> Self {
+        Self {
+            token,
+            account_id,
+            authorization_header_override: None,
+        }
+    }
+
+    pub fn from_authorization_header_value(
+        authorization_header_value: Option<String>,
+        account_id: Option<String>,
+    ) -> Self {
+        Self {
+            token: None,
+            account_id,
+            authorization_header_override: authorization_header_value,
+        }
+    }
+
     pub fn auth_header_attached(&self) -> bool {
-        self.token
+        self.authorization_header_value()
             .as_ref()
-            .is_some_and(|token| http::HeaderValue::from_str(&format!("Bearer {token}")).is_ok())
+            .is_some_and(|value| http::HeaderValue::from_str(value).is_ok())
     }
 
     pub fn auth_header_name(&self) -> Option<&'static str> {
@@ -195,13 +215,31 @@ impl CoreAuthProvider {
         Self {
             token: token.map(str::to_string),
             account_id: account_id.map(str::to_string),
+            authorization_header_override: None,
         }
+    }
+
+    #[cfg(test)]
+    pub fn for_test_authorization_header(
+        authorization_header_value: Option<&str>,
+        account_id: Option<&str>,
+    ) -> Self {
+        Self::from_authorization_header_value(
+            authorization_header_value.map(str::to_string),
+            account_id.map(str::to_string),
+        )
     }
 }
 
 impl ApiAuthProvider for CoreAuthProvider {
     fn bearer_token(&self) -> Option<String> {
         self.token.clone()
+    }
+
+    fn authorization_header_value(&self) -> Option<String> {
+        self.authorization_header_override
+            .clone()
+            .or_else(|| self.bearer_token().map(|token| format!("Bearer {token}")))
     }
 
     fn account_id(&self) -> Option<String> {

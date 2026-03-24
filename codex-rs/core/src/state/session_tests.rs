@@ -42,7 +42,7 @@ async fn set_agent_task_persists_plaintext_task_for_session_reuse() {
         binding_id: "chatgpt-account-account-123".to_string(),
         chatgpt_account_id: "account-123".to_string(),
         chatgpt_user_id: Some("user-123".to_string()),
-        agent_runtime_id: "agent_123".to_string(),
+        agent_runtime_id: "agent-123".to_string(),
         task_id: "task_123".to_string(),
         registered_at: "2026-03-23T12:00:00Z".to_string(),
     };
