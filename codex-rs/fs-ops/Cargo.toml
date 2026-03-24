@@ -1,0 +1,16 @@
+[package]
+name = "codex-fs-ops"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lib]
+name = "codex_fs_ops"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
