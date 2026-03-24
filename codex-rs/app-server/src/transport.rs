@@ -959,7 +959,16 @@ mod tests {
             .expect("writer queue should still contain original message");
         let queued_json =
             serde_json::to_value(queued_outgoing.message).expect("serialize queued message");
-        assert_eq!(queued_json, json!({ "method": "queued" }));
+        assert_eq!(
+            queued_json,
+            json!({
+                "method": "configWarning",
+                "params": {
+                    "summary": "queued",
+                    "details": null,
+                },
+            })
+        );
     }
 
     #[tokio::test]
