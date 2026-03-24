@@ -550,7 +550,8 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         &tools,
         &[
             "spawn_agent",
-            "send_input",
+            "send_message",
+            "assign_task",
             "wait_agent",
             "close_agent",
             "list_agents",
@@ -584,9 +585,9 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         json!(["agent_id", "task_name", "nickname"])
     );
 
-    let send_input = find_tool(&tools, "send_input");
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &send_input.spec else {
-        panic!("send_input should be a function tool");
+    let send_message = find_tool(&tools, "send_message");
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &send_message.spec else {
+        panic!("send_message should be a function tool");
     };
     let JsonSchema::Object {
         properties,
@@ -594,10 +595,33 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         ..
     } = parameters
     else {
-        panic!("send_input should use object params");
+        panic!("send_message should use object params");
     };
     assert!(properties.contains_key("target"));
-    assert_eq!(required.as_ref(), Some(&vec!["target".to_string()]));
+    assert!(!properties.contains_key("message"));
+    assert_eq!(
+        required.as_ref(),
+        Some(&vec!["target".to_string(), "items".to_string()])
+    );
+
+    let assign_task = find_tool(&tools, "assign_task");
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &assign_task.spec else {
+        panic!("assign_task should be a function tool");
+    };
+    let JsonSchema::Object {
+        properties,
+        required,
+        ..
+    } = parameters
+    else {
+        panic!("assign_task should use object params");
+    };
+    assert!(properties.contains_key("target"));
+    assert!(!properties.contains_key("message"));
+    assert_eq!(
+        required.as_ref(),
+        Some(&vec!["target".to_string(), "items".to_string()])
+    );
 
     let wait_agent = find_tool(&tools, "wait_agent");
     let ToolSpec::Function(ResponsesApiTool {
@@ -652,6 +676,7 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         output_schema["properties"]["agents"]["items"]["required"],
         json!(["agent_name", "agent_status", "last_task_message"])
     );
+    assert_lacks_tool_name(&tools, "send_input");
     assert_lacks_tool_name(&tools, "resume_agent");
 }
 

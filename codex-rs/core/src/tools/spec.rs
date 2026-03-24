@@ -1448,6 +1448,80 @@ fn create_send_input_tool() -> ToolSpec {
     })
 }
 
+fn create_send_message_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "target".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Agent id or canonical task name to message (from spawn_agent).".to_string(),
+                ),
+            },
+        ),
+        ("items".to_string(), create_collab_input_items_schema()),
+        (
+            "interrupt".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "send_message".to_string(),
+        description: "Add a message to an existing agent without triggering a new turn. Use interrupt=true to stop the current task first. In MultiAgentV2, this tool currently supports text content only."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["target".to_string(), "items".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: Some(send_input_output_schema()),
+    })
+}
+
+fn create_assign_task_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "target".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Agent id or canonical task name to message (from spawn_agent).".to_string(),
+                ),
+            },
+        ),
+        ("items".to_string(), create_collab_input_items_schema()),
+        (
+            "interrupt".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "assign_task".to_string(),
+        description: "Add a message to an existing agent and trigger a turn in the target. Use interrupt=true to redirect work immediately. In MultiAgentV2, this tool currently supports text content only."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["target".to_string(), "items".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: Some(send_input_output_schema()),
+    })
+}
+
 fn create_resume_agent_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -2695,8 +2769,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents::SendInputHandler;
     use crate::tools::handlers::multi_agents::SpawnAgentHandler;
     use crate::tools::handlers::multi_agents::WaitAgentHandler;
+    use crate::tools::handlers::multi_agents_v2::AssignTaskHandler as AssignTaskHandlerV2;
     use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
-    use crate::tools::handlers::multi_agents_v2::SendInputHandler as SendInputHandlerV2;
+    use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
     use std::sync::Arc;
@@ -3085,10 +3160,22 @@ pub(crate) fn build_specs_with_discoverable_tools(
         );
         push_tool_spec(
             &mut builder,
-            create_send_input_tool(),
+            if config.multi_agent_v2 {
+                create_send_message_tool()
+            } else {
+                create_send_input_tool()
+            },
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
+        if config.multi_agent_v2 {
+            push_tool_spec(
+                &mut builder,
+                create_assign_task_tool(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+        }
         if !config.multi_agent_v2 {
             push_tool_spec(
                 &mut builder,
@@ -3122,7 +3209,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 config.code_mode_enabled,
             );
             builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandlerV2));
-            builder.register_handler("send_input", Arc::new(SendInputHandlerV2));
+            builder.register_handler("send_message", Arc::new(SendMessageHandlerV2));
+            builder.register_handler("assign_task", Arc::new(AssignTaskHandlerV2));
             builder.register_handler("wait_agent", Arc::new(WaitAgentHandlerV2));
             builder.register_handler("list_agents", Arc::new(ListAgentsHandlerV2));
         } else {

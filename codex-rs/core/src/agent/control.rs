@@ -812,24 +812,41 @@ impl AgentControl {
                 return;
             };
             let child_thread = state.get_thread(child_thread_id).await.ok();
+            let message = format_subagent_notification_message(child_reference.as_str(), &status);
             if child_agent_path.is_some()
                 && child_thread
                     .as_ref()
                     .map(|thread| thread.enabled(Feature::MultiAgentV2))
                     .unwrap_or(true)
             {
-                // Disable v2 completion notifications for now so child turns do
-                // not enqueue synthetic parent messages on completion.
+                let Some(child_agent_path) = child_agent_path.clone() else {
+                    return;
+                };
+                let Some(parent_agent_path) = child_agent_path
+                    .as_str()
+                    .rsplit_once('/')
+                    .and_then(|(parent, _)| AgentPath::try_from(parent).ok())
+                else {
+                    return;
+                };
+                let communication = InterAgentCommunication::new(
+                    child_agent_path,
+                    parent_agent_path,
+                    Vec::new(),
+                    message,
+                    false,
+                )
+                ;
+                let _ = control
+                    .send_inter_agent_communication(parent_thread_id, communication)
+                    .await;
                 return;
             }
             let Ok(parent_thread) = state.get_thread(parent_thread_id).await else {
                 return;
             };
             parent_thread
-                .inject_user_message_without_turn(format_subagent_notification_message(
-                    child_reference.as_str(),
-                    &status,
-                ))
+                .inject_user_message_without_turn(message)
                 .await;
         });
     }

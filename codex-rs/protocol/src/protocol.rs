@@ -518,6 +518,7 @@ pub struct InterAgentCommunication {
     #[serde(default)]
     pub other_recipients: Vec<AgentPath>,
     pub content: String,
+    pub trigger_turn: bool,
 }
 
 impl InterAgentCommunication {
@@ -526,12 +527,14 @@ impl InterAgentCommunication {
         recipient: AgentPath,
         other_recipients: Vec<AgentPath>,
         content: String,
+        trigger_turn: bool
     ) -> Self {
         Self {
             author,
             recipient,
             other_recipients,
             content,
+            trigger_turn,
         }
     }
 

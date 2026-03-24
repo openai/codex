@@ -41,6 +41,7 @@ fn inter_agent_assistant_message(text: &str) -> ResponseItem {
         AgentPath::root().join("worker").unwrap(),
         Vec::new(),
         text.to_string(),
+        true,
     );
     ResponseItem::Message {
         id: None,

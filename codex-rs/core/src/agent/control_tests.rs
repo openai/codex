@@ -408,6 +408,62 @@ async fn send_input_submits_user_message() {
 }
 
 #[tokio::test]
+async fn send_inter_agent_communication_without_turn_queues_message_without_triggering_turn() {
+    let harness = AgentControlHarness::new().await;
+    let (thread_id, thread) = harness.start_thread().await;
+    let communication = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::try_from("/root/worker").expect("agent path"),
+        Vec::new(),
+        "hello from tests".to_string(),
+        false,
+    );
+
+    let submission_id = harness
+        .control
+        .send_inter_agent_communication(thread_id, communication.clone())
+        .await
+        .expect("send_inter_agent_communication should succeed");
+    assert!(!submission_id.is_empty());
+
+    let expected = (thread_id, Op::InterAgentCommunication { communication: communication.clone() });
+    let captured = harness
+        .manager
+        .captured_ops()
+        .into_iter()
+        .find(|entry| *entry == expected);
+    assert_eq!(captured, Some(expected));
+
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if thread
+                .codex
+                .session
+                .has_queued_response_items_for_next_turn()
+                .await
+            {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("inter-agent communication should stay pending");
+
+    let history_items = thread
+        .codex
+        .session
+        .clone_history()
+        .await
+        .raw_items()
+        .to_vec();
+    assert!(!history_contains_assistant_inter_agent_communication(
+        &history_items,
+        &communication
+    ));
+}
+
+#[tokio::test]
 async fn append_message_records_assistant_message() {
     let harness = AgentControlHarness::new().await;
     let (thread_id, thread) = harness.start_thread().await;
@@ -1057,9 +1113,96 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
             AgentPath::root(),
             Vec::new(),
             "done".to_string(),
+            true,
         )
     ));
     assert!(!has_subagent_notification(&root_history_items));
+}
+
+#[tokio::test]
+async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
+    let harness = AgentControlHarness::new().await;
+    let (_root_thread_id, root_thread) = harness.start_thread().await;
+    let (worker_thread_id, _worker_thread) = harness.start_thread().await;
+    let mut tester_config = harness.config.clone();
+    let _ = tester_config.features.enable(Feature::MultiAgentV2);
+    let tester_thread_id = harness
+        .manager
+        .start_thread(tester_config)
+        .await
+        .expect("tester thread should start")
+        .thread_id;
+    let tester_thread = harness
+        .manager
+        .get_thread(tester_thread_id)
+        .await
+        .expect("tester thread should exist");
+    let worker_path = AgentPath::root().join("worker_a").expect("worker path");
+    let tester_path = worker_path.join("tester").expect("tester path");
+    harness.control.maybe_start_completion_watcher(
+        tester_thread_id,
+        Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: worker_thread_id,
+            depth: 2,
+            agent_path: Some(tester_path.clone()),
+            agent_nickname: None,
+            agent_role: Some("explorer".to_string()),
+        })),
+        tester_path.to_string(),
+        Some(tester_path.clone()),
+    );
+    let tester_turn = tester_thread.codex.session.new_default_turn().await;
+    tester_thread
+        .codex
+        .session
+        .send_event(
+            tester_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: tester_turn.sub_id.clone(),
+                last_agent_message: Some("done".to_string()),
+            }),
+        )
+        .await;
+
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let ops = harness.manager.captured_ops();
+            if ops.iter().any(|(thread_id, op)| {
+                *thread_id == worker_thread_id
+                    && matches!(
+                        op,
+                        Op::InterAgentCommunication { communication }
+                            if communication.author == tester_path
+                                && communication.recipient == worker_path
+                                && communication.content == "done"
+                                && !communication.trigger_turn
+                    )
+            }) {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("completion watcher should queue a direct-parent message");
+
+    let root_history_items = root_thread
+        .codex
+        .session
+        .clone_history()
+        .await
+        .raw_items()
+        .to_vec();
+    assert!(!history_contains_assistant_inter_agent_communication(
+        &root_history_items,
+        &InterAgentCommunication::new(
+            tester_path,
+            AgentPath::root(),
+            Vec::new(),
+            "done".to_string(),
+            false,
+        )
+    ));
 }
 
 #[tokio::test]
