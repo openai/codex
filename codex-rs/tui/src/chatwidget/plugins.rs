@@ -8,6 +8,7 @@ use crate::bottom_pane::ColumnWidthMode;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::history_cell;
+use crate::onboarding::mark_url_hyperlink;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::shimmer::shimmer_spans;
@@ -90,6 +91,23 @@ impl Renderable for DelayedLoadingHeader {
 
     fn desired_height(&self, _width: u16) -> u16 {
         2 + u16::from(self.note.is_some())
+    }
+}
+
+const APPS_HELP_ARTICLE_URL: &str = "https://help.openai.com/en/articles/11487775-apps-in-chatgpt";
+
+struct PluginDisclosureLine {
+    line: Line<'static>,
+}
+
+impl Renderable for PluginDisclosureLine {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        self.line.render(area, buf);
+        mark_url_hyperlink(buf, area, APPS_HELP_ARTICLE_URL);
+    }
+
+    fn desired_height(&self, _width: u16) -> u16 {
+        1
     }
 }
 
@@ -812,13 +830,35 @@ impl ChatWidget {
     ) -> SelectionViewParams {
         let marketplace_label = plugin.marketplace_name.clone();
         let display_name = plugin_display_name(&plugin.summary);
-        let status_label = plugin_status_label(&plugin.summary);
+        let detail_status_label = if plugin.summary.installed {
+            if plugin.summary.enabled {
+                "Installed"
+            } else {
+                "Installed · Disabled"
+            }
+        } else {
+            match plugin.summary.install_policy {
+                PluginInstallPolicy::NotAvailable => "Not installable",
+                PluginInstallPolicy::Available => "Can be installed",
+                PluginInstallPolicy::InstalledByDefault => "Available by default",
+            }
+        };
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Plugins".bold()));
         header.push(Line::from(
-            format!("{display_name} · {marketplace_label}").bold(),
+            format!("{display_name} · {detail_status_label} · {marketplace_label}").bold(),
         ));
-        header.push(Line::from(status_label.dim()));
+        header.push(PluginDisclosureLine {
+            line: Line::from(vec![
+                "Data shared with this app is subject to the app's ".into(),
+                "terms of service".bold(),
+                " and ".into(),
+                "privacy policy".bold(),
+                ". ".into(),
+                "Learn more".cyan().underlined(),
+                ".".into(),
+            ]),
+        });
         if let Some(description) = plugin_detail_description(plugin) {
             header.push(Line::from(description.dim()));
         }
