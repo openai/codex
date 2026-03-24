@@ -27,6 +27,9 @@ use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
 use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::registry::AnyToolResult;
+use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRequest;
@@ -47,6 +50,50 @@ enum ShellCommandBackend {
 
 pub struct ShellCommandHandler {
     backend: ShellCommandBackend,
+}
+
+fn bash_post_tool_use_payload(
+    result: &AnyToolResult,
+    pre_tool_use_payload: Option<PreToolUsePayload>,
+) -> Option<PostToolUsePayload> {
+    let command = pre_tool_use_payload?.command;
+    let tool_response = result
+        .result
+        .post_tool_use_response(&result.call_id, &result.payload)?;
+    Some(PostToolUsePayload {
+        command,
+        tool_response,
+    })
+}
+
+fn shell_pre_tool_use_payload(payload: &ToolPayload) -> Option<PreToolUsePayload> {
+    match payload {
+        ToolPayload::Function { arguments } => {
+            serde_json::from_str::<ShellToolCallParams>(arguments)
+                .ok()
+                .map(|params| PreToolUsePayload {
+                    command: codex_shell_command::parse_command::command_for_display(
+                        &params.command,
+                    ),
+                })
+        }
+        ToolPayload::LocalShell { params } => Some(PreToolUsePayload {
+            command: codex_shell_command::parse_command::command_for_display(&params.command),
+        }),
+        _ => None,
+    }
+}
+
+fn shell_command_pre_tool_use_payload(payload: &ToolPayload) -> Option<PreToolUsePayload> {
+    let ToolPayload::Function { arguments } = payload else {
+        return None;
+    };
+
+    serde_json::from_str::<ShellCommandToolCallParams>(arguments)
+        .ok()
+        .map(|params| PreToolUsePayload {
+            command: params.command,
+        })
 }
 
 struct RunExecLikeArgs {
@@ -179,6 +226,14 @@ impl ToolHandler for ShellHandler {
         }
     }
 
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        shell_pre_tool_use_payload(&invocation.payload)
+    }
+
+    fn post_tool_use_payload(&self, result: &AnyToolResult) -> Option<PostToolUsePayload> {
+        bash_post_tool_use_payload(result, shell_pre_tool_use_payload(&result.payload))
+    }
+
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
@@ -267,6 +322,14 @@ impl ToolHandler for ShellCommandHandler {
                 !is_known_safe_command(&command)
             })
             .unwrap_or(true)
+    }
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        shell_command_pre_tool_use_payload(&invocation.payload)
+    }
+
+    fn post_tool_use_payload(&self, result: &AnyToolResult) -> Option<PostToolUsePayload> {
+        bash_post_tool_use_payload(result, shell_command_pre_tool_use_payload(&result.payload))
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {

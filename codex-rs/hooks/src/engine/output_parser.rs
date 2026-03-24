@@ -130,7 +130,7 @@ pub(crate) fn parse_post_tool_use(stdout: &str) -> Option<PostToolUseOutput> {
             None => true,
         } {
         Some(invalid_block_message("PostToolUse"))
-    } else if !should_block && wire.reason.is_some() {
+    } else if !should_block && universal.continue_processing && wire.reason.is_some() {
         Some("PostToolUse hook returned reason without decision".to_string())
     } else {
         None
@@ -236,11 +236,7 @@ fn unsupported_pre_tool_use_universal(universal: &UniversalOutput) -> Option<Str
 }
 
 fn unsupported_post_tool_use_universal(universal: &UniversalOutput) -> Option<String> {
-    if !universal.continue_processing {
-        Some("PostToolUse hook returned unsupported continue:false".to_string())
-    } else if universal.stop_reason.is_some() {
-        Some("PostToolUse hook returned unsupported stopReason".to_string())
-    } else if universal.suppress_output {
+    if universal.suppress_output {
         Some("PostToolUse hook returned unsupported suppressOutput".to_string())
     } else {
         None

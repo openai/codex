@@ -273,6 +273,11 @@ elif mode == "decision_block":
         "decision": "block",
         "reason": reason
     }}))
+elif mode == "continue_false":
+    print(json.dumps({{
+        "continue": False,
+        "stopReason": reason
+    }}))
 elif mode == "exit_2":
     sys.stderr.write(reason + "\n")
     raise SystemExit(2)
@@ -1062,7 +1067,7 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
         .and_then(Value::as_str)
         .expect("shell command output string");
     assert!(
-        output.contains("Bash command blocked by hook: blocked by pre hook"),
+        output.contains("Command blocked by PreToolUse hook: blocked by pre hook"),
         "blocked tool output should surface the hook reason",
     );
     assert!(
@@ -1164,13 +1169,13 @@ async fn pre_tool_use_blocks_local_shell_before_execution() -> Result<()> {
         .and_then(Value::as_str)
         .expect("local shell output string");
     assert!(
-        output.contains("Bash command blocked by hook: blocked local shell"),
+        output.contains("Command blocked by PreToolUse hook: blocked local shell"),
         "blocked local shell output should surface the hook reason",
     );
     assert!(
         output.contains(&format!(
             "Command: {}",
-            codex_shell_command::parse_command::shlex_join(&command)
+            codex_shell_command::parse_command::command_for_display(&command)
         )),
         "blocked local shell output should surface the blocked command",
     );
@@ -1183,7 +1188,7 @@ async fn pre_tool_use_blocks_local_shell_before_execution() -> Result<()> {
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(
         hook_inputs[0]["tool_input"]["command"],
-        codex_shell_command::parse_command::shlex_join(&command),
+        codex_shell_command::parse_command::command_for_display(&command),
     );
     assert!(
         hook_inputs[0]["turn_id"]
@@ -1259,7 +1264,7 @@ async fn pre_tool_use_blocks_exec_command_before_execution() -> Result<()> {
         .and_then(Value::as_str)
         .expect("exec command output string");
     assert!(
-        output.contains("Bash command blocked by hook: blocked exec command"),
+        output.contains("Command blocked by PreToolUse hook: blocked exec command"),
         "blocked exec command output should surface the hook reason",
     );
     assert!(
@@ -1518,6 +1523,75 @@ async fn post_tool_use_block_decision_replaces_shell_command_output_with_reason(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn post_tool_use_continue_false_replaces_shell_command_output_with_stop_reason() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "posttooluse-shell-command-stop";
+    let command = "printf stop-output".to_string();
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "post hook stop observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let stop_reason = "Execution halted by post-tool hook";
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_post_tool_use_hook(home, Some("^Bash$"), "continue_false", stop_reason)
+            {
+                panic!("failed to write post tool use hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("run the shell command with stop-style post hook")
+        .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell command output string");
+    assert_eq!(output, stop_reason);
+
+    let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(
+        hook_inputs[0]["tool_response"],
+        Value::String("stop-output".to_string())
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn post_tool_use_records_additional_context_for_local_shell() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1581,7 +1655,7 @@ async fn post_tool_use_records_additional_context_for_local_shell() -> Result<()
     assert_eq!(hook_inputs.len(), 1);
     assert_eq!(
         hook_inputs[0]["tool_input"]["command"],
-        codex_shell_command::parse_command::shlex_join(&command),
+        codex_shell_command::parse_command::command_for_display(&command),
     );
     assert_eq!(
         hook_inputs[0]["tool_response"],

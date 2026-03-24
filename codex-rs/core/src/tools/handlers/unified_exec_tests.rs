@@ -11,6 +11,10 @@ use std::fs;
 use std::sync::Arc;
 use tempfile::tempdir;
 
+use crate::tools::context::ExecCommandToolOutput;
+use crate::tools::context::ToolPayload;
+use crate::tools::registry::AnyToolResult;
+
 #[test]
 fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> {
     let json = r#"{"cmd": "echo hello"}"#;
@@ -181,4 +185,65 @@ fn exec_command_args_resolve_relative_additional_permissions_against_workdir() -
         })
     );
     Ok(())
+}
+
+#[test]
+fn exec_command_pre_tool_use_payload_uses_raw_command() {
+    let payload = ToolPayload::Function {
+        arguments: serde_json::json!({ "cmd": "printf exec command" }).to_string(),
+    };
+
+    assert_eq!(
+        super::exec_command_pre_tool_use_payload("exec_command", &payload),
+        Some(crate::tools::registry::PreToolUsePayload {
+            command: "printf exec command".to_string(),
+        })
+    );
+}
+
+#[test]
+fn exec_command_pre_tool_use_payload_skips_write_stdin() {
+    let payload = ToolPayload::Function {
+        arguments: serde_json::json!({ "chars": "echo hi" }).to_string(),
+    };
+
+    assert_eq!(
+        super::exec_command_pre_tool_use_payload("write_stdin", &payload),
+        None
+    );
+}
+
+#[test]
+fn exec_command_post_tool_use_payload_uses_raw_output() {
+    let payload = ToolPayload::Function {
+        arguments: serde_json::json!({ "cmd": "echo three" }).to_string(),
+    };
+    let result = AnyToolResult {
+        tool_name: "exec_command".to_string(),
+        call_id: "call-43".to_string(),
+        payload,
+        result: Box::new(ExecCommandToolOutput {
+            event_call_id: "event-43".to_string(),
+            chunk_id: "chunk-1".to_string(),
+            wall_time: std::time::Duration::from_millis(498),
+            raw_output: b"three".to_vec(),
+            max_output_tokens: None,
+            process_id: None,
+            exit_code: Some(0),
+            original_token_count: None,
+            session_command: Some(vec![
+                "/bin/zsh".to_string(),
+                "-lc".to_string(),
+                "echo three".to_string(),
+            ]),
+        }),
+    };
+
+    assert_eq!(
+        super::exec_command_post_tool_use_payload(&result),
+        Some(crate::tools::registry::PostToolUsePayload {
+            command: "echo three".to_string(),
+            tool_response: serde_json::json!("three"),
+        })
+    );
 }

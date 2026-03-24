@@ -16,6 +16,9 @@ use crate::tools::handlers::normalize_and_validate_additional_permissions;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
+use crate::tools::registry::AnyToolResult;
+use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::spec::UnifiedExecShellMode;
@@ -81,6 +84,34 @@ fn default_tty() -> bool {
     false
 }
 
+fn exec_command_pre_tool_use_payload(
+    tool_name: &str,
+    payload: &ToolPayload,
+) -> Option<PreToolUsePayload> {
+    if tool_name != "exec_command" {
+        return None;
+    }
+
+    let ToolPayload::Function { arguments } = payload else {
+        return None;
+    };
+
+    serde_json::from_str::<ExecCommandArgs>(arguments)
+        .ok()
+        .map(|args| PreToolUsePayload { command: args.cmd })
+}
+
+fn exec_command_post_tool_use_payload(result: &AnyToolResult) -> Option<PostToolUsePayload> {
+    let command = exec_command_pre_tool_use_payload(&result.tool_name, &result.payload)?.command;
+    let tool_response = result
+        .result
+        .post_tool_use_response(&result.call_id, &result.payload)?;
+    Some(PostToolUsePayload {
+        command,
+        tool_response,
+    })
+}
+
 #[async_trait]
 impl ToolHandler for UnifiedExecHandler {
     type Output = ExecCommandToolOutput;
@@ -115,6 +146,14 @@ impl ToolHandler for UnifiedExecHandler {
             Err(_) => return true,
         };
         !is_known_safe_command(&command)
+    }
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        exec_command_pre_tool_use_payload(&invocation.tool_name, &invocation.payload)
+    }
+
+    fn post_tool_use_payload(&self, result: &AnyToolResult) -> Option<PostToolUsePayload> {
+        exec_command_post_tool_use_payload(result)
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -160,7 +199,8 @@ impl ToolHandler for UnifiedExecHandler {
                     turn.tools_config.allow_login_shell,
                 )
                 .map_err(FunctionCallError::RespondToModel)?;
-                let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
+                let command_for_display =
+                    codex_shell_command::parse_command::command_for_display(&command);
 
                 let ExecCommandArgs {
                     workdir,

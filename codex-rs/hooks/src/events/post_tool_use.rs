@@ -35,12 +35,16 @@ pub struct PostToolUseRequest {
 #[derive(Debug)]
 pub struct PostToolUseOutcome {
     pub hook_events: Vec<HookCompletedEvent>,
+    pub should_stop: bool,
+    pub stop_reason: Option<String>,
     pub additional_contexts: Vec<String>,
     pub feedback_message: Option<String>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct PostToolUseHandlerData {
+    should_stop: bool,
+    stop_reason: Option<String>,
     additional_contexts_for_model: Vec<String>,
     feedback_messages_for_model: Vec<String>,
 }
@@ -72,6 +76,8 @@ pub(crate) async fn run(
     if matched.is_empty() {
         return PostToolUseOutcome {
             hook_events: Vec::new(),
+            should_stop: false,
+            stop_reason: None,
             additional_contexts: Vec::new(),
             feedback_message: None,
         };
@@ -117,6 +123,10 @@ pub(crate) async fn run(
             .iter()
             .map(|result| result.data.additional_contexts_for_model.as_slice()),
     );
+    let should_stop = results.iter().any(|result| result.data.should_stop);
+    let stop_reason = results
+        .iter()
+        .find_map(|result| result.data.stop_reason.clone());
     let feedback_message = common::join_text_chunks(
         results
             .iter()
@@ -126,6 +136,8 @@ pub(crate) async fn run(
 
     PostToolUseOutcome {
         hook_events: results.into_iter().map(|result| result.completed).collect(),
+        should_stop,
+        stop_reason,
         additional_contexts,
         feedback_message,
     }
@@ -138,6 +150,8 @@ fn parse_completed(
 ) -> dispatcher::ParsedHandler<PostToolUseHandlerData> {
     let mut entries = Vec::new();
     let mut status = HookRunStatus::Completed;
+    let mut should_stop = false;
+    let mut stop_reason = None;
     let mut additional_contexts_for_model = Vec::new();
     let mut feedback_messages_for_model = Vec::new();
 
@@ -171,7 +185,25 @@ fn parse_completed(
                             additional_context,
                         );
                     }
-                    if let Some(invalid_reason) = parsed.invalid_reason {
+                    if !parsed.universal.continue_processing {
+                        status = HookRunStatus::Stopped;
+                        should_stop = true;
+                        stop_reason = parsed.universal.stop_reason.clone();
+                        let stop_text = parsed
+                            .universal
+                            .stop_reason
+                            .unwrap_or_else(|| "PostToolUse hook stopped execution".to_string());
+                        entries.push(HookOutputEntry {
+                            kind: HookOutputEntryKind::Stop,
+                            text: stop_text.clone(),
+                        });
+                        let model_feedback = parsed
+                            .reason
+                            .as_deref()
+                            .and_then(common::trimmed_non_empty)
+                            .unwrap_or(stop_text);
+                        feedback_messages_for_model.push(model_feedback);
+                    } else if let Some(invalid_reason) = parsed.invalid_reason {
                         status = HookRunStatus::Failed;
                         entries.push(HookOutputEntry {
                             kind: HookOutputEntryKind::Error,
@@ -241,6 +273,8 @@ fn parse_completed(
     dispatcher::ParsedHandler {
         completed,
         data: PostToolUseHandlerData {
+            should_stop,
+            stop_reason,
             additional_contexts_for_model,
             feedback_messages_for_model,
         },
@@ -250,6 +284,8 @@ fn parse_completed(
 fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> PostToolUseOutcome {
     PostToolUseOutcome {
         hook_events,
+        should_stop: false,
+        stop_reason: None,
         additional_contexts: Vec::new(),
         feedback_message: None,
     }
@@ -285,6 +321,8 @@ mod tests {
         assert_eq!(
             parsed.data,
             PostToolUseHandlerData {
+                should_stop: false,
+                stop_reason: None,
                 additional_contexts_for_model: Vec::new(),
                 feedback_messages_for_model: vec!["bash output looked sketchy".to_string()],
             }
@@ -307,6 +345,8 @@ mod tests {
         assert_eq!(
             parsed.data,
             PostToolUseHandlerData {
+                should_stop: false,
+                stop_reason: None,
                 additional_contexts_for_model: vec!["Remember the bash cleanup note.".to_string()],
                 feedback_messages_for_model: Vec::new(),
             }
@@ -335,6 +375,8 @@ mod tests {
         assert_eq!(
             parsed.data,
             PostToolUseHandlerData {
+                should_stop: false,
+                stop_reason: None,
                 additional_contexts_for_model: Vec::new(),
                 feedback_messages_for_model: Vec::new(),
             }
@@ -360,11 +402,44 @@ mod tests {
         assert_eq!(
             parsed.data,
             PostToolUseHandlerData {
+                should_stop: false,
+                stop_reason: None,
                 additional_contexts_for_model: Vec::new(),
                 feedback_messages_for_model: vec!["post hook says pause".to_string()],
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Completed);
+    }
+
+    #[test]
+    fn continue_false_stops_with_reason() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(
+                Some(0),
+                r#"{"continue":false,"stopReason":"halt after bash output","reason":"post-tool hook says stop"}"#,
+                "",
+            ),
+            Some("turn-1".to_string()),
+        );
+
+        assert_eq!(
+            parsed.data,
+            PostToolUseHandlerData {
+                should_stop: true,
+                stop_reason: Some("halt after bash output".to_string()),
+                additional_contexts_for_model: Vec::new(),
+                feedback_messages_for_model: vec!["post-tool hook says stop".to_string()],
+            }
+        );
+        assert_eq!(parsed.completed.run.status, HookRunStatus::Stopped);
+        assert_eq!(
+            parsed.completed.run.entries,
+            vec![HookOutputEntry {
+                kind: HookOutputEntryKind::Stop,
+                text: "halt after bash output".to_string(),
+            }]
+        );
     }
 
     #[test]
@@ -378,6 +453,8 @@ mod tests {
         assert_eq!(
             parsed.data,
             PostToolUseHandlerData {
+                should_stop: false,
+                stop_reason: None,
                 additional_contexts_for_model: Vec::new(),
                 feedback_messages_for_model: Vec::new(),
             }

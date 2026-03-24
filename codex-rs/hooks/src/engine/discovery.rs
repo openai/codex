@@ -7,6 +7,7 @@ use codex_config::ConfigLayerStackOrdering;
 use super::ConfiguredHandler;
 use super::config::HookHandlerConfig;
 use super::config::HooksFile;
+use super::config::MatcherGroup;
 use crate::events::common::matcher_pattern_for_event;
 use crate::events::common::validate_matcher_pattern;
 
@@ -70,80 +71,46 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
             }
         };
 
-        for group in parsed.hooks.pre_tool_use {
-            append_group_handlers(
-                &mut handlers,
-                &mut warnings,
-                &mut display_order,
-                source_path.as_path(),
-                codex_protocol::protocol::HookEventName::PreToolUse,
-                matcher_pattern_for_event(
-                    codex_protocol::protocol::HookEventName::PreToolUse,
-                    group.matcher.as_deref(),
-                ),
-                group.hooks,
-            );
-        }
-
-        for group in parsed.hooks.post_tool_use {
-            append_group_handlers(
-                &mut handlers,
-                &mut warnings,
-                &mut display_order,
-                source_path.as_path(),
-                codex_protocol::protocol::HookEventName::PostToolUse,
-                matcher_pattern_for_event(
-                    codex_protocol::protocol::HookEventName::PostToolUse,
-                    group.matcher.as_deref(),
-                ),
-                group.hooks,
-            );
-        }
-
-        for group in parsed.hooks.session_start {
-            append_group_handlers(
-                &mut handlers,
-                &mut warnings,
-                &mut display_order,
-                source_path.as_path(),
-                codex_protocol::protocol::HookEventName::SessionStart,
-                matcher_pattern_for_event(
-                    codex_protocol::protocol::HookEventName::SessionStart,
-                    group.matcher.as_deref(),
-                ),
-                group.hooks,
-            );
-        }
-
-        for group in parsed.hooks.user_prompt_submit {
-            append_group_handlers(
-                &mut handlers,
-                &mut warnings,
-                &mut display_order,
-                source_path.as_path(),
-                codex_protocol::protocol::HookEventName::UserPromptSubmit,
-                matcher_pattern_for_event(
-                    codex_protocol::protocol::HookEventName::UserPromptSubmit,
-                    group.matcher.as_deref(),
-                ),
-                group.hooks,
-            );
-        }
-
-        for group in parsed.hooks.stop {
-            append_group_handlers(
-                &mut handlers,
-                &mut warnings,
-                &mut display_order,
-                source_path.as_path(),
-                codex_protocol::protocol::HookEventName::Stop,
-                matcher_pattern_for_event(
-                    codex_protocol::protocol::HookEventName::Stop,
-                    group.matcher.as_deref(),
-                ),
-                group.hooks,
-            );
-        }
+        append_matcher_groups(
+            &mut handlers,
+            &mut warnings,
+            &mut display_order,
+            source_path.as_path(),
+            codex_protocol::protocol::HookEventName::PreToolUse,
+            parsed.hooks.pre_tool_use,
+        );
+        append_matcher_groups(
+            &mut handlers,
+            &mut warnings,
+            &mut display_order,
+            source_path.as_path(),
+            codex_protocol::protocol::HookEventName::PostToolUse,
+            parsed.hooks.post_tool_use,
+        );
+        append_matcher_groups(
+            &mut handlers,
+            &mut warnings,
+            &mut display_order,
+            source_path.as_path(),
+            codex_protocol::protocol::HookEventName::SessionStart,
+            parsed.hooks.session_start,
+        );
+        append_matcher_groups(
+            &mut handlers,
+            &mut warnings,
+            &mut display_order,
+            source_path.as_path(),
+            codex_protocol::protocol::HookEventName::UserPromptSubmit,
+            parsed.hooks.user_prompt_submit,
+        );
+        append_matcher_groups(
+            &mut handlers,
+            &mut warnings,
+            &mut display_order,
+            source_path.as_path(),
+            codex_protocol::protocol::HookEventName::Stop,
+            parsed.hooks.stop,
+        );
     }
 
     DiscoveryResult { handlers, warnings }
@@ -211,6 +178,27 @@ fn append_group_handlers(
                 source_path.display()
             )),
         }
+    }
+}
+
+fn append_matcher_groups(
+    handlers: &mut Vec<ConfiguredHandler>,
+    warnings: &mut Vec<String>,
+    display_order: &mut i64,
+    source_path: &Path,
+    event_name: codex_protocol::protocol::HookEventName,
+    groups: Vec<MatcherGroup>,
+) {
+    for group in groups {
+        append_group_handlers(
+            handlers,
+            warnings,
+            display_order,
+            source_path,
+            event_name,
+            matcher_pattern_for_event(event_name, group.matcher.as_deref()),
+            group.hooks,
+        );
     }
 }
 

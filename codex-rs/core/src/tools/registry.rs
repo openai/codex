@@ -24,10 +24,7 @@ use codex_hooks::HookToolInput;
 use codex_hooks::HookToolInputLocalShell;
 use codex_hooks::HookToolKind;
 use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::ShellCommandToolCallParams;
-use codex_protocol::models::ShellToolCallParams;
 use codex_utils_readiness::Readiness;
-use serde::Deserialize;
 use serde_json::Value;
 use tracing::warn;
 
@@ -60,12 +57,21 @@ pub trait ToolHandler: Send + Sync {
         false
     }
 
+    fn pre_tool_use_payload(&self, _invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        None
+    }
+
+    fn post_tool_use_payload(&self, _result: &AnyToolResult) -> Option<PostToolUsePayload> {
+        None
+    }
+
     /// Perform the actual [ToolInvocation] and returns a [ToolOutput] containing
     /// the final output to return to the model.
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError>;
 }
 
 pub(crate) struct AnyToolResult {
+    pub(crate) tool_name: String,
     pub(crate) call_id: String,
     pub(crate) payload: ToolPayload,
     pub(crate) result: Box<dyn ToolOutput>,
@@ -77,6 +83,7 @@ impl AnyToolResult {
             call_id,
             payload,
             result,
+            ..
         } = self;
         result.to_response_item(&call_id, &payload)
     }
@@ -89,11 +96,26 @@ impl AnyToolResult {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PreToolUsePayload {
+    pub(crate) command: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PostToolUsePayload {
+    pub(crate) command: String,
+    pub(crate) tool_response: Value,
+}
+
 #[async_trait]
 trait AnyToolHandler: Send + Sync {
     fn matches_kind(&self, payload: &ToolPayload) -> bool;
 
     async fn is_mutating(&self, invocation: &ToolInvocation) -> bool;
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload>;
+
+    fn post_tool_use_payload(&self, result: &AnyToolResult) -> Option<PostToolUsePayload>;
 
     async fn handle_any(
         &self,
@@ -114,14 +136,24 @@ where
         ToolHandler::is_mutating(self, invocation).await
     }
 
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        ToolHandler::pre_tool_use_payload(self, invocation)
+    }
+
+    fn post_tool_use_payload(&self, result: &AnyToolResult) -> Option<PostToolUsePayload> {
+        ToolHandler::post_tool_use_payload(self, result)
+    }
+
     async fn handle_any(
         &self,
         invocation: ToolInvocation,
     ) -> Result<AnyToolResult, FunctionCallError> {
+        let tool_name = invocation.tool_name.clone();
         let call_id = invocation.call_id.clone();
         let payload = invocation.payload.clone();
         let output = self.handle(invocation).await?;
         Ok(AnyToolResult {
+            tool_name,
             call_id,
             payload,
             result: Box::new(output),
@@ -251,17 +283,18 @@ impl ToolRegistry {
             return Err(FunctionCallError::Fatal(message));
         }
 
-        if let Some(command) = pre_tool_use_command(tool_name.as_ref(), &invocation.payload)
+        if let Some(pre_tool_use_payload) = handler.pre_tool_use_payload(&invocation)
             && let Some(reason) = run_pre_tool_use_hooks(
                 &invocation.session,
                 &invocation.turn,
                 invocation.call_id.clone(),
-                command.clone(),
+                pre_tool_use_payload.command.clone(),
             )
             .await
         {
             return Err(FunctionCallError::RespondToModel(format!(
-                "Bash command blocked by hook: {reason}. Command: {command}"
+                "Command blocked by PreToolUse hook: {reason}. Command: {}",
+                pre_tool_use_payload.command
             )));
         }
 
@@ -311,7 +344,7 @@ impl ToolRegistry {
             let guard = response_cell.lock().await;
             guard
                 .as_ref()
-                .and_then(|result| post_tool_use_payload(tool_name.as_ref(), result))
+                .and_then(|result| handler.post_tool_use_payload(result))
         } else {
             None
         };
@@ -351,7 +384,20 @@ impl ToolRegistry {
             )
             .await;
 
-            if let Some(feedback_message) = &outcome.feedback_message {
+            if outcome.should_stop {
+                let replacement_text = outcome
+                    .feedback_message
+                    .clone()
+                    .or_else(|| outcome.stop_reason.clone())
+                    .unwrap_or_else(|| "PostToolUse hook stopped execution".to_string());
+                let mut guard = response_cell.lock().await;
+                if let Some(result) = guard.as_mut() {
+                    result.result = Box::new(FunctionToolOutput::from_text(
+                        replacement_text,
+                        /*success*/ None,
+                    ));
+                }
+            } else if let Some(feedback_message) = &outcome.feedback_message {
                 let mut guard = response_cell.lock().await;
                 if let Some(result) = guard.as_mut() {
                     result.result = Box::new(FunctionToolOutput::from_text(
@@ -474,51 +520,6 @@ fn sandbox_policy_tag(policy: &SandboxPolicy) -> &'static str {
         SandboxPolicy::DangerFullAccess => "danger-full-access",
         SandboxPolicy::ExternalSandbox { .. } => "external-sandbox",
     }
-}
-
-#[derive(Deserialize)]
-struct PreToolUseExecCommandArgs {
-    cmd: String,
-}
-
-fn pre_tool_use_command(tool_name: &str, payload: &ToolPayload) -> Option<String> {
-    match (tool_name, payload) {
-        ("shell" | "container.exec", ToolPayload::Function { arguments }) => {
-            serde_json::from_str::<ShellToolCallParams>(arguments)
-                .ok()
-                .map(|params| codex_shell_command::parse_command::shlex_join(&params.command))
-        }
-        ("local_shell", ToolPayload::LocalShell { params }) => Some(
-            codex_shell_command::parse_command::shlex_join(&params.command),
-        ),
-        ("shell_command", ToolPayload::Function { arguments }) => {
-            serde_json::from_str::<ShellCommandToolCallParams>(arguments)
-                .ok()
-                .map(|params| params.command)
-        }
-        ("exec_command", ToolPayload::Function { arguments }) => {
-            serde_json::from_str::<PreToolUseExecCommandArgs>(arguments)
-                .ok()
-                .map(|params| params.cmd)
-        }
-        _ => None,
-    }
-}
-
-struct PostToolUsePayload {
-    command: String,
-    tool_response: Value,
-}
-
-fn post_tool_use_payload(tool_name: &str, result: &AnyToolResult) -> Option<PostToolUsePayload> {
-    let command = pre_tool_use_command(tool_name, &result.payload)?;
-    let tool_response = result
-        .result
-        .post_tool_use_response(&result.call_id, &result.payload)?;
-    Some(PostToolUsePayload {
-        command,
-        tool_response,
-    })
 }
 
 // Hooks use a separate wire-facing input type so hook payload JSON stays stable
