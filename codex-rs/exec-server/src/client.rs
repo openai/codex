@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,6 +18,7 @@ use codex_app_server_protocol::FsWriteFileParams;
 use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::JSONRPCNotification;
 use serde_json::Value;
+use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
@@ -26,13 +28,15 @@ use tracing::warn;
 use crate::client_api::ExecServerClientConnectOptions;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
-use crate::process::ExecServerEvent;
+use crate::process::ExecSessionEvent;
+use crate::protocol::EXEC_CLOSED_METHOD;
 use crate::protocol::EXEC_EXITED_METHOD;
 use crate::protocol::EXEC_METHOD;
 use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
 use crate::protocol::EXEC_READ_METHOD;
 use crate::protocol::EXEC_TERMINATE_METHOD;
 use crate::protocol::EXEC_WRITE_METHOD;
+use crate::protocol::ExecClosedNotification;
 use crate::protocol::ExecExitedNotification;
 use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecParams;
@@ -92,7 +96,7 @@ impl RemoteExecServerConnectArgs {
 
 struct Inner {
     client: RpcClient,
-    events_tx: broadcast::Sender<ExecServerEvent>,
+    sessions: Mutex<HashMap<String, broadcast::Sender<ExecSessionEvent>>>,
     reader_task: tokio::task::JoinHandle<()>,
 }
 
@@ -156,10 +160,6 @@ impl ExecServerClient {
             args.into(),
         )
         .await
-    }
-
-    pub fn event_receiver(&self) -> broadcast::Receiver<ExecServerEvent> {
-        self.inner.events_tx.subscribe()
     }
 
     pub async fn initialize(
@@ -307,6 +307,25 @@ impl ExecServerClient {
             .map_err(Into::into)
     }
 
+    pub(crate) async fn register_session(
+        &self,
+        process_id: &str,
+    ) -> Result<broadcast::Receiver<ExecSessionEvent>, ExecServerError> {
+        let (events_tx, events_rx) = broadcast::channel(256);
+        let mut sessions = self.inner.sessions.lock().await;
+        if sessions.contains_key(process_id) {
+            return Err(ExecServerError::Protocol(format!(
+                "session already registered for process {process_id}"
+            )));
+        }
+        sessions.insert(process_id.to_string(), events_tx);
+        Ok(events_rx)
+    }
+
+    pub(crate) async fn unregister_session(&self, process_id: &str) {
+        self.inner.sessions.lock().await.remove(process_id);
+    }
+
     async fn connect(
         connection: JsonRpcConnection,
         options: ExecServerClientConnectOptions,
@@ -338,7 +357,7 @@ impl ExecServerClient {
 
             Inner {
                 client: rpc_client,
-                events_tx: broadcast::channel(256).0,
+                sessions: Mutex::new(HashMap::new()),
                 reader_task,
             }
         });
@@ -378,12 +397,33 @@ async fn handle_server_notification(
         EXEC_OUTPUT_DELTA_METHOD => {
             let params: ExecOutputDeltaNotification =
                 serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
-            let _ = inner.events_tx.send(ExecServerEvent::OutputDelta(params));
+            let events_tx = { inner.sessions.lock().await.get(&params.process_id).cloned() };
+            if let Some(events_tx) = events_tx {
+                let _ = events_tx.send(ExecSessionEvent::Output {
+                    seq: params.seq,
+                    stream: params.stream,
+                    chunk: params.chunk.into_inner(),
+                });
+            }
         }
         EXEC_EXITED_METHOD => {
             let params: ExecExitedNotification =
                 serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
-            let _ = inner.events_tx.send(ExecServerEvent::Exited(params));
+            let events_tx = { inner.sessions.lock().await.get(&params.process_id).cloned() };
+            if let Some(events_tx) = events_tx {
+                let _ = events_tx.send(ExecSessionEvent::Exited {
+                    seq: params.seq,
+                    exit_code: params.exit_code,
+                });
+            }
+        }
+        EXEC_CLOSED_METHOD => {
+            let params: ExecClosedNotification =
+                serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
+            let events_tx = { inner.sessions.lock().await.remove(&params.process_id) };
+            if let Some(events_tx) = events_tx {
+                let _ = events_tx.send(ExecSessionEvent::Closed { seq: params.seq });
+            }
         }
         other => {
             debug!("ignoring unknown exec-server notification: {other}");

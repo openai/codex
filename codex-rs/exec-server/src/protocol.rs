@@ -13,6 +13,7 @@ pub const EXEC_WRITE_METHOD: &str = "process/write";
 pub const EXEC_TERMINATE_METHOD: &str = "process/terminate";
 pub const EXEC_OUTPUT_DELTA_METHOD: &str = "process/output";
 pub const EXEC_EXITED_METHOD: &str = "process/exited";
+pub const EXEC_CLOSED_METHOD: &str = "process/closed";
 pub const FS_READ_FILE_METHOD: &str = "fs/readFile";
 pub const FS_WRITE_FILE_METHOD: &str = "fs/writeFile";
 pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
@@ -129,6 +130,7 @@ pub enum ExecOutputStream {
 #[serde(rename_all = "camelCase")]
 pub struct ExecOutputDeltaNotification {
     pub process_id: String,
+    pub seq: u64,
     pub stream: ExecOutputStream,
     pub chunk: ByteChunk,
 }
@@ -137,7 +139,15 @@ pub struct ExecOutputDeltaNotification {
 #[serde(rename_all = "camelCase")]
 pub struct ExecExitedNotification {
     pub process_id: String,
+    pub seq: u64,
     pub exit_code: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecClosedNotification {
+    pub process_id: String,
+    pub seq: u64,
 }
 
 mod base64_bytes {
