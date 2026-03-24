@@ -1,3 +1,5 @@
+use crate::bottom_pane::FeedbackAudience;
+use crate::status::StatusAccountDisplay;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::AppServerRequestHandle;
@@ -80,8 +82,6 @@ use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use crate::bottom_pane::FeedbackAudience;
-use crate::status::StatusAccountDisplay;
 
 pub(crate) struct AppServerBootstrap {
     pub(crate) account_auth_mode: Option<AuthMode>,
