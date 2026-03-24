@@ -382,6 +382,144 @@ flag = false
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
+async fn managed_preferences_expand_home_directory_in_workspace_write_roots() -> anyhow::Result<()>
+{
+    use base64::Engine;
+
+    let Some(home) = dirs::home_dir() else {
+        return Ok(());
+    };
+    let tmp = tempdir()?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides {
+            managed_config_path: Some(tmp.path().join("managed_config.toml")),
+            managed_preferences_base64: Some(
+                base64::prelude::BASE64_STANDARD.encode(
+                    r#"
+sandbox_mode = "workspace-write"
+[sandbox_workspace_write]
+writable_roots = ["~/code"]
+"#
+                    .as_bytes(),
+                ),
+            ),
+            macos_managed_config_requirements_base64: None,
+        })
+        .build()
+        .await?;
+
+    let expected_root = AbsolutePathBuf::from_absolute_path(home.join("code"))?;
+    match config.permissions.sandbox_policy.get() {
+        SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
+            assert_eq!(
+                writable_roots
+                    .iter()
+                    .filter(|root| **root == expected_root)
+                    .count(),
+                1,
+            );
+        }
+        other => panic!("expected workspace-write policy, got {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn managed_preferences_ignore_invalid_config_entry_without_dropping_valid_entries()
+-> anyhow::Result<()> {
+    use base64::Engine;
+
+    let tmp = tempdir()?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides {
+            managed_config_path: Some(tmp.path().join("managed_config.toml")),
+            managed_preferences_base64: Some(
+                base64::prelude::BASE64_STANDARD.encode(
+                    r#"
+model = "managed"
+sandbox_mode = "workspace-write"
+[sandbox_workspace_write]
+writable_roots = ["relative/path"]
+"#
+                    .as_bytes(),
+                ),
+            ),
+            macos_managed_config_requirements_base64: None,
+        })
+        .build()
+        .await?;
+
+    assert_eq!(config.model.as_deref(), Some("managed"));
+    let effective_config = config.config_layer_stack.effective_config();
+    let writable_roots = effective_config
+        .get("sandbox_workspace_write")
+        .and_then(|value| value.get("writable_roots"))
+        .and_then(TomlValue::as_array);
+    assert_eq!(writable_roots, None);
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn managed_preferences_ignore_invalid_payload() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "model = \"user\"\n")?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(LoaderOverrides {
+            managed_config_path: Some(tmp.path().join("managed_config.toml")),
+            managed_preferences_base64: Some("%%%".to_string()),
+            macos_managed_config_requirements_base64: None,
+        })
+        .build()
+        .await?;
+
+    assert_eq!(config.model.as_deref(), Some("user"));
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn managed_preferences_ignore_invalid_requirements_payload() -> anyhow::Result<()> {
+    use base64::Engine;
+
+    let tmp = tempdir()?;
+
+    let state = load_config_layers_state(
+        tmp.path(),
+        Some(AbsolutePathBuf::try_from(tmp.path())?),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides {
+            managed_config_path: Some(tmp.path().join("managed_config.toml")),
+            managed_preferences_base64: Some(String::new()),
+            macos_managed_config_requirements_base64: Some(
+                base64::prelude::BASE64_STANDARD
+                    .encode("allowed_sandbox_modes = [\"bogus\"]".as_bytes()),
+            ),
+        },
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    assert_eq!(state.requirements_toml().allowed_sandbox_modes, None);
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
 async fn managed_preferences_requirements_are_applied() -> anyhow::Result<()> {
     use base64::Engine;
 
