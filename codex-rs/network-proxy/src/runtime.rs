@@ -819,7 +819,8 @@ mod tests {
 
     use crate::config::NetworkProxyConfig;
     use crate::config::NetworkProxySettings;
-    use crate::policy::compile_globset;
+    use crate::policy::compile_allowlist_globset;
+    use crate::policy::compile_denylist_globset;
     use crate::state::NetworkProxyConstraints;
     use crate::state::build_config_state;
     use crate::state::validate_policy_against_constraints;
@@ -890,6 +891,29 @@ mod tests {
         assert_eq!(denied, vec!["example.com".to_string()]);
         assert_eq!(
             state.host_blocked("example.com", 80).await.unwrap(),
+            HostBlockDecision::Blocked(HostBlockReason::Denied)
+        );
+    }
+
+    #[tokio::test]
+    async fn add_denied_domain_forces_block_with_global_wildcard_allowlist() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allowed_domains: vec!["*".to_string()],
+            ..NetworkProxySettings::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("evil.example", 80).await.unwrap(),
+            HostBlockDecision::Allowed
+        );
+
+        state.add_denied_domain("evil.example").await.unwrap();
+
+        let (allowed, denied) = state.current_patterns().await.unwrap();
+        assert_eq!(allowed, vec!["*".to_string()]);
+        assert_eq!(denied, vec!["evil.example".to_string()]);
+        assert_eq!(
+            state.host_blocked("evil.example", 80).await.unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::Denied)
         );
     }
@@ -1086,6 +1110,28 @@ mod tests {
         assert_eq!(
             state.host_blocked("openai.com", 80).await.unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::NotAllowed)
+        );
+    }
+
+    #[tokio::test]
+    async fn host_blocked_global_wildcard_allowlist_allows_public_hosts_except_denylist() {
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allowed_domains: vec!["*".to_string()],
+            denied_domains: vec!["evil.example".to_string()],
+            ..NetworkProxySettings::default()
+        });
+
+        assert_eq!(
+            state.host_blocked("example.com", 80).await.unwrap(),
+            HostBlockDecision::Allowed
+        );
+        assert_eq!(
+            state.host_blocked("api.openai.com", 443).await.unwrap(),
+            HostBlockDecision::Allowed
+        );
+        assert_eq!(
+            state.host_blocked("evil.example", 80).await.unwrap(),
+            HostBlockDecision::Blocked(HostBlockReason::Denied)
         );
     }
 
@@ -1484,7 +1530,7 @@ mod tests {
     #[test]
     fn compile_globset_is_case_insensitive() {
         let patterns = vec!["ExAmPle.CoM".to_string()];
-        let set = compile_globset(&patterns).unwrap();
+        let set = compile_denylist_globset(&patterns).unwrap();
         assert!(set.is_match("example.com"));
         assert!(set.is_match("EXAMPLE.COM"));
     }
@@ -1492,7 +1538,7 @@ mod tests {
     #[test]
     fn compile_globset_excludes_apex_for_subdomain_patterns() {
         let patterns = vec!["*.openai.com".to_string()];
-        let set = compile_globset(&patterns).unwrap();
+        let set = compile_denylist_globset(&patterns).unwrap();
         assert!(set.is_match("api.openai.com"));
         assert!(!set.is_match("openai.com"));
         assert!(!set.is_match("evilopenai.com"));
@@ -1501,7 +1547,7 @@ mod tests {
     #[test]
     fn compile_globset_includes_apex_for_double_wildcard_patterns() {
         let patterns = vec!["**.openai.com".to_string()];
-        let set = compile_globset(&patterns).unwrap();
+        let set = compile_denylist_globset(&patterns).unwrap();
         assert!(set.is_match("openai.com"));
         assert!(set.is_match("api.openai.com"));
         assert!(!set.is_match("evilopenai.com"));
@@ -1510,25 +1556,34 @@ mod tests {
     #[test]
     fn compile_globset_rejects_global_wildcard() {
         let patterns = vec!["*".to_string()];
-        assert!(compile_globset(&patterns).is_err());
+        assert!(compile_denylist_globset(&patterns).is_err());
+    }
+
+    #[test]
+    fn compile_globset_allows_global_wildcard_when_enabled() {
+        let patterns = vec!["*".to_string()];
+        let set = compile_allowlist_globset(&patterns).unwrap();
+        assert!(set.is_match("example.com"));
+        assert!(set.is_match("api.openai.com"));
+        assert!(set.is_match("localhost"));
     }
 
     #[test]
     fn compile_globset_rejects_bracketed_global_wildcard() {
         let patterns = vec!["[*]".to_string()];
-        assert!(compile_globset(&patterns).is_err());
+        assert!(compile_denylist_globset(&patterns).is_err());
     }
 
     #[test]
     fn compile_globset_rejects_double_wildcard_bracketed_global_wildcard() {
         let patterns = vec!["**.[*]".to_string()];
-        assert!(compile_globset(&patterns).is_err());
+        assert!(compile_denylist_globset(&patterns).is_err());
     }
 
     #[test]
     fn compile_globset_dedupes_patterns_without_changing_behavior() {
         let patterns = vec!["example.com".to_string(), "example.com".to_string()];
-        let set = compile_globset(&patterns).unwrap();
+        let set = compile_denylist_globset(&patterns).unwrap();
         assert!(set.is_match("example.com"));
         assert!(set.is_match("EXAMPLE.COM"));
         assert!(!set.is_match("not-example.com"));
@@ -1537,11 +1592,11 @@ mod tests {
     #[test]
     fn compile_globset_rejects_invalid_patterns() {
         let patterns = vec!["[".to_string()];
-        assert!(compile_globset(&patterns).is_err());
+        assert!(compile_denylist_globset(&patterns).is_err());
     }
 
     #[test]
-    fn build_config_state_rejects_global_wildcard_allowed_domains() {
+    fn build_config_state_allows_global_wildcard_allowed_domains() {
         let config = NetworkProxyConfig {
             network: NetworkProxySettings {
                 enabled: true,
@@ -1550,11 +1605,11 @@ mod tests {
             },
         };
 
-        assert!(build_config_state(config, NetworkProxyConstraints::default()).is_err());
+        assert!(build_config_state(config, NetworkProxyConstraints::default()).is_ok());
     }
 
     #[test]
-    fn build_config_state_rejects_bracketed_global_wildcard_allowed_domains() {
+    fn build_config_state_allows_bracketed_global_wildcard_allowed_domains() {
         let config = NetworkProxyConfig {
             network: NetworkProxySettings {
                 enabled: true,
@@ -1563,7 +1618,7 @@ mod tests {
             },
         };
 
-        assert!(build_config_state(config, NetworkProxyConstraints::default()).is_err());
+        assert!(build_config_state(config, NetworkProxyConstraints::default()).is_ok());
     }
 
     #[test]

@@ -51,6 +51,7 @@ use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core::skills::model::SkillMetadata;
 use codex_features::FEATURES;
 use codex_features::Feature;
+use codex_git_utils::CommitLogEntry;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
@@ -6725,12 +6726,12 @@ async fn review_commit_picker_shows_subjects_without_timestamps() {
 
     // Show commit picker with synthetic entries.
     let entries = vec![
-        codex_core::git_info::CommitLogEntry {
+        CommitLogEntry {
             sha: "1111111deadbeef".to_string(),
             timestamp: 0,
             subject: "Add new feature X".to_string(),
         },
-        codex_core::git_info::CommitLogEntry {
+        CommitLogEntry {
             sha: "2222222cafebabe".to_string(),
             timestamp: 0,
             subject: "Fix bug Y".to_string(),
@@ -7162,6 +7163,7 @@ fn plugins_test_repo_marketplace(plugins: Vec<PluginSummary>) -> PluginMarketpla
 fn plugins_test_response(marketplaces: Vec<PluginMarketplaceEntry>) -> PluginListResponse {
     PluginListResponse {
         marketplaces,
+        marketplace_load_errors: Vec::new(),
         remote_sync_error: None,
         featured_plugin_ids: Vec::new(),
     }
@@ -7239,7 +7241,7 @@ async fn plugins_popup_loading_state_snapshot() {
 }
 
 #[tokio::test]
-async fn plugins_popup_snapshot_filters_to_curated_marketplace_and_preserves_response_order() {
+async fn plugins_popup_snapshot_shows_all_marketplaces_and_sorts_installed_then_name() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.set_feature_enabled(Feature::Plugins, true);
 
@@ -7288,15 +7290,17 @@ async fn plugins_popup_snapshot_filters_to_curated_marketplace_and_preserves_res
     let popup = render_loaded_plugins_popup(&mut chat, response);
     assert_snapshot!("plugins_popup_curated_marketplace", popup);
     assert!(
-        !popup.contains("Hidden Repo Plugin"),
-        "expected /plugins to hide non-ChatGPT marketplaces, got:\n{popup}"
+        popup.contains("Hidden Repo Plugin"),
+        "expected /plugins to include non-curated marketplaces, got:\n{popup}"
     );
     assert!(
-        plugins_test_popup_row_position(&popup, "Bravo Search")
-            < plugins_test_popup_row_position(&popup, "Alpha Sync")
-            && plugins_test_popup_row_position(&popup, "Alpha Sync")
+        plugins_test_popup_row_position(&popup, "Alpha Sync")
+            < plugins_test_popup_row_position(&popup, "Bravo Search")
+            && plugins_test_popup_row_position(&popup, "Bravo Search")
+                < plugins_test_popup_row_position(&popup, "Hidden Repo Plugin")
+            && plugins_test_popup_row_position(&popup, "Hidden Repo Plugin")
                 < plugins_test_popup_row_position(&popup, "Starter"),
-        "expected /plugins rows to keep response order, got:\n{popup}"
+        "expected /plugins rows to sort installed plugins first, then alphabetically, got:\n{popup}"
     );
 }
 
@@ -7409,7 +7413,7 @@ async fn plugins_popup_refresh_replaces_selection_with_first_row() {
         "expected refresh to rebuild the popup from the new first row, got:\n{after}"
     );
     assert!(
-        after.contains("Slack · ChatGPT Marketplace"),
+        after.contains("Slack"),
         "expected refreshed popup to include the updated plugin list, got:\n{after}"
     );
 }
@@ -7445,7 +7449,7 @@ async fn plugins_popup_refreshes_installed_counts_after_install() {
         "expected initial installed count before refresh, got:\n{before}"
     );
     assert!(
-        before.contains("Can be installed"),
+        before.contains("Available"),
         "expected pre-install popup copy before refresh, got:\n{before}"
     );
 
@@ -7478,7 +7482,7 @@ async fn plugins_popup_refreshes_installed_counts_after_install() {
         "expected /plugins to refresh installed counts after install, got:\n{after}"
     );
     assert!(
-        after.contains("Installed. Press Enter to view plugin details."),
+        after.contains("Installed   Press Enter to view plugin details."),
         "expected refreshed selected row copy to reflect the installed plugin state, got:\n{after}"
     );
 }
@@ -7526,8 +7530,7 @@ async fn plugins_popup_search_filters_visible_rows_snapshot() {
     let popup = render_bottom_popup(&chat, 100);
     assert_snapshot!("plugins_popup_search_filtered", popup);
     assert!(
-        !popup.contains("Calendar · ChatGPT Marketplace")
-            && !popup.contains("Drive · ChatGPT Marketplace"),
+        !popup.contains("Calendar") && !popup.contains("Drive"),
         "expected search to leave only matching rows visible, got:\n{popup}"
     );
 }
@@ -7579,8 +7582,7 @@ async fn plugins_popup_search_no_matches_and_backspace_restores_results() {
 
     let restored = render_bottom_popup(&chat, 100);
     assert!(
-        restored.contains("Calendar · ChatGPT Marketplace")
-            && restored.contains("Slack · ChatGPT Marketplace"),
+        restored.contains("Calendar") && restored.contains("Slack"),
         "expected clearing the query to restore the plugin rows, got:\n{restored}"
     );
     assert!(

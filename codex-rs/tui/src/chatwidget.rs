@@ -69,9 +69,6 @@ use codex_core::config::types::Notifications;
 use codex_core::config::types::WindowsSandboxModeToml;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::find_thread_name_by_id;
-use codex_core::git_info::current_branch_name;
-use codex_core::git_info::get_git_repo_root;
-use codex_core::git_info::local_git_branches;
 use codex_core::mcp::McpManager;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::plugins::PluginsManager;
@@ -81,6 +78,12 @@ use codex_core::skills::model::SkillMetadata;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_features::FEATURES;
 use codex_features::Feature;
+#[cfg(test)]
+use codex_git_utils::CommitLogEntry;
+use codex_git_utils::current_branch_name;
+use codex_git_utils::get_git_repo_root;
+use codex_git_utils::local_git_branches;
+use codex_git_utils::recent_commits;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
@@ -2120,7 +2123,14 @@ impl ChatWidget {
                         .map(|w| w.used_percent >= RATE_LIMIT_SWITCH_PROMPT_THRESHOLD)
                         .unwrap_or(false));
 
+            let has_workspace_credits = snapshot
+                .credits
+                .as_ref()
+                .map(|credits| credits.has_credits)
+                .unwrap_or(false);
+
             if high_usage
+                && !has_workspace_credits
                 && !self.rate_limit_switch_prompt_hidden()
                 && self.current_model() != NUDGE_MODEL_SLUG
                 && !matches!(
@@ -5260,6 +5270,7 @@ impl ChatWidget {
             items,
             cwd: self.config.cwd.clone(),
             approval_policy: self.config.permissions.approval_policy.value(),
+            approvals_reviewer: None,
             sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
             model: effective_mode.model().to_string(),
             effort: effective_mode.reasoning_effort(),
@@ -8938,6 +8949,10 @@ impl ChatWidget {
 
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
         if self.connectors_enabled() {
+            let plugin_provenance = McpManager::new(Arc::new(PluginsManager::new(
+                self.config.codex_home.clone(),
+            )))
+            .tool_plugin_provenance(&self.config);
             let mut connectors_by_id: HashMap<String, connectors::AppInfo> = HashMap::new();
             for tool in ev.tools.values() {
                 let Some(meta) = tool.meta.as_ref().and_then(serde_json::Value::as_object) else {
@@ -8980,7 +8995,9 @@ impl ChatWidget {
                             install_url: None,
                             is_accessible: true,
                             is_enabled: true,
-                            plugin_display_names: Vec::new(),
+                            plugin_display_names: plugin_provenance
+                                .plugin_display_names_for_connector_id(connector_id)
+                                .to_vec(),
                         }
                     });
             }
@@ -9116,7 +9133,7 @@ impl ChatWidget {
         self.bottom_pane.set_connectors_snapshot(Some(snapshot));
     }
 
-    fn refresh_plugin_mentions(&mut self) {
+    pub(crate) fn refresh_plugin_mentions(&mut self) {
         if !self.config.features.enabled(Feature::Plugins) {
             self.bottom_pane.set_plugin_mentions(/*plugins*/ None);
             return;
@@ -9127,6 +9144,11 @@ impl ChatWidget {
             .capability_summaries()
             .to_vec();
         self.bottom_pane.set_plugin_mentions(Some(plugins));
+    }
+
+    pub(crate) fn sync_plugin_mentions_config(&mut self, config: &Config) {
+        self.config.features = config.features.clone();
+        self.config.config_layer_stack = config.config_layer_stack.clone();
     }
 
     pub(crate) fn open_review_popup(&mut self) {
@@ -9227,7 +9249,7 @@ impl ChatWidget {
     }
 
     pub(crate) async fn show_review_commit_picker(&mut self, cwd: &Path) {
-        let commits = codex_core::git_info::recent_commits(cwd, /*limit*/ 100).await;
+        let commits = recent_commits(cwd, /*limit*/ 100).await;
 
         let mut items: Vec<SelectionItem> = Vec::with_capacity(commits.len());
         for entry in commits {
@@ -9630,7 +9652,7 @@ async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Vec<RateLimitSn
 #[cfg(test)]
 pub(crate) fn show_review_commit_picker_with_entries(
     chat: &mut ChatWidget,
-    entries: Vec<codex_core::git_info::CommitLogEntry>,
+    entries: Vec<CommitLogEntry>,
 ) {
     let mut items: Vec<SelectionItem> = Vec::with_capacity(entries.len());
     for entry in entries {

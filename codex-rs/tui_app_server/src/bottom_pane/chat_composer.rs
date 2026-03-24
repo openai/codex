@@ -3802,7 +3802,7 @@ impl ChatComposer {
 
     #[cfg(not(target_os = "linux"))]
     fn schedule_space_hold_timer(flag: Arc<AtomicBool>, frame: Option<FrameRequester>) {
-        const HOLD_DELAY_MILLIS: u64 = 500;
+        const HOLD_DELAY_MILLIS: u64 = 1_000;
         if let Ok(handle) = Handle::try_current() {
             let flag_clone = flag;
             let frame_clone = frame;
@@ -3890,7 +3890,7 @@ impl ChatComposer {
         }
     }
 
-    /// Called when the 500ms space hold timeout elapses.
+    /// Called when the 1s space hold timeout elapses.
     ///
     /// On terminals without key-release reporting, this only transitions into voice capture if we
     /// observed repeated Space events while pending; otherwise the keypress is treated as a typed

@@ -22,6 +22,7 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+codex-git-utils = { workspace = true }
 pretty_assertions = { workspace = true }
 
 [lints]

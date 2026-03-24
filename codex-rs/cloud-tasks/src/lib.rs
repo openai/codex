@@ -10,6 +10,8 @@ pub use cli::Cli;
 use anyhow::anyhow;
 use chrono::Utc;
 use codex_cloud_tasks_client::TaskStatus;
+use codex_git_utils::current_branch_name;
+use codex_git_utils::default_branch_name;
 use owo_colors::OwoColorize;
 use owo_colors::Stream;
 use std::cmp::Ordering;
@@ -119,11 +121,11 @@ struct RealGitInfo;
 #[async_trait::async_trait]
 impl GitInfoProvider for RealGitInfo {
     async fn default_branch_name(&self, path: &std::path::Path) -> Option<String> {
-        codex_core::git_info::default_branch_name(path).await
+        default_branch_name(path).await
     }
 
     async fn current_branch_name(&self, path: &std::path::Path) -> Option<String> {
-        codex_core::git_info::current_branch_name(path).await
+        current_branch_name(path).await
     }
 }
 

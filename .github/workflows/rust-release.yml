@@ -389,15 +389,6 @@ jobs:
       release-lto: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
     secrets: inherit
 
-  shell-tool-mcp:
-    name: shell-tool-mcp
-    needs: tag-check
-    uses: ./.github/workflows/shell-tool-mcp.yml
-    with:
-      release-tag: ${{ github.ref_name }}
-      publish: true
-    secrets: inherit
-
   argument-comment-lint-release-assets:
     name: argument-comment-lint release assets
     needs: tag-check
@@ -405,12 +396,17 @@ jobs:
     with:
       publish: true
 
+  zsh-release-assets:
+    name: zsh release assets
+    needs: tag-check
+    uses: ./.github/workflows/rust-release-zsh.yml
+
   release:
     needs:
       - build
       - build-windows
-      - shell-tool-mcp
       - argument-comment-lint-release-assets
+      - zsh-release-assets
     name: release
     runs-on: ubuntu-latest
     permissions:
@@ -453,11 +449,8 @@ jobs:
       - name: List
         run: ls -R dist/
 
-      # This is a temporary fix: we should modify shell-tool-mcp.yml so these
-      # files do not end up in dist/ in the first place.
       - name: Delete entries from dist/ that should not go in the release
         run: |
-          rm -rf dist/shell-tool-mcp*
           rm -rf dist/windows-binaries*
           # cargo-timing.html appears under multiple target-specific directories.
           # If included in files: dist/**, release upload races on duplicate
@@ -499,7 +492,7 @@ jobs:
           fi
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v5
         with:
           run_install: false
 
@@ -546,6 +539,13 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-config.json
+
+      - uses: facebook/dotslash-publish-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag: ${{ github.ref_name }}
+          config: .github/dotslash-zsh-config.json
 
       - uses: facebook/dotslash-publish-release@v2
         env:
@@ -693,7 +693,7 @@ jobs:
 
     steps:
       - name: Publish to WinGet
-        uses: vedantmgoyal9/winget-releaser@19e706d4c9121098010096f9c495a70a7518b30f
+        uses: vedantmgoyal9/winget-releaser@7bd472be23763def6e16bd06cc8b1cdfab0e2fd5
         with:
           identifier: OpenAI.Codex
           version: ${{ needs.release.outputs.version }}

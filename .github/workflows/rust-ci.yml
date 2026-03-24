@@ -547,7 +547,7 @@ jobs:
   tests:
     name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.remote_env == 'true' && ' (remote)' || '' }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.runner == 'windows-arm64' && 35 || 30 }}
     needs: changed
     if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
     defaults:

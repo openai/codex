@@ -14,16 +14,6 @@ use serde::Serialize;
 use strum_macros::Display;
 use ts_rs::TS;
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
-#[ts(type = "string")]
-pub struct GitSha(pub String);
-
-impl GitSha {
-    pub fn new(sha: &str) -> Self {
-        Self(sha.to_string())
-    }
-}
-
 /// Authentication mode for OpenAI-backed providers.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Display, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]

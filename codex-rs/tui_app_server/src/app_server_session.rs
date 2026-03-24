@@ -80,6 +80,7 @@ use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use tracing::debug;
 
 use crate::bottom_pane::FeedbackAudience;
 use crate::status::StatusAccountDisplay;
@@ -178,16 +179,6 @@ impl AppServerSession {
             })
             .await
             .wrap_err("model/list failed during TUI bootstrap")?;
-        let rate_limit_request_id = self.next_request_id();
-        let rate_limits: GetAccountRateLimitsResponse = self
-            .client
-            .request_typed(ClientRequest::GetAccountRateLimits {
-                request_id: rate_limit_request_id,
-                params: None,
-            })
-            .await
-            .wrap_err("account/rateLimits/read failed during TUI bootstrap")?;
-
         let available_models = models
             .data
             .into_iter()
@@ -252,6 +243,25 @@ impl AppServerSession {
                 false,
             ),
         };
+        let rate_limit_snapshots = if account.requires_openai_auth && has_chatgpt_account {
+            let rate_limit_request_id = self.next_request_id();
+            match self
+                .client
+                .request_typed(ClientRequest::GetAccountRateLimits {
+                    request_id: rate_limit_request_id,
+                    params: None,
+                })
+                .await
+            {
+                Ok(rate_limits) => app_server_rate_limit_snapshots_to_core(rate_limits),
+                Err(error) => {
+                    debug!(error = ?error, "failed to fetch rate limits during TUI bootstrap");
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
 
         Ok(AppServerBootstrap {
             account_auth_mode,
@@ -263,7 +273,7 @@ impl AppServerSession {
             feedback_audience,
             has_chatgpt_account,
             available_models,
-            rate_limit_snapshots: app_server_rate_limit_snapshots_to_core(rate_limits),
+            rate_limit_snapshots,
         })
     }
 

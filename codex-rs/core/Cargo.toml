@@ -41,13 +41,14 @@ codex-shell-command = { workspace = true }
 codex-skills = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-file-search = { workspace = true }
-codex-git = { workspace = true }
+codex-git-utils = { workspace = true }
 codex-hooks = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-artifacts = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-utils-absolute-path = { workspace = true }

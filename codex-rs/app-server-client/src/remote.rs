@@ -272,18 +272,19 @@ impl RemoteAppServerClient {
                                         }
                                     }
                                     Ok(JSONRPCMessage::Notification(notification)) => {
-                                        let event = app_server_event_from_notification(notification);
-                                        if let Err(err) = deliver_event(
-                                            &event_tx,
-                                            &mut skipped_events,
-                                            event,
-                                            &mut stream,
-                                        )
-                                        .await
-                                        {
-                                            warn!(%err, "failed to deliver remote app-server event");
-                                            break;
-                                        }
+                                        if let Some(event) =
+                                            app_server_event_from_notification(notification)
+                                            && let Err(err) = deliver_event(
+                                                &event_tx,
+                                                &mut skipped_events,
+                                                event,
+                                                &mut stream,
+                                            )
+                                            .await
+                                            {
+                                                warn!(%err, "failed to deliver remote app-server event");
+                                                break;
+                                            }
                                     }
                                     Ok(JSONRPCMessage::Request(request)) => {
                                         let request_id = request.id.clone();
@@ -673,7 +674,9 @@ async fn initialize_remote_connection(
                             )));
                         }
                         JSONRPCMessage::Notification(notification) => {
-                            pending_events.push(app_server_event_from_notification(notification));
+                            if let Some(event) = app_server_event_from_notification(notification) {
+                                pending_events.push(event);
+                            }
                         }
                         JSONRPCMessage::Request(request) => {
                             let request_id = request.id.clone();
@@ -756,10 +759,10 @@ async fn initialize_remote_connection(
     Ok(pending_events)
 }
 
-fn app_server_event_from_notification(notification: JSONRPCNotification) -> AppServerEvent {
-    match ServerNotification::try_from(notification.clone()) {
-        Ok(notification) => AppServerEvent::ServerNotification(notification),
-        Err(_) => AppServerEvent::LegacyNotification(notification),
+fn app_server_event_from_notification(notification: JSONRPCNotification) -> Option<AppServerEvent> {
+    match ServerNotification::try_from(notification) {
+        Ok(notification) => Some(AppServerEvent::ServerNotification(notification)),
+        Err(_) => None,
     }
 }
 
@@ -852,13 +855,6 @@ async fn reject_if_server_request_dropped(
 fn event_requires_delivery(event: &AppServerEvent) -> bool {
     match event {
         AppServerEvent::ServerNotification(ServerNotification::TurnCompleted(_)) => true,
-        AppServerEvent::LegacyNotification(notification) => matches!(
-            notification
-                .method
-                .strip_prefix("codex/event/")
-                .unwrap_or(&notification.method),
-            "task_complete" | "turn_aborted" | "shutdown_complete"
-        ),
         AppServerEvent::Disconnected { .. } => true,
         AppServerEvent::Lagged { .. }
         | AppServerEvent::ServerNotification(_)

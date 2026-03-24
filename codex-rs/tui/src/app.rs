@@ -57,6 +57,7 @@ use codex_app_server_protocol::RequestId;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
+use codex_core::ForkSnapshot;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -1032,6 +1033,7 @@ impl App {
             .await?;
         self.apply_runtime_policy_overrides(&mut config);
         self.config = config;
+        self.chat_widget.sync_plugin_mentions_config(&self.config);
         Ok(())
     }
 
@@ -2502,7 +2504,7 @@ impl App {
                 );
                 let forked = thread_manager
                     .fork_thread(
-                        usize::MAX,
+                        ForkSnapshot::Interrupted,
                         config.clone(),
                         target_session.path.clone(),
                         /*persist_extended_history*/ false,
@@ -2925,7 +2927,7 @@ impl App {
                         match self
                             .server
                             .fork_thread(
-                                usize::MAX,
+                                ForkSnapshot::Interrupted,
                                 self.config.clone(),
                                 path.clone(),
                                 /*persist_extended_history*/ false,
@@ -3180,6 +3182,7 @@ impl App {
                     if let Err(err) = self.refresh_in_memory_config_from_disk().await {
                         tracing::warn!(error = %err, "failed to refresh config after plugin install");
                     }
+                    self.chat_widget.refresh_plugin_mentions();
                     self.chat_widget.submit_op(Op::ReloadUserConfig);
                 }
                 let should_refresh_plugin_detail = self.chat_widget.on_plugin_install_loaded(
@@ -3633,6 +3636,7 @@ impl App {
                             "failed to refresh config after plugin uninstall"
                         );
                     }
+                    self.chat_widget.refresh_plugin_mentions();
                     self.chat_widget.submit_op(Op::ReloadUserConfig);
                 }
                 self.chat_widget.on_plugin_uninstall_loaded(

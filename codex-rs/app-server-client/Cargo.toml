@@ -16,7 +16,6 @@ codex-app-server = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-core = { workspace = true }
-codex-features = { workspace = true }
 codex-feedback = { workspace = true }
 codex-protocol = { workspace = true }
 futures = { workspace = true }

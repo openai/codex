@@ -110,7 +110,6 @@ use codex_core::ThreadManager;
 use codex_core::find_thread_name_by_id;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
-use codex_core::sandboxing::intersect_permission_profiles;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
@@ -136,6 +135,7 @@ use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequest
 use codex_protocol::request_permissions::RequestPermissionsResponse as CoreRequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
+use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::shlex_join;
 use std::collections::HashMap;
 use std::convert::TryFrom;
