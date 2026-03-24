@@ -36,10 +36,12 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
+use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
+use codex_app_server_protocol::TurnStatus;
 use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_core::AuthManager;
@@ -71,6 +73,9 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnAbortedEvent;
+use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_oss::ensure_oss_provider_ready;
@@ -794,6 +799,24 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 .await;
             }
             InProcessServerEvent::ServerNotification(notification) => {
+                if let Some((event, terminal_error)) = decode_turn_completed_notification_for_exec(
+                    &notification,
+                    primary_thread_id_for_requests.as_str(),
+                    task_id.as_str(),
+                ) {
+                    error_seen |= terminal_error;
+                    if handle_exec_status(
+                        event_processor.process_event(event),
+                        &client,
+                        &mut request_ids,
+                        &primary_thread_id_for_requests,
+                    )
+                    .await
+                    {
+                        break;
+                    }
+                    continue;
+                }
                 if let ServerNotification::Error(payload) = &notification
                     && payload.thread_id == primary_thread_id_for_requests
                     && payload.turn_id == task_id
@@ -862,25 +885,15 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     _ => {}
                 }
 
-                match event_processor.process_event(event) {
-                    CodexStatus::Running => {}
-                    CodexStatus::InitiateShutdown => {
-                        if let Err(err) = request_shutdown(
-                            &client,
-                            &mut request_ids,
-                            &primary_thread_id_for_requests,
-                        )
-                        .await
-                        {
-                            warn!("thread/unsubscribe failed during shutdown: {err}");
-                        }
-                        break;
-                    }
-                    CodexStatus::Shutdown => {
-                        // `ShutdownComplete` does not identify which attached
-                        // thread emitted it, so subagent shutdowns must not end
-                        // the primary exec loop early.
-                    }
+                if handle_exec_status(
+                    event_processor.process_event(event),
+                    &client,
+                    &mut request_ids,
+                    &primary_thread_id_for_requests,
+                )
+                .await
+                {
+                    break;
                 }
             }
             InProcessServerEvent::Lagged { skipped } => {
@@ -1141,6 +1154,80 @@ fn canceled_mcp_server_elicitation_response() -> Result<Value, String> {
         meta: None,
     })
     .map_err(|err| format!("failed to encode mcp elicitation response: {err}"))
+}
+
+async fn handle_exec_status(
+    status: CodexStatus,
+    client: &InProcessAppServerClient,
+    request_ids: &mut RequestIdSequencer,
+    primary_thread_id_for_requests: &str,
+) -> bool {
+    match status {
+        CodexStatus::Running => false,
+        CodexStatus::InitiateShutdown => {
+            if let Err(err) =
+                request_shutdown(client, request_ids, primary_thread_id_for_requests).await
+            {
+                warn!("thread/unsubscribe failed during shutdown: {err}");
+            }
+            true
+        }
+        CodexStatus::Shutdown => {
+            // `ShutdownComplete` does not identify which attached
+            // thread emitted it, so subagent shutdowns must not end
+            // the primary exec loop early.
+            false
+        }
+    }
+}
+
+fn decode_turn_completed_notification_for_exec(
+    notification: &ServerNotification,
+    primary_thread_id_for_requests: &str,
+    task_id: &str,
+) -> Option<(Event, bool)> {
+    let ServerNotification::TurnCompleted(TurnCompletedNotification { thread_id, turn }) =
+        notification
+    else {
+        return None;
+    };
+    if thread_id != primary_thread_id_for_requests || turn.id != task_id {
+        return None;
+    }
+
+    match turn.status {
+        TurnStatus::Completed => Some((
+            Event {
+                id: String::new(),
+                msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                    turn_id: turn.id.clone(),
+                    last_agent_message: None,
+                }),
+            },
+            false,
+        )),
+        TurnStatus::Failed => Some((
+            Event {
+                id: String::new(),
+                msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                    turn_id: turn.id.clone(),
+                    last_agent_message: None,
+                }),
+            },
+            true,
+        )),
+        TurnStatus::Interrupted => Some((
+            Event {
+                id: String::new(),
+                msg: EventMsg::TurnAborted(TurnAbortedEvent {
+                    turn_id: Some(turn.id.clone()),
+                    reason: TurnAbortReason::Interrupted,
+                }),
+            },
+            false,
+        )),
+        TurnStatus::InProgress => None,
+    }
 }
 
 async fn request_shutdown(
@@ -1933,5 +2020,119 @@ mod tests {
             event.approvals_reviewer,
             ApprovalsReviewer::GuardianSubagent
         );
+    }
+    #[test]
+    fn decode_turn_completed_notification_ignores_other_threads_and_turns() {
+        let thread_mismatch = ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: "thread-a".to_string(),
+            turn: codex_app_server_protocol::Turn {
+                id: "turn-a".to_string(),
+                items: Vec::new(),
+                status: TurnStatus::Completed,
+                error: None,
+            },
+        });
+        assert!(
+            decode_turn_completed_notification_for_exec(&thread_mismatch, "thread-b", "turn-a")
+                .is_none()
+        );
+
+        let turn_mismatch = ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: "thread-a".to_string(),
+            turn: codex_app_server_protocol::Turn {
+                id: "turn-a".to_string(),
+                items: Vec::new(),
+                status: TurnStatus::Completed,
+                error: None,
+            },
+        });
+        assert!(
+            decode_turn_completed_notification_for_exec(&turn_mismatch, "thread-a", "turn-b")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn decode_turn_completed_notification_maps_completed_and_failed_turns() {
+        let completed_notification = ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: "thread-a".to_string(),
+            turn: codex_app_server_protocol::Turn {
+                id: "turn-a".to_string(),
+                items: Vec::new(),
+                status: TurnStatus::Completed,
+                error: None,
+            },
+        });
+        let Some((completed, completed_error)) = decode_turn_completed_notification_for_exec(
+            &completed_notification,
+            "thread-a",
+            "turn-a",
+        ) else {
+            panic!("completed turn should decode");
+        };
+        assert!(!completed_error);
+        match completed.msg {
+            EventMsg::TurnComplete(event) => {
+                assert_eq!(event.turn_id, "turn-a");
+                assert_eq!(event.last_agent_message, None);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        let failed_notification = ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: "thread-a".to_string(),
+            turn: codex_app_server_protocol::Turn {
+                id: "turn-a".to_string(),
+                items: Vec::new(),
+                status: TurnStatus::Failed,
+                error: Some(codex_app_server_protocol::TurnError {
+                    message: "synthetic".to_string(),
+                    codex_error_info: None,
+                    additional_details: None,
+                }),
+            },
+        });
+        let Some((failed, failed_error)) =
+            decode_turn_completed_notification_for_exec(&failed_notification, "thread-a", "turn-a")
+        else {
+            panic!("failed turn should decode");
+        };
+        assert!(failed_error);
+        match failed.msg {
+            EventMsg::TurnComplete(event) => {
+                assert_eq!(event.turn_id, "turn-a");
+                assert_eq!(event.last_agent_message, None);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_turn_completed_notification_maps_interrupted_turns() {
+        let interrupted_notification =
+            ServerNotification::TurnCompleted(TurnCompletedNotification {
+                thread_id: "thread-a".to_string(),
+                turn: codex_app_server_protocol::Turn {
+                    id: "turn-a".to_string(),
+                    items: Vec::new(),
+                    status: TurnStatus::Interrupted,
+                    error: None,
+                },
+            });
+        let Some((event, terminal_error)) = decode_turn_completed_notification_for_exec(
+            &interrupted_notification,
+            "thread-a",
+            "turn-a",
+        ) else {
+            panic!("interrupted turn should decode");
+        };
+        assert!(!terminal_error);
+        match event.msg {
+            EventMsg::TurnAborted(event) => {
+                assert_eq!(event.turn_id.as_deref(), Some("turn-a"));
+                assert_eq!(event.reason, TurnAbortReason::Interrupted);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 }
