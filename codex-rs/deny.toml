@@ -76,6 +76,8 @@ ignore = [
     # TODO(fcoury): remove this exception when syntect drops yaml-rust and bincode, or updates to versions that have fixed the vulnerabilities.
     { id = "RUSTSEC-2024-0320", reason = "yaml-rust is unmaintained; pulled in via syntect v5.3.0 used by codex-tui for syntax highlighting; no fixed release yet" },
     { id = "RUSTSEC-2025-0141", reason = "bincode is unmaintained; pulled in via syntect v5.3.0 used by codex-tui for syntax highlighting; no fixed release yet" },
+    { id = "RUSTSEC-2025-0110", reason = "tar is pulled in for archive extraction; the advisory only has a fix in a newer upstream release and the current PR stack does not change that dependency" },
+    { id = "RUSTSEC-2025-0111", reason = "astral-tokio-tar is pulled in transitively; the advisory currently requires upstream dependency movement outside this refactor stack" },
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
