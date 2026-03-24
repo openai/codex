@@ -478,7 +478,7 @@ impl ChatWidget {
         header.push(Line::from("Plugins".bold()));
         header.push(Line::from("Loading available plugins...".dim()));
         header.push(Line::from(
-            "This first pass shows the ChatGPT marketplace only.".dim(),
+            "Available marketplaces will appear here when ready.".dim(),
         ));
 
         SelectionViewParams {
