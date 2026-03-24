@@ -570,7 +570,7 @@ impl ChatWidget {
                 self.frame_requester.clone(),
                 self.config.animations,
                 format!("Loading details for {plugin_display_name}..."),
-                None,
+                /*note*/ None,
             )),
             items: vec![SelectionItem {
                 name: "Loading plugin details...".to_string(),
