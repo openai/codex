@@ -86,6 +86,7 @@ use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio_tungstenite::tungstenite::Error;
 use tokio_tungstenite::tungstenite::Message;
+use tracing::error;
 use tracing::instrument;
 use tracing::trace;
 use tracing::warn;
@@ -671,6 +672,31 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
+    fn log_responses_request(request: &ResponsesApiRequest, transport: &str) {
+        match serde_json::to_value(request) {
+            Ok(mut request_value) => {
+                if let Some(request_object) = request_value.as_object_mut() {
+                    request_object.remove("tools");
+                }
+                match serde_json::to_string_pretty(&request_value) {
+                    Ok(request_json) => {
+                        error!("### Responses API payload ({transport})\n{request_json}");
+                    }
+                    Err(err) => {
+                        error!(
+                            "### Responses API payload ({transport})\nfailed to serialize filtered payload: {err:#}\n{request_value:#?}"
+                        );
+                    }
+                }
+            }
+            Err(err) => {
+                error!(
+                    "### Responses API payload ({transport})\nfailed to serialize request: {err:#}\n{request:#?}"
+                );
+            }
+        }
+    }
+
     fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
         self.websocket_session.last_request = None;
@@ -1046,6 +1072,7 @@ impl ModelClientSession {
                 summary,
                 service_tier,
             )?;
+            Self::log_responses_request(&request, "responses_http");
             let client = ApiResponsesClient::new(
                 transport,
                 client_setup.api_provider,
@@ -1128,6 +1155,7 @@ impl ModelClientSession {
                 summary,
                 service_tier,
             )?;
+            Self::log_responses_request(&request, "responses_websocket");
             let mut ws_payload = ResponseCreateWsRequest {
                 client_metadata: response_create_client_metadata(
                     build_ws_client_metadata(turn_metadata_header),

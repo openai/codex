@@ -115,9 +115,6 @@ impl ContextManager {
         self.items
             .retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
         self.items
-            .into_iter()
-            .map(rewrite_inter_agent_communication_for_prompt)
-            .collect()
     }
 
     /// Returns raw items in the history.
@@ -642,49 +639,6 @@ pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
 
 fn is_inter_agent_instruction_content(content: &[ContentItem]) -> bool {
     InterAgentCommunication::is_message_content(content)
-}
-
-fn rewrite_inter_agent_communication_for_prompt(item: ResponseItem) -> ResponseItem {
-    let ResponseItem::Message {
-        id,
-        role,
-        content,
-        end_turn,
-        phase,
-    } = item
-    else {
-        return item;
-    };
-
-    if role != "assistant" {
-        return ResponseItem::Message {
-            id,
-            role,
-            content,
-            end_turn,
-            phase,
-        };
-    }
-
-    let Some(communication) = InterAgentCommunication::from_message_content(&content) else {
-        return ResponseItem::Message {
-            id,
-            role,
-            content,
-            end_turn,
-            phase,
-        };
-    };
-
-    ResponseItem::Message {
-        id,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: communication.content,
-        }],
-        end_turn,
-        phase,
-    }
 }
 
 fn user_message_positions(items: &[ResponseItem]) -> Vec<usize> {
