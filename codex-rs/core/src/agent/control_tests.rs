@@ -1169,20 +1169,27 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
         )
         .await;
 
+    let expected = (
+        worker_thread_id,
+        Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new(
+                tester_path.clone(),
+                worker_path.clone(),
+                Vec::new(),
+                "done".to_string(),
+                false,
+            ),
+        },
+    );
+
     timeout(Duration::from_secs(5), async {
         loop {
-            let ops = harness.manager.captured_ops();
-            if ops.iter().any(|(thread_id, op)| {
-                *thread_id == worker_thread_id
-                    && matches!(
-                        op,
-                        Op::InterAgentCommunication { communication }
-                            if communication.author == tester_path
-                                && communication.recipient == worker_path
-                                && communication.content == "done"
-                                && !communication.trigger_turn
-                    )
-            }) {
+            let captured = harness
+                .manager
+                .captured_ops()
+                .into_iter()
+                .find(|entry| *entry == expected);
+            if captured == Some(expected.clone()) {
                 break;
             }
             sleep(Duration::from_millis(10)).await;

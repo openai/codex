@@ -1105,7 +1105,7 @@ fn last_task_message_from_item(item: &ResponseItem) -> Option<String> {
     }
 
     match item {
-        ResponseItem::Message { role, content, .. } if role == "user" => {
+        ResponseItem::Message { role, .. } if role == "user" => {
             let Some(TurnItem::UserMessage(message)) = parse_turn_item(item) else {
                 return None;
             };
