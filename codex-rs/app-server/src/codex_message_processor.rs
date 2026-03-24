@@ -1933,6 +1933,13 @@ impl CodexMessageProcessor {
         }
     }
 
+    pub(crate) async fn cancel_active_login(&self) {
+        let mut guard = self.active_login.lock().await;
+        if let Some(active_login) = guard.take() {
+            drop(active_login);
+        }
+    }
+
     pub(crate) async fn clear_all_thread_listeners(&self) {
         self.thread_state_manager.clear_all_listeners().await;
     }

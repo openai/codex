@@ -3,7 +3,6 @@
 // Prevent accidental direct writes to stdout/stderr in library code. All
 // user-visible output must go through the appropriate abstraction (e.g.,
 // the TUI or the tracing stack).
-#![allow(warnings, clippy::all)]
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 mod analytics_client;

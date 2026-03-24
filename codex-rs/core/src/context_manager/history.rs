@@ -1,5 +1,3 @@
-#![allow(warnings, clippy::all)]
-
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
 use crate::event_mapping::has_non_contextual_dev_message_content;

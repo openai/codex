@@ -1,5 +1,3 @@
-#![allow(warnings, clippy::all)]
-
 pub mod account;
 mod agent_path;
 mod thread_id;
