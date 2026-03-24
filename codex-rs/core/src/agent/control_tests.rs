@@ -965,7 +965,6 @@ async fn spawn_child_completion_notifies_parent_history() {
 }
 
 #[tokio::test]
-#[ignore = "flaky on: rust-ci / Tests — windows-arm64 - aarch64-pc-windows-msvc"]
 async fn multi_agent_v2_completion_sends_inter_agent_message_to_direct_parent() {
     let harness = AgentControlHarness::new().await;
     let (root_thread_id, _) = harness.start_thread().await;
@@ -1022,6 +1021,13 @@ async fn multi_agent_v2_completion_sends_inter_agent_message_to_direct_parent() 
         )
         .await;
 
+    let expected = InterAgentCommunication::new(
+        tester_path.clone(),
+        worker_path.clone(),
+        Vec::new(),
+        "done".to_string(),
+    );
+
     timeout(MULTI_AGENT_EVENTUAL_TIMEOUT, async {
         loop {
             let delivered = harness
@@ -1033,10 +1039,7 @@ async fn multi_agent_v2_completion_sends_inter_agent_message_to_direct_parent() 
                         && matches!(
                             op,
                             Op::InterAgentCommunication { communication }
-                                if communication.author == tester_path
-                                    && communication.recipient == worker_path
-                                    && communication.other_recipients.is_empty()
-                                    && communication.content == "done"
+                                if communication == expected
                         )
                 });
             if delivered {
