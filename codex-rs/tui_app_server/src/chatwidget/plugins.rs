@@ -856,17 +856,19 @@ impl ChatWidget {
         header.push(Line::from(
             format!("{display_name} · {detail_status_label} · {marketplace_label}").bold(),
         ));
-        header.push(PluginDisclosureLine {
-            line: Line::from(vec![
-                "Data shared with this app is subject to the app's ".into(),
-                "terms of service".bold(),
-                " and ".into(),
-                "privacy policy".bold(),
-                ". ".into(),
-                "Learn more".cyan().underlined(),
-                ".".into(),
-            ]),
-        });
+        if !plugin.summary.installed {
+            header.push(PluginDisclosureLine {
+                line: Line::from(vec![
+                    "Data shared with this app is subject to the app's ".into(),
+                    "terms of service".bold(),
+                    " and ".into(),
+                    "privacy policy".bold(),
+                    ". ".into(),
+                    "Learn more".cyan().underlined(),
+                    ".".into(),
+                ]),
+            });
+        }
         if let Some(description) = plugin_detail_description(plugin) {
             header.push(Line::from(description.dim()));
         }
