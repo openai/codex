@@ -44,6 +44,7 @@ use codex_protocol::protocol::W3cTraceContext;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -598,26 +599,7 @@ impl ThreadManager {
     where
         S: Into<ForkSnapshot>,
     {
-        let snapshot = snapshot.into();
-        let history = RolloutRecorder::get_rollout_history(&path).await?;
-        let snapshot_state = snapshot_turn_state(&history);
-        let history = match snapshot {
-            ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
-                truncate_before_nth_user_message(history, nth_user_message, &snapshot_state)
-            }
-            ForkSnapshot::Interrupted => {
-                let history = match history {
-                    InitialHistory::New => InitialHistory::New,
-                    InitialHistory::Forked(history) => InitialHistory::Forked(history),
-                    InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
-                };
-                if snapshot_state.ends_mid_turn {
-                    append_interrupted_boundary(history, snapshot_state.active_turn_id)
-                } else {
-                    history
-                }
-            }
-        };
+        let history = snapshot_rollout_history(path.as_path(), snapshot).await?;
         Box::pin(self.state.spawn_thread(
             config,
             history,
@@ -644,6 +626,40 @@ impl ThreadManager {
             .and_then(|ops_log| ops_log.lock().ok().map(|log| log.clone()))
             .unwrap_or_default()
     }
+}
+
+/// Load persisted rollout history and convert it into a reusable fork snapshot.
+///
+/// This is the common snapshotting primitive used by generic thread forking. Callers that already
+/// know how they want to spawn the child thread can use it directly without reimplementing rollout
+/// parsing and snapshot semantics.
+pub(crate) async fn snapshot_rollout_history<S>(
+    path: &Path,
+    snapshot: S,
+) -> CodexResult<InitialHistory>
+where
+    S: Into<ForkSnapshot>,
+{
+    let snapshot = snapshot.into();
+    let history = RolloutRecorder::get_rollout_history(path).await?;
+    let snapshot_state = snapshot_turn_state(&history);
+    Ok(match snapshot {
+        ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
+            truncate_before_nth_user_message(history, nth_user_message, &snapshot_state)
+        }
+        ForkSnapshot::Interrupted => {
+            let history = match history {
+                InitialHistory::New => InitialHistory::New,
+                InitialHistory::Forked(history) => InitialHistory::Forked(history),
+                InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
+            };
+            if snapshot_state.ends_mid_turn {
+                append_interrupted_boundary(history, snapshot_state.active_turn_id)
+            } else {
+                history
+            }
+        }
+    })
 }
 
 impl ThreadManagerState {

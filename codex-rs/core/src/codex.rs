@@ -4499,6 +4499,7 @@ mod handlers {
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
+    use crate::guardian::routes_approval_to_guardian;
 
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
@@ -4640,6 +4641,16 @@ mod handlers {
             Ok(_) => current_context.session_telemetry.user_prompt(&items),
             Err(SteerInputError::NoActiveTurn(items)) => {
                 current_context.session_telemetry.user_prompt(&items);
+                // Only start eager guardian init when this input is actually launching a new task.
+                // Inputs that steer into an already-running turn should not contend with that
+                // turn's real guardian work.
+                if routes_approval_to_guardian(current_context.as_ref()) {
+                    sess.guardian_review_session
+                        .spawn_eager_trunk_init_if_needed(
+                            Arc::clone(sess),
+                            Arc::clone(&current_context),
+                        );
+                }
                 sess.refresh_mcp_servers_if_requested(&current_context)
                     .await;
                 sess.spawn_task(
