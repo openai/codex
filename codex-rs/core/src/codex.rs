@@ -2157,14 +2157,13 @@ impl Session {
             InitialHistory::New => {
                 // Defer initial context insertion until the first real turn starts so
                 // turn/start overrides can be merged before we write model-visible context.
-                self.set_previous_turn_settings(/*previous_turn_settings*/ None)
-                    .await;
+                self.reset_reference_turn_context_state().await;
             }
             InitialHistory::Resumed(resumed_history) => {
                 let rollout_items = resumed_history.history;
-                let previous_turn_settings = self
-                    .apply_rollout_reconstruction(&turn_context, &rollout_items)
+                self.apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
+                let previous_turn_settings = self.previous_turn_settings().await;
 
                 // If resuming, warn when the last recorded model differs from the current one.
                 let curr: &str = turn_context.model_info.slug.as_str();
@@ -2221,7 +2220,7 @@ impl Session {
                     .await;
                 {
                     let mut state = self.state.lock().await;
-                    state.set_reference_context_item(Some(turn_context.to_turn_context_item()));
+                    state.note_model_visible_turn_context(turn_context.to_turn_context_item());
                 }
 
                 // Forked threads should remain file-backed immediately after startup.
@@ -2239,19 +2238,15 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
-    ) -> Option<PreviousTurnSettings> {
+    ) {
         let reconstructed_rollout = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
-        let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
-        self.replace_history(
+        let mut state = self.state.lock().await;
+        state.replace_history_with_reference_turn_context_state(
             reconstructed_rollout.history,
-            reconstructed_rollout.reference_context_item,
-        )
-        .await;
-        self.set_previous_turn_settings(previous_turn_settings.clone())
-            .await;
-        previous_turn_settings
+            reconstructed_rollout.reference_turn_context_state,
+        );
     }
 
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
@@ -2266,12 +2261,14 @@ impl Session {
         state.previous_turn_settings()
     }
 
-    pub(crate) async fn set_previous_turn_settings(
-        &self,
-        previous_turn_settings: Option<PreviousTurnSettings>,
-    ) {
+    pub(crate) async fn note_model_visible_turn_context(&self, turn_context_item: TurnContextItem) {
         let mut state = self.state.lock().await;
-        state.set_previous_turn_settings(previous_turn_settings);
+        state.note_model_visible_turn_context(turn_context_item);
+    }
+
+    async fn reset_reference_turn_context_state(&self) {
+        let mut state = self.state.lock().await;
+        state.reset_reference_turn_context_state();
     }
 
     fn maybe_refresh_shell_snapshot_for_cwd(
@@ -3667,10 +3664,11 @@ impl Session {
         self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item.clone())])
             .await;
 
-        // Advance the in-memory diff baseline even when this turn emitted no model-visible
-        // context items. This keeps later runtime diffing aligned with the current turn state.
-        let mut state = self.state.lock().await;
-        state.set_reference_context_item(Some(turn_context_item));
+        // Advance the stored turn-context snapshot even when this turn emitted no model-visible
+        // context items. Regular turns become both the `previous_turn_settings()` source and the
+        // active model-visible reference baseline for subsequent diffing.
+        self.note_model_visible_turn_context(turn_context_item)
+            .await;
     }
 
     pub(crate) async fn update_token_usage_info(
@@ -5688,17 +5686,6 @@ pub(crate) async fn run_turn(
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
     record_additional_contexts(&sess, &turn_context, additional_contexts).await;
-    if !input.is_empty() {
-        // Track the previous-turn baseline from the regular user-turn path only so
-        // standalone tasks (compact/shell/review/undo) cannot suppress future
-        // model/realtime injections.
-        sess.set_previous_turn_settings(Some(PreviousTurnSettings {
-            model: turn_context.model_info.slug.clone(),
-            realtime_active: Some(turn_context.realtime_active),
-        }))
-        .await;
-    }
-
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
             .await;

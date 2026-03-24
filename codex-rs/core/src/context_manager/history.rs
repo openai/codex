@@ -1,3 +1,4 @@
+use crate::codex::PreviousTurnSettings;
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
 use crate::event_mapping::has_non_contextual_dev_message_content;
@@ -35,17 +36,94 @@ pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
     token_info: Option<TokenUsageInfo>,
-    /// Reference context snapshot used for diffing and producing model-visible
-    /// settings update items.
+    reference_turn_context_state: ReferenceTurnContextState,
+}
+
+/// Session-owned bookkeeping for the stored turn context that drives both
+/// `previous_turn_settings()` and the model-visible reference baseline.
+///
+/// The stored turn context survives compaction so future turns can still diff
+/// against the last known settings, while
+/// `compacted_since_model_saw_reference_turn_context` controls whether the model
+/// may still treat that stored item as the active reference baseline.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ReferenceTurnContextState {
+    /// The last stored turn context we reconstructed or recorded.
     ///
-    /// This is the baseline for the next regular model turn, and may already
-    /// match the current turn after context updates are persisted.
+    /// This is the single source of truth for both `previous_turn_settings()` and
+    /// the reference baseline. Compaction can shadow it for model visibility
+    /// without erasing it.
+    turn_context_item: Option<TurnContextItem>,
+    /// Whether compaction has crossed the current reference baseline without a later
+    /// reinjection or real turn context re-establishing it.
     ///
-    /// When this is `None`, settings diffing treats the next turn as having no
-    /// baseline and emits a full reinjection of context state. Rollback may
-    /// also clear this when it trims a mixed initial-context developer bundle
-    /// whose non-diff fragments no longer exist in the surviving history.
-    reference_context_item: Option<TurnContextItem>,
+    /// When this is true, `reference_context_item()` must return `None` even if
+    /// `turn_context_item` still retains the last stored baseline for replay or
+    /// rollback bookkeeping.
+    compacted_since_model_saw_reference_turn_context: bool,
+}
+
+impl ReferenceTurnContextState {
+    pub(crate) fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    pub(crate) fn note_compaction(&mut self) {
+        self.compacted_since_model_saw_reference_turn_context = true;
+    }
+
+    pub(crate) fn note_compaction_during_reverse_replay(&mut self) {
+        if self.turn_context_item.is_none() {
+            self.compacted_since_model_saw_reference_turn_context = true;
+        }
+    }
+
+    pub(crate) fn note_turn_context_during_reverse_replay(
+        &mut self,
+        turn_context_item: &TurnContextItem,
+    ) {
+        if self.turn_context_item.is_none() {
+            self.turn_context_item = Some(turn_context_item.clone());
+        }
+    }
+
+    pub(crate) fn note_model_visible_turn_context(&mut self, turn_context_item: TurnContextItem) {
+        self.turn_context_item = Some(turn_context_item);
+        self.compacted_since_model_saw_reference_turn_context = false;
+    }
+
+    pub(crate) fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
+        if let Some(item) = item {
+            self.note_model_visible_turn_context(item);
+        } else {
+            self.note_compaction();
+        }
+    }
+
+    pub(crate) fn stored_turn_context_item(&self) -> Option<TurnContextItem> {
+        self.turn_context_item.clone()
+    }
+
+    pub(crate) fn compacted_since_model_saw_reference_turn_context(&self) -> bool {
+        self.compacted_since_model_saw_reference_turn_context
+    }
+
+    pub(crate) fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
+        self.turn_context_item
+            .as_ref()
+            .map(|turn_context_item| PreviousTurnSettings {
+                model: turn_context_item.model.clone(),
+                realtime_active: turn_context_item.realtime_active,
+            })
+    }
+
+    pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {
+        if self.compacted_since_model_saw_reference_turn_context {
+            None
+        } else {
+            self.turn_context_item.clone()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -63,7 +141,7 @@ impl ContextManager {
             token_info: TokenUsageInfo::new_or_append(
                 &None, &None, /*model_context_window*/ None,
             ),
-            reference_context_item: None,
+            reference_turn_context_state: ReferenceTurnContextState::default(),
         }
     }
 
@@ -75,12 +153,33 @@ impl ContextManager {
         self.token_info = info;
     }
 
+    pub(crate) fn set_reference_turn_context_state(
+        &mut self,
+        reference_turn_context_state: ReferenceTurnContextState,
+    ) {
+        self.reference_turn_context_state = reference_turn_context_state;
+    }
+
+    pub(crate) fn reset_reference_turn_context_state(&mut self) {
+        self.reference_turn_context_state.reset();
+    }
+
+    pub(crate) fn note_model_visible_turn_context(&mut self, turn_context_item: TurnContextItem) {
+        self.reference_turn_context_state
+            .note_model_visible_turn_context(turn_context_item);
+    }
+
+    pub(crate) fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
+        self.reference_turn_context_state.previous_turn_settings()
+    }
+
     pub(crate) fn set_reference_context_item(&mut self, item: Option<TurnContextItem>) {
-        self.reference_context_item = item;
+        self.reference_turn_context_state
+            .set_reference_context_item(item);
     }
 
     pub(crate) fn reference_context_item(&self) -> Option<TurnContextItem> {
-        self.reference_context_item.clone()
+        self.reference_turn_context_state.reference_context_item()
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {
@@ -410,8 +509,8 @@ impl ContextManager {
     /// that boundary.
     ///
     /// If any trimmed developer message was a mixed `build_initial_context` bundle containing both
-    /// rollback-trimmable contextual fragments and persistent developer text, this also clears the
-    /// stored `reference_context_item` baseline so the next real turn falls back to full
+    /// rollback-trimmable contextual fragments and persistent developer text, this shadows the
+    /// stored turn context as a model-visible baseline so the next real turn falls back to full
     /// reinjection.
     fn trim_pre_turn_context_updates(
         &mut self,
@@ -428,7 +527,7 @@ impl ContextManager {
                         // Mixed `build_initial_context` bundles are not reconstructible from
                         // steady-state diffs once trimmed, so the next real turn must fully
                         // reinject context instead of diffing against a stale baseline.
-                        self.reference_context_item = None;
+                        self.set_reference_context_item(/*item*/ None);
                     }
                     cut_idx -= 1;
                 }
