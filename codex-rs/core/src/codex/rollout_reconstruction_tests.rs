@@ -36,19 +36,17 @@ fn assistant_message(text: &str) -> ResponseItem {
 }
 
 fn inter_agent_assistant_message(text: &str) -> ResponseItem {
+    let communication = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::root().join("worker").unwrap(),
+        Vec::new(),
+        text.to_string(),
+    );
     ResponseItem::Message {
         id: None,
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
-            text: serde_json::to_string(&InterAgentCommunication::new(
-                AgentPath::root(),
-                AgentPath::root()
-                    .join("worker")
-                    .expect("worker path should be valid"),
-                Vec::new(),
-                text.to_string(),
-            ))
-            .expect("inter-agent communication should serialize"),
+            text: serde_json::to_string(&communication).unwrap(),
         }],
         end_turn: None,
         phase: None,

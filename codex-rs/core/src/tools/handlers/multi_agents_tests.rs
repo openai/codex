@@ -9,12 +9,14 @@ use crate::config::types::ShellEnvironmentPolicy;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::AgentStatus;
 use crate::protocol::AskForApproval;
+use crate::protocol::EventMsg;
 use crate::protocol::FileSystemSandboxPolicy;
 use crate::protocol::NetworkSandboxPolicy;
 use crate::protocol::Op;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionSource;
 use crate::protocol::SubAgentSource;
+use crate::protocol::TurnCompleteEvent;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
@@ -80,14 +82,31 @@ fn thread_manager() -> ThreadManager {
     )
 }
 
+fn history_contains_inter_agent_communication(
+    history_items: &[ResponseItem],
+    expected: &InterAgentCommunication,
+) -> bool {
+    history_items.iter().any(|item| {
+        let ResponseItem::Message { role, content, .. } = item else {
+            return false;
+        };
+        if role != "assistant" {
+            return false;
+        }
+        content.iter().any(|content_item| match content_item {
+            ContentItem::OutputText { text } => {
+                serde_json::from_str::<InterAgentCommunication>(text)
+                    .ok()
+                    .as_ref()
+                    == Some(expected)
+            }
+            ContentItem::InputText { .. } | ContentItem::InputImage { .. } => false,
+        })
+    })
+}
+
 fn inter_agent_message_text(recipient: &str, content: &str) -> String {
-    serde_json::to_string(&InterAgentCommunication::new(
-        AgentPath::root(),
-        AgentPath::try_from(recipient).expect("recipient path should be valid"),
-        Vec::new(),
-        content.to_string(),
-    ))
-    .expect("inter-agent communication should serialize")
+    format!("author: /root\nrecipient: {recipient}\nother_recipients: []\nContent: {content}")
 }
 
 #[derive(Clone, Copy)]
@@ -401,7 +420,12 @@ async fn multi_agent_v2_spawn_returns_path_and_send_input_accepts_relative_path(
         .get_thread(child_thread_id)
         .await
         .expect("child thread should exist");
-    let expected_message = inter_agent_message_text("/root/test_process", "continue");
+    let expected_communication = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::try_from("/root/test_process").expect("agent path"),
+        Vec::new(),
+        "continue".to_string(),
+    );
     timeout(Duration::from_secs(2), async {
         loop {
             let history_items = child_thread
@@ -411,18 +435,8 @@ async fn multi_agent_v2_spawn_returns_path_and_send_input_accepts_relative_path(
                 .await
                 .raw_items()
                 .to_vec();
-            let recorded = history_items.iter().any(|item| {
-                matches!(
-                    item,
-                    ResponseItem::Message { role, content, .. }
-                        if role == "assistant"
-                            && content.iter().any(|content_item| matches!(
-                                content_item,
-                                ContentItem::OutputText { text }
-                                    if text == &expected_message
-                            ))
-                )
-            });
+            let recorded =
+                history_contains_inter_agent_communication(&history_items, &expected_communication);
             let saw_user_message = history_items.iter().any(|item| {
                 matches!(
                     item,
@@ -664,7 +678,6 @@ async fn multi_agent_v2_send_input_interrupts_busy_child_without_losing_message(
             ))
     )));
 
-    let expected_message = inter_agent_message_text("/root/worker", "continue");
     timeout(Duration::from_secs(5), async {
         loop {
             let history_items = thread
@@ -674,18 +687,15 @@ async fn multi_agent_v2_send_input_interrupts_busy_child_without_losing_message(
                 .await
                 .raw_items()
                 .to_vec();
-            let saw_envelope = history_items.iter().any(|item| {
-                matches!(
-                    item,
-                    ResponseItem::Message { role, content, .. }
-                        if role == "assistant"
-                            && content.iter().any(|content_item| matches!(
-                                content_item,
-                                ContentItem::OutputText { text }
-                                    if text == &expected_message
-                            ))
-                )
-            });
+            let saw_envelope = history_contains_inter_agent_communication(
+                &history_items,
+                &InterAgentCommunication::new(
+                    AgentPath::root(),
+                    AgentPath::try_from("/root/worker").expect("agent path"),
+                    Vec::new(),
+                    "continue".to_string(),
+                ),
+            );
             let saw_user_message = history_items.iter().any(|item| {
                 matches!(
                     item,
@@ -1406,7 +1416,7 @@ async fn multi_agent_v2_wait_agent_accepts_targets_argument() {
     assert_eq!(
         result,
         crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult {
-            status: HashMap::from([(target, AgentStatus::NotFound)]),
+            message: "Wait completed.".to_string(),
             timed_out: false,
         }
     );
@@ -1574,12 +1584,7 @@ async fn wait_agent_returns_final_status_without_timeout() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_wait_agent_returns_statuses_keyed_by_path() {
-    #[derive(Debug, Deserialize)]
-    struct SpawnAgentResult {
-        task_name: String,
-    }
-
+async fn multi_agent_v2_wait_agent_returns_summary_for_named_targets() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -1609,9 +1614,7 @@ async fn multi_agent_v2_wait_agent_returns_statuses_keyed_by_path() {
         ))
         .await
         .expect("spawn_agent should succeed");
-    let (content, _) = expect_text_output(spawn_output);
-    let spawn_result: SpawnAgentResult =
-        serde_json::from_str(&content).expect("spawn result should parse");
+    let _ = expect_text_output(spawn_output);
 
     let agent_id = session
         .services
@@ -1659,10 +1662,64 @@ async fn multi_agent_v2_wait_agent_returns_statuses_keyed_by_path() {
     assert_eq!(
         result,
         crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult {
-            status: HashMap::from([(spawn_result.task_name, AgentStatus::Shutdown)]),
+            message: "Wait completed.".to_string(),
             timed_out: false,
         }
     );
+    assert_eq!(success, None);
+}
+
+#[tokio::test]
+async fn multi_agent_v2_wait_agent_does_not_return_completed_content() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let manager = thread_manager();
+    session.services.agent_control = manager.agent_control();
+    let mut config = (*turn.config).clone();
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    turn.config = Arc::new(config.clone());
+
+    let thread = manager.start_thread(config).await.expect("start thread");
+    let agent_id = thread.thread_id;
+    let child_turn = thread.thread.codex.session.new_default_turn().await;
+    thread
+        .thread
+        .codex
+        .session
+        .send_event(
+            child_turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: child_turn.sub_id.clone(),
+                last_agent_message: Some("sensitive child output".to_string()),
+            }),
+        )
+        .await;
+
+    let output = WaitAgentHandlerV2
+        .handle(invocation(
+            Arc::new(session),
+            Arc::new(turn),
+            "wait_agent",
+            function_payload(json!({
+                "targets": [agent_id.to_string()],
+                "timeout_ms": 1000
+            })),
+        ))
+        .await
+        .expect("wait_agent should succeed");
+    let (content, success) = expect_text_output(output);
+    let result: crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult =
+        serde_json::from_str(&content).expect("wait_agent result should be json");
+    assert_eq!(
+        result,
+        crate::tools::handlers::multi_agents_v2::wait::WaitAgentResult {
+            message: "Wait completed.".to_string(),
+            timed_out: false,
+        }
+    );
+    assert!(!content.contains("sensitive child output"));
     assert_eq!(success, None);
 }
 
