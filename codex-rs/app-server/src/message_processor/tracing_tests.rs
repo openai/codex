@@ -239,8 +239,6 @@ fn build_test_processor(
         cli_overrides: Vec::new(),
         loader_overrides: LoaderOverrides::default(),
         cloud_requirements: CloudRequirementsLoader::default(),
-        auth_manager: None,
-        thread_manager: None,
         feedback: CodexFeedback::new(),
         log_db: None,
         config_warnings: Vec::new(),
@@ -392,6 +390,7 @@ async fn read_response<T: serde::de::DeserializeOwned>(
         let crate::outgoing_message::OutgoingEnvelope::ToConnection {
             connection_id,
             message,
+            ..
         } = envelope
         else {
             continue;
@@ -422,6 +421,7 @@ async fn read_thread_started_notification(
             crate::outgoing_message::OutgoingEnvelope::ToConnection {
                 connection_id,
                 message,
+                ..
             } => {
                 if connection_id != TEST_CONNECTION_ID {
                     continue;
@@ -580,7 +580,7 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
         parent_span_id: remote_parent_span_id,
         context: remote_trace,
     } = RemoteTrace::new("00000000000000000000000000000077", "0000000000000088");
-    let _: TurnStartResponse = harness
+    let turn_start_response: TurnStartResponse = harness
         .request(
             ClientRequest::TurnStart {
                 request_id: RequestId::Integer(3),
@@ -628,6 +628,10 @@ async fn turn_start_jsonrpc_span_parents_core_turn_spans() -> Result<()> {
     assert_eq!(server_request_span.parent_span_id, remote_parent_span_id);
     assert!(server_request_span.parent_span_is_remote);
     assert_eq!(server_request_span.span_context.trace_id(), remote_trace_id);
+    assert_eq!(
+        span_attr(server_request_span, "turn.id"),
+        Some(turn_start_response.turn.id.as_str())
+    );
     assert_span_descends_from(&spans, core_turn_span, server_request_span);
     harness.shutdown().await;
 

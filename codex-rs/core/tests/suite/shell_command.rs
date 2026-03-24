@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use codex_core::features::Feature;
 use core_test_support::assert_regex_match;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -251,16 +250,7 @@ async fn shell_command_times_out_with_timeout_ms() -> anyhow::Result<()> {
 async fn unicode_output(login: bool) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    #[allow(clippy::expect_used)]
-    let harness = shell_command_harness_with(|builder| {
-        builder.with_model("gpt-5.2").with_config(|config| {
-            config
-                .features
-                .enable(Feature::PowershellUtf8)
-                .expect("test config should allow feature update");
-        })
-    })
-    .await?;
+    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.2")).await?;
 
     // We use a child process on windows instead of a direct builtin like 'echo' to ensure that Powershell
     // config is actually being set correctly.
@@ -286,16 +276,7 @@ async fn unicode_output(login: bool) -> anyhow::Result<()> {
 async fn unicode_output_with_newlines(login: bool) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
-    #[allow(clippy::expect_used)]
-    let harness = shell_command_harness_with(|builder| {
-        builder.with_model("gpt-5.2").with_config(|config| {
-            config
-                .features
-                .enable(Feature::PowershellUtf8)
-                .expect("test config should allow feature update");
-        })
-    })
-    .await?;
+    let harness = shell_command_harness_with(|builder| builder.with_model("gpt-5.2")).await?;
 
     let call_id = "unicode_output";
     mount_shell_responses_with_timeout(

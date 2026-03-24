@@ -8,11 +8,11 @@ use std::sync::RwLock;
 use serde::Serialize;
 use tokio::task::JoinHandle;
 
-use crate::git_info::get_git_remote_urls_assume_git_repo;
-use crate::git_info::get_git_repo_root;
-use crate::git_info::get_has_changes;
-use crate::git_info::get_head_commit_hash;
 use crate::sandbox_tags::sandbox_tag;
+use codex_git_utils::get_git_remote_urls_assume_git_repo;
+use codex_git_utils::get_git_repo_root;
+use codex_git_utils::get_has_changes;
+use codex_git_utils::get_head_commit_hash;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::SandboxPolicy;
 
@@ -54,6 +54,8 @@ impl From<WorkspaceGitMetadata> for TurnMetadataWorkspace {
 #[derive(Clone, Debug, Serialize, Default)]
 pub(crate) struct TurnMetadataBag {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     turn_id: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     workspaces: BTreeMap<String, TurnMetadataWorkspace>,
@@ -68,6 +70,7 @@ impl TurnMetadataBag {
 }
 
 fn build_turn_metadata_bag(
+    session_id: Option<String>,
     turn_id: Option<String>,
     sandbox: Option<String>,
     repo_root: Option<String>,
@@ -81,6 +84,7 @@ fn build_turn_metadata_bag(
     }
 
     TurnMetadataBag {
+        session_id,
         turn_id,
         workspaces,
         sandbox,
@@ -90,11 +94,12 @@ fn build_turn_metadata_bag(
 pub async fn build_turn_metadata_header(cwd: &Path, sandbox: Option<&str>) -> Option<String> {
     let repo_root = get_git_repo_root(cwd).map(|root| root.to_string_lossy().into_owned());
 
-    let (latest_git_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
+    let (head_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
         get_head_commit_hash(cwd),
         get_git_remote_urls_assume_git_repo(cwd),
         get_has_changes(cwd),
     );
+    let latest_git_commit_hash = head_commit_hash.map(|sha| sha.0);
     if latest_git_commit_hash.is_none()
         && associated_remote_urls.is_none()
         && has_changes.is_none()
@@ -104,6 +109,7 @@ pub async fn build_turn_metadata_header(cwd: &Path, sandbox: Option<&str>) -> Op
     }
 
     build_turn_metadata_bag(
+        /*session_id*/ None,
         /*turn_id*/ None,
         sandbox.map(ToString::to_string),
         repo_root,
@@ -128,6 +134,7 @@ pub(crate) struct TurnMetadataState {
 
 impl TurnMetadataState {
     pub(crate) fn new(
+        session_id: String,
         turn_id: String,
         cwd: PathBuf,
         sandbox_policy: &SandboxPolicy,
@@ -136,6 +143,7 @@ impl TurnMetadataState {
         let repo_root = get_git_repo_root(&cwd).map(|root| root.to_string_lossy().into_owned());
         let sandbox = Some(sandbox_tag(sandbox_policy, windows_sandbox_level).to_string());
         let base_metadata = build_turn_metadata_bag(
+            Some(session_id),
             Some(turn_id),
             sandbox,
             /*repo_root*/ None,
@@ -168,6 +176,11 @@ impl TurnMetadataState {
         Some(self.base_header.clone())
     }
 
+    pub(crate) fn current_meta_value(&self) -> Option<serde_json::Value> {
+        self.current_header_value()
+            .and_then(|header| serde_json::from_str(&header).ok())
+    }
+
     pub(crate) fn spawn_git_enrichment_task(&self) {
         if self.repo_root.is_none() {
             return;
@@ -189,6 +202,7 @@ impl TurnMetadataState {
             };
 
             let enriched_metadata = build_turn_metadata_bag(
+                state.base_metadata.session_id.clone(),
                 state.base_metadata.turn_id.clone(),
                 state.base_metadata.sandbox.clone(),
                 Some(repo_root),
@@ -218,11 +232,12 @@ impl TurnMetadataState {
     }
 
     async fn fetch_workspace_git_metadata(&self) -> WorkspaceGitMetadata {
-        let (latest_git_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
+        let (head_commit_hash, associated_remote_urls, has_changes) = tokio::join!(
             get_head_commit_hash(&self.cwd),
             get_git_remote_urls_assume_git_repo(&self.cwd),
             get_has_changes(&self.cwd),
         );
+        let latest_git_commit_hash = head_commit_hash.map(|sha| sha.0);
 
         WorkspaceGitMetadata {
             associated_remote_urls,

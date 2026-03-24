@@ -22,6 +22,7 @@ use crate::message_processor::MessageProcessorArgs;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::ConnectionState;
 use crate::transport::OutboundConnectionState;
@@ -103,9 +104,7 @@ enum OutboundControlEvent {
     /// Register a new writer for an opened connection.
     Opened {
         connection_id: ConnectionId,
-        writer: mpsc::Sender<crate::outgoing_message::OutgoingMessage>,
-        // Allow codex/event/* notifications to be emitted.
-        allow_legacy_notifications: bool,
+        writer: mpsc::Sender<QueuedOutgoingMessage>,
         disconnect_sender: Option<CancellationToken>,
         initialized: Arc<AtomicBool>,
         experimental_api_enabled: Arc<AtomicBool>,
@@ -336,6 +335,7 @@ pub async fn run_main(
         loader_overrides,
         default_analytics_enabled,
         AppServerTransport::Stdio,
+        SessionSource::VSCode,
     )
     .await
 }
@@ -346,6 +346,7 @@ pub async fn run_main_with_transport(
     loader_overrides: LoaderOverrides,
     default_analytics_enabled: bool,
     transport: AppServerTransport,
+    session_source: SessionSource,
 ) -> IoResult<()> {
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
@@ -477,7 +478,7 @@ pub async fn run_main_with_transport(
             range: None,
         });
     }
-    if let Some(warning) = codex_core::config::missing_system_bwrap_warning() {
+    if let Some(warning) = codex_core::config::system_bwrap_warning() {
         config_warnings.push(ConfigWarningNotification {
             summary: warning,
             details: None,
@@ -560,7 +561,6 @@ pub async fn run_main_with_transport(
                             OutboundControlEvent::Opened {
                                 connection_id,
                                 writer,
-                                allow_legacy_notifications,
                                 disconnect_sender,
                                 initialized,
                                 experimental_api_enabled,
@@ -573,7 +573,6 @@ pub async fn run_main_with_transport(
                                         initialized,
                                         experimental_api_enabled,
                                         opted_out_notification_methods,
-                                        allow_legacy_notifications,
                                         disconnect_sender,
                                     ),
                                 );
@@ -616,12 +615,10 @@ pub async fn run_main_with_transport(
             cli_overrides,
             loader_overrides,
             cloud_requirements: cloud_requirements.clone(),
-            auth_manager: None,
-            thread_manager: None,
             feedback: feedback.clone(),
             log_db,
             config_warnings,
-            session_source: SessionSource::VSCode,
+            session_source,
             enable_codex_api_key_env: false,
         });
         let mut thread_created_rx = processor.thread_created_receiver();
@@ -673,7 +670,6 @@ pub async fn run_main_with_transport(
                             TransportEvent::ConnectionOpened {
                                 connection_id,
                                 writer,
-                                allow_legacy_notifications,
                                 disconnect_sender,
                             } => {
                                 let outbound_initialized = Arc::new(AtomicBool::new(false));
@@ -685,7 +681,6 @@ pub async fn run_main_with_transport(
                                     .send(OutboundControlEvent::Opened {
                                         connection_id,
                                         writer,
-                                        allow_legacy_notifications,
                                         disconnect_sender,
                                         initialized: Arc::clone(&outbound_initialized),
                                         experimental_api_enabled: Arc::clone(

@@ -60,9 +60,11 @@ cases like `/repo = write`, `/repo/a = none`, `/repo/a/b = write`, where the
 more specific writable child must reopen under a denied parent.
 
 The Linux sandbox helper prefers `/usr/bin/bwrap` whenever it is available and
-falls back to the vendored bubblewrap path otherwise. When `/usr/bin/bwrap` is
-missing, Codex also surfaces a startup warning through its normal notification
-path instead of printing directly from the sandbox helper.
+supports the required argv-rewrite flags, and falls back to the vendored
+bubblewrap path compiled into the binary otherwise. When `/usr/bin/bwrap` is
+missing or too old to support the required flags, Codex also surfaces a startup
+warning through its normal notification path instead of printing directly from
+the sandbox helper.
 
 ### Windows
 

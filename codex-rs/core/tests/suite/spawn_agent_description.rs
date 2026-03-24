@@ -3,9 +3,9 @@
 
 use anyhow::Result;
 use codex_core::CodexAuth;
-use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::models_manager::manager::RefreshStrategy;
+use codex_features::Feature;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -64,7 +64,6 @@ fn test_model_info(
         visibility,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
-        prefer_websockets: false,
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         priority: 1,

@@ -354,7 +354,7 @@ mod tests {
             StatusDetailsCapitalization::CapitalizeFirst,
             STATUS_DETAILS_DEFAULT_MAX_LINES,
         );
-        w.set_interrupt_hint_visible(false);
+        w.set_interrupt_hint_visible(/*visible*/ false);
 
         // Freeze time-dependent rendering (elapsed + spinner) to keep the snapshot stable.
         w.is_paused = true;

@@ -41,13 +41,16 @@ codex-chatgpt = { workspace = true }
 codex-client = { workspace = true }
 codex-cloud-requirements = { workspace = true }
 codex-core = { workspace = true }
+codex-features = { workspace = true }
 codex-feedback = { workspace = true }
 codex-file-search = { workspace = true }
+codex-git-utils = { workspace = true }
 codex-login = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-state = { workspace = true }
+codex-terminal-detection = { workspace = true }
 codex-utils-approval-presets = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-cli = { workspace = true }

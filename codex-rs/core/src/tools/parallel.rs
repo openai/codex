@@ -16,6 +16,7 @@ use crate::error::CodexErr;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::AbortedToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::context::ToolPayload;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
@@ -57,9 +58,17 @@ impl ToolCallRuntime {
         call: ToolCall,
         cancellation_token: CancellationToken,
     ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {
+        let error_call = call.clone();
         let future =
             self.handle_tool_call_with_source(call, ToolCallSource::Direct, cancellation_token);
-        async move { future.await.map(AnyToolResult::into_response) }.in_current_span()
+        async move {
+            match future.await {
+                Ok(response) => Ok(response.into_response()),
+                Err(FunctionCallError::Fatal(message)) => Err(CodexErr::Fatal(message)),
+                Err(other) => Ok(Self::failure_response(error_call, other)),
+            }
+        }
+        .in_current_span()
     }
 
     #[instrument(level = "trace", skip_all)]
@@ -68,7 +77,7 @@ impl ToolCallRuntime {
         call: ToolCall,
         source: ToolCallSource,
         cancellation_token: CancellationToken,
-    ) -> impl std::future::Future<Output = Result<AnyToolResult, CodexErr>> {
+    ) -> impl std::future::Future<Output = Result<AnyToolResult, FunctionCallError>> {
         let supports_parallel = self.router.tool_supports_parallel(&call.tool_name);
         let router = Arc::clone(&self.router);
         let session = Arc::clone(&self.session);
@@ -78,7 +87,7 @@ impl ToolCallRuntime {
         let started = Instant::now();
 
         let dispatch_span = trace_span!(
-            "dispatch_tool_call",
+            "dispatch_tool_call_with_code_mode_result",
             otel.name = call.tool_name.as_str(),
             tool_name = call.tool_name.as_str(),
             call_id = call.call_id.as_str(),
@@ -115,20 +124,42 @@ impl ToolCallRuntime {
             }));
 
         async move {
-            match handle.await {
-                Ok(Ok(response)) => Ok(response),
-                Ok(Err(FunctionCallError::Fatal(message))) => Err(CodexErr::Fatal(message)),
-                Ok(Err(other)) => Err(CodexErr::Fatal(other.to_string())),
-                Err(err) => Err(CodexErr::Fatal(format!(
-                    "tool task failed to receive: {err:?}"
-                ))),
-            }
+            handle.await.map_err(|err| {
+                FunctionCallError::Fatal(format!("tool task failed to receive: {err:?}"))
+            })?
         }
         .in_current_span()
     }
 }
 
 impl ToolCallRuntime {
+    fn failure_response(call: ToolCall, err: FunctionCallError) -> ResponseInputItem {
+        let message = err.to_string();
+        match call.payload {
+            ToolPayload::ToolSearch { .. } => ResponseInputItem::ToolSearchOutput {
+                call_id: call.call_id,
+                status: "completed".to_string(),
+                execution: "client".to_string(),
+                tools: Vec::new(),
+            },
+            ToolPayload::Custom { .. } => ResponseInputItem::CustomToolCallOutput {
+                call_id: call.call_id,
+                name: None,
+                output: codex_protocol::models::FunctionCallOutputPayload {
+                    body: codex_protocol::models::FunctionCallOutputBody::Text(message),
+                    success: Some(false),
+                },
+            },
+            _ => ResponseInputItem::FunctionCallOutput {
+                call_id: call.call_id,
+                output: codex_protocol::models::FunctionCallOutputPayload {
+                    body: codex_protocol::models::FunctionCallOutputBody::Text(message),
+                    success: Some(false),
+                },
+            },
+        }
+    }
+
     fn aborted_response(call: &ToolCall, secs: f32) -> AnyToolResult {
         AnyToolResult {
             call_id: call.call_id.clone(),

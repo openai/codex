@@ -32,7 +32,9 @@ axum = { workspace = true, default-features = false, features = [
 codex-arg0 = { workspace = true }
 codex-cloud-requirements = { workspace = true }
 codex-core = { workspace = true }
-codex-environment = { workspace = true }
+codex-exec-server = { workspace = true }
+codex-features = { workspace = true }
+codex-git-utils = { workspace = true }
 codex-otel = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-utils-cli = { workspace = true }
@@ -45,6 +47,7 @@ codex-protocol = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-feedback = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }

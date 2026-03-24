@@ -1,0 +1,17 @@
+---
+source: core/src/codex_tests.rs
+assertion_line: 1282
+expression: snapshot
+---
+Scenario: First request after fork when fork startup changes approval policy and the first forked turn changes approval policy again and enters plan mode.
+
+## First Forked Turn Request
+00:message/developer:<PERMISSIONS_INSTRUCTIONS>
+01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+02:message/user:fork seed
+03:message/developer:<PERMISSIONS_INSTRUCTIONS>
+04:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
+05:message/developer[2]:
+    [01] <PERMISSIONS_INSTRUCTIONS>
+    [02] <collaboration_mode>Fork turn collaboration instructions.</collaboration_mode>
+06:message/user:after fork

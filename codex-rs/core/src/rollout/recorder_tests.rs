@@ -1,7 +1,7 @@
 use super::*;
 use crate::config::ConfigBuilder;
-use crate::features::Feature;
 use chrono::TimeZone;
+use codex_features::Feature;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AskForApproval;
@@ -85,6 +85,7 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
             AgentMessageEvent {
                 message: "buffered-event".to_string(),
                 phase: None,
+                memory_citation: None,
             },
         ))])
         .await?;
@@ -201,6 +202,7 @@ async fn metadata_irrelevant_events_touch_state_db_updated_at() -> std::io::Resu
             AgentMessageEvent {
                 message: "assistant text".to_string(),
                 phase: None,
+                memory_citation: None,
             },
         ))])
         .await?;
@@ -251,6 +253,7 @@ async fn metadata_irrelevant_events_fall_back_to_upsert_when_thread_missing() ->
         AgentMessageEvent {
             message: "assistant text".to_string(),
             phase: None,
+            memory_citation: None,
         },
     ))];
 

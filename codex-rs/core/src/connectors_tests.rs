@@ -11,9 +11,9 @@ use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
-use crate::features::Feature;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
+use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
@@ -977,6 +977,33 @@ fn first_party_chat_originator_filters_target_and_openai_prefixed_connectors() {
     assert_eq!(
         filtered,
         vec![app("asdk_app_6938a94a61d881918ef32cb999ff937c")]
+    );
+}
+
+#[tokio::test]
+async fn tool_suggest_connector_ids_include_configured_tool_suggest_discoverables() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[tool_suggest]
+discoverables = [
+  { type = "connector", id = "connector_2128aebfecb84f64a069897515042a44" },
+  { type = "plugin", id = "slack@openai-curated" },
+  { type = "connector", id = "   " }
+]
+"#,
+    )
+    .expect("write config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should load");
+
+    assert_eq!(
+        tool_suggest_connector_ids(&config),
+        HashSet::from(["connector_2128aebfecb84f64a069897515042a44".to_string()])
     );
 }
 

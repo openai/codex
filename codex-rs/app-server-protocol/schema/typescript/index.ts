@@ -1,6 +1,7 @@
 // GENERATED CODE! DO NOT MODIFY BY HAND!
 
 export type { AbsolutePathBuf } from "./AbsolutePathBuf";
+export type { AgentPath } from "./AgentPath";
 export type { ApplyPatchApprovalParams } from "./ApplyPatchApprovalParams";
 export type { ApplyPatchApprovalResponse } from "./ApplyPatchApprovalResponse";
 export type { AuthMode } from "./AuthMode";
@@ -18,6 +19,7 @@ export type { FileChange } from "./FileChange";
 export type { ForcedLoginMethod } from "./ForcedLoginMethod";
 export type { FunctionCallOutputBody } from "./FunctionCallOutputBody";
 export type { FunctionCallOutputContentItem } from "./FunctionCallOutputContentItem";
+export type { FuzzyFileSearchMatchType } from "./FuzzyFileSearchMatchType";
 export type { FuzzyFileSearchParams } from "./FuzzyFileSearchParams";
 export type { FuzzyFileSearchResponse } from "./FuzzyFileSearchResponse";
 export type { FuzzyFileSearchResult } from "./FuzzyFileSearchResult";

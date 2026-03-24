@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::Duration as ChronoDuration;
 use chrono::Utc;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;

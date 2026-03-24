@@ -13,7 +13,6 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::StreamOutput;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::packages::versions;
 use crate::protocol::ExecCommandSource;
@@ -26,9 +25,10 @@ use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_features::Feature;
 
 const ARTIFACTS_TOOL_NAME: &str = "artifacts";
-const ARTIFACTS_PRAGMA_PREFIXES: [&str; 2] = ["// codex-artifacts:", "// codex-artifact-tool:"];
+const ARTIFACT_TOOL_PRAGMA_PREFIX: &str = "// codex-artifact-tool:";
 const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct ArtifactsHandler;
@@ -74,7 +74,7 @@ impl ToolHandler for ArtifactsHandler {
             ToolPayload::Custom { input } => parse_freeform_args(&input)?,
             _ => {
                 return Err(FunctionCallError::RespondToModel(
-                    "artifacts expects freeform JavaScript input authored against the preloaded @oai/artifact-tool surface".to_string(),
+                    "artifacts expects freeform JavaScript input authored against the preloaded @oai/artifact-tool exports".to_string(),
                 ));
             }
         };
@@ -123,7 +123,7 @@ impl ToolHandler for ArtifactsHandler {
 fn parse_freeform_args(input: &str) -> Result<ArtifactsToolArgs, FunctionCallError> {
     if input.trim().is_empty() {
         return Err(FunctionCallError::RespondToModel(
-            "artifacts expects raw JavaScript source text (non-empty) authored against the preloaded @oai/artifact-tool surface. Provide JS only, optionally with first-line `// codex-artifacts: timeout_ms=15000` or `// codex-artifact-tool: timeout_ms=15000`."
+            "artifacts expects raw JavaScript source text (non-empty) authored against the preloaded @oai/artifact-tool exports. Provide JS only, optionally with first-line `// codex-artifact-tool: timeout_ms=15000`."
                 .to_string(),
         ));
     }
@@ -191,7 +191,7 @@ fn reject_json_or_quoted_source(code: &str) -> Result<(), FunctionCallError> {
     let trimmed = code.trim();
     if trimmed.starts_with("```") {
         return Err(FunctionCallError::RespondToModel(
-            "artifacts expects raw JavaScript source, not markdown code fences. Resend plain JS only (optional first line `// codex-artifacts: ...` or `// codex-artifact-tool: ...`)."
+            "artifacts expects raw JavaScript source, not markdown code fences. Resend plain JS only (optional first line `// codex-artifact-tool: ...`)."
                 .to_string(),
         ));
     }
@@ -200,7 +200,7 @@ fn reject_json_or_quoted_source(code: &str) -> Result<(), FunctionCallError> {
     };
     match value {
         JsonValue::Object(_) | JsonValue::String(_) => Err(FunctionCallError::RespondToModel(
-            "artifacts is a freeform tool and expects raw JavaScript source authored against the preloaded @oai/artifact-tool surface. Resend plain JS only (optional first line `// codex-artifacts: ...` or `// codex-artifact-tool: ...`); do not send JSON (`{\"code\":...}`), quoted code, or markdown fences."
+            "artifacts is a freeform tool and expects raw JavaScript source authored against the preloaded @oai/artifact-tool exports. Resend plain JS only (optional first line `// codex-artifact-tool: ...`); do not send JSON (`{\"code\":...}`), quoted code, or markdown fences."
                 .to_string(),
         )),
         _ => Ok(()),
@@ -208,9 +208,7 @@ fn reject_json_or_quoted_source(code: &str) -> Result<(), FunctionCallError> {
 }
 
 fn parse_pragma_prefix(line: &str) -> Option<&str> {
-    ARTIFACTS_PRAGMA_PREFIXES
-        .iter()
-        .find_map(|prefix| line.strip_prefix(prefix))
+    line.strip_prefix(ARTIFACT_TOOL_PRAGMA_PREFIX)
 }
 
 fn default_runtime_manager(codex_home: std::path::PathBuf) -> ArtifactRuntimeManager {

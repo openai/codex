@@ -2,7 +2,7 @@
 
 Public surface of `codex_app_server` for app-server v2.
 
-This SDK surface is experimental. The current implementation intentionally allows only one active `TurnHandle.stream()` or `TurnHandle.run()` consumer per client instance at a time.
+This SDK surface is experimental. The current implementation intentionally allows only one active turn consumer (`Thread.run()`, `TurnHandle.stream()`, or `TurnHandle.run()`) per client instance at a time.
 
 ## Package Entry
 
@@ -10,6 +10,7 @@ This SDK surface is experimental. The current implementation intentionally allow
 from codex_app_server import (
     Codex,
     AsyncCodex,
+    RunResult,
     Thread,
     AsyncThread,
     TurnHandle,
@@ -24,7 +25,7 @@ from codex_app_server import (
     MentionInput,
     TurnStatus,
 )
-from codex_app_server.generated.v2_all import ThreadItem
+from codex_app_server.generated.v2_all import ThreadItem, ThreadTokenUsage
 ```
 
 - Version: `codex_app_server.__version__`
@@ -97,6 +98,7 @@ async with AsyncCodex() as codex:
 
 ### Thread
 
+- `run(input: str | Input, *, approval_policy=None, approvals_reviewer=None, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, service_tier=None, summary=None) -> RunResult`
 - `turn(input: Input, *, approval_policy=None, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, summary=None) -> TurnHandle`
 - `read(*, include_turns: bool = False) -> ThreadReadResponse`
 - `set_name(name: str) -> ThreadSetNameResponse`
@@ -104,10 +106,25 @@ async with AsyncCodex() as codex:
 
 ### AsyncThread
 
+- `run(input: str | Input, *, approval_policy=None, approvals_reviewer=None, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, service_tier=None, summary=None) -> Awaitable[RunResult]`
 - `turn(input: Input, *, approval_policy=None, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox_policy=None, summary=None) -> Awaitable[AsyncTurnHandle]`
 - `read(*, include_turns: bool = False) -> Awaitable[ThreadReadResponse]`
 - `set_name(name: str) -> Awaitable[ThreadSetNameResponse]`
 - `compact() -> Awaitable[ThreadCompactStartResponse]`
+
+`run(...)` is the common-case convenience path. It accepts plain strings, starts
+the turn, consumes notifications until completion, and returns a small result
+object with:
+
+- `final_response: str | None`
+- `items: list[ThreadItem]`
+- `usage: ThreadTokenUsage | None`
+
+`final_response` is `None` when the turn finishes without a final-answer or
+phase-less assistant message item.
+
+Use `turn(...)` when you need low-level turn control (`stream()`, `steer()`,
+`interrupt()`) or the canonical generated `Turn` from `TurnHandle.run()`.
 
 ## TurnHandle / AsyncTurnHandle
 
@@ -181,10 +198,10 @@ from codex_app_server import (
 ## Example
 
 ```python
-from codex_app_server import Codex, TextInput
+from codex_app_server import Codex
 
 with Codex() as codex:
     thread = codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
-    completed_turn = thread.turn(TextInput("Say hello in one sentence.")).run()
-    print(completed_turn.id, completed_turn.status)
+    result = thread.run("Say hello in one sentence.")
+    print(result.final_response)
 ```

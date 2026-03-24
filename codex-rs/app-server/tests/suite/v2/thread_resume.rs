@@ -322,6 +322,7 @@ stream_max_retries = 0
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
         source: RolloutSessionSource::Cli,
+        agent_path: None,
         agent_nickname: None,
         agent_role: None,
         model_provider: Some("mock_provider".to_string()),
@@ -450,6 +451,7 @@ async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is
             "payload": serde_json::to_value(EventMsg::AgentMessage(AgentMessageEvent {
                 message: "Still running".to_string(),
                 phase: None,
+                memory_citation: None,
             }))?,
         })
         .to_string(),

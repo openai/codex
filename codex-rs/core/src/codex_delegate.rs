@@ -80,7 +80,7 @@ pub(crate) async fn run_codex_thread_interactive(
         skills_manager: Arc::clone(&parent_session.services.skills_manager),
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
-        file_watcher: Arc::clone(&parent_session.services.file_watcher),
+        skills_watcher: Arc::clone(&parent_session.services.skills_watcher),
         conversation_history: initial_history.unwrap_or(InitialHistory::New),
         session_source: SessionSource::SubAgent(subagent_source),
         agent_control: parent_session.services.agent_control.clone(),
@@ -89,6 +89,7 @@ pub(crate) async fn run_codex_thread_interactive(
         metrics_service_name: None,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
         parent_trace: None,
     })
     .await?;

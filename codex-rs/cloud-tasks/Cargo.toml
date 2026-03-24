@@ -22,6 +22,7 @@ codex-cloud-tasks-client = { path = "../cloud-tasks-client", features = [
 ] }
 codex-client = { workspace = true }
 codex-core = { path = "../core" }
+codex-git-utils = { workspace = true }
 codex-login = { path = "../login" }
 codex-tui = { path = "../tui" }
 codex-utils-cli = { workspace = true }

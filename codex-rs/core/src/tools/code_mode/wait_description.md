@@ -1,8 +1,0 @@
-- Use `wait` only after `exec` returns `Script running with cell ID ...`.
-- `cell_id` identifies the running `exec` cell to resume.
-- `yield_time_ms` controls how long to wait for more output before yielding again. If omitted, `wait` uses its default wait timeout.
-- `max_tokens` limits how much new output this wait call returns.
-- `terminate: true` stops the running cell instead of waiting for more output.
-- `wait` returns only the new output since the last yield, or the final completion or termination result for that cell.
-- If the cell is still running, `wait` may yield again with the same `cell_id`.
-- If the cell has already finished, `wait` returns the completed result and closes the cell.

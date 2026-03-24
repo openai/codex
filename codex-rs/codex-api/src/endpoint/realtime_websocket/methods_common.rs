@@ -12,6 +12,7 @@ use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
 use crate::endpoint::realtime_websocket::protocol::SessionUpdateSession;
 
 pub(super) const REALTIME_AUDIO_SAMPLE_RATE: u32 = 24_000;
+const AGENT_FINAL_MESSAGE_PREFIX: &str = "\"Agent Final Message\":\n\n";
 
 pub(super) fn normalized_session_mode(
     event_parser: RealtimeEventParser,
@@ -38,6 +39,7 @@ pub(super) fn conversation_handoff_append_message(
     handoff_id: String,
     output_text: String,
 ) -> RealtimeOutboundMessage {
+    let output_text = format!("{AGENT_FINAL_MESSAGE_PREFIX}{output_text}");
     match event_parser {
         RealtimeEventParser::V1 => v1_conversation_handoff_append_message(handoff_id, output_text),
         RealtimeEventParser::RealtimeV2 => {

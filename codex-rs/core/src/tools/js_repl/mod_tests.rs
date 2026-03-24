@@ -1,11 +1,11 @@
 use super::*;
 use crate::codex::make_session_and_context;
 use crate::codex::make_session_and_context_with_dynamic_tools_and_rx;
-use crate::features::Feature;
 use crate::protocol::AskForApproval;
 use crate::protocol::EventMsg;
 use crate::protocol::SandboxPolicy;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use codex_features::Feature;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -376,6 +376,7 @@ fn validate_emitted_image_url_rejects_non_data_scheme() {
 fn summarize_tool_call_response_for_multimodal_custom_output() {
     let response = ResponseInputItem::CustomToolCallOutput {
         call_id: "call-1".to_string(),
+        name: None,
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputImage {
                 image_url: "data:image/png;base64,abcd".to_string(),

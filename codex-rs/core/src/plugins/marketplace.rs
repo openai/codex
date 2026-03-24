@@ -2,9 +2,9 @@ use super::PluginManifestInterface;
 use super::load_plugin_manifest;
 use super::store::PluginId;
 use super::store::PluginIdError;
-use crate::git_info::get_git_repo_root;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
+use codex_git_utils::get_git_repo_root;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dirs::home_dir;
@@ -14,6 +14,7 @@ use std::io;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
+use tracing::warn;
 
 const MARKETPLACE_RELATIVE_PATH: &str = ".agents/plugins/marketplace.json";
 
@@ -30,6 +31,18 @@ pub struct Marketplace {
     pub path: AbsolutePathBuf,
     pub interface: Option<MarketplaceInterface>,
     pub plugins: Vec<MarketplacePlugin>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketplaceListError {
+    pub path: AbsolutePathBuf,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MarketplaceListOutcome {
+    pub marketplaces: Vec<Marketplace>,
+    pub errors: Vec<MarketplaceListError>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,7 +69,7 @@ pub struct MarketplacePluginPolicy {
     pub authentication: MarketplacePluginAuthPolicy,
     // TODO: Surface or enforce product gating at the Codex/plugin consumer boundary instead of
     // only carrying it through core marketplace metadata.
-    pub products: Vec<Product>,
+    pub products: Option<Vec<Product>>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -127,6 +140,9 @@ pub enum MarketplaceError {
         marketplace_name: String,
     },
 
+    #[error("plugins feature is disabled")]
+    PluginsDisabled,
+
     #[error("{0}")]
     InvalidPlugin(String),
 }
@@ -142,6 +158,7 @@ impl MarketplaceError {
 pub fn resolve_marketplace_plugin(
     marketplace_path: &AbsolutePathBuf,
     plugin_name: &str,
+    restriction_product: Option<Product>,
 ) -> Result<ResolvedMarketplacePlugin, MarketplaceError> {
     let marketplace = load_raw_marketplace_manifest(marketplace_path)?;
     let marketplace_name = marketplace.name;
@@ -164,7 +181,14 @@ pub fn resolve_marketplace_plugin(
         ..
     } = plugin;
     let install_policy = policy.installation;
-    if install_policy == MarketplacePluginInstallPolicy::NotAvailable {
+    let product_allowed = match policy.products.as_deref() {
+        None => true,
+        Some([]) => false,
+        Some(products) => {
+            restriction_product.is_some_and(|product| product.matches_product_restriction(products))
+        }
+    };
+    if install_policy == MarketplacePluginInstallPolicy::NotAvailable || !product_allowed {
         return Err(MarketplaceError::PluginNotAvailable {
             plugin_name: name,
             marketplace_name,
@@ -183,7 +207,7 @@ pub fn resolve_marketplace_plugin(
 
 pub fn list_marketplaces(
     additional_roots: &[AbsolutePathBuf],
-) -> Result<Vec<Marketplace>, MarketplaceError> {
+) -> Result<MarketplaceListOutcome, MarketplaceError> {
     list_marketplaces_with_home(additional_roots, home_dir().as_deref())
 }
 
@@ -234,14 +258,27 @@ pub(crate) fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Ma
 fn list_marketplaces_with_home(
     additional_roots: &[AbsolutePathBuf],
     home_dir: Option<&Path>,
-) -> Result<Vec<Marketplace>, MarketplaceError> {
-    let mut marketplaces = Vec::new();
+) -> Result<MarketplaceListOutcome, MarketplaceError> {
+    let mut outcome = MarketplaceListOutcome::default();
 
     for marketplace_path in discover_marketplace_paths_from_roots(additional_roots, home_dir) {
-        marketplaces.push(load_marketplace(&marketplace_path)?);
+        match load_marketplace(&marketplace_path) {
+            Ok(marketplace) => outcome.marketplaces.push(marketplace),
+            Err(err) => {
+                warn!(
+                    path = %marketplace_path.display(),
+                    error = %err,
+                    "skipping marketplace that failed to load"
+                );
+                outcome.errors.push(MarketplaceListError {
+                    path: marketplace_path,
+                    message: err.to_string(),
+                });
+            }
+        }
     }
 
-    Ok(marketplaces)
+    Ok(outcome)
 }
 
 fn discover_marketplace_paths_from_roots(
@@ -415,8 +452,7 @@ struct RawMarketplaceManifestPluginPolicy {
     installation: MarketplacePluginInstallPolicy,
     #[serde(default)]
     authentication: MarketplacePluginAuthPolicy,
-    #[serde(default)]
-    products: Vec<Product>,
+    products: Option<Vec<Product>>,
 }
 
 #[derive(Debug, Deserialize)]

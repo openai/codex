@@ -30,13 +30,16 @@ codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-exec = { workspace = true }
 codex-execpolicy = { workspace = true }
+codex-features = { workspace = true }
 codex-login = { workspace = true }
 codex-mcp-server = { workspace = true }
 codex-protocol = { workspace = true }
 codex-responses-api-proxy = { workspace = true }
 codex-rmcp-client = { workspace = true }
+codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
 codex-stdio-to-uds = { workspace = true }
+codex-terminal-detection = { workspace = true }
 codex-tui = { workspace = true }
 codex-tui-app-server = { workspace = true }
 libc = { workspace = true }

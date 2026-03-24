@@ -19,7 +19,6 @@ use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::types::AppToolApproval;
 use crate::connectors;
-use crate::features::Feature;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
 use crate::guardian::guardian_approval_request_to_json;
@@ -33,6 +32,7 @@ use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
 use crate::state_db;
+use codex_features::Feature;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::AskForApproval;
@@ -119,7 +119,8 @@ pub(crate) async fn handle_mcp_tool_call(
         );
         return CallToolResult::from_result(result);
     }
-    let request_meta = build_mcp_tool_call_request_meta(&server, metadata.as_ref());
+    let request_meta =
+        build_mcp_tool_call_request_meta(turn_context.as_ref(), &server, metadata.as_ref());
 
     let tool_call_begin_event = EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
         call_id: call_id.clone(),
@@ -390,18 +391,30 @@ pub(crate) struct McpToolApprovalMetadata {
 const MCP_TOOL_CODEX_APPS_META_KEY: &str = "_codex_apps";
 
 fn build_mcp_tool_call_request_meta(
+    turn_context: &TurnContext,
     server: &str,
     metadata: Option<&McpToolApprovalMetadata>,
 ) -> Option<serde_json::Value> {
-    if server != CODEX_APPS_MCP_SERVER_NAME {
-        return None;
+    let mut request_meta = serde_json::Map::new();
+
+    if let Some(turn_metadata) = turn_context.turn_metadata_state.current_meta_value() {
+        request_meta.insert(
+            crate::X_CODEX_TURN_METADATA_HEADER.to_string(),
+            turn_metadata,
+        );
     }
 
-    let codex_apps_meta = metadata.and_then(|metadata| metadata.codex_apps_meta.as_ref())?;
+    if server == CODEX_APPS_MCP_SERVER_NAME
+        && let Some(codex_apps_meta) =
+            metadata.and_then(|metadata| metadata.codex_apps_meta.clone())
+    {
+        request_meta.insert(
+            MCP_TOOL_CODEX_APPS_META_KEY.to_string(),
+            serde_json::Value::Object(codex_apps_meta),
+        );
+    }
 
-    Some(serde_json::json!({
-        MCP_TOOL_CODEX_APPS_META_KEY: codex_apps_meta,
-    }))
+    (!request_meta.is_empty()).then_some(serde_json::Value::Object(request_meta))
 }
 
 #[derive(Clone, Copy)]
@@ -444,6 +457,9 @@ const MCP_TOOL_APPROVAL_TOOL_TITLE_KEY: &str = "tool_title";
 const MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY: &str = "tool_description";
 const MCP_TOOL_APPROVAL_TOOL_PARAMS_KEY: &str = "tool_params";
 const MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY: &str = "tool_params_display";
+const MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_DEFAULT: &str = "mcp_tool_call__default";
+const MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_ALWAYS_ALLOW: &str = "mcp_tool_call__always_allow";
+const MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_FULL_ACCESS: &str = "mcp_tool_call__full_access";
 
 pub(crate) fn is_mcp_tool_approval_question_id(question_id: &str) -> bool {
     question_id
@@ -481,14 +497,22 @@ async fn maybe_request_mcp_tool_approval(
     let annotations = metadata.and_then(|metadata| metadata.annotations.as_ref());
     let approval_required = annotations.is_some_and(requires_mcp_tool_approval);
     let mut monitor_reason = None;
+    let auto_approved_by_policy = approval_mode == AppToolApproval::Approve
+        || (approval_mode == AppToolApproval::Auto && is_full_access_mode(turn_context));
 
-    if approval_mode == AppToolApproval::Approve {
+    if auto_approved_by_policy {
         if !approval_required {
             return None;
         }
 
-        match maybe_monitor_auto_approved_mcp_tool_call(sess, turn_context, invocation, metadata)
-            .await
+        match maybe_monitor_auto_approved_mcp_tool_call(
+            sess,
+            turn_context,
+            invocation,
+            metadata,
+            approval_mode,
+        )
+        .await
         {
             ArcMonitorOutcome::Ok => return None,
             ArcMonitorOutcome::AskUser(reason) => {
@@ -502,13 +526,8 @@ async fn maybe_request_mcp_tool_approval(
         }
     }
 
-    if approval_mode == AppToolApproval::Auto {
-        if is_full_access_mode(turn_context) {
-            return None;
-        }
-        if !approval_required {
-            return None;
-        }
+    if approval_mode == AppToolApproval::Auto && !approval_required {
+        return None;
     }
 
     let session_approval_key = session_mcp_tool_approval_key(invocation, metadata, approval_mode);
@@ -640,9 +659,16 @@ async fn maybe_monitor_auto_approved_mcp_tool_call(
     turn_context: &TurnContext,
     invocation: &McpInvocation,
     metadata: Option<&McpToolApprovalMetadata>,
+    approval_mode: AppToolApproval,
 ) -> ArcMonitorOutcome {
     let action = prepare_arc_request_action(invocation, metadata);
-    monitor_action(sess, turn_context, action).await
+    monitor_action(
+        sess,
+        turn_context,
+        action,
+        mcp_tool_approval_callsite_mode(approval_mode, turn_context),
+    )
+    .await
 }
 
 fn prepare_arc_request_action(
@@ -734,6 +760,22 @@ fn is_full_access_mode(turn_context: &TurnContext) -> bool {
             turn_context.sandbox_policy.get(),
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
         )
+}
+
+fn mcp_tool_approval_callsite_mode(
+    approval_mode: AppToolApproval,
+    turn_context: &TurnContext,
+) -> &'static str {
+    match approval_mode {
+        AppToolApproval::Approve => MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_ALWAYS_ALLOW,
+        AppToolApproval::Auto | AppToolApproval::Prompt => {
+            if approval_mode == AppToolApproval::Auto && is_full_access_mode(turn_context) {
+                MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_FULL_ACCESS
+            } else {
+                MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_DEFAULT
+            }
+        }
+    }
 }
 
 pub(crate) async fn lookup_mcp_tool_metadata(

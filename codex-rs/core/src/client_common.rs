@@ -89,8 +89,12 @@ fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
         {
             shell_call_ids.insert(call_id.clone());
         }
-        ResponseItem::FunctionCallOutput { call_id, output }
-        | ResponseItem::CustomToolCallOutput { call_id, output } => {
+        ResponseItem::FunctionCallOutput {
+            call_id, output, ..
+        }
+        | ResponseItem::CustomToolCallOutput {
+            call_id, output, ..
+        } => {
             if shell_call_ids.remove(call_id)
                 && let Some(structured) = output
                     .text_content()

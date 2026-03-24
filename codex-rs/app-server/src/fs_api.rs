@@ -18,11 +18,11 @@ use codex_app_server_protocol::FsRemoveResponse;
 use codex_app_server_protocol::FsWriteFileParams;
 use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_environment::CopyOptions;
-use codex_environment::CreateDirectoryOptions;
-use codex_environment::Environment;
-use codex_environment::ExecutorFileSystem;
-use codex_environment::RemoveOptions;
+use codex_exec_server::CopyOptions;
+use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::Environment;
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::RemoveOptions;
 use std::io;
 use std::sync::Arc;
 
@@ -34,7 +34,7 @@ pub(crate) struct FsApi {
 impl Default for FsApi {
     fn default() -> Self {
         Self {
-            file_system: Arc::new(Environment.get_filesystem()),
+            file_system: Environment::default().get_filesystem(),
         }
     }
 }

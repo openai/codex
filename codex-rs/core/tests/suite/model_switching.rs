@@ -1,8 +1,8 @@
 use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::config::types::Personality;
-use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
+use codex_features::Feature;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ConfigShellToolType;
@@ -32,7 +32,33 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
+use std::path::Path;
+use std::path::PathBuf;
 use wiremock::MockServer;
+
+fn image_generation_artifact_path(codex_home: &Path, session_id: &str, call_id: &str) -> PathBuf {
+    fn sanitize(value: &str) -> String {
+        let mut sanitized: String = value
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                    ch
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        if sanitized.is_empty() {
+            sanitized = "generated_image".to_string();
+        }
+        sanitized
+    }
+
+    codex_home
+        .join("generated_images")
+        .join(sanitize(session_id))
+        .join(format!("{}.png", sanitize(call_id)))
+}
 
 fn test_model_info(
     slug: &str,
@@ -53,7 +79,6 @@ fn test_model_info(
         visibility: ModelVisibility::List,
         supported_in_api: true,
         input_modalities,
-        prefer_websockets: false,
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         priority: 1,
@@ -101,6 +126,7 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
@@ -137,6 +163,7 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: next_model.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -196,6 +223,7 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
@@ -232,6 +260,7 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: next_model.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -373,6 +402,7 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: image_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -393,6 +423,7 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: text_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -445,9 +476,6 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
 async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let saved_path = std::env::temp_dir().join("ig_123.png");
-    let _ = std::fs::remove_file(&saved_path);
-
     let server = MockServer::start().await;
     let image_model_slug = "test-image-model";
     let image_model = test_model_info(
@@ -483,6 +511,12 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
             config.model = Some(image_model_slug.to_string());
         });
     let test = builder.build(&server).await?;
+    let saved_path = image_generation_artifact_path(
+        test.codex_home_path(),
+        &test.session_configured.session_id.to_string(),
+        "ig_123",
+    );
+    let _ = std::fs::remove_file(&saved_path);
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
         .list_models(RefreshStrategy::OnlineIfUncached)
@@ -497,6 +531,7 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: image_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -517,6 +552,7 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: image_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -565,9 +601,6 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
 -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let saved_path = std::env::temp_dir().join("ig_123.png");
-    let _ = std::fs::remove_file(&saved_path);
-
     let server = MockServer::start().await;
     let image_model_slug = "test-image-model";
     let text_model_slug = "test-text-only-model";
@@ -610,6 +643,12 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
             config.model = Some(image_model_slug.to_string());
         });
     let test = builder.build(&server).await?;
+    let saved_path = image_generation_artifact_path(
+        test.codex_home_path(),
+        &test.session_configured.session_id.to_string(),
+        "ig_123",
+    );
+    let _ = std::fs::remove_file(&saved_path);
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
         .list_models(RefreshStrategy::OnlineIfUncached)
@@ -624,6 +663,7 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: image_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -644,6 +684,7 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: text_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -701,9 +742,6 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
 async fn thread_rollback_after_generated_image_drops_entire_image_turn_history() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let saved_path = std::env::temp_dir().join("ig_rollback.png");
-    let _ = std::fs::remove_file(&saved_path);
-
     let server = MockServer::start().await;
     let image_model_slug = "test-image-model";
     let image_model = test_model_info(
@@ -739,6 +777,12 @@ async fn thread_rollback_after_generated_image_drops_entire_image_turn_history()
             config.model = Some(image_model_slug.to_string());
         });
     let test = builder.build(&server).await?;
+    let saved_path = image_generation_artifact_path(
+        test.codex_home_path(),
+        &test.session_configured.session_id.to_string(),
+        "ig_rollback",
+    );
+    let _ = std::fs::remove_file(&saved_path);
     let models_manager = test.thread_manager.get_models_manager();
     let _ = models_manager
         .list_models(RefreshStrategy::OnlineIfUncached)
@@ -753,6 +797,7 @@ async fn thread_rollback_after_generated_image_drops_entire_image_turn_history()
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: image_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -781,6 +826,7 @@ async fn thread_rollback_after_generated_image_drops_entire_image_turn_history()
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: image_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -849,7 +895,6 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         visibility: ModelVisibility::List,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
-        prefer_websockets: false,
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         priority: 1,
@@ -936,6 +981,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: large_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -994,6 +1040,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: smaller_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,

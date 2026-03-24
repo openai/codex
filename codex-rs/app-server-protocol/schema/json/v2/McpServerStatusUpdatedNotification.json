@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "McpServerStartupState": {
+      "enum": [
+        "starting",
+        "ready",
+        "failed",
+        "cancelled"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "error": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "name": {
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/definitions/McpServerStartupState"
+    }
+  },
+  "required": [
+    "name",
+    "status"
+  ],
+  "title": "McpServerStatusUpdatedNotification",
+  "type": "object"
+}

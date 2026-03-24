@@ -40,13 +40,17 @@ use base64::Engine;
 use codex_app_server_protocol::McpServerStatus;
 use codex_core::config::Config;
 use codex_core::config::types::McpServerTransportConfig;
+#[cfg(test)]
 use codex_core::mcp::McpManager;
+#[cfg(test)]
 use codex_core::plugins::PluginsManager;
 use codex_core::web_search::web_search_detail;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ServiceTier;
+#[cfg(test)]
 use codex_protocol::mcp::Resource;
+#[cfg(test)]
 use codex_protocol::mcp::ResourceTemplate;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::models::local_image_label_text;
@@ -77,6 +81,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(test)]
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -1797,6 +1802,7 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
+#[cfg(test)]
 /// Render MCP tools grouped by connection using the fully-qualified tool names.
 pub(crate) fn new_mcp_tools_output(
     config: &Config,
@@ -2532,7 +2538,7 @@ pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistor
 pub(crate) fn new_image_generation_call(
     call_id: String,
     revised_prompt: Option<String>,
-    saved_to: Option<String>,
+    saved_path: Option<String>,
 ) -> PlainHistoryCell {
     let detail = revised_prompt.unwrap_or_else(|| call_id.clone());
 
@@ -2540,8 +2546,8 @@ pub(crate) fn new_image_generation_call(
         vec!["• ".dim(), "Generated Image:".bold()].into(),
         vec!["  └ ".dim(), detail.dim()].into(),
     ];
-    if let Some(saved_to) = saved_to {
-        lines.push(vec!["  └ ".dim(), format!("Saved to: {saved_to}").dim()].into());
+    if let Some(saved_path) = saved_path {
+        lines.push(vec!["  └ ".dim(), "Saved to: ".dim(), saved_path.into()].into());
     }
 
     PlainHistoryCell { lines }
@@ -2845,6 +2851,25 @@ mod tests {
             meta: None,
         }))
         .expect("resource link content should serialize")
+    }
+
+    #[test]
+    fn image_generation_call_renders_saved_path() {
+        let saved_path = "file:///tmp/generated-image.png".to_string();
+        let cell = new_image_generation_call(
+            "call-image-generation".to_string(),
+            Some("A tiny blue square".to_string()),
+            Some(saved_path.clone()),
+        );
+
+        assert_eq!(
+            render_lines(&cell.display_lines(80)),
+            vec![
+                "• Generated Image:".to_string(),
+                "  └ A tiny blue square".to_string(),
+                format!("  └ Saved to: {saved_path}"),
+            ],
+        );
     }
 
     fn session_configured_event(model: &str) -> SessionConfiguredEvent {

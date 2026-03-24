@@ -35,10 +35,14 @@ pub(crate) enum AppCommandView<'a> {
     RealtimeConversationAudio(&'a ConversationAudioParams),
     RealtimeConversationText(&'a ConversationTextParams),
     RealtimeConversationClose,
+    RunUserShellCommand {
+        command: &'a str,
+    },
     UserTurn {
         items: &'a [UserInput],
         cwd: &'a PathBuf,
         approval_policy: AskForApproval,
+        approvals_reviewer: &'a Option<ApprovalsReviewer>,
         sandbox_policy: &'a SandboxPolicy,
         model: &'a str,
         effort: Option<ReasoningEffortConfig>,
@@ -134,6 +138,10 @@ impl AppCommand {
         Self(Op::RealtimeConversationClose)
     }
 
+    pub(crate) fn run_user_shell_command(command: String) -> Self {
+        Self(Op::RunUserShellCommand { command })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn user_turn(
         items: Vec<UserInput>,
@@ -152,6 +160,7 @@ impl AppCommand {
             items,
             cwd,
             approval_policy,
+            approvals_reviewer: None,
             sandbox_policy,
             model,
             effort,
@@ -291,10 +300,12 @@ impl AppCommand {
                 AppCommandView::RealtimeConversationText(params)
             }
             Op::RealtimeConversationClose => AppCommandView::RealtimeConversationClose,
+            Op::RunUserShellCommand { command } => AppCommandView::RunUserShellCommand { command },
             Op::UserTurn {
                 items,
                 cwd,
                 approval_policy,
+                approvals_reviewer,
                 sandbox_policy,
                 model,
                 effort,
@@ -307,6 +318,7 @@ impl AppCommand {
                 items,
                 cwd,
                 approval_policy: *approval_policy,
+                approvals_reviewer,
                 sandbox_policy,
                 model,
                 effort: *effort,

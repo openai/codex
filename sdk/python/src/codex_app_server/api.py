@@ -7,6 +7,7 @@ from typing import AsyncIterator, Iterator
 from .async_client import AsyncAppServerClient
 from .client import AppServerClient, AppServerConfig
 from .generated.v2_all import (
+    ApprovalsReviewer,
     AskForApproval,
     ModelListResponse,
     Personality,
@@ -18,7 +19,6 @@ from .generated.v2_all import (
     ThreadArchiveResponse,
     ThreadCompactStartResponse,
     ThreadForkParams,
-    ThreadItem,
     ThreadListParams,
     ThreadListResponse,
     ThreadReadResponse,
@@ -34,57 +34,23 @@ from .generated.v2_all import (
     TurnSteerResponse,
 )
 from .models import InitializeResponse, JsonObject, Notification, ServerInfo
-
-
-@dataclass(slots=True)
-class TextInput:
-    text: str
-
-
-@dataclass(slots=True)
-class ImageInput:
-    url: str
-
-
-@dataclass(slots=True)
-class LocalImageInput:
-    path: str
-
-
-@dataclass(slots=True)
-class SkillInput:
-    name: str
-    path: str
-
-
-@dataclass(slots=True)
-class MentionInput:
-    name: str
-    path: str
-
-
-InputItem = TextInput | ImageInput | LocalImageInput | SkillInput | MentionInput
-Input = list[InputItem] | InputItem
-
-
-def _to_wire_item(item: InputItem) -> JsonObject:
-    if isinstance(item, TextInput):
-        return {"type": "text", "text": item.text}
-    if isinstance(item, ImageInput):
-        return {"type": "image", "url": item.url}
-    if isinstance(item, LocalImageInput):
-        return {"type": "localImage", "path": item.path}
-    if isinstance(item, SkillInput):
-        return {"type": "skill", "name": item.name, "path": item.path}
-    if isinstance(item, MentionInput):
-        return {"type": "mention", "name": item.name, "path": item.path}
-    raise TypeError(f"unsupported input item: {type(item)!r}")
-
-
-def _to_wire_input(input: Input) -> list[JsonObject]:
-    if isinstance(input, list):
-        return [_to_wire_item(i) for i in input]
-    return [_to_wire_item(input)]
+from ._inputs import (
+    ImageInput,
+    Input,
+    InputItem,
+    LocalImageInput,
+    MentionInput,
+    RunInput,
+    SkillInput,
+    TextInput,
+    _normalize_run_input,
+    _to_wire_input,
+)
+from ._run import (
+    RunResult,
+    _collect_async_run_result,
+    _collect_run_result,
+)
 
 
 def _split_user_agent(user_agent: str) -> tuple[str | None, str | None]:
@@ -503,6 +469,40 @@ class Thread:
     _client: AppServerClient
     id: str
 
+    def run(
+        self,
+        input: RunInput,
+        *,
+        approval_policy: AskForApproval | None = None,
+        approvals_reviewer: ApprovalsReviewer | None = None,
+        cwd: str | None = None,
+        effort: ReasoningEffort | None = None,
+        model: str | None = None,
+        output_schema: JsonObject | None = None,
+        personality: Personality | None = None,
+        sandbox_policy: SandboxPolicy | None = None,
+        service_tier: ServiceTier | None = None,
+        summary: ReasoningSummary | None = None,
+    ) -> RunResult:
+        turn = self.turn(
+            _normalize_run_input(input),
+            approval_policy=approval_policy,
+            approvals_reviewer=approvals_reviewer,
+            cwd=cwd,
+            effort=effort,
+            model=model,
+            output_schema=output_schema,
+            personality=personality,
+            sandbox_policy=sandbox_policy,
+            service_tier=service_tier,
+            summary=summary,
+        )
+        stream = turn.stream()
+        try:
+            return _collect_run_result(stream, turn_id=turn.id)
+        finally:
+            stream.close()
+
     # BEGIN GENERATED: Thread.flat_methods
     def turn(
         self,
@@ -552,6 +552,40 @@ class Thread:
 class AsyncThread:
     _codex: AsyncCodex
     id: str
+
+    async def run(
+        self,
+        input: RunInput,
+        *,
+        approval_policy: AskForApproval | None = None,
+        approvals_reviewer: ApprovalsReviewer | None = None,
+        cwd: str | None = None,
+        effort: ReasoningEffort | None = None,
+        model: str | None = None,
+        output_schema: JsonObject | None = None,
+        personality: Personality | None = None,
+        sandbox_policy: SandboxPolicy | None = None,
+        service_tier: ServiceTier | None = None,
+        summary: ReasoningSummary | None = None,
+    ) -> RunResult:
+        turn = await self.turn(
+            _normalize_run_input(input),
+            approval_policy=approval_policy,
+            approvals_reviewer=approvals_reviewer,
+            cwd=cwd,
+            effort=effort,
+            model=model,
+            output_schema=output_schema,
+            personality=personality,
+            sandbox_policy=sandbox_policy,
+            service_tier=service_tier,
+            summary=summary,
+        )
+        stream = turn.stream()
+        try:
+            return await _collect_async_run_result(stream, turn_id=turn.id)
+        finally:
+            await stream.aclose()
 
     # BEGIN GENERATED: AsyncThread.flat_methods
     async def turn(

@@ -132,9 +132,11 @@ runs:
           keychain_args+=(--keychain "${APPLE_CODESIGN_KEYCHAIN}")
         fi
 
+        entitlements_path="$GITHUB_ACTION_PATH/codex.entitlements.plist"
+
         for binary in codex codex-responses-api-proxy; do
           path="codex-rs/target/${TARGET}/release/${binary}"
-          codesign --force --options runtime --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$path"
+          codesign --force --options runtime --timestamp --entitlements "$entitlements_path" --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$path"
         done
 
     - name: Notarize macOS binaries

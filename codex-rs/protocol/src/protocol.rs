@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use crate::AgentPath;
 use crate::ThreadId;
 use crate::approvals::ElicitationRequestEvent;
 use crate::config_types::ApprovalsReviewer;
@@ -32,10 +33,12 @@ use crate::mcp::RequestId;
 use crate::mcp::Resource as McpResource;
 use crate::mcp::ResourceTemplate as McpResourceTemplate;
 use crate::mcp::Tool as McpTool;
+use crate::memory_citation::MemoryCitation;
 use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
 use crate::models::MessagePhase;
+use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::WebSearchAction;
 use crate::num_format::format_with_separators;
@@ -46,6 +49,7 @@ use crate::request_permissions::RequestPermissionsEvent;
 use crate::request_permissions::RequestPermissionsResponse;
 use crate::request_user_input::RequestUserInputResponse;
 use crate::user_input::UserInput;
+use codex_git_utils::GitSha;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -252,6 +256,11 @@ pub enum Op {
         /// Policy to use for command approval.
         approval_policy: AskForApproval,
 
+        /// Reviewer to use for approval requests raised during this turn.
+        ///
+        /// When omitted, the session keeps the current setting
+        approvals_reviewer: Option<ApprovalsReviewer>,
+
         /// Policy to use for tool calls such as `local_shell`.
         sandbox_policy: SandboxPolicy,
 
@@ -289,6 +298,12 @@ pub enum Op {
         /// Optional personality override for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         personality: Option<Personality>,
+    },
+
+    /// Inter-agent communication that should be recorded as assistant history
+    /// while still using the normal thread submission lifecycle.
+    InterAgentCommunication {
+        communication: InterAgentCommunication,
     },
 
     /// Override parts of the persistent turn context for subsequent turns.
@@ -497,6 +512,56 @@ pub enum Op {
     ListModels,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct InterAgentCommunication {
+    pub author: AgentPath,
+    pub recipient: AgentPath,
+    #[serde(default)]
+    pub other_recipients: Vec<AgentPath>,
+    pub content: String,
+    pub trigger_turn: bool,
+}
+
+impl InterAgentCommunication {
+    pub fn new(
+        author: AgentPath,
+        recipient: AgentPath,
+        other_recipients: Vec<AgentPath>,
+        content: String,
+        trigger_turn: bool,
+    ) -> Self {
+        Self {
+            author,
+            recipient,
+            other_recipients,
+            content,
+            trigger_turn,
+        }
+    }
+
+    pub fn to_response_input_item(&self) -> ResponseInputItem {
+        ResponseInputItem::Message {
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: serde_json::to_string(self).unwrap_or_default(),
+            }],
+        }
+    }
+
+    pub fn is_message_content(content: &[ContentItem]) -> bool {
+        Self::from_message_content(content).is_some()
+    }
+
+    pub fn from_message_content(content: &[ContentItem]) -> Option<Self> {
+        match content {
+            [ContentItem::InputText { text }] | [ContentItem::OutputText { text }] => {
+                serde_json::from_str(text).ok()
+            }
+            _ => None,
+        }
+    }
+}
+
 impl Op {
     pub fn kind(&self) -> &'static str {
         match self {
@@ -508,6 +573,7 @@ impl Op {
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::UserInput { .. } => "user_input",
             Self::UserTurn { .. } => "user_turn",
+            Self::InterAgentCommunication { .. } => "inter_agent_communication",
             Self::OverrideTurnContext { .. } => "override_turn_context",
             Self::ExecApproval { .. } => "exec_approval",
             Self::PatchApproval { .. } => "patch_approval",
@@ -1340,7 +1406,9 @@ pub enum EventMsg {
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum HookEventName {
+    PreToolUse,
     SessionStart,
+    UserPromptSubmit,
     Stop,
 }
 
@@ -1535,6 +1603,15 @@ pub enum AgentStatus {
     NotFound,
 }
 
+/// Turn kinds that reject same-turn steering.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum NonSteerableTurnKind {
+    Review,
+    Compact,
+}
+
 /// Codex errors that we expose to clients.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
@@ -1562,6 +1639,11 @@ pub enum CodexErrorInfo {
     ResponseTooManyFailedAttempts {
         http_status_code: Option<u16>,
     },
+    /// Returned when `turn/start` or `turn/steer` is submitted while the current active turn
+    /// cannot accept same-turn steering, for example `/review` or manual `/compact`.
+    ActiveTurnNotSteerable {
+        turn_kind: NonSteerableTurnKind,
+    },
     ThreadRollbackFailed,
     Other,
 }
@@ -1570,7 +1652,7 @@ impl CodexErrorInfo {
     /// Whether this error should mark the current turn as failed when replaying history.
     pub fn affects_turn_status(&self) -> bool {
         match self {
-            Self::ThreadRollbackFailed => false,
+            Self::ThreadRollbackFailed | Self::ActiveTurnNotSteerable { .. } => false,
             Self::ContextWindowExceeded
             | Self::UsageLimitExceeded
             | Self::ServerOverloaded
@@ -1995,6 +2077,8 @@ pub struct AgentMessageEvent {
     pub message: String,
     #[serde(default)]
     pub phase: Option<MessagePhase>,
+    #[serde(default)]
+    pub memory_citation: Option<MemoryCitation>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -2268,6 +2352,7 @@ pub enum SessionSource {
     VSCode,
     Exec,
     Mcp,
+    Custom(String),
     SubAgent(SubAgentSource),
     #[serde(other)]
     Unknown,
@@ -2282,6 +2367,8 @@ pub enum SubAgentSource {
     ThreadSpawn {
         parent_thread_id: ThreadId,
         depth: i32,
+        #[serde(default)]
+        agent_path: Option<AgentPath>,
         #[serde(default)]
         agent_nickname: Option<String>,
         #[serde(default, alias = "agent_type")]
@@ -2298,6 +2385,7 @@ impl fmt::Display for SessionSource {
             SessionSource::VSCode => f.write_str("vscode"),
             SessionSource::Exec => f.write_str("exec"),
             SessionSource::Mcp => f.write_str("mcp"),
+            SessionSource::Custom(source) => f.write_str(source),
             SessionSource::SubAgent(sub_source) => write!(f, "subagent_{sub_source}"),
             SessionSource::Unknown => f.write_str("unknown"),
         }
@@ -2305,6 +2393,23 @@ impl fmt::Display for SessionSource {
 }
 
 impl SessionSource {
+    pub fn from_startup_arg(value: &str) -> Result<Self, &'static str> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err("session source must not be empty");
+        }
+
+        let normalized = trimmed.to_ascii_lowercase();
+        Ok(match normalized.as_str() {
+            "cli" => SessionSource::Cli,
+            "vscode" => SessionSource::VSCode,
+            "exec" => SessionSource::Exec,
+            "mcp" | "appserver" | "app-server" | "app_server" => SessionSource::Mcp,
+            "unknown" => SessionSource::Unknown,
+            _ => SessionSource::Custom(normalized),
+        })
+    }
+
     pub fn get_nickname(&self) -> Option<String> {
         match self {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_nickname, .. }) => {
@@ -2327,6 +2432,34 @@ impl SessionSource {
             }
             _ => None,
         }
+    }
+
+    pub fn get_agent_path(&self) -> Option<AgentPath> {
+        match self {
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_path, .. }) => {
+                agent_path.clone()
+            }
+            _ => None,
+        }
+    }
+
+    pub fn restriction_product(&self) -> Option<Product> {
+        match self {
+            SessionSource::Custom(source) => Product::from_session_source_name(source),
+            SessionSource::Cli
+            | SessionSource::VSCode
+            | SessionSource::Exec
+            | SessionSource::Mcp
+            | SessionSource::Unknown => Some(Product::Codex),
+            SessionSource::SubAgent(_) => None,
+        }
+    }
+
+    pub fn matches_product_restriction(&self, products: &[Product]) -> bool {
+        products.is_empty()
+            || self
+                .restriction_product()
+                .is_some_and(|product| product.matches_product_restriction(products))
     }
 }
 
@@ -2370,6 +2503,9 @@ pub struct SessionMeta {
     /// Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.
     #[serde(default, alias = "agent_type", skip_serializing_if = "Option::is_none")]
     pub agent_role: Option<String>,
+    /// Optional canonical agent path assigned to an AgentControl-spawned sub-agent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_path: Option<String>,
     pub model_provider: Option<String>,
     /// base_instructions for the session. This *should* always be present when creating a new session,
     /// but may be missing for older sessions. If not present, fall back to rendering the base_instructions
@@ -2393,6 +2529,7 @@ impl Default for SessionMeta {
             source: SessionSource::default(),
             agent_nickname: None,
             agent_role: None,
+            agent_path: None,
             model_provider: None,
             base_instructions: None,
             dynamic_tools: None,
@@ -2503,7 +2640,7 @@ pub struct RolloutLine {
 pub struct GitInfo {
     /// Current commit hash (SHA)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub commit_hash: Option<String>,
+    pub commit_hash: Option<GitSha>,
     /// Current branch name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
@@ -2918,6 +3055,29 @@ pub enum Product {
     Codex,
     #[serde(alias = "ATLAS")]
     Atlas,
+}
+impl Product {
+    pub fn to_app_platform(self) -> &'static str {
+        match self {
+            Self::Chatgpt => "chat",
+            Self::Codex => "codex",
+            Self::Atlas => "atlas",
+        }
+    }
+
+    pub fn from_session_source_name(value: &str) -> Option<Self> {
+        let normalized = value.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "chatgpt" => Some(Self::Chatgpt),
+            "codex" => Some(Self::Codex),
+            "atlas" => Some(Self::Atlas),
+            _ => None,
+        }
+    }
+
+    pub fn matches_product_restriction(&self, products: &[Product]) -> bool {
+        products.is_empty() || products.contains(self)
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
@@ -3417,6 +3577,100 @@ mod tests {
             .get_writable_roots_with_cwd(cwd)
             .iter()
             .any(|root| root.is_path_writable(path))
+    }
+
+    #[test]
+    fn session_source_from_startup_arg_maps_known_values() {
+        assert_eq!(
+            SessionSource::from_startup_arg("vscode").unwrap(),
+            SessionSource::VSCode
+        );
+        assert_eq!(
+            SessionSource::from_startup_arg("app-server").unwrap(),
+            SessionSource::Mcp
+        );
+    }
+
+    #[test]
+    fn session_source_from_startup_arg_normalizes_custom_values() {
+        assert_eq!(
+            SessionSource::from_startup_arg("atlas").unwrap(),
+            SessionSource::Custom("atlas".to_string())
+        );
+        assert_eq!(
+            SessionSource::from_startup_arg(" Atlas ").unwrap(),
+            SessionSource::Custom("atlas".to_string())
+        );
+    }
+
+    #[test]
+    fn session_source_restriction_product_defaults_non_subagent_sources_to_codex() {
+        assert_eq!(
+            SessionSource::Cli.restriction_product(),
+            Some(Product::Codex)
+        );
+        assert_eq!(
+            SessionSource::VSCode.restriction_product(),
+            Some(Product::Codex)
+        );
+        assert_eq!(
+            SessionSource::Exec.restriction_product(),
+            Some(Product::Codex)
+        );
+        assert_eq!(
+            SessionSource::Mcp.restriction_product(),
+            Some(Product::Codex)
+        );
+        assert_eq!(
+            SessionSource::Unknown.restriction_product(),
+            Some(Product::Codex)
+        );
+    }
+
+    #[test]
+    fn session_source_restriction_product_does_not_guess_subagent_products() {
+        assert_eq!(
+            SessionSource::SubAgent(SubAgentSource::Review).restriction_product(),
+            None
+        );
+    }
+
+    #[test]
+    fn session_source_restriction_product_maps_custom_sources_to_products() {
+        assert_eq!(
+            SessionSource::Custom("chatgpt".to_string()).restriction_product(),
+            Some(Product::Chatgpt)
+        );
+        assert_eq!(
+            SessionSource::Custom("ATLAS".to_string()).restriction_product(),
+            Some(Product::Atlas)
+        );
+        assert_eq!(
+            SessionSource::Custom("codex".to_string()).restriction_product(),
+            Some(Product::Codex)
+        );
+        assert_eq!(
+            SessionSource::Custom("atlas-dev".to_string()).restriction_product(),
+            None
+        );
+    }
+
+    #[test]
+    fn session_source_matches_product_restriction() {
+        assert!(
+            SessionSource::Custom("chatgpt".to_string())
+                .matches_product_restriction(&[Product::Chatgpt])
+        );
+        assert!(
+            !SessionSource::Custom("chatgpt".to_string())
+                .matches_product_restriction(&[Product::Codex])
+        );
+        assert!(SessionSource::VSCode.matches_product_restriction(&[Product::Codex]));
+        assert!(
+            !SessionSource::Custom("atlas-dev".to_string())
+                .matches_product_restriction(&[Product::Atlas])
+        );
+        assert!(SessionSource::Custom("atlas-dev".to_string()).matches_product_restriction(&[]));
     }
 
     fn sandbox_policy_probe_paths(policy: &SandboxPolicy, cwd: &Path) -> Vec<PathBuf> {
@@ -4032,6 +4286,17 @@ mod tests {
         let event = ErrorEvent {
             message: "rollback failed".into(),
             codex_error_info: Some(CodexErrorInfo::ThreadRollbackFailed),
+        };
+        assert!(!event.affects_turn_status());
+    }
+
+    #[test]
+    fn active_turn_not_steerable_error_does_not_affect_turn_status() {
+        let event = ErrorEvent {
+            message: "cannot steer a review turn".into(),
+            codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
+                turn_kind: NonSteerableTurnKind::Review,
+            }),
         };
         assert!(!event.affects_turn_status());
     }

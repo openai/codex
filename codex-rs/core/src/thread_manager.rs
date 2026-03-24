@@ -12,7 +12,6 @@ use crate::config::Config;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::file_watcher::FileWatcher;
-use crate::file_watcher::FileWatcherEvent;
 use crate::mcp::McpManager;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::ModelsManager;
@@ -24,14 +23,23 @@ use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillsManager;
+use crate::skills_watcher::SkillsWatcher;
+use crate::skills_watcher::SkillsWatcherEvent;
+use crate::tasks::interrupted_turn_history_marker;
+use codex_app_server_protocol::ThreadHistoryBuilder;
+use codex_app_server_protocol::TurnStatus;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
+#[cfg(test)]
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::W3cTraceContext;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -76,32 +84,33 @@ impl Drop for TempCodexHomeGuard {
     }
 }
 
-fn build_file_watcher(codex_home: PathBuf, skills_manager: Arc<SkillsManager>) -> Arc<FileWatcher> {
+fn build_skills_watcher(skills_manager: Arc<SkillsManager>) -> Arc<SkillsWatcher> {
     if should_use_test_thread_manager_behavior()
         && let Ok(handle) = Handle::try_current()
         && handle.runtime_flavor() == RuntimeFlavor::CurrentThread
     {
         // The real watcher spins background tasks that can starve the
         // current-thread test runtime and cause event waits to time out.
-        warn!("using noop file watcher under current-thread test runtime");
-        return Arc::new(FileWatcher::noop());
+        warn!("using noop skills watcher under current-thread test runtime");
+        return Arc::new(SkillsWatcher::noop());
     }
 
-    let file_watcher = match FileWatcher::new(codex_home) {
+    let file_watcher = match FileWatcher::new() {
         Ok(file_watcher) => Arc::new(file_watcher),
         Err(err) => {
             warn!("failed to initialize file watcher: {err}");
             Arc::new(FileWatcher::noop())
         }
     };
+    let skills_watcher = Arc::new(SkillsWatcher::new(&file_watcher));
 
-    let mut rx = file_watcher.subscribe();
+    let mut rx = skills_watcher.subscribe();
     let skills_manager = Arc::clone(&skills_manager);
     if let Ok(handle) = Handle::try_current() {
         handle.spawn(async move {
             loop {
                 match rx.recv().await {
-                    Ok(FileWatcherEvent::SkillsChanged { .. }) => {
+                    Ok(SkillsWatcherEvent::SkillsChanged { .. }) => {
                         skills_manager.clear_cache();
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
@@ -110,10 +119,10 @@ fn build_file_watcher(codex_home: PathBuf, skills_manager: Arc<SkillsManager>) -
             }
         });
     } else {
-        warn!("file watcher listener skipped: no Tokio runtime available");
+        warn!("skills watcher listener skipped: no Tokio runtime available");
     }
 
-    file_watcher
+    skills_watcher
 }
 
 /// Represents a newly created Codex thread (formerly called a conversation), including the first event
@@ -122,6 +131,45 @@ pub struct NewThread {
     pub thread_id: ThreadId,
     pub thread: Arc<CodexThread>,
     pub session_configured: SessionConfiguredEvent,
+}
+
+// TODO(ccunningham): Add an explicit non-interrupting live-turn snapshot once
+// core can represent sampling boundaries directly instead of relying on
+// whichever items happened to be persisted mid-turn.
+//
+// Two likely future variants:
+// - `TruncateToLastSamplingBoundary` for callers that want a coherent fork from
+//   the last stable model boundary without synthesizing an interrupt.
+// - `WaitUntilNextSamplingBoundary` (or similar) for callers that prefer to
+//   fork after the next sampling boundary rather than interrupting immediately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForkSnapshot {
+    /// Fork a committed prefix ending strictly before the nth user message.
+    ///
+    /// When `n` is within range, this cuts before that 0-based user-message
+    /// boundary. When `n` is out of range and the source thread is currently
+    /// mid-turn, this instead cuts before the active turn's opening boundary
+    /// so the fork drops the unfinished turn suffix. When `n` is out of range
+    /// and the source thread is already at a turn boundary, this returns the
+    /// full committed history unchanged.
+    TruncateBeforeNthUserMessage(usize),
+
+    /// Fork the current persisted history as if the source thread had been
+    /// interrupted now.
+    ///
+    /// If the persisted snapshot ends mid-turn, this appends the same
+    /// `<turn_aborted>` marker produced by a real interrupt. If the snapshot is
+    /// already at a turn boundary, this returns the current persisted history
+    /// unchanged.
+    Interrupted,
+}
+
+/// Preserve legacy `fork_thread(usize, ...)` callsites by mapping them to the
+/// existing truncate-before-nth-user-message snapshot mode.
+impl From<usize> for ForkSnapshot {
+    fn from(value: usize) -> Self {
+        Self::TruncateBeforeNthUserMessage(value)
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -155,7 +203,7 @@ pub(crate) struct ThreadManagerState {
     skills_manager: Arc<SkillsManager>,
     plugins_manager: Arc<PluginsManager>,
     mcp_manager: Arc<McpManager>,
-    file_watcher: Arc<FileWatcher>,
+    skills_watcher: Arc<SkillsWatcher>,
     session_source: SessionSource,
     // Captures submitted ops for testing purpose when test mode is enabled.
     ops_log: Option<SharedCapturedOps>,
@@ -169,20 +217,25 @@ impl ThreadManager {
         collaboration_modes_config: CollaborationModesConfig,
     ) -> Self {
         let codex_home = config.codex_home.clone();
+        let restriction_product = session_source.restriction_product();
         let openai_models_provider = config
             .model_providers
             .get(OPENAI_PROVIDER_ID)
             .cloned()
             .unwrap_or_else(|| ModelProviderInfo::create_openai_provider(/*base_url*/ None));
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
-        let plugins_manager = Arc::new(PluginsManager::new(codex_home.clone()));
+        let plugins_manager = Arc::new(PluginsManager::new_with_restriction_product(
+            codex_home.clone(),
+            restriction_product,
+        ));
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-        let skills_manager = Arc::new(SkillsManager::new(
+        let skills_manager = Arc::new(SkillsManager::new_with_restriction_product(
             codex_home.clone(),
             Arc::clone(&plugins_manager),
             config.bundled_skills_enabled(),
+            restriction_product,
         ));
-        let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
+        let skills_watcher = build_skills_watcher(Arc::clone(&skills_manager));
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -197,7 +250,7 @@ impl ThreadManager {
                 skills_manager,
                 plugins_manager,
                 mcp_manager,
-                file_watcher,
+                skills_watcher,
                 auth_manager,
                 session_source,
                 ops_log: should_use_test_thread_manager_behavior()
@@ -236,14 +289,19 @@ impl ThreadManager {
         set_thread_manager_test_mode_for_tests(/*enabled*/ true);
         let auth_manager = AuthManager::from_auth_for_testing(auth);
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
-        let plugins_manager = Arc::new(PluginsManager::new(codex_home.clone()));
+        let restriction_product = SessionSource::Exec.restriction_product();
+        let plugins_manager = Arc::new(PluginsManager::new_with_restriction_product(
+            codex_home.clone(),
+            restriction_product,
+        ));
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-        let skills_manager = Arc::new(SkillsManager::new(
+        let skills_manager = Arc::new(SkillsManager::new_with_restriction_product(
             codex_home.clone(),
             Arc::clone(&plugins_manager),
             /*bundled_skills_enabled*/ true,
+            restriction_product,
         ));
-        let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
+        let skills_watcher = build_skills_watcher(Arc::clone(&skills_manager));
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -256,7 +314,7 @@ impl ThreadManager {
                 skills_manager,
                 plugins_manager,
                 mcp_manager,
-                file_watcher,
+                skills_watcher,
                 auth_manager,
                 session_source: SessionSource::Exec,
                 ops_log: should_use_test_thread_manager_behavior()
@@ -270,6 +328,10 @@ impl ThreadManager {
         self.state.session_source.clone()
     }
 
+    pub fn auth_manager(&self) -> Arc<AuthManager> {
+        self.state.auth_manager.clone()
+    }
+
     pub fn skills_manager(&self) -> Arc<SkillsManager> {
         self.state.skills_manager.clone()
     }
@@ -280,10 +342,6 @@ impl ThreadManager {
 
     pub fn mcp_manager(&self) -> Arc<McpManager> {
         self.state.mcp_manager.clone()
-    }
-
-    pub fn subscribe_file_watcher(&self) -> broadcast::Receiver<FileWatcherEvent> {
-        self.state.file_watcher.subscribe()
     }
 
     pub fn get_models_manager(&self) -> Arc<ModelsManager> {
@@ -525,20 +583,41 @@ impl ThreadManager {
         report
     }
 
-    /// Fork an existing thread by taking messages up to the given position (not including
-    /// the message at the given position) and starting a new thread with identical
-    /// configuration (unless overridden by the caller's `config`). The new thread will have
-    /// a fresh id. Pass `usize::MAX` to keep the full rollout history.
-    pub async fn fork_thread(
+    /// Fork an existing thread by snapshotting rollout history according to
+    /// `snapshot` and starting a new thread with identical configuration
+    /// (unless overridden by the caller's `config`). The new thread will have
+    /// a fresh id.
+    pub async fn fork_thread<S>(
         &self,
-        nth_user_message: usize,
+        snapshot: S,
         config: Config,
         path: PathBuf,
         persist_extended_history: bool,
         parent_trace: Option<W3cTraceContext>,
-    ) -> CodexResult<NewThread> {
+    ) -> CodexResult<NewThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
+        let snapshot = snapshot.into();
         let history = RolloutRecorder::get_rollout_history(&path).await?;
-        let history = truncate_before_nth_user_message(history, nth_user_message);
+        let snapshot_state = snapshot_turn_state(&history);
+        let history = match snapshot {
+            ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
+                truncate_before_nth_user_message(history, nth_user_message, &snapshot_state)
+            }
+            ForkSnapshot::Interrupted => {
+                let history = match history {
+                    InitialHistory::New => InitialHistory::New,
+                    InitialHistory::Forked(history) => InitialHistory::Forked(history),
+                    InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
+                };
+                if snapshot_state.ends_mid_turn {
+                    append_interrupted_boundary(history, snapshot_state.active_turn_id)
+                } else {
+                    history
+                }
+            }
+        };
         Box::pin(self.state.spawn_thread(
             config,
             history,
@@ -592,6 +671,17 @@ impl ThreadManagerState {
         thread.submit(op).await
     }
 
+    #[cfg(test)]
+    /// Append a prebuilt message to a thread by ID outside the normal user-input path.
+    pub(crate) async fn append_message(
+        &self,
+        thread_id: ThreadId,
+        message: ResponseItem,
+    ) -> CodexResult<String> {
+        let thread = self.get_thread(thread_id).await?;
+        thread.append_message(message).await
+    }
+
     /// Remove a thread from the manager by ID, returning it when present.
     pub(crate) async fn remove_thread(&self, thread_id: &ThreadId) -> Option<Arc<CodexThread>> {
         self.threads.write().await.remove(thread_id)
@@ -610,10 +700,12 @@ impl ThreadManagerState {
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
             /*inherited_shell_snapshot*/ None,
+            /*inherited_exec_policy*/ None,
         ))
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn_new_thread_with_source(
         &self,
         config: Config,
@@ -622,6 +714,7 @@ impl ThreadManagerState {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -633,6 +726,7 @@ impl ThreadManagerState {
             persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,
+            inherited_exec_policy,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
@@ -646,6 +740,7 @@ impl ThreadManagerState {
         agent_control: AgentControl,
         session_source: SessionSource,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
         Box::pin(self.spawn_thread_with_source(
@@ -658,12 +753,14 @@ impl ThreadManagerState {
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
+            inherited_exec_policy,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn fork_thread_with_source(
         &self,
         config: Config,
@@ -672,6 +769,7 @@ impl ThreadManagerState {
         session_source: SessionSource,
         persist_extended_history: bool,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -683,6 +781,7 @@ impl ThreadManagerState {
             persist_extended_history,
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
+            inherited_exec_policy,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
@@ -713,6 +812,7 @@ impl ThreadManagerState {
             persist_extended_history,
             metrics_service_name,
             /*inherited_shell_snapshot*/ None,
+            /*inherited_exec_policy*/ None,
             parent_trace,
             user_shell_override,
         ))
@@ -731,11 +831,12 @@ impl ThreadManagerState {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         let watch_registration = self
-            .file_watcher
+            .skills_watcher
             .register_config(&config, self.skills_manager.as_ref());
         let CodexSpawnOk {
             codex, thread_id, ..
@@ -746,7 +847,7 @@ impl ThreadManagerState {
             skills_manager: Arc::clone(&self.skills_manager),
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),
-            file_watcher: Arc::clone(&self.file_watcher),
+            skills_watcher: Arc::clone(&self.skills_watcher),
             conversation_history: initial_history,
             session_source,
             agent_control,
@@ -754,6 +855,7 @@ impl ThreadManagerState {
             persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,
+            inherited_exec_policy,
             user_shell_override,
             parent_trace,
         })
@@ -799,16 +901,125 @@ impl ThreadManagerState {
     }
 }
 
-/// Return a prefix of `items` obtained by cutting strictly before the nth user message
-/// (0-based) and all items that follow it.
-fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> InitialHistory {
+/// Return a fork snapshot cut strictly before the nth user message (0-based).
+///
+/// Out-of-range values keep the full committed history at a turn boundary, but
+/// when the source thread is currently mid-turn they fall back to cutting
+/// before the active turn's opening boundary so the fork omits the unfinished
+/// suffix entirely.
+fn truncate_before_nth_user_message(
+    history: InitialHistory,
+    n: usize,
+    snapshot_state: &SnapshotTurnState,
+) -> InitialHistory {
     let items: Vec<RolloutItem> = history.get_rollout_items();
-    let rolled = truncation::truncate_rollout_before_nth_user_message_from_start(&items, n);
+    let user_positions = truncation::user_message_positions_in_rollout(&items);
+    let rolled = if snapshot_state.ends_mid_turn && n >= user_positions.len() {
+        if let Some(cut_idx) = snapshot_state
+            .active_turn_start_index
+            .or_else(|| user_positions.last().copied())
+        {
+            items[..cut_idx].to_vec()
+        } else {
+            items
+        }
+    } else {
+        truncation::truncate_rollout_before_nth_user_message_from_start(&items, n)
+    };
 
     if rolled.is_empty() {
         InitialHistory::New
     } else {
         InitialHistory::Forked(rolled)
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct SnapshotTurnState {
+    ends_mid_turn: bool,
+    active_turn_id: Option<String>,
+    active_turn_start_index: Option<usize>,
+}
+
+fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
+    let rollout_items = history.get_rollout_items();
+    let mut builder = ThreadHistoryBuilder::new();
+    for item in &rollout_items {
+        builder.handle_rollout_item(item);
+    }
+    let active_turn_id = builder.active_turn_id_if_explicit();
+    if builder.has_active_turn() && active_turn_id.is_some() {
+        let active_turn_snapshot = builder.active_turn_snapshot();
+        if active_turn_snapshot
+            .as_ref()
+            .is_some_and(|turn| turn.status != TurnStatus::InProgress)
+        {
+            return SnapshotTurnState {
+                ends_mid_turn: false,
+                active_turn_id: None,
+                active_turn_start_index: None,
+            };
+        }
+
+        return SnapshotTurnState {
+            ends_mid_turn: true,
+            active_turn_id,
+            active_turn_start_index: builder.active_turn_start_index(),
+        };
+    }
+
+    let Some(last_user_position) = truncation::user_message_positions_in_rollout(&rollout_items)
+        .last()
+        .copied()
+    else {
+        return SnapshotTurnState {
+            ends_mid_turn: false,
+            active_turn_id: None,
+            active_turn_start_index: None,
+        };
+    };
+
+    // Synthetic fork/resume histories can contain user/assistant response items
+    // without explicit turn lifecycle events. If the persisted snapshot has no
+    // terminating boundary after its last user message, treat it as mid-turn.
+    SnapshotTurnState {
+        ends_mid_turn: !rollout_items[last_user_position + 1..].iter().any(|item| {
+            matches!(
+                item,
+                RolloutItem::EventMsg(EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
+            )
+        }),
+        active_turn_id: None,
+        active_turn_start_index: None,
+    }
+}
+
+/// Append the same persisted interrupt boundary used by the live interrupt path
+/// to an existing fork snapshot after the source thread has been confirmed to
+/// be mid-turn.
+fn append_interrupted_boundary(history: InitialHistory, turn_id: Option<String>) -> InitialHistory {
+    let aborted_event = RolloutItem::EventMsg(EventMsg::TurnAborted(TurnAbortedEvent {
+        turn_id,
+        reason: TurnAbortReason::Interrupted,
+    }));
+
+    match history {
+        InitialHistory::New => InitialHistory::Forked(vec![
+            RolloutItem::ResponseItem(interrupted_turn_history_marker()),
+            aborted_event,
+        ]),
+        InitialHistory::Forked(mut history) => {
+            history.push(RolloutItem::ResponseItem(interrupted_turn_history_marker()));
+            history.push(aborted_event);
+            InitialHistory::Forked(history)
+        }
+        InitialHistory::Resumed(mut resumed) => {
+            resumed
+                .history
+                .push(RolloutItem::ResponseItem(interrupted_turn_history_marker()));
+            resumed.history.push(aborted_event);
+            InitialHistory::Forked(resumed.history)
+        }
     }
 }
 

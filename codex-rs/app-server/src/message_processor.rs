@@ -50,20 +50,22 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_core::AnalyticsEventsClient;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
-use codex_core::auth::ExternalAuthRefreshContext;
-use codex_core::auth::ExternalAuthRefreshReason;
-use codex_core::auth::ExternalAuthRefresher;
-use codex_core::auth::ExternalAuthTokens;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
+use codex_core::default_client::DEFAULT_ORIGINATOR;
 use codex_core::default_client::SetOriginatorError;
 use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_features::Feature;
 use codex_feedback::CodexFeedback;
+use codex_login::auth::ExternalAuthRefreshContext;
+use codex_login::auth::ExternalAuthRefreshReason;
+use codex_login::auth::ExternalAuthRefresher;
+use codex_login::auth::ExternalAuthTokens;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
@@ -77,6 +79,7 @@ use toml::Value as TomlValue;
 use tracing::Instrument;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
+const TUI_APP_SERVER_CLIENT_NAME: &str = "codex-tui";
 
 #[derive(Clone)]
 struct ExternalAuthRefreshBridge {
@@ -169,8 +172,6 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
     pub(crate) loader_overrides: LoaderOverrides,
     pub(crate) cloud_requirements: CloudRequirementsLoader,
-    pub(crate) auth_manager: Option<Arc<AuthManager>>,
-    pub(crate) thread_manager: Option<Arc<ThreadManager>>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
@@ -189,36 +190,27 @@ impl MessageProcessor {
             cli_overrides,
             loader_overrides,
             cloud_requirements,
-            auth_manager,
-            thread_manager,
             feedback,
             log_db,
             config_warnings,
             session_source,
             enable_codex_api_key_env,
         } = args;
-        let (auth_manager, thread_manager) = match (auth_manager, thread_manager) {
-            (Some(auth_manager), Some(thread_manager)) => (auth_manager, thread_manager),
-            (None, None) => {
-                let auth_manager = AuthManager::shared(
-                    config.codex_home.clone(),
-                    enable_codex_api_key_env,
-                    config.cli_auth_credentials_store_mode,
-                );
-                let thread_manager = Arc::new(ThreadManager::new(
-                    config.as_ref(),
-                    auth_manager.clone(),
-                    session_source,
-                    CollaborationModesConfig {
-                        default_mode_request_user_input: config
-                            .features
-                            .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
-                    },
-                ));
-                (auth_manager, thread_manager)
-            }
-            _ => panic!("MessageProcessorArgs must provide both auth_manager and thread_manager"),
-        };
+        let auth_manager = AuthManager::shared(
+            config.codex_home.clone(),
+            enable_codex_api_key_env,
+            config.cli_auth_credentials_store_mode,
+        );
+        let thread_manager = Arc::new(ThreadManager::new(
+            config.as_ref(),
+            auth_manager.clone(),
+            session_source,
+            CollaborationModesConfig {
+                default_mode_request_user_input: config
+                    .features
+                    .enabled(Feature::DefaultModeRequestUserInput),
+            },
+        ));
         auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
         auth_manager.set_external_auth_refresher(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
@@ -228,10 +220,7 @@ impl MessageProcessor {
         thread_manager
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());
-        // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
-        thread_manager
-            .plugins_manager()
-            .maybe_start_curated_repo_sync_for_config(&config);
+
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager: auth_manager.clone(),
@@ -244,6 +233,11 @@ impl MessageProcessor {
             feedback,
             log_db,
         });
+        // Keep plugin startup warmups aligned at app-server startup.
+        // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.
+        thread_manager
+            .plugins_manager()
+            .maybe_start_plugin_startup_tasks_for_config(&config, auth_manager.clone());
         let config_api = ConfigApi::new(
             config.codex_home.clone(),
             cli_overrides,
@@ -457,6 +451,10 @@ impl MessageProcessor {
         self.codex_message_processor.drain_background_tasks().await;
     }
 
+    pub(crate) async fn cancel_active_login(&self) {
+        self.codex_message_processor.cancel_active_login().await;
+    }
+
     pub(crate) async fn clear_all_thread_listeners(&self) {
         self.codex_message_processor
             .clear_all_thread_listeners()
@@ -548,7 +546,14 @@ impl MessageProcessor {
                 } = params.client_info;
                 session.app_server_client_name = Some(name.clone());
                 session.client_version = Some(version.clone());
-                if let Err(error) = set_default_originator(name.clone()) {
+                let originator = if name == TUI_APP_SERVER_CLIENT_NAME {
+                    // TODO: Remove this temporary workaround once app-server clients no longer
+                    // need to retain the legacy TUI `codex_cli_rs` originator behavior.
+                    DEFAULT_ORIGINATOR.to_string()
+                } else {
+                    name.clone()
+                };
+                if let Err(error) = set_default_originator(originator) {
                     match error {
                         SetOriginatorError::InvalidHeaderValue => {
                             let error = JSONRPCErrorError {
@@ -787,7 +792,7 @@ impl MessageProcessor {
             Ok(response) => {
                 self.codex_message_processor.clear_plugin_related_caches();
                 self.codex_message_processor
-                    .maybe_start_curated_repo_sync_for_latest_config()
+                    .maybe_start_plugin_startup_tasks_for_latest_config()
                     .await;
                 self.outgoing.send_response(request_id, response).await;
             }
@@ -804,7 +809,7 @@ impl MessageProcessor {
             Ok(response) => {
                 self.codex_message_processor.clear_plugin_related_caches();
                 self.codex_message_processor
-                    .maybe_start_curated_repo_sync_for_latest_config()
+                    .maybe_start_plugin_startup_tasks_for_latest_config()
                     .await;
                 self.outgoing.send_response(request_id, response).await;
             }

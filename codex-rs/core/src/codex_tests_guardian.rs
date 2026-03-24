@@ -3,9 +3,9 @@ use crate::compact::InitialContextInjection;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
+use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecParams;
 use crate::exec_policy::ExecPolicyManager;
-use crate::features::Feature;
 use crate::guardian::GUARDIAN_REVIEWER_NAME;
 use crate::protocol::AskForApproval;
 use crate::sandboxing::SandboxPermissions;
@@ -15,6 +15,7 @@ use codex_app_server_protocol::ConfigLayerSource;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::RuleMatch;
+use codex_features::Feature;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
@@ -124,6 +125,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
         },
         cwd: turn_context.cwd.clone(),
         expiration: expiration_ms.into(),
+        capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
         network: None,
         sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
@@ -433,7 +435,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         true,
     ));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let file_watcher = Arc::new(FileWatcher::noop());
+    let skills_watcher = Arc::new(SkillsWatcher::noop());
 
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
@@ -442,7 +444,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         skills_manager,
         plugins_manager,
         mcp_manager,
-        file_watcher,
+        skills_watcher,
         conversation_history: InitialHistory::New,
         session_source: SessionSource::SubAgent(SubAgentSource::Other(
             GUARDIAN_REVIEWER_NAME.to_string(),
@@ -452,6 +454,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         persist_extended_history: false,
         metrics_service_name: None,
         inherited_shell_snapshot: None,
+        inherited_exec_policy: Some(Arc::new(parent_exec_policy)),
         user_shell_override: None,
         parent_trace: None,
     })

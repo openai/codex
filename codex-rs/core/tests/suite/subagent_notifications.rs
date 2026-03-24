@@ -1,7 +1,7 @@
 use anyhow::Result;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::config::AgentRoleConfig;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort;
 use core_test_support::responses::ResponsesRequest;

@@ -23,6 +23,7 @@ fn thread_metadata(cwd: &str, title: &str, first_user_message: &str) -> ThreadMe
             .single()
             .expect("valid timestamp"),
         source: "cli".to_string(),
+        agent_path: None,
         agent_nickname: None,
         agent_role: None,
         model_provider: "test-provider".to_string(),

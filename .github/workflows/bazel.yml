@@ -156,12 +156,18 @@ jobs:
 
           bazel_args=(
             test
-            //...
             --test_verbose_timeout_warnings
             --build_metadata=REPO_URL=https://github.com/openai/codex.git
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
             --build_metadata=ROLE=CI
             --build_metadata=VISIBILITY=PUBLIC
+          )
+
+          bazel_targets=(
+            //...
+            # Keep V8 out of the ordinary Bazel CI path. Only the dedicated
+            # canary and release workflows should build `third_party/v8`.
+            -//third_party/v8:all
           )
 
           if [[ "${RUNNER_OS:-}" != "Windows" ]]; then
@@ -183,6 +189,8 @@ jobs:
               --bazelrc=.github/workflows/ci.bazelrc \
               "${bazel_args[@]}" \
               "--remote_header=x-buildbuddy-api-key=$BUILDBUDDY_API_KEY" \
+              -- \
+              "${bazel_targets[@]}" \
               2>&1 | tee "$bazel_console_log"
             bazel_status=${PIPESTATUS[0]}
             set -e
@@ -210,6 +218,8 @@ jobs:
               "${bazel_args[@]}" \
               --remote_cache= \
               --remote_executor= \
+              -- \
+              "${bazel_targets[@]}" \
               2>&1 | tee "$bazel_console_log"
             bazel_status=${PIPESTATUS[0]}
             set -e

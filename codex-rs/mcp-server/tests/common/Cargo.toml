@@ -11,6 +11,7 @@ path = "lib.rs"
 anyhow = { workspace = true }
 codex-core = { workspace = true }
 codex-mcp-server = { workspace = true }
+codex-terminal-detection = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 rmcp = { workspace = true }
 os_info = { workspace = true }

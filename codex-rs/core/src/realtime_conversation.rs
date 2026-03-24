@@ -56,7 +56,7 @@ const REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET: usize = 5_000;
 const ACTIVE_RESPONSE_CONFLICT_ERROR_PREFIX: &str =
     "Conversation already has an active response in progress:";
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RealtimeConversationEnd {
     Requested,
     TransportClosed,

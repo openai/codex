@@ -11,7 +11,9 @@ members = [
     "apply-patch",
     "arg0",
     "feedback",
+    "features",
     "codex-backend-openapi-models",
+    "code-mode",
     "cloud-requirements",
     "cloud-tasks",
     "cloud-tasks-client",
@@ -22,10 +24,10 @@ members = [
     "shell-escalation",
     "skills",
     "core",
-    "environment",
     "hooks",
     "secrets",
     "exec",
+    "exec-server",
     "execpolicy",
     "execpolicy-legacy",
     "keyring-store",
@@ -40,13 +42,15 @@ members = [
     "protocol",
     "rmcp-client",
     "responses-api-proxy",
+    "sandboxing",
     "stdio-to-uds",
     "otel",
     "tui",
     "tui_app_server",
+    "v8-poc",
     "utils/absolute-path",
     "utils/cargo-bin",
-    "utils/git",
+    "git-utils",
     "utils/cache",
     "utils/image",
     "utils/json-to-toml",
@@ -66,6 +70,7 @@ members = [
     "codex-client",
     "codex-api",
     "state",
+    "terminal-detection",
     "codex-experimental-api-macros",
     "test-macros",
     "package-manager",
@@ -88,6 +93,7 @@ app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
 codex-artifacts = { path = "artifacts" }
+codex-code-mode = { path = "code-mode" }
 codex-package-manager = { path = "package-manager" }
 codex-app-server = { path = "app-server" }
 codex-app-server-client = { path = "app-server-client" }
@@ -104,13 +110,14 @@ codex-cloud-requirements = { path = "cloud-requirements" }
 codex-connectors = { path = "connectors" }
 codex-config = { path = "config" }
 codex-core = { path = "core" }
-codex-environment = { path = "environment" }
 codex-exec = { path = "exec" }
+codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
 codex-feedback = { path = "feedback" }
+codex-features = { path = "features" }
 codex-file-search = { path = "file-search" }
-codex-git = { path = "utils/git" }
+codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
@@ -124,6 +131,7 @@ codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
+codex-sandboxing = { path = "sandboxing" }
 codex-secrets = { path = "secrets" }
 codex-shell-command = { path = "shell-command" }
 codex-shell-escalation = { path = "shell-escalation" }
@@ -131,8 +139,10 @@ codex-skills = { path = "skills" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-test-macros = { path = "test-macros" }
+codex-terminal-detection = { path = "terminal-detection" }
 codex-tui = { path = "tui" }
 codex-tui-app-server = { path = "tui_app_server" }
+codex-v8-poc = { path = "v8-poc" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
 codex-utils-approval-presets = { path = "utils/approval-presets" }
 codex-utils-cache = { path = "utils/cache" }
@@ -232,6 +242,7 @@ portable-pty = "0.9.0"
 predicates = "3"
 pretty_assertions = "1.4.1"
 pulldown-cmark = "0.10"
+quick-xml = "0.38.4"
 rand = "0.9"
 ratatui = "0.29.0"
 ratatui-macros = "0.6.0"
@@ -240,6 +251,7 @@ regex-lite = "0.1.8"
 reqwest = "0.12"
 rmcp = { version = "0.15.0", default-features = false }
 runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
+v8 = "=146.4.0"
 rustls = { version = "0.23", default-features = false, features = [
     "ring",
     "std",
@@ -278,7 +290,7 @@ supports-color = "3.0.2"
 syntect = "5"
 sys-locale = "0.3.2"
 tempfile = "3.23.0"
-tar = "0.4.44"
+tar = "0.4.45"
 test-log = "0.2.19"
 textwrap = "0.16.2"
 thiserror = "2.0.17"
@@ -365,7 +377,8 @@ ignored = [
     "icu_provider",
     "openssl-sys",
     "codex-utils-readiness",
-    "codex-secrets"
+    "codex-secrets",
+    "codex-v8-poc",
 ]
 
 [profile.release]

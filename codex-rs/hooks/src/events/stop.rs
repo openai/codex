@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
+use codex_protocol::items::HookPromptFragment;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookOutputEntry;
@@ -8,11 +9,13 @@ use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
 
+use super::common;
 use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
+use crate::schema::NullableString;
 use crate::schema::StopCommandInput;
 
 #[derive(Debug, Clone)]
@@ -34,7 +37,7 @@ pub struct StopOutcome {
     pub stop_reason: Option<String>,
     pub should_block: bool,
     pub block_reason: Option<String>,
-    pub continuation_prompt: Option<String>,
+    pub continuation_fragments: Vec<HookPromptFragment>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -43,21 +46,17 @@ struct StopHandlerData {
     stop_reason: Option<String>,
     should_block: bool,
     block_reason: Option<String>,
-    continuation_prompt: Option<String>,
+    continuation_fragments: Vec<HookPromptFragment>,
 }
 
 pub(crate) fn preview(
     handlers: &[ConfiguredHandler],
     _request: &StopRequest,
 ) -> Vec<HookRunSummary> {
-    dispatcher::select_handlers(
-        handlers,
-        HookEventName::Stop,
-        /*session_start_source*/ None,
-    )
-    .into_iter()
-    .map(|handler| dispatcher::running_summary(&handler))
-    .collect()
+    dispatcher::select_handlers(handlers, HookEventName::Stop, /*matcher_input*/ None)
+        .into_iter()
+        .map(|handler| dispatcher::running_summary(&handler))
+        .collect()
 }
 
 pub(crate) async fn run(
@@ -65,11 +64,8 @@ pub(crate) async fn run(
     shell: &CommandShell,
     request: StopRequest,
 ) -> StopOutcome {
-    let matched = dispatcher::select_handlers(
-        handlers,
-        HookEventName::Stop,
-        /*session_start_source*/ None,
-    );
+    let matched =
+        dispatcher::select_handlers(handlers, HookEventName::Stop, /*matcher_input*/ None);
     if matched.is_empty() {
         return StopOutcome {
             hook_events: Vec::new(),
@@ -77,26 +73,28 @@ pub(crate) async fn run(
             stop_reason: None,
             should_block: false,
             block_reason: None,
-            continuation_prompt: None,
+            continuation_fragments: Vec::new(),
         };
     }
 
-    let input_json = match serde_json::to_string(&StopCommandInput::new(
-        request.session_id.to_string(),
-        request.transcript_path.clone(),
-        request.cwd.display().to_string(),
-        request.model.clone(),
-        request.permission_mode.clone(),
-        request.stop_hook_active,
-        request.last_assistant_message.clone(),
-    )) {
+    let input_json = match serde_json::to_string(&StopCommandInput {
+        session_id: request.session_id.to_string(),
+        turn_id: request.turn_id.clone(),
+        transcript_path: NullableString::from_path(request.transcript_path.clone()),
+        cwd: request.cwd.display().to_string(),
+        hook_event_name: "Stop".to_string(),
+        model: request.model.clone(),
+        permission_mode: request.permission_mode.clone(),
+        stop_hook_active: request.stop_hook_active,
+        last_assistant_message: NullableString::from_string(request.last_assistant_message.clone()),
+    }) {
         Ok(input_json) => input_json,
         Err(error) => {
-            return serialization_failure_outcome(
+            return serialization_failure_outcome(common::serialization_failure_hook_events(
                 matched,
                 Some(request.turn_id),
                 format!("failed to serialize stop hook input: {error}"),
-            );
+            ));
         }
     };
 
@@ -118,7 +116,7 @@ pub(crate) async fn run(
         stop_reason: aggregate.stop_reason,
         should_block: aggregate.should_block,
         block_reason: aggregate.block_reason,
-        continuation_prompt: aggregate.continuation_prompt,
+        continuation_fragments: aggregate.continuation_fragments,
     }
 }
 
@@ -172,7 +170,9 @@ fn parse_completed(
                             text: invalid_block_reason,
                         });
                     } else if parsed.should_block {
-                        if let Some(reason) = parsed.reason.as_deref().and_then(trimmed_non_empty) {
+                        if let Some(reason) =
+                            parsed.reason.as_deref().and_then(common::trimmed_non_empty)
+                        {
                             status = HookRunStatus::Blocked;
                             should_block = true;
                             block_reason = Some(reason.clone());
@@ -200,7 +200,7 @@ fn parse_completed(
                 }
             }
             Some(2) => {
-                if let Some(reason) = trimmed_non_empty(&run_result.stderr) {
+                if let Some(reason) = common::trimmed_non_empty(&run_result.stderr) {
                     status = HookRunStatus::Blocked;
                     should_block = true;
                     block_reason = Some(reason.clone());
@@ -240,6 +240,14 @@ fn parse_completed(
         turn_id,
         run: dispatcher::completed_summary(handler, &run_result, status, entries),
     };
+    let continuation_fragments = continuation_prompt
+        .map(|prompt| {
+            vec![HookPromptFragment::from_single_hook(
+                prompt,
+                completed.run.id.clone(),
+            )]
+        })
+        .unwrap_or_default();
 
     dispatcher::ParsedHandler {
         completed,
@@ -248,7 +256,7 @@ fn parse_completed(
             stop_reason,
             should_block,
             block_reason,
-            continuation_prompt,
+            continuation_fragments,
         },
     }
 }
@@ -261,18 +269,23 @@ fn aggregate_results<'a>(
     let stop_reason = results.iter().find_map(|result| result.stop_reason.clone());
     let should_block = !should_stop && results.iter().any(|result| result.should_block);
     let block_reason = if should_block {
-        join_block_text(results.iter().copied(), |result| {
-            result.block_reason.as_deref()
-        })
+        common::join_text_chunks(
+            results
+                .iter()
+                .filter_map(|result| result.block_reason.clone())
+                .collect(),
+        )
     } else {
         None
     };
-    let continuation_prompt = if should_block {
-        join_block_text(results.iter().copied(), |result| {
-            result.continuation_prompt.as_deref()
-        })
+    let continuation_fragments = if should_block {
+        results
+            .iter()
+            .filter(|result| result.should_block)
+            .flat_map(|result| result.continuation_fragments.clone())
+            .collect()
     } else {
-        None
+        Vec::new()
     };
 
     StopHandlerData {
@@ -280,63 +293,18 @@ fn aggregate_results<'a>(
         stop_reason,
         should_block,
         block_reason,
-        continuation_prompt,
+        continuation_fragments,
     }
 }
 
-fn join_block_text<'a>(
-    results: impl IntoIterator<Item = &'a StopHandlerData>,
-    select: impl Fn(&'a StopHandlerData) -> Option<&'a str>,
-) -> Option<String> {
-    let parts = results
-        .into_iter()
-        .filter_map(select)
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    if parts.is_empty() {
-        return None;
-    }
-    Some(parts.join("\n\n"))
-}
-
-fn trimmed_non_empty(text: &str) -> Option<String> {
-    let trimmed = text.trim();
-    if !trimmed.is_empty() {
-        return Some(trimmed.to_string());
-    }
-    None
-}
-
-fn serialization_failure_outcome(
-    handlers: Vec<ConfiguredHandler>,
-    turn_id: Option<String>,
-    error_message: String,
-) -> StopOutcome {
-    let hook_events = handlers
-        .into_iter()
-        .map(|handler| {
-            let mut run = dispatcher::running_summary(&handler);
-            run.status = HookRunStatus::Failed;
-            run.completed_at = Some(run.started_at);
-            run.duration_ms = Some(0);
-            run.entries = vec![HookOutputEntry {
-                kind: HookOutputEntryKind::Error,
-                text: error_message.clone(),
-            }];
-            HookCompletedEvent {
-                turn_id: turn_id.clone(),
-                run,
-            }
-        })
-        .collect();
-
+fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> StopOutcome {
     StopOutcome {
         hook_events,
         should_stop: false,
         stop_reason: None,
         should_block: false,
         block_reason: None,
-        continuation_prompt: None,
+        continuation_fragments: Vec::new(),
     }
 }
 
@@ -349,6 +317,8 @@ mod tests {
     use codex_protocol::protocol::HookOutputEntryKind;
     use codex_protocol::protocol::HookRunStatus;
     use pretty_assertions::assert_eq;
+
+    use codex_protocol::items::HookPromptFragment;
 
     use super::StopHandlerData;
     use super::aggregate_results;
@@ -375,7 +345,10 @@ mod tests {
                 stop_reason: None,
                 should_block: true,
                 block_reason: Some("retry with tests".to_string()),
-                continuation_prompt: Some("retry with tests".to_string()),
+                continuation_fragments: vec![HookPromptFragment {
+                    text: "retry with tests".to_string(),
+                    hook_run_id: parsed.completed.run.id.clone(),
+                }],
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
@@ -419,7 +392,7 @@ mod tests {
                 stop_reason: Some("done".to_string()),
                 should_block: false,
                 block_reason: None,
-                continuation_prompt: None,
+                continuation_fragments: Vec::new(),
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Stopped);
@@ -440,7 +413,10 @@ mod tests {
                 stop_reason: None,
                 should_block: true,
                 block_reason: Some("retry with tests".to_string()),
-                continuation_prompt: Some("retry with tests".to_string()),
+                continuation_fragments: vec![HookPromptFragment {
+                    text: "retry with tests".to_string(),
+                    hook_run_id: parsed.completed.run.id.clone(),
+                }],
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
@@ -509,14 +485,18 @@ mod tests {
                 stop_reason: None,
                 should_block: true,
                 block_reason: Some("first".to_string()),
-                continuation_prompt: Some("first".to_string()),
+                continuation_fragments: vec![HookPromptFragment::from_single_hook(
+                    "first", "run-1",
+                )],
             },
             &StopHandlerData {
                 should_stop: false,
                 stop_reason: None,
                 should_block: true,
                 block_reason: Some("second".to_string()),
-                continuation_prompt: Some("second".to_string()),
+                continuation_fragments: vec![HookPromptFragment::from_single_hook(
+                    "second", "run-2",
+                )],
             },
         ]);
 
@@ -527,7 +507,10 @@ mod tests {
                 stop_reason: None,
                 should_block: true,
                 block_reason: Some("first\n\nsecond".to_string()),
-                continuation_prompt: Some("first\n\nsecond".to_string()),
+                continuation_fragments: vec![
+                    HookPromptFragment::from_single_hook("first", "run-1"),
+                    HookPromptFragment::from_single_hook("second", "run-2"),
+                ],
             }
         );
     }

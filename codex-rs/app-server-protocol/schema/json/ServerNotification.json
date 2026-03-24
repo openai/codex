@@ -83,6 +83,9 @@
       ],
       "type": "object"
     },
+    "AgentPath": {
+      "type": "string"
+    },
     "AppBranding": {
       "description": "EXPERIMENTAL - app metadata returned by app-list APIs.",
       "properties": {
@@ -511,6 +514,28 @@
           ],
           "title": "ResponseTooManyFailedAttemptsCodexErrorInfo",
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Returned when `turn/start` or `turn/steer` is submitted while the current active turn cannot accept same-turn steering, for example `/review` or manual `/compact`.",
+          "properties": {
+            "activeTurnNotSteerable": {
+              "properties": {
+                "turnKind": {
+                  "$ref": "#/definitions/NonSteerableTurnKind"
+                }
+              },
+              "required": [
+                "turnKind"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "activeTurnNotSteerable"
+          ],
+          "title": "ActiveTurnNotSteerableCodexErrorInfo",
+          "type": "object"
         }
       ]
     },
@@ -745,6 +770,15 @@
       ],
       "type": "object"
     },
+    "CommandExecutionSource": {
+      "enum": [
+        "agent",
+        "userShell",
+        "unifiedExecStartup",
+        "unifiedExecInteraction"
+      ],
+      "type": "string"
+    },
     "CommandExecutionStatus": {
       "enum": [
         "inProgress",
@@ -964,6 +998,13 @@
       ],
       "type": "object"
     },
+    "FuzzyFileSearchMatchType": {
+      "enum": [
+        "file",
+        "directory"
+      ],
+      "type": "string"
+    },
     "FuzzyFileSearchResult": {
       "description": "Superset of [`codex_file_search::FileMatch`]",
       "properties": {
@@ -981,6 +1022,9 @@
             "null"
           ]
         },
+        "match_type": {
+          "$ref": "#/definitions/FuzzyFileSearchMatchType"
+        },
         "path": {
           "type": "string"
         },
@@ -995,6 +1039,7 @@
       },
       "required": [
         "file_name",
+        "match_type",
         "path",
         "root",
         "score"
@@ -1135,7 +1180,9 @@
     },
     "HookEventName": {
       "enum": [
+        "preToolUse",
         "sessionStart",
+        "userPromptSubmit",
         "stop"
       ],
       "type": "string"
@@ -1179,6 +1226,21 @@
         "error"
       ],
       "type": "string"
+    },
+    "HookPromptFragment": {
+      "properties": {
+        "hookRunId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "hookRunId",
+        "text"
+      ],
+      "type": "object"
     },
     "HookRunStatus": {
       "enum": [
@@ -1399,6 +1461,36 @@
       ],
       "type": "object"
     },
+    "McpServerStartupState": {
+      "enum": [
+        "starting",
+        "ready",
+        "failed",
+        "cancelled"
+      ],
+      "type": "string"
+    },
+    "McpServerStatusUpdatedNotification": {
+      "properties": {
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/definitions/McpServerStartupState"
+        }
+      },
+      "required": [
+        "name",
+        "status"
+      ],
+      "type": "object"
+    },
     "McpToolCallError": {
       "properties": {
         "message": {
@@ -1454,6 +1546,54 @@
       ],
       "type": "string"
     },
+    "MemoryCitation": {
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/definitions/MemoryCitationEntry"
+          },
+          "type": "array"
+        },
+        "threadIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entries",
+        "threadIds"
+      ],
+      "type": "object"
+    },
+    "MemoryCitationEntry": {
+      "properties": {
+        "lineEnd": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "lineStart": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "note": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "lineEnd",
+        "lineStart",
+        "note",
+        "path"
+      ],
+      "type": "object"
+    },
     "MessagePhase": {
       "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
       "oneOf": [
@@ -1505,6 +1645,13 @@
         "turnId"
       ],
       "type": "object"
+    },
+    "NonSteerableTurnKind": {
+      "enum": [
+        "review",
+        "compact"
+      ],
+      "type": "string"
     },
     "PatchApplyStatus": {
       "enum": [
@@ -1834,6 +1981,19 @@
         {
           "additionalProperties": false,
           "properties": {
+            "custom": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "custom"
+          ],
+          "title": "CustomSessionSource",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "subAgent": {
               "$ref": "#/definitions/SubAgentSource"
             }
@@ -1871,6 +2031,17 @@
                     "string",
                     "null"
                   ]
+                },
+                "agent_path": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/AgentPath"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
                 },
                 "agent_role": {
                   "default": null,
@@ -2177,8 +2348,46 @@
         },
         {
           "properties": {
+            "fragments": {
+              "items": {
+                "$ref": "#/definitions/HookPromptFragment"
+              },
+              "type": "array"
+            },
             "id": {
               "type": "string"
+            },
+            "type": {
+              "enum": [
+                "hookPrompt"
+              ],
+              "title": "HookPromptThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "fragments",
+            "id",
+            "type"
+          ],
+          "title": "HookPromptThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "memoryCitation": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MemoryCitation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "phase": {
               "anyOf": [
@@ -2318,6 +2527,14 @@
                 "string",
                 "null"
               ]
+            },
+            "source": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/CommandExecutionSource"
+                }
+              ],
+              "default": "agent"
             },
             "status": {
               "$ref": "#/definitions/CommandExecutionStatus"
@@ -2644,6 +2861,12 @@
                 "null"
               ]
             },
+            "savedPath": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "status": {
               "type": "string"
             },
@@ -2872,6 +3095,26 @@
       "required": [
         "threadId",
         "version"
+      ],
+      "type": "object"
+    },
+    "ThreadRealtimeTranscriptUpdatedNotification": {
+      "description": "EXPERIMENTAL - flat transcript delta emitted whenever realtime transcript text changes.",
+      "properties": {
+        "role": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "text",
+        "threadId"
       ],
       "type": "object"
     },
@@ -4075,6 +4318,26 @@
       "properties": {
         "method": {
           "enum": [
+            "mcpServer/startupStatus/updated"
+          ],
+          "title": "McpServer/startupStatus/updatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/McpServerStatusUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "McpServer/startupStatus/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
             "account/updated"
           ],
           "title": "Account/updatedNotificationMethod",
@@ -4350,6 +4613,26 @@
         "params"
       ],
       "title": "Thread/realtime/itemAddedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "thread/realtime/transcriptUpdated"
+          ],
+          "title": "Thread/realtime/transcriptUpdatedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadRealtimeTranscriptUpdatedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Thread/realtime/transcriptUpdatedNotification",
       "type": "object"
     },
     {

@@ -41,13 +41,14 @@ use super::policy::EventPersistenceMode;
 use super::policy::is_persisted_response_item;
 use crate::config::Config;
 use crate::default_client::originator;
-use crate::git_info::collect_git_info;
 use crate::path_utils;
 use crate::state_db;
 use crate::state_db::StateDbHandle;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::truncate_text;
+use codex_git_utils::collect_git_info;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::GitInfo as ProtocolGitInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
@@ -405,6 +406,7 @@ impl RolloutRecorder {
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
                         agent_nickname: source.get_nickname(),
                         agent_role: source.get_agent_role(),
+                        agent_path: source.get_agent_path().map(Into::into),
                         source,
                         model_provider: Some(config.model_provider_id.clone()),
                         base_instructions: Some(base_instructions),
@@ -845,7 +847,11 @@ async fn write_session_meta(
     default_provider: &str,
     generate_memories: bool,
 ) -> std::io::Result<()> {
-    let git_info = collect_git_info(cwd).await;
+    let git_info = collect_git_info(cwd).await.map(|info| ProtocolGitInfo {
+        commit_hash: info.commit_hash,
+        branch: info.branch,
+        repository_url: info.repository_url,
+    });
     let session_meta_line = SessionMetaLine {
         meta: session_meta,
         git: git_info,

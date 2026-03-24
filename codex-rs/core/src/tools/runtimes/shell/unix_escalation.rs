@@ -1,22 +1,21 @@
 use super::ShellRequest;
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
+use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
-use crate::exec::SandboxType;
 use crate::exec::is_likely_sandbox_denied;
-use crate::features::Feature;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
+use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::skills::SkillMetadata;
 use crate::tools::runtimes::ExecveSessionApproval;
-use crate::tools::runtimes::build_command_spec;
+use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::sandboxing::SandboxAttempt;
-use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use codex_execpolicy::Decision;
@@ -24,6 +23,7 @@ use codex_execpolicy::Evaluation;
 use codex_execpolicy::MatchOptions;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
+use codex_features::Feature;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
@@ -34,6 +34,11 @@ use codex_protocol::protocol::ExecApprovalRequestSkillMetadata;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxTransformRequest;
+use codex_sandboxing::SandboxType;
+use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::bash::parse_shell_lc_plain_commands;
 use codex_shell_command::bash::parse_shell_lc_single_command_prefix;
 use codex_shell_escalation::EscalateServer;
@@ -106,17 +111,20 @@ pub(super) async fn try_run_zsh_fork(
         return Ok(None);
     }
 
-    let spec = build_command_spec(
+    let command = build_sandbox_command(
         command,
         &req.cwd,
         &req.env,
-        req.timeout_ms.into(),
-        req.sandbox_permissions,
         req.additional_permissions.clone(),
-        req.justification.clone(),
     )?;
+    let options = ExecOptions {
+        expiration: req.timeout_ms.into(),
+        capture_policy: ExecCapturePolicy::ShellTool,
+        sandbox_permissions: req.sandbox_permissions,
+        justification: req.justification.clone(),
+    };
     let sandbox_exec_request = attempt
-        .env_for(spec, req.network.as_ref())
+        .env_for(command, options, req.network.as_ref())
         .map_err(|err| ToolError::Codex(err.into()))?;
     let crate::sandboxing::ExecRequest {
         command,
@@ -124,6 +132,7 @@ pub(super) async fn try_run_zsh_fork(
         env: sandbox_env,
         network: sandbox_network,
         expiration: _sandbox_expiration,
+        capture_policy: _capture_policy,
         sandbox,
         windows_sandbox_level,
         windows_sandbox_private_desktop: _windows_sandbox_private_desktop,
@@ -490,7 +499,7 @@ impl CoreShellActionProvider {
             .session
             .services
             .skills_manager
-            .skills_for_cwd(&self.turn.cwd, force_reload)
+            .skills_for_cwd(&self.turn.cwd, self.turn.config.as_ref(), force_reload)
             .await;
 
         let program_path = program.as_path();
@@ -891,7 +900,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
         let mut exec_env = self.env.clone();
         // `env_overlay` comes from `EscalationSession::env()`, so merge only the
         // wrapper/socket variables into the base shell environment.
-        for var in ["CODEX_ESCALATE_SOCKET", "EXEC_WRAPPER", "BASH_EXEC_WRAPPER"] {
+        for var in ["CODEX_ESCALATE_SOCKET", "EXEC_WRAPPER"] {
             if let Some(value) = env_overlay.get(var) {
                 exec_env.insert(var.to_string(), value.clone());
             }
@@ -904,6 +913,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 env: exec_env,
                 network: self.network.clone(),
                 expiration: ExecExpiration::Cancellation(cancel_rx),
+                capture_policy: ExecCapturePolicy::ShellTool,
                 sandbox: self.sandbox,
                 windows_sandbox_level: self.windows_sandbox_level,
                 windows_sandbox_private_desktop: false,
@@ -1028,7 +1038,7 @@ impl CoreShellCommandExecutor {
         let (program, args) = command
             .split_first()
             .ok_or_else(|| anyhow::anyhow!("prepared command must not be empty"))?;
-        let sandbox_manager = crate::sandboxing::SandboxManager::new();
+        let sandbox_manager = SandboxManager::new();
         let sandbox = sandbox_manager.select_initial(
             file_system_sandbox_policy,
             network_sandbox_policy,
@@ -1036,36 +1046,42 @@ impl CoreShellCommandExecutor {
             self.windows_sandbox_level,
             self.network.is_some(),
         );
+        let sandbox_permissions = if additional_permissions.is_some() {
+            SandboxPermissions::WithAdditionalPermissions
+        } else {
+            SandboxPermissions::UseDefault
+        };
+        let command = SandboxCommand {
+            program: program.clone(),
+            args: args.to_vec(),
+            cwd: workdir.to_path_buf(),
+            env,
+            additional_permissions,
+        };
+        let options = ExecOptions {
+            expiration: ExecExpiration::DefaultTimeout,
+            capture_policy: ExecCapturePolicy::ShellTool,
+            sandbox_permissions,
+            justification: self.justification.clone(),
+        };
+        let exec_request = sandbox_manager.transform(SandboxTransformRequest {
+            command,
+            policy: sandbox_policy,
+            file_system_policy: file_system_sandbox_policy,
+            network_policy: network_sandbox_policy,
+            sandbox,
+            enforce_managed_network: self.network.is_some(),
+            network: self.network.as_ref(),
+            sandbox_policy_cwd: &self.sandbox_policy_cwd,
+            #[cfg(target_os = "macos")]
+            macos_seatbelt_profile_extensions,
+            codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.as_ref(),
+            use_legacy_landlock: self.use_legacy_landlock,
+            windows_sandbox_level: self.windows_sandbox_level,
+            windows_sandbox_private_desktop: false,
+        })?;
         let mut exec_request =
-            sandbox_manager.transform(crate::sandboxing::SandboxTransformRequest {
-                spec: crate::sandboxing::CommandSpec {
-                    program: program.clone(),
-                    args: args.to_vec(),
-                    cwd: workdir.to_path_buf(),
-                    env,
-                    expiration: ExecExpiration::DefaultTimeout,
-                    sandbox_permissions: if additional_permissions.is_some() {
-                        SandboxPermissions::WithAdditionalPermissions
-                    } else {
-                        SandboxPermissions::UseDefault
-                    },
-                    additional_permissions,
-                    justification: self.justification.clone(),
-                },
-                policy: sandbox_policy,
-                file_system_policy: file_system_sandbox_policy,
-                network_policy: network_sandbox_policy,
-                sandbox,
-                enforce_managed_network: self.network.is_some(),
-                network: self.network.as_ref(),
-                sandbox_policy_cwd: &self.sandbox_policy_cwd,
-                #[cfg(target_os = "macos")]
-                macos_seatbelt_profile_extensions,
-                codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.as_ref(),
-                use_legacy_landlock: self.use_legacy_landlock,
-                windows_sandbox_level: self.windows_sandbox_level,
-                windows_sandbox_private_desktop: false,
-            })?;
+            crate::sandboxing::ExecRequest::from_sandbox_exec_request(exec_request, options);
         if let Some(network) = exec_request.network.as_ref() {
             network.apply_to_env(&mut exec_request.env);
         }

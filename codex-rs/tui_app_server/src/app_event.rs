@@ -11,13 +11,19 @@
 use std::path::PathBuf;
 
 use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::PluginInstallResponse;
+use codex_app_server_protocol::PluginListResponse;
+use codex_app_server_protocol::PluginReadParams;
+use codex_app_server_protocol::PluginReadResponse;
+use codex_app_server_protocol::PluginUninstallResponse;
 use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::protocol::Event;
+use codex_protocol::protocol::GetHistoryEntryResponseEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RateLimitSnapshot;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 
 use crate::bottom_pane::ApprovalRequest;
@@ -25,7 +31,7 @@ use crate::bottom_pane::StatusLineItem;
 use crate::history_cell::HistoryCell;
 
 use codex_core::config::types::ApprovalsReviewer;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
@@ -71,7 +77,6 @@ pub(crate) struct ConnectorsSnapshot {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
-    CodexEvent(Event),
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
     /// Switch the active thread to the selected agent.
@@ -83,11 +88,10 @@ pub(crate) enum AppEvent {
         op: Op,
     },
 
-    /// Forward an event from a non-primary thread into the app-level thread router.
-    #[allow(dead_code)]
-    ThreadEvent {
+    /// Deliver a synthetic history lookup response to a specific thread channel.
+    ThreadHistoryEntryResponse {
         thread_id: ThreadId,
-        event: Event,
+        event: GetHistoryEntryResponseEvent,
     },
 
     /// Start a new session.
@@ -165,6 +169,84 @@ pub(crate) enum AppEvent {
     RefreshConnectors {
         force_refetch: bool,
     },
+
+    /// Fetch plugin marketplace state for the provided working directory.
+    FetchPluginsList {
+        cwd: PathBuf,
+    },
+
+    /// Result of fetching plugin marketplace state.
+    PluginsLoaded {
+        cwd: PathBuf,
+        result: Result<PluginListResponse, String>,
+    },
+
+    /// Replace the plugins popup with a plugin-detail loading state.
+    OpenPluginDetailLoading {
+        plugin_display_name: String,
+    },
+
+    /// Fetch detail for a specific plugin from a marketplace.
+    FetchPluginDetail {
+        cwd: PathBuf,
+        params: PluginReadParams,
+    },
+
+    /// Result of fetching plugin detail.
+    PluginDetailLoaded {
+        cwd: PathBuf,
+        result: Result<PluginReadResponse, String>,
+    },
+
+    /// Replace the plugins popup with an install loading state.
+    OpenPluginInstallLoading {
+        plugin_display_name: String,
+    },
+
+    /// Replace the plugins popup with an uninstall loading state.
+    OpenPluginUninstallLoading {
+        plugin_display_name: String,
+    },
+
+    /// Install a specific plugin from a marketplace.
+    FetchPluginInstall {
+        cwd: PathBuf,
+        marketplace_path: AbsolutePathBuf,
+        plugin_name: String,
+        plugin_display_name: String,
+    },
+
+    /// Result of installing a plugin.
+    PluginInstallLoaded {
+        cwd: PathBuf,
+        marketplace_path: AbsolutePathBuf,
+        plugin_name: String,
+        plugin_display_name: String,
+        result: Result<PluginInstallResponse, String>,
+    },
+
+    /// Uninstall a specific plugin by canonical plugin id.
+    FetchPluginUninstall {
+        cwd: PathBuf,
+        plugin_id: String,
+        plugin_display_name: String,
+    },
+
+    /// Result of uninstalling a plugin.
+    PluginUninstallLoaded {
+        cwd: PathBuf,
+        plugin_id: String,
+        plugin_display_name: String,
+        result: Result<PluginUninstallResponse, String>,
+    },
+
+    /// Advance the post-install plugin app-auth flow.
+    PluginInstallAuthAdvance {
+        refresh_connectors: bool,
+    },
+
+    /// Abandon the post-install plugin app-auth flow.
+    PluginInstallAuthAbandon,
 
     /// Fetch MCP inventory via app-server RPCs and render it into history.
     FetchMcpInventory,

@@ -16,6 +16,21 @@
       },
       "type": "object"
     },
+    "MarketplaceLoadErrorInfo": {
+      "properties": {
+        "marketplacePath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "marketplacePath",
+        "message"
+      ],
+      "type": "object"
+    },
     "PluginAuthPolicy": {
       "enum": [
         "ON_INSTALL",
@@ -239,6 +254,20 @@
     }
   },
   "properties": {
+    "featuredPluginIds": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "marketplaceLoadErrors": {
+      "default": [],
+      "items": {
+        "$ref": "#/definitions/MarketplaceLoadErrorInfo"
+      },
+      "type": "array"
+    },
     "marketplaces": {
       "items": {
         "$ref": "#/definitions/PluginMarketplaceEntry"

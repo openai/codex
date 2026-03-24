@@ -117,3 +117,40 @@ async fn list_tool_suggest_discoverable_plugins_omits_installed_curated_plugins(
 
     assert_eq!(discoverable_plugins, Vec::<DiscoverablePluginInfo>::new());
 }
+
+#[tokio::test]
+async fn list_tool_suggest_discoverable_plugins_includes_configured_plugin_ids() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let curated_root = crate::plugins::curated_plugins_repo_path(codex_home.path());
+    write_openai_curated_marketplace(&curated_root, &["sample"]);
+    write_file(
+        &codex_home.path().join(crate::config::CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+
+[tool_suggest]
+discoverables = [{ type = "plugin", id = "sample@openai-curated" }]
+"#,
+    );
+
+    let config = load_plugins_config(codex_home.path()).await;
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)
+        .unwrap()
+        .into_iter()
+        .map(DiscoverablePluginInfo::from)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        discoverable_plugins,
+        vec![DiscoverablePluginInfo {
+            id: "sample@openai-curated".to_string(),
+            name: "sample".to_string(),
+            description: Some(
+                "Plugin that includes skills, MCP servers, and app connectors".to_string(),
+            ),
+            has_skills: true,
+            mcp_server_names: vec!["sample-docs".to_string()],
+            app_connector_ids: vec!["connector_calendar".to_string()],
+        }]
+    );
+}

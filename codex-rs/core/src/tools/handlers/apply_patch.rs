@@ -11,8 +11,7 @@ use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
-use crate::sandboxing::effective_file_system_sandbox_policy;
-use crate::sandboxing::merge_permission_profiles;
+use crate::tools::context::ApplyPatchToolOutput;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
@@ -34,6 +33,9 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
+use codex_sandboxing::policy_transforms::normalize_additional_permissions;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -88,7 +90,7 @@ fn write_permissions_for_paths(file_paths: &[AbsolutePathBuf]) -> Option<Permiss
         ..Default::default()
     })?;
 
-    crate::sandboxing::normalize_additional_permissions(permissions).ok()
+    normalize_additional_permissions(permissions).ok()
 }
 
 async fn effective_patch_permissions(
@@ -125,7 +127,7 @@ async fn effective_patch_permissions(
 
 #[async_trait]
 impl ToolHandler for ApplyPatchHandler {
-    type Output = FunctionToolOutput;
+    type Output = ApplyPatchToolOutput;
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -179,7 +181,7 @@ impl ToolHandler for ApplyPatchHandler {
                 {
                     InternalApplyPatchInvocation::Output(item) => {
                         let content = item?;
-                        Ok(FunctionToolOutput::from_text(content, Some(true)))
+                        Ok(ApplyPatchToolOutput::from_text(content))
                     }
                     InternalApplyPatchInvocation::DelegateToExec(apply) => {
                         let changes = convert_apply_patch_to_protocol(&apply.action);
@@ -233,7 +235,7 @@ impl ToolHandler for ApplyPatchHandler {
                             Some(&tracker),
                         );
                         let content = emitter.finish(event_ctx, out).await?;
-                        Ok(FunctionToolOutput::from_text(content, Some(true)))
+                        Ok(ApplyPatchToolOutput::from_text(content))
                     }
                 }
             }

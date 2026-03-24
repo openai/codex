@@ -27,9 +27,6 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
-use crate::features::FEATURES;
-use crate::features::Feature;
-use crate::features::maybe_push_unstable_features_warning;
 #[cfg(test)]
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::ModelsManager;
@@ -49,18 +46,19 @@ use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item;
-use crate::terminal;
 use crate::truncate::TruncationPolicy;
 use crate::turn_metadata::TurnMetadataState;
 use crate::util::error_or_panic;
-use crate::ws_version_from_features;
 use async_channel::Receiver;
 use async_channel::Sender;
 use chrono::Local;
 use chrono::Utc;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
-use codex_environment::Environment;
+use codex_exec_server::Environment;
+use codex_features::FEATURES;
+use codex_features::Feature;
+use codex_features::unstable_features_warning_event;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
@@ -88,6 +86,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
+use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
@@ -117,6 +116,7 @@ use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
+use codex_terminal_detection::user_agent;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
 use codex_utils_stream_parser::ProposedPlanSegment;
@@ -140,6 +140,7 @@ use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use toml::Value as TomlValue;
 use tracing::Instrument;
 use tracing::debug;
 use tracing::debug_span;
@@ -185,7 +186,39 @@ mod rollout_reconstruction_tests;
 pub enum SteerInputError {
     NoActiveTurn(Vec<UserInput>),
     ExpectedTurnMismatch { expected: String, actual: String },
+    ActiveTurnNotSteerable { turn_kind: NonSteerableTurnKind },
     EmptyInput,
+}
+
+impl SteerInputError {
+    fn to_error_event(&self) -> ErrorEvent {
+        match self {
+            Self::NoActiveTurn(_) => ErrorEvent {
+                message: "no active turn to steer".to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            },
+            Self::ExpectedTurnMismatch { expected, actual } => ErrorEvent {
+                message: format!("expected active turn id `{expected}` but found `{actual}`"),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            },
+            Self::ActiveTurnNotSteerable { turn_kind } => {
+                let turn_kind_label = match turn_kind {
+                    NonSteerableTurnKind::Review => "review",
+                    NonSteerableTurnKind::Compact => "compact",
+                };
+                ErrorEvent {
+                    message: format!("cannot steer a {turn_kind_label} turn"),
+                    codex_error_info: Some(CodexErrorInfo::ActiveTurnNotSteerable {
+                        turn_kind: *turn_kind,
+                    }),
+                }
+            }
+            Self::EmptyInput => ErrorEvent {
+                message: "input must not be empty".to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            },
+        }
+    }
 }
 
 /// Notes from the previous real user turn.
@@ -202,10 +235,13 @@ pub(crate) struct PreviousTurnSettings {
 
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
-use crate::file_watcher::FileWatcher;
-use crate::file_watcher::FileWatcherEvent;
-use crate::git_info::get_git_repo_root;
 use crate::guardian::GuardianReviewSessionManager;
+use crate::hook_runtime::PendingInputHookDisposition;
+use crate::hook_runtime::inspect_pending_input;
+use crate::hook_runtime::record_additional_contexts;
+use crate::hook_runtime::record_pending_input;
+use crate::hook_runtime::run_pending_session_start_hooks;
+use crate::hook_runtime::run_user_prompt_submit_hooks;
 use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpManager;
@@ -283,6 +319,8 @@ use crate::skills::injection::ToolMentionKind;
 use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::tool_kind_for_path;
 use crate::skills::resolve_skill_dependencies_for_turn;
+use crate::skills_watcher::SkillsWatcher;
+use crate::skills_watcher::SkillsWatcherEvent;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
@@ -311,6 +349,7 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_async_utils::OrCancelExt;
+use codex_git_utils::get_git_repo_root;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_otel::metrics::names::THREAD_STARTED_METRIC;
@@ -326,6 +365,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::NonSteerableTurnKind;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_readiness::Readiness;
@@ -363,7 +403,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
-    pub(crate) file_watcher: Arc<FileWatcher>,
+    pub(crate) skills_watcher: Arc<SkillsWatcher>,
     pub(crate) conversation_history: InitialHistory,
     pub(crate) session_source: SessionSource,
     pub(crate) agent_control: AgentControl,
@@ -371,6 +411,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) persist_extended_history: bool,
     pub(crate) metrics_service_name: Option<String>,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+    pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
 }
@@ -415,7 +456,7 @@ impl Codex {
             skills_manager,
             plugins_manager,
             mcp_manager,
-            file_watcher,
+            skills_watcher,
             conversation_history,
             session_source,
             agent_control,
@@ -424,6 +465,7 @@ impl Codex {
             metrics_service_name,
             inherited_shell_snapshot,
             user_shell_override,
+            inherited_exec_policy,
             parent_trace: _,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -480,11 +522,15 @@ impl Codex {
             // Guardian review should rely on the built-in shell safety checks,
             // not on caller-provided exec-policy rules that could shape the
             // reviewer or silently auto-approve commands.
-            ExecPolicyManager::default()
+            Arc::new(ExecPolicyManager::default())
+        } else if let Some(exec_policy) = &inherited_exec_policy {
+            Arc::clone(exec_policy)
         } else {
-            ExecPolicyManager::load(&config.config_layer_stack)
-                .await
-                .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?
+            Arc::new(
+                ExecPolicyManager::load(&config.config_layer_stack)
+                    .await
+                    .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?,
+            )
         };
 
         let config = Arc::new(config);
@@ -598,7 +644,7 @@ impl Codex {
             skills_manager,
             plugins_manager,
             mcp_manager.clone(),
-            file_watcher,
+            skills_watcher,
             agent_control,
         )
         .await
@@ -752,6 +798,7 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    idle_pending_input: Mutex<Vec<ResponseInputItem>>,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
@@ -763,6 +810,7 @@ pub(crate) struct TurnSkillsContext {
     pub(crate) outcome: Arc<SkillLoadOutcome>,
     pub(crate) implicit_invocation_seen_skills: Arc<Mutex<HashSet<String>>>,
 }
+
 impl TurnSkillsContext {
     pub(crate) fn new(outcome: Arc<SkillLoadOutcome>) -> Self {
         Self {
@@ -1249,13 +1297,13 @@ impl Session {
         self.out_of_band_elicitation_paused.send_replace(paused);
     }
 
-    fn start_file_watcher_listener(self: &Arc<Self>) {
-        let mut rx = self.services.file_watcher.subscribe();
+    fn start_skills_watcher_listener(self: &Arc<Self>) {
+        let mut rx = self.services.skills_watcher.subscribe();
         let weak_sess = Arc::downgrade(self);
         tokio::spawn(async move {
             loop {
                 match rx.recv().await {
-                    Ok(FileWatcherEvent::SkillsChanged { .. }) => {
+                    Ok(SkillsWatcherEvent::SkillsChanged { .. }) => {
                         let Some(sess) = weak_sess.upgrade() else {
                             break;
                         };
@@ -1274,6 +1322,7 @@ impl Session {
 
     #[allow(clippy::too_many_arguments)]
     fn make_turn_context(
+        conversation_id: ThreadId,
         auth_manager: Option<Arc<AuthManager>>,
         session_telemetry: &SessionTelemetry,
         provider: ModelProviderInfo,
@@ -1324,6 +1373,7 @@ impl Session {
 
         let cwd = session_configuration.cwd.clone();
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
+            conversation_id.to_string(),
             sub_id.clone(),
             cwd.clone(),
             session_configuration.sandbox_policy.get(),
@@ -1381,7 +1431,7 @@ impl Session {
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
-        exec_policy: ExecPolicyManager,
+        exec_policy: Arc<ExecPolicyManager>,
         tx_event: Sender<Event>,
         agent_status: watch::Sender<AgentStatus>,
         initial_history: InitialHistory,
@@ -1389,7 +1439,7 @@ impl Session {
         skills_manager: Arc<SkillsManager>,
         plugins_manager: Arc<PluginsManager>,
         mcp_manager: Arc<McpManager>,
-        file_watcher: Arc<FileWatcher>,
+        skills_watcher: Arc<SkillsWatcher>,
         agent_control: AgentControl,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
@@ -1554,7 +1604,19 @@ impl Session {
                 }),
             });
         }
-        maybe_push_unstable_features_warning(&config, &mut post_session_configured_events);
+        let config_path = config.codex_home.join(CONFIG_TOML_FILE);
+        if let Some(event) = unstable_features_warning_event(
+            config
+                .config_layer_stack
+                .effective_config()
+                .get("features")
+                .and_then(TomlValue::as_table),
+            config.suppress_unstable_features_warning,
+            &config.features,
+            &config_path.display().to_string(),
+        ) {
+            post_session_configured_events.push(event);
+        }
         if config.permissions.approval_policy.value() == AskForApproval::OnFailure {
             post_session_configured_events.push(Event {
                 id: "".to_owned(),
@@ -1569,7 +1631,7 @@ impl Session {
         let account_id = auth.and_then(CodexAuth::get_account_id);
         let account_email = auth.and_then(CodexAuth::get_account_email);
         let originator = crate::default_client::originator().value;
-        let terminal_type = terminal::user_agent();
+        let terminal_type = user_agent();
         let session_model = session_configuration.collaboration_mode.model().to_string();
         let auth_env_telemetry = collect_auth_env_telemetry(
             &session_configuration.provider,
@@ -1796,7 +1858,7 @@ impl Session {
             skills_manager,
             plugins_manager: Arc::clone(&plugins_manager),
             mcp_manager: Arc::clone(&mcp_manager),
-            file_watcher,
+            skills_watcher,
             agent_control,
             network_proxy,
             network_approval: Arc::clone(&network_approval),
@@ -1807,7 +1869,6 @@ impl Session {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
-                ws_version_from_features(config.as_ref()),
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Self::build_model_client_beta_features_header(config.as_ref()),
@@ -1815,7 +1876,9 @@ impl Session {
             code_mode_service: crate::tools::code_mode::CodeModeService::new(
                 config.js_repl_node_path.clone(),
             ),
-            environment: Arc::new(Environment),
+            environment: Arc::new(
+                Environment::create(config.experimental_exec_server_url.clone()).await?,
+            ),
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
@@ -1834,6 +1897,7 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
+            idle_pending_input: Mutex::new(Vec::new()),
             guardian_review_session: GuardianReviewSessionManager::default(),
             services,
             js_repl,
@@ -1873,7 +1937,7 @@ impl Session {
         }
 
         // Start the watcher after SessionConfigured so it cannot emit earlier events.
-        sess.start_file_watcher_listener();
+        sess.start_skills_watcher_listener();
         // Construct sandbox_state before MCP startup so it can be sent to each
         // MCP server immediately after it becomes ready (avoiding blocking).
         let sandbox_state = SandboxState {
@@ -2381,6 +2445,7 @@ impl Session {
                 .skills_for_config(&per_turn_config),
         );
         let mut turn_context: TurnContext = Self::make_turn_context(
+            self.conversation_id,
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.session_telemetry,
             session_configuration.provider.clone(),
@@ -3410,6 +3475,7 @@ impl Session {
             DeveloperInstructions::from_policy(
                 turn_context.sandbox_policy.get(),
                 turn_context.approval_policy.value(),
+                turn_context.config.approvals_reviewer,
                 self.services.exec_policy.current().as_ref(),
                 &turn_context.cwd,
                 turn_context
@@ -3829,12 +3895,27 @@ impl Session {
             });
         }
 
+        match active_turn.tasks.first().map(|(_, task)| task.kind) {
+            Some(crate::state::TaskKind::Regular) => {}
+            Some(crate::state::TaskKind::Review) => {
+                return Err(SteerInputError::ActiveTurnNotSteerable {
+                    turn_kind: NonSteerableTurnKind::Review,
+                });
+            }
+            Some(crate::state::TaskKind::Compact) => {
+                return Err(SteerInputError::ActiveTurnNotSteerable {
+                    turn_kind: NonSteerableTurnKind::Compact,
+                });
+            }
+            None => return Err(SteerInputError::NoActiveTurn(input)),
+        }
+
         let mut turn_state = active_turn.turn_state.lock().await;
         turn_state.push_pending_input(input.into());
         Ok(active_turn_id.clone())
     }
 
-    /// Returns the input if there was no task running to inject into
+    /// Returns the input if there was no task running to inject into.
     pub async fn inject_response_items(
         &self,
         input: Vec<ResponseInputItem>,
@@ -3852,6 +3933,18 @@ impl Session {
         }
     }
 
+    pub async fn prepend_pending_input(&self, input: Vec<ResponseInputItem>) -> Result<(), ()> {
+        let mut active = self.active_turn.lock().await;
+        match active.as_mut() {
+            Some(at) => {
+                let mut ts = at.turn_state.lock().await;
+                ts.prepend_pending_input(input);
+                Ok(())
+            }
+            None => Err(()),
+        }
+    }
+
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
@@ -3861,6 +3954,41 @@ impl Session {
             }
             None => Vec::with_capacity(0),
         }
+    }
+
+    pub(crate) async fn pending_input_snapshot(&self) -> Vec<ResponseInputItem> {
+        let active = self.active_turn.lock().await;
+        match active.as_ref() {
+            Some(at) => {
+                let ts = at.turn_state.lock().await;
+                ts.pending_input_snapshot()
+            }
+            None => Vec::with_capacity(0),
+        }
+    }
+
+    /// Queue response items to be injected into the next active turn created for this session.
+    pub(crate) async fn queue_response_items_for_next_turn(&self, items: Vec<ResponseInputItem>) {
+        if items.is_empty() {
+            return;
+        }
+
+        let mut idle_pending_input = self.idle_pending_input.lock().await;
+        idle_pending_input.extend(items);
+    }
+
+    pub(crate) async fn take_queued_response_items_for_next_turn(&self) -> Vec<ResponseInputItem> {
+        std::mem::take(&mut *self.idle_pending_input.lock().await)
+    }
+
+    pub(crate) async fn queued_response_items_for_next_turn_snapshot(
+        &self,
+    ) -> Vec<ResponseInputItem> {
+        self.idle_pending_input.lock().await.clone()
+    }
+
+    pub(crate) async fn has_queued_response_items_for_next_turn(&self) -> bool {
+        !self.idle_pending_input.lock().await.is_empty()
     }
 
     pub async fn has_pending_input(&self) -> bool {
@@ -3974,6 +4102,11 @@ impl Session {
             guard.clone()
         };
         recorder.map(|recorder| recorder.rollout_path().to_path_buf())
+    }
+
+    pub(crate) async fn hook_transcript_path(&self) -> Option<PathBuf> {
+        self.ensure_rollout_materialized().await;
+        self.current_rollout_path().await
     }
 
     pub(crate) async fn take_pending_session_start_source(
@@ -4190,6 +4323,10 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
                     false
                 }
+                Op::InterAgentCommunication { communication } => {
+                    handlers::inter_agent_communication(&sess, sub.id.clone(), communication).await;
+                    false
+                }
                 Op::ExecApproval {
                     id: approval_id,
                     turn_id,
@@ -4369,6 +4506,7 @@ mod handlers {
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::InterAgentCommunication;
     use codex_protocol::protocol::ListCustomPromptsResponseEvent;
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
@@ -4429,6 +4567,7 @@ mod handlers {
             Op::UserTurn {
                 cwd,
                 approval_policy,
+                approvals_reviewer,
                 sandbox_policy,
                 model,
                 effort,
@@ -4454,7 +4593,7 @@ mod handlers {
                     SessionSettingsUpdate {
                         cwd: Some(cwd),
                         approval_policy: Some(approval_policy),
-                        approvals_reviewer: None,
+                        approvals_reviewer,
                         sandbox_policy: Some(sandbox_policy),
                         windows_sandbox_level: None,
                         collaboration_mode,
@@ -4479,26 +4618,58 @@ mod handlers {
             _ => unreachable!(),
         };
 
-        let Ok(current_context) = sess.new_turn_with_sub_id(sub_id, updates).await else {
+        let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
             // new_turn_with_sub_id already emits the error event.
             return;
         };
         sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
             .await;
-        current_context.session_telemetry.user_prompt(&items);
-
-        // Attempt to inject input into current task.
-        if let Err(SteerInputError::NoActiveTurn(items)) =
-            sess.steer_input(items, /*expected_turn_id*/ None).await
+        match sess
+            .steer_input(items.clone(), /*expected_turn_id*/ None)
+            .await
         {
-            sess.refresh_mcp_servers_if_requested(&current_context)
+            Ok(_) => current_context.session_telemetry.user_prompt(&items),
+            Err(SteerInputError::NoActiveTurn(items)) => {
+                current_context.session_telemetry.user_prompt(&items);
+                sess.refresh_mcp_servers_if_requested(&current_context)
+                    .await;
+                sess.spawn_task(
+                    Arc::clone(&current_context),
+                    items,
+                    crate::tasks::RegularTask::new(),
+                )
                 .await;
-            sess.spawn_task(
-                Arc::clone(&current_context),
-                items,
-                crate::tasks::RegularTask::new(),
-            )
+            }
+            Err(err) => {
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(err.to_error_event()),
+                })
+                .await;
+            }
+        }
+    }
+
+    /// Records an inter-agent assistant envelope and, when requested, wakes the recipient by
+    /// starting a regular turn if the session is currently idle.
+    pub async fn inter_agent_communication(
+        sess: &Arc<Session>,
+        sub_id: String,
+        communication: InterAgentCommunication,
+    ) {
+        let pending_item = communication.to_response_input_item();
+        if let Ok(()) = sess.inject_response_items(vec![pending_item.clone()]).await {
+            return;
+        }
+
+        sess.queue_response_items_for_next_turn(vec![pending_item])
             .await;
+        if communication.trigger_turn {
+            let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
+            sess.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
+                .await;
+            sess.spawn_task(turn_context, Vec::new(), crate::tasks::RegularTask::new())
+                .await;
         }
     }
 
@@ -4754,9 +4925,12 @@ mod handlers {
         };
 
         let skills_manager = &sess.services.skills_manager;
+        let config = sess.get_config().await;
         let mut skills = Vec::new();
         for cwd in cwds {
-            let outcome = skills_manager.skills_for_cwd(&cwd, force_reload).await;
+            let outcome = skills_manager
+                .skills_for_cwd(&cwd, config.as_ref(), force_reload)
+                .await;
             let errors = super::errors_to_info(&outcome.errors);
             let skills_metadata = super::skills_to_info(&outcome.skills, &outcome.disabled_paths);
             skills.push(SkillsListEntry {
@@ -5127,8 +5301,8 @@ async fn spawn_review_thread(
         .await;
     // For reviews, disable web_search and view_image regardless of global settings.
     let mut review_features = sess.features.clone();
-    let _ = review_features.disable(crate::features::Feature::WebSearchRequest);
-    let _ = review_features.disable(crate::features::Feature::WebSearchCached);
+    let _ = review_features.disable(Feature::WebSearchRequest);
+    let _ = review_features.disable(Feature::WebSearchCached);
     let review_web_search_mode = WebSearchMode::Disabled;
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &review_model_info,
@@ -5187,6 +5361,7 @@ async fn spawn_review_thread(
     let per_turn_config = Arc::new(per_turn_config);
     let review_turn_id = sub_id.to_string();
     let turn_metadata_state = Arc::new(TurnMetadataState::new(
+        sess.conversation_id.to_string(),
         review_turn_id.clone(),
         parent_turn_context.cwd.clone(),
         parent_turn_context.sandbox_policy.get(),
@@ -5333,7 +5508,7 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
-    if input.is_empty() {
+    if input.is_empty() && !sess.has_pending_input().await {
         return None;
     }
 
@@ -5460,20 +5635,6 @@ pub(crate) async fn run_turn(
         &available_connectors,
         &skill_name_counts_lower,
     ));
-    // Explicit plugin mentions can make a plugin's enabled apps callable for
-    // this turn without persisting those connectors as sticky user selections.
-    let mut turn_enabled_connectors = explicitly_enabled_connectors.clone();
-    turn_enabled_connectors.extend(
-        mentioned_plugins
-            .iter()
-            .flat_map(|plugin| plugin.app_connector_ids.iter())
-            .map(|connector_id| connector_id.0.clone())
-            .filter(|connector_id| {
-                available_connectors
-                    .iter()
-                    .any(|connector| connector.is_enabled && connector.id == *connector_id)
-            }),
-    );
     let connector_names_by_id = available_connectors
         .iter()
         .map(|connector| (connector.id.as_str(), connector.name.as_str()))
@@ -5488,6 +5649,34 @@ pub(crate) async fn run_turn(
             invocation_type: Some(InvocationType::Explicit),
         })
         .collect::<Vec<_>>();
+
+    if run_pending_session_start_hooks(&sess, &turn_context).await {
+        return None;
+    }
+    let additional_contexts = if input.is_empty() {
+        Vec::new()
+    } else {
+        let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
+        let response_item: ResponseItem = initial_input_for_turn.clone().into();
+        let user_prompt_submit_outcome = run_user_prompt_submit_hooks(
+            &sess,
+            &turn_context,
+            UserMessageItem::new(&input).message(),
+        )
+        .await;
+        if user_prompt_submit_outcome.should_stop {
+            record_additional_contexts(
+                &sess,
+                &turn_context,
+                user_prompt_submit_outcome.additional_contexts,
+            )
+            .await;
+            return None;
+        }
+        sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
+            .await;
+        user_prompt_submit_outcome.additional_contexts
+    };
     sess.services
         .analytics_events_client
         .track_app_mentioned(tracking.clone(), mentioned_app_invocations);
@@ -5498,19 +5687,17 @@ pub(crate) async fn run_turn(
     }
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
-
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-    let response_item: ResponseItem = initial_input_for_turn.clone().into();
-    sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
+    record_additional_contexts(&sess, &turn_context, additional_contexts).await;
+    if !input.is_empty() {
+        // Track the previous-turn baseline from the regular user-turn path only so
+        // standalone tasks (compact/shell/review/undo) cannot suppress future
+        // model/realtime injections.
+        sess.set_previous_turn_settings(Some(PreviousTurnSettings {
+            model: turn_context.model_info.slug.clone(),
+            realtime_active: Some(turn_context.realtime_active),
+        }))
         .await;
-    // Track the previous-turn baseline from the regular user-turn path only so
-    // standalone tasks (compact/shell/review/undo) cannot suppress future
-    // model/realtime injections.
-    sess.set_previous_turn_settings(Some(PreviousTurnSettings {
-        model: turn_context.model_info.slug.clone(),
-        realtime_active: Some(turn_context.realtime_active),
-    }))
-    .await;
+    }
 
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
@@ -5521,6 +5708,7 @@ pub(crate) async fn run_turn(
             .await;
     }
 
+    let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
     sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
         .await;
     let mut last_agent_message: Option<String> = None;
@@ -5536,83 +5724,53 @@ pub(crate) async fn run_turn(
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
 
     loop {
-        if let Some(session_start_source) = sess.take_pending_session_start_source().await {
-            let session_start_permission_mode = match turn_context.approval_policy.value() {
-                AskForApproval::Never => "bypassPermissions",
-                AskForApproval::UnlessTrusted
-                | AskForApproval::OnFailure
-                | AskForApproval::OnRequest
-                | AskForApproval::Granular(_) => "default",
-            }
-            .to_string();
-            let session_start_request = codex_hooks::SessionStartRequest {
-                session_id: sess.conversation_id,
-                cwd: turn_context.cwd.clone(),
-                transcript_path: sess.current_rollout_path().await,
-                model: turn_context.model_info.slug.clone(),
-                permission_mode: session_start_permission_mode,
-                source: session_start_source,
-            };
-            for run in sess.hooks().preview_session_start(&session_start_request) {
-                sess.send_event(
-                    &turn_context,
-                    EventMsg::HookStarted(crate::protocol::HookStartedEvent {
-                        turn_id: Some(turn_context.sub_id.clone()),
-                        run,
-                    }),
-                )
-                .await;
-            }
-            let session_start_outcome = sess
-                .hooks()
-                .run_session_start(session_start_request, Some(turn_context.sub_id.clone()))
-                .await;
-            for completed in session_start_outcome.hook_events {
-                sess.send_event(&turn_context, EventMsg::HookCompleted(completed))
-                    .await;
-            }
-            if session_start_outcome.should_stop {
-                break;
-            }
-            if let Some(additional_context) = session_start_outcome.additional_context {
-                let developer_message: ResponseItem =
-                    DeveloperInstructions::new(additional_context).into();
-                sess.record_conversation_items(
-                    &turn_context,
-                    std::slice::from_ref(&developer_message),
-                )
-                .await;
-            }
+        if run_pending_session_start_hooks(&sess, &turn_context).await {
+            break;
         }
 
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
-        let pending_response_items = sess
-            .get_pending_input()
-            .await
-            .into_iter()
-            .map(ResponseItem::from)
-            .collect::<Vec<ResponseItem>>();
+        let pending_input = sess.get_pending_input().await;
 
-        if !pending_response_items.is_empty() {
-            for response_item in pending_response_items {
-                if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
-                    // todo(aibrahim): move pending input to be UserInput only to keep TextElements. context: https://github.com/openai/codex/pull/10656#discussion_r2765522480
-                    sess.record_user_prompt_and_emit_turn_item(
-                        turn_context.as_ref(),
-                        &user_message.content,
-                        response_item,
-                    )
-                    .await;
-                } else {
-                    sess.record_conversation_items(
-                        &turn_context,
-                        std::slice::from_ref(&response_item),
-                    )
-                    .await;
+        let mut blocked_pending_input = false;
+        let mut blocked_pending_input_contexts = Vec::new();
+        let mut requeued_pending_input = false;
+        let mut accepted_pending_input = Vec::new();
+        if !pending_input.is_empty() {
+            let mut pending_input_iter = pending_input.into_iter();
+            while let Some(pending_input_item) = pending_input_iter.next() {
+                match inspect_pending_input(&sess, &turn_context, pending_input_item).await {
+                    PendingInputHookDisposition::Accepted(pending_input) => {
+                        accepted_pending_input.push(*pending_input);
+                    }
+                    PendingInputHookDisposition::Blocked {
+                        additional_contexts,
+                    } => {
+                        let remaining_pending_input = pending_input_iter.collect::<Vec<_>>();
+                        if !remaining_pending_input.is_empty() {
+                            let _ = sess.prepend_pending_input(remaining_pending_input).await;
+                            requeued_pending_input = true;
+                        }
+                        blocked_pending_input_contexts = additional_contexts;
+                        blocked_pending_input = true;
+                        break;
+                    }
                 }
             }
+        }
+
+        let has_accepted_pending_input = !accepted_pending_input.is_empty();
+        for pending_input in accepted_pending_input {
+            record_pending_input(&sess, &turn_context, pending_input).await;
+        }
+        record_additional_contexts(&sess, &turn_context, blocked_pending_input_contexts).await;
+
+        if blocked_pending_input && !has_accepted_pending_input {
+            if requeued_pending_input {
+                continue;
+            }
+            break;
         }
 
         // Construct the input that we will send to the model.
@@ -5638,7 +5796,7 @@ pub(crate) async fn run_turn(
             &mut client_session,
             turn_metadata_header.as_deref(),
             sampling_request_input,
-            &turn_enabled_connectors,
+            &explicitly_enabled_connectors,
             skills_outcome,
             &mut server_model_warning_emitted_for_turn,
             cancellation_token.child_token(),
@@ -5695,7 +5853,7 @@ pub(crate) async fn run_turn(
                         session_id: sess.conversation_id,
                         turn_id: turn_context.sub_id.clone(),
                         cwd: turn_context.cwd.clone(),
-                        transcript_path: sess.current_rollout_path().await,
+                        transcript_path: sess.hook_transcript_path().await,
                         model: turn_context.model_info.slug.clone(),
                         permission_mode: stop_hook_permission_mode,
                         stop_hook_active,
@@ -5717,13 +5875,12 @@ pub(crate) async fn run_turn(
                             .await;
                     }
                     if stop_outcome.should_block {
-                        if let Some(continuation_prompt) = stop_outcome.continuation_prompt.clone()
+                        if let Some(hook_prompt_message) =
+                            build_hook_prompt_message(&stop_outcome.continuation_fragments)
                         {
-                            let developer_message: ResponseItem =
-                                DeveloperInstructions::new(continuation_prompt).into();
                             sess.record_conversation_items(
                                 &turn_context,
-                                std::slice::from_ref(&developer_message),
+                                std::slice::from_ref(&hook_prompt_message),
                             )
                             .await;
                             stop_hook_active = true;
@@ -6239,10 +6396,7 @@ async fn run_sampling_request(
             // transient reconnect messages. In debug builds, keep full visibility for diagnosis.
             let report_error = retries > 1
                 || cfg!(debug_assertions)
-                || !sess
-                    .services
-                    .model_client
-                    .responses_websocket_enabled(&turn_context.model_info);
+                || !sess.services.model_client.responses_websocket_enabled();
             if report_error {
                 // Surface retry information to any UI/front‑end so the
                 // user understands what is happening instead of staring
@@ -6845,6 +6999,7 @@ async fn emit_agent_message_in_plan_mode(
                     id: agent_message_id.clone(),
                     content: Vec::new(),
                     phase: None,
+                    memory_citation: None,
                 })
             });
         sess.emit_turn_item_started(turn_context, &start_item).await;

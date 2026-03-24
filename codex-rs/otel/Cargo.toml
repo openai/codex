@@ -24,6 +24,7 @@ chrono = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-api = { workspace = true }
+codex-app-server-protocol = { workspace = true }
 codex-protocol = { workspace = true }
 eventsource-stream = { workspace = true }
 gethostname = { workspace = true }

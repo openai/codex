@@ -75,17 +75,37 @@ impl RequestContext {
     pub(crate) fn span(&self) -> Span {
         self.span.clone()
     }
+
+    fn record_turn_id(&self, turn_id: &str) {
+        self.span.record("turn.id", turn_id);
+    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) enum OutgoingEnvelope {
     ToConnection {
         connection_id: ConnectionId,
         message: OutgoingMessage,
+        write_complete_tx: Option<oneshot::Sender<()>>,
     },
     Broadcast {
         message: OutgoingMessage,
     },
+}
+
+#[derive(Debug)]
+pub(crate) struct QueuedOutgoingMessage {
+    pub(crate) message: OutgoingMessage,
+    pub(crate) write_complete_tx: Option<oneshot::Sender<()>>,
+}
+
+impl QueuedOutgoingMessage {
+    pub(crate) fn new(message: OutgoingMessage) -> Self {
+        Self {
+            message,
+            write_complete_tx: None,
+        }
+    }
 }
 
 /// Sends messages to the client and manages request callbacks.
@@ -217,6 +237,17 @@ impl OutgoingMessageSender {
             .and_then(RequestContext::request_trace)
     }
 
+    pub(crate) async fn record_request_turn_id(
+        &self,
+        request_id: &ConnectionRequestId,
+        turn_id: &str,
+    ) {
+        let request_contexts = self.request_contexts.lock().await;
+        if let Some(request_context) = request_contexts.get(request_id) {
+            request_context.record_turn_id(turn_id);
+        }
+    }
+
     async fn take_request_context(
         &self,
         request_id: &ConnectionRequestId,
@@ -284,6 +315,7 @@ impl OutgoingMessageSender {
                         .send(OutgoingEnvelope::ToConnection {
                             connection_id: *connection_id,
                             message: outgoing_message.clone(),
+                            write_complete_tx: None,
                         })
                         .await
                     {
@@ -318,6 +350,7 @@ impl OutgoingMessageSender {
                 .send(OutgoingEnvelope::ToConnection {
                     connection_id,
                     message: OutgoingMessage::Request(request),
+                    write_complete_tx: None,
                 })
                 .await
             {
@@ -504,6 +537,7 @@ impl OutgoingMessageSender {
                 .send(OutgoingEnvelope::ToConnection {
                     connection_id: *connection_id,
                     message: outgoing_message.clone(),
+                    write_complete_tx: None,
                 })
                 .await
             {
@@ -512,36 +546,26 @@ impl OutgoingMessageSender {
         }
     }
 
-    pub(crate) async fn send_notification_to_connections(
+    pub(crate) async fn send_server_notification_to_connection_and_wait(
         &self,
-        connection_ids: &[ConnectionId],
-        notification: OutgoingNotification,
+        connection_id: ConnectionId,
+        notification: ServerNotification,
     ) {
-        let outgoing_message = OutgoingMessage::Notification(notification);
-        if connection_ids.is_empty() {
-            if let Err(err) = self
-                .sender
-                .send(OutgoingEnvelope::Broadcast {
-                    message: outgoing_message,
-                })
-                .await
-            {
-                warn!("failed to send notification to client: {err:?}");
-            }
-            return;
+        tracing::trace!("app-server event: {notification}");
+        let outgoing_message = OutgoingMessage::AppServerNotification(notification);
+        let (write_complete_tx, write_complete_rx) = oneshot::channel();
+        if let Err(err) = self
+            .sender
+            .send(OutgoingEnvelope::ToConnection {
+                connection_id,
+                message: outgoing_message,
+                write_complete_tx: Some(write_complete_tx),
+            })
+            .await
+        {
+            warn!("failed to send server notification to client: {err:?}");
         }
-        for connection_id in connection_ids {
-            if let Err(err) = self
-                .sender
-                .send(OutgoingEnvelope::ToConnection {
-                    connection_id: *connection_id,
-                    message: outgoing_message.clone(),
-                })
-                .await
-            {
-                warn!("failed to send notification to client: {err:?}");
-            }
-        }
+        let _ = write_complete_rx.await;
     }
 
     pub(crate) async fn send_error(
@@ -583,6 +607,7 @@ impl OutgoingMessageSender {
         let send_fut = self.sender.send(OutgoingEnvelope::ToConnection {
             connection_id,
             message,
+            write_complete_tx: None,
         });
         let send_result = if let Some(request_context) = request_context {
             send_fut.instrument(request_context.span()).await
@@ -601,19 +626,11 @@ impl OutgoingMessageSender {
 #[serde(untagged)]
 pub(crate) enum OutgoingMessage {
     Request(ServerRequest),
-    Notification(OutgoingNotification),
     /// AppServerNotification is specific to the case where this is run as an
     /// "app server" as opposed to an MCP server.
     AppServerNotification(ServerNotification),
     Response(OutgoingResponse),
     Error(OutgoingError),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub(crate) struct OutgoingNotification {
-    pub method: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub params: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -843,6 +860,7 @@ mod tests {
             OutgoingEnvelope::ToConnection {
                 connection_id,
                 message,
+                ..
             } => {
                 assert_eq!(connection_id, ConnectionId(42));
                 let OutgoingMessage::Response(response) = message else {
@@ -905,6 +923,7 @@ mod tests {
             OutgoingEnvelope::ToConnection {
                 connection_id,
                 message,
+                ..
             } => {
                 assert_eq!(connection_id, ConnectionId(9));
                 let OutgoingMessage::Error(outgoing_error) = message else {
@@ -915,6 +934,50 @@ mod tests {
             }
             other => panic!("expected targeted error envelope, got: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn send_server_notification_to_connection_and_wait_tracks_write_completion() {
+        let (tx, mut rx) = mpsc::channel::<OutgoingEnvelope>(4);
+        let outgoing = OutgoingMessageSender::new(tx);
+        let send_task = tokio::spawn(async move {
+            outgoing
+                .send_server_notification_to_connection_and_wait(
+                    ConnectionId(42),
+                    ServerNotification::ModelRerouted(ModelReroutedNotification {
+                        thread_id: "thread-1".to_string(),
+                        turn_id: "turn-1".to_string(),
+                        from_model: "gpt-5.3-codex".to_string(),
+                        to_model: "gpt-5.2".to_string(),
+                        reason: ModelRerouteReason::HighRiskCyberActivity,
+                    }),
+                )
+                .await
+        });
+
+        let envelope = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("should receive envelope before timeout")
+            .expect("channel should contain one message");
+        let OutgoingEnvelope::ToConnection {
+            connection_id,
+            message,
+            write_complete_tx,
+        } = envelope
+        else {
+            panic!("expected targeted server notification envelope");
+        };
+        assert_eq!(connection_id, ConnectionId(42));
+        assert!(matches!(message, OutgoingMessage::AppServerNotification(_)));
+        write_complete_tx
+            .expect("write completion sender should be attached")
+            .send(())
+            .expect("receiver should still be waiting");
+
+        timeout(Duration::from_secs(1), send_task)
+            .await
+            .expect("send task should finish after write completion is signaled")
+            .expect("send task should not panic");
     }
 
     #[tokio::test]
