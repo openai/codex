@@ -671,7 +671,6 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
-
     fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
         self.websocket_session.last_request = None;

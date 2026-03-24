@@ -257,7 +257,7 @@ fn for_prompt_preserves_inter_agent_assistant_messages() {
     let item = inter_agent_assistant_msg("continue");
     let history = create_history_with_items(vec![item.clone()]);
 
-    assert_eq!(history.raw_items(), &[item.clone()]);
+    assert_eq!(history.raw_items(), std::slice::from_ref(&item));
     assert_eq!(history.for_prompt(&default_input_modalities()), vec![item]);
 }
 
