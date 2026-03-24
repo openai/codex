@@ -8008,7 +8008,7 @@ async fn plugins_popup_refresh_replaces_selection_with_first_row() {
         "expected refresh to rebuild the popup from the new first row, got:\n{after}"
     );
     assert!(
-        after.contains("Slack · ChatGPT Marketplace"),
+        after.contains("Slack"),
         "expected refreshed popup to include the updated plugin list, got:\n{after}"
     );
 }
@@ -8044,7 +8044,7 @@ async fn plugins_popup_refreshes_installed_counts_after_install() {
         "expected initial installed count before refresh, got:\n{before}"
     );
     assert!(
-        before.contains("Can be installed"),
+        before.contains("Available"),
         "expected pre-install popup copy before refresh, got:\n{before}"
     );
 
@@ -8077,7 +8077,7 @@ async fn plugins_popup_refreshes_installed_counts_after_install() {
         "expected /plugins to refresh installed counts after install, got:\n{after}"
     );
     assert!(
-        after.contains("Installed. Press Enter to view plugin details."),
+        after.contains("Installed · Press Enter to view plugin details."),
         "expected refreshed selected row copy to reflect the installed plugin state, got:\n{after}"
     );
 }
@@ -8125,8 +8125,7 @@ async fn plugins_popup_search_filters_visible_rows_snapshot() {
     let popup = render_bottom_popup(&chat, 100);
     assert_snapshot!("plugins_popup_search_filtered", popup);
     assert!(
-        !popup.contains("Calendar · ChatGPT Marketplace")
-            && !popup.contains("Drive · ChatGPT Marketplace"),
+        !popup.contains("Calendar") && !popup.contains("Drive"),
         "expected search to leave only matching rows visible, got:\n{popup}"
     );
 }
@@ -8178,8 +8177,7 @@ async fn plugins_popup_search_no_matches_and_backspace_restores_results() {
 
     let restored = render_bottom_popup(&chat, 100);
     assert!(
-        restored.contains("Calendar · ChatGPT Marketplace")
-            && restored.contains("Slack · ChatGPT Marketplace"),
+        restored.contains("Calendar") && restored.contains("Slack"),
         "expected clearing the query to restore the plugin rows, got:\n{restored}"
     );
     assert!(
