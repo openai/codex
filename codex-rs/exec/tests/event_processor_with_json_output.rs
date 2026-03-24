@@ -1424,6 +1424,46 @@ fn turn_completion_preserves_streamed_final_message_when_turn_items_are_empty() 
 }
 
 #[test]
+fn failed_turn_clears_stale_final_message() {
+    let mut processor = EventProcessorWithJsonOutput::new(None);
+
+    let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
+            item: ThreadItem::AgentMessage {
+                id: "msg-1".to_string(),
+                text: "partial answer".to_string(),
+                phase: None,
+                memory_citation: None,
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        },
+    ));
+
+    assert_eq!(collected.status, CodexStatus::Running);
+    assert_eq!(processor.final_message(), Some("partial answer"));
+
+    let collected = processor.collect_thread_events(ServerNotification::TurnCompleted(
+        TurnCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: Turn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: TurnStatus::Failed,
+                error: Some(TurnError {
+                    message: "turn failed".to_string(),
+                    additional_details: None,
+                    codex_error_info: None,
+                }),
+            },
+        },
+    ));
+
+    assert_eq!(collected.status, CodexStatus::InitiateShutdown);
+    assert_eq!(processor.final_message(), None);
+}
+
+#[test]
 fn turn_completion_falls_back_to_final_plan_text() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 

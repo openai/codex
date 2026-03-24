@@ -34,6 +34,7 @@ pub(crate) struct EventProcessorWithHumanOutput {
     last_message_path: Option<PathBuf>,
     final_message: Option<String>,
     final_message_rendered: bool,
+    emit_final_message_on_shutdown: bool,
     last_total_token_usage: Option<ThreadTokenUsage>,
 }
 
@@ -58,6 +59,7 @@ impl EventProcessorWithHumanOutput {
             last_message_path,
             final_message: None,
             final_message_rendered: false,
+            emit_final_message_on_shutdown: false,
             last_total_token_usage: None,
         }
     }
@@ -307,15 +309,22 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                             rendered_message.as_deref() == Some(final_message.as_str());
                         self.final_message = Some(final_message);
                     }
+                    self.emit_final_message_on_shutdown = true;
                     CodexStatus::InitiateShutdown
                 }
                 TurnStatus::Failed => {
+                    self.final_message = None;
+                    self.final_message_rendered = false;
+                    self.emit_final_message_on_shutdown = false;
                     if let Some(error) = notification.turn.error {
                         eprintln!("{} {}", "ERROR:".style(self.red).style(self.bold), error);
                     }
                     CodexStatus::InitiateShutdown
                 }
                 TurnStatus::Interrupted => {
+                    self.final_message = None;
+                    self.final_message_rendered = false;
+                    self.emit_final_message_on_shutdown = false;
                     eprintln!("{}", "turn interrupted".style(self.dimmed));
                     CodexStatus::InitiateShutdown
                 }
@@ -364,7 +373,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
     }
 
     fn print_final_output(&mut self) {
-        if let Some(path) = self.last_message_path.as_deref() {
+        if self.emit_final_message_on_shutdown
+            && let Some(path) = self.last_message_path.as_deref()
+        {
             handle_last_message(self.final_message.as_deref(), path);
         }
 
@@ -378,14 +389,18 @@ impl EventProcessor for EventProcessorWithHumanOutput {
 
         #[allow(clippy::print_stdout)]
         if should_print_final_message_to_stdout(
-            self.final_message.as_deref(),
+            self.emit_final_message_on_shutdown
+                .then_some(self.final_message.as_deref())
+                .flatten(),
             std::io::stdout().is_terminal(),
             std::io::stderr().is_terminal(),
         ) && let Some(message) = self.final_message.as_deref()
         {
             println!("{message}");
         } else if should_print_final_message_to_tty(
-            self.final_message.as_deref(),
+            self.emit_final_message_on_shutdown
+                .then_some(self.final_message.as_deref())
+                .flatten(),
             self.final_message_rendered,
             std::io::stdout().is_terminal(),
             std::io::stderr().is_terminal(),
@@ -698,6 +713,7 @@ mod tests {
             last_message_path: None,
             final_message: None,
             final_message_rendered: false,
+            emit_final_message_on_shutdown: false,
             last_total_token_usage: None,
         };
 
@@ -741,6 +757,7 @@ mod tests {
             last_message_path: None,
             final_message: Some("stale answer".to_string()),
             final_message_rendered: true,
+            emit_final_message_on_shutdown: false,
             last_total_token_usage: None,
         };
 
@@ -785,6 +802,7 @@ mod tests {
             last_message_path: None,
             final_message: Some("streamed answer".to_string()),
             final_message_rendered: false,
+            emit_final_message_on_shutdown: false,
             last_total_token_usage: None,
         };
 
@@ -805,5 +823,88 @@ mod tests {
             crate::event_processor::CodexStatus::InitiateShutdown
         );
         assert_eq!(processor.final_message.as_deref(), Some("streamed answer"));
+        assert!(processor.emit_final_message_on_shutdown);
+    }
+
+    #[test]
+    fn turn_failed_clears_stale_final_message() {
+        let mut processor = EventProcessorWithHumanOutput {
+            bold: Style::new(),
+            cyan: Style::new(),
+            dimmed: Style::new(),
+            green: Style::new(),
+            italic: Style::new(),
+            magenta: Style::new(),
+            red: Style::new(),
+            yellow: Style::new(),
+            show_agent_reasoning: true,
+            show_raw_agent_reasoning: false,
+            last_message_path: None,
+            final_message: Some("partial answer".to_string()),
+            final_message_rendered: true,
+            emit_final_message_on_shutdown: true,
+            last_total_token_usage: None,
+        };
+
+        let status = processor.process_server_notification(ServerNotification::TurnCompleted(
+            codex_app_server_protocol::TurnCompletedNotification {
+                thread_id: "thread-1".to_string(),
+                turn: Turn {
+                    id: "turn-1".to_string(),
+                    items: Vec::new(),
+                    status: TurnStatus::Failed,
+                    error: None,
+                },
+            },
+        ));
+
+        assert_eq!(
+            status,
+            crate::event_processor::CodexStatus::InitiateShutdown
+        );
+        assert_eq!(processor.final_message, None);
+        assert!(!processor.final_message_rendered);
+        assert!(!processor.emit_final_message_on_shutdown);
+    }
+
+    #[test]
+    fn turn_interrupted_clears_stale_final_message() {
+        let mut processor = EventProcessorWithHumanOutput {
+            bold: Style::new(),
+            cyan: Style::new(),
+            dimmed: Style::new(),
+            green: Style::new(),
+            italic: Style::new(),
+            magenta: Style::new(),
+            red: Style::new(),
+            yellow: Style::new(),
+            show_agent_reasoning: true,
+            show_raw_agent_reasoning: false,
+            last_message_path: None,
+            final_message: Some("partial answer".to_string()),
+            final_message_rendered: true,
+            emit_final_message_on_shutdown: true,
+            last_total_token_usage: None,
+        };
+
+        let status = processor.process_server_notification(ServerNotification::TurnCompleted(
+            codex_app_server_protocol::TurnCompletedNotification {
+                thread_id: "thread-1".to_string(),
+                turn: Turn {
+                    id: "turn-1".to_string(),
+                    items: Vec::new(),
+                    status: TurnStatus::Interrupted,
+                    error: None,
+                },
+            },
+        ));
+
+        assert_eq!(
+            status,
+            crate::event_processor::CodexStatus::InitiateShutdown
+        );
+        assert_eq!(processor.final_message, None);
+        assert!(!processor.final_message_rendered);
+        assert!(!processor.emit_final_message_on_shutdown);
     }
 }
