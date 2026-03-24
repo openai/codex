@@ -5501,6 +5501,56 @@ mod tests {
     }
 
     #[test]
+    fn mention_items_hide_plugin_owned_app_duplicates_when_provenance_matches() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_connectors_enabled(true);
+        composer.set_text_content("$goog".to_string(), Vec::new(), Vec::new());
+        composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
+            config_name: "google-calendar@debug".to_string(),
+            display_name: "Google Calendar".to_string(),
+            description: None,
+            has_skills: false,
+            mcp_server_names: vec!["google-calendar".to_string()],
+            app_connector_ids: vec![codex_core::plugins::AppConnectorId(
+                "google_calendar".to_string(),
+            )],
+        }]));
+        composer.set_connector_mentions(Some(ConnectorsSnapshot {
+            connectors: vec![AppInfo {
+                id: "google_calendar".to_string(),
+                name: "Google Calendar".to_string(),
+                description: Some("Look up events and availability".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/google-calendar".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: vec!["Google Calendar".to_string()],
+            }],
+        }));
+
+        let mentions = composer.mention_items();
+        assert_eq!(mentions.len(), 1);
+        assert_eq!(mentions[0].category_tag, Some("[Plugin]".to_string()));
+        assert_eq!(
+            mentions[0].path,
+            Some("plugin://google-calendar@debug".to_string())
+        );
+    }
+
+    #[test]
     fn plugin_mention_popup_snapshot() {
         snapshot_composer_state("plugin_mention_popup", false, |composer| {
             composer.set_text_content("$sa".to_string(), Vec::new(), Vec::new());

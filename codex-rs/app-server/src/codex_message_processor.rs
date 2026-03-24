@@ -12,7 +12,6 @@ use crate::models::supported_models;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
-use crate::outgoing_message::OutgoingNotification;
 use crate::outgoing_message::RequestContext;
 use crate::outgoing_message::ThreadScopedOutgoingMessageSender;
 use crate::thread_status::ThreadWatchManager;
@@ -183,6 +182,7 @@ use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
+use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
@@ -4062,7 +4062,7 @@ impl CodexMessageProcessor {
         } = match self
             .thread_manager
             .fork_thread(
-                usize::MAX,
+                ForkSnapshot::Interrupted,
                 config,
                 rollout_path.clone(),
                 persist_extended_history,
@@ -6531,7 +6531,7 @@ impl CodexMessageProcessor {
         } = self
             .thread_manager
             .fork_thread(
-                usize::MAX,
+                ForkSnapshot::Interrupted,
                 config,
                 rollout_path,
                 /*persist_extended_history*/ false,
@@ -6853,43 +6853,9 @@ impl CodexMessageProcessor {
                             }
                         };
 
-                        // For now, we send a notification for every event,
-                        // Legacy `codex/event/*` notifications are still
-                        // produced here because the in-process app-server lane
-                        // (`codex exec` and other in-process consumers) still
-                        // depends on them. External transports now drop
-                        // `OutgoingMessage::Notification` in `transport.rs`,
-                        // so stdio/websocket clients only observe the typed
-                        // `ServerNotification` translations emitted below.
-                        //
-                        // TODO: remove this raw legacy-notification emission
-                        // entirely once the remaining in-process consumers are
-                        // migrated off `codex/event/*`.
-                        let event_formatted = match &event.msg {
-                            EventMsg::TurnStarted(_) => "task_started",
-                            EventMsg::TurnComplete(_) => "task_complete",
-                            _ => &event.msg.to_string(),
-                        };
-                        let request_event_name = format!("codex/event/{event_formatted}");
-                        tracing::trace!(
-                            conversation_id = %conversation_id,
-                            "app-server event: {request_event_name}"
-                        );
-                        let mut params = match serde_json::to_value(event.clone()) {
-                            Ok(serde_json::Value::Object(map)) => map,
-                            Ok(_) => {
-                                error!("event did not serialize to an object");
-                                continue;
-                            }
-                            Err(err) => {
-                                error!("failed to serialize event: {err}");
-                                continue;
-                            }
-                        };
-                        params.insert(
-                            "conversationId".to_string(),
-                            conversation_id.to_string().into(),
-                        );
+                        // Track the event before emitting any typed
+                        // translations so thread-local state such as raw event
+                        // opt-in stays synchronized with the conversation.
                         let raw_events_enabled = {
                             let mut thread_state = thread_state.lock().await;
                             thread_state.track_current_turn_event(&event.msg);
@@ -6900,18 +6866,6 @@ impl CodexMessageProcessor {
                             .await;
                         if let EventMsg::RawResponseItem(_) = &event.msg && !raw_events_enabled {
                             continue;
-                        }
-
-                        if !subscribed_connection_ids.is_empty() {
-                            outgoing_for_task
-                                .send_notification_to_connections(
-                                    &subscribed_connection_ids,
-                                    OutgoingNotification {
-                                        method: request_event_name,
-                                        params: Some(params.into()),
-                                    },
-                                )
-                                .await;
                         }
 
                         let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
