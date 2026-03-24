@@ -310,7 +310,13 @@ impl ExecServerClient {
     pub(crate) async fn register_session(
         &self,
         process_id: &str,
-    ) -> Result<broadcast::Receiver<ExecSessionEvent>, ExecServerError> {
+    ) -> Result<
+        (
+            broadcast::Sender<ExecSessionEvent>,
+            broadcast::Receiver<ExecSessionEvent>,
+        ),
+        ExecServerError,
+    > {
         let (events_tx, events_rx) = broadcast::channel(256);
         let mut sessions = self.inner.sessions.lock().await;
         if sessions.contains_key(process_id) {
@@ -318,8 +324,8 @@ impl ExecServerClient {
                 "session already registered for process {process_id}"
             )));
         }
-        sessions.insert(process_id.to_string(), events_tx);
-        Ok(events_rx)
+        sessions.insert(process_id.to_string(), events_tx.clone());
+        Ok((events_tx, events_rx))
     }
 
     pub(crate) async fn unregister_session(&self, process_id: &str) {

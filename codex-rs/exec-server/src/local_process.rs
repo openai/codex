@@ -89,7 +89,8 @@ pub(crate) struct LocalProcess {
 
 struct LocalExecProcess {
     process_id: ProcessId,
-    events: StdMutex<broadcast::Receiver<ExecSessionEvent>>,
+    events_tx: broadcast::Sender<ExecSessionEvent>,
+    initial_events_rx: StdMutex<Option<broadcast::Receiver<ExecSessionEvent>>>,
     backend: LocalProcess,
 }
 
@@ -173,7 +174,14 @@ impl LocalProcess {
     async fn start_process(
         &self,
         params: ExecParams,
-    ) -> Result<(ExecResponse, broadcast::Receiver<ExecSessionEvent>), JSONRPCErrorError> {
+    ) -> Result<
+        (
+            ExecResponse,
+            broadcast::Sender<ExecSessionEvent>,
+            broadcast::Receiver<ExecSessionEvent>,
+        ),
+        JSONRPCErrorError,
+    > {
         self.require_initialized_for("exec")?;
         let process_id = params.process_id.clone();
         warn!(
@@ -249,7 +257,7 @@ impl LocalProcess {
                     next_seq: 1,
                     exit_code: None,
                     output_notify: Arc::clone(&output_notify),
-                    session_events_tx,
+                    session_events_tx: session_events_tx.clone(),
                     open_streams: 2,
                     closed: false,
                 })),
@@ -290,13 +298,17 @@ impl LocalProcess {
             tty = params.tty,
             "exec-server started process"
         );
-        Ok((ExecResponse { process_id }, session_events_rx))
+        Ok((
+            ExecResponse { process_id },
+            session_events_tx,
+            session_events_rx,
+        ))
     }
 
     pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
         self.start_process(params)
             .await
-            .map(|(response, _)| response)
+            .map(|(response, _, _)| response)
     }
 
     pub(crate) async fn exec_read(
@@ -458,13 +470,14 @@ impl LocalProcess {
 #[async_trait]
 impl ExecBackend for LocalProcess {
     async fn start(&self, params: ExecParams) -> Result<Arc<dyn ExecProcess>, ExecServerError> {
-        let (response, events) = self
+        let (response, events_tx, events_rx) = self
             .start_process(params)
             .await
             .map_err(map_handler_error)?;
         Ok(Arc::new(LocalExecProcess {
             process_id: response.process_id.into(),
-            events: StdMutex::new(events),
+            events_tx,
+            initial_events_rx: StdMutex::new(Some(events_rx)),
             backend: self.clone(),
         }))
     }
@@ -477,10 +490,13 @@ impl ExecProcess for LocalExecProcess {
     }
 
     fn subscribe(&self) -> broadcast::Receiver<ExecSessionEvent> {
-        self.events
+        let mut initial_events_rx = self
+            .initial_events_rx
             .lock()
-            .expect("local exec process events mutex should not be poisoned")
-            .resubscribe()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        initial_events_rx
+            .take()
+            .unwrap_or_else(|| self.events_tx.subscribe())
     }
 
     async fn write(&self, chunk: Vec<u8>) -> Result<(), ExecServerError> {

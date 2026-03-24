@@ -19,7 +19,8 @@ pub(crate) struct RemoteProcess {
 
 struct RemoteExecProcess {
     process_id: ProcessId,
-    events: StdMutex<broadcast::Receiver<ExecSessionEvent>>,
+    events_tx: broadcast::Sender<ExecSessionEvent>,
+    initial_events_rx: StdMutex<Option<broadcast::Receiver<ExecSessionEvent>>>,
     backend: RemoteProcess,
 }
 
@@ -49,7 +50,7 @@ impl RemoteProcess {
 impl ExecBackend for RemoteProcess {
     async fn start(&self, params: ExecParams) -> Result<Arc<dyn ExecProcess>, ExecServerError> {
         let process_id = params.process_id.clone();
-        let events = self.client.register_session(&process_id).await?;
+        let (events_tx, events_rx) = self.client.register_session(&process_id).await?;
         if let Err(err) = self.client.exec(params).await {
             self.client.unregister_session(&process_id).await;
             return Err(err);
@@ -57,7 +58,8 @@ impl ExecBackend for RemoteProcess {
 
         Ok(Arc::new(RemoteExecProcess {
             process_id: process_id.into(),
-            events: StdMutex::new(events),
+            events_tx,
+            initial_events_rx: StdMutex::new(Some(events_rx)),
             backend: self.clone(),
         }))
     }
@@ -70,10 +72,13 @@ impl ExecProcess for RemoteExecProcess {
     }
 
     fn subscribe(&self) -> broadcast::Receiver<ExecSessionEvent> {
-        self.events
+        let mut initial_events_rx = self
+            .initial_events_rx
             .lock()
-            .expect("remote exec process events mutex should not be poisoned")
-            .resubscribe()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        initial_events_rx
+            .take()
+            .unwrap_or_else(|| self.events_tx.subscribe())
     }
 
     async fn write(&self, chunk: Vec<u8>) -> Result<(), ExecServerError> {
