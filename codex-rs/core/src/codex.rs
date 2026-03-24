@@ -4550,6 +4550,7 @@ mod handlers {
             Op::UserTurn {
                 cwd,
                 approval_policy,
+                approvals_reviewer,
                 sandbox_policy,
                 model,
                 effort,
@@ -4575,7 +4576,7 @@ mod handlers {
                     SessionSettingsUpdate {
                         cwd: Some(cwd),
                         approval_policy: Some(approval_policy),
-                        approvals_reviewer: None,
+                        approvals_reviewer,
                         sandbox_policy: Some(sandbox_policy),
                         windows_sandbox_level: None,
                         collaboration_mode,

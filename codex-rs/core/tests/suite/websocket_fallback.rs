@@ -156,6 +156,7 @@ async fn websocket_fallback_hides_first_websocket_retry_stream_error() -> Result
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_configured.model.clone(),
             effort: None,
