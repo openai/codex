@@ -8077,7 +8077,7 @@ async fn plugins_popup_refreshes_installed_counts_after_install() {
         "expected /plugins to refresh installed counts after install, got:\n{after}"
     );
     assert!(
-        after.contains("Installed · Press Enter to view plugin details."),
+        after.contains("Installed   Press Enter to view plugin details."),
         "expected refreshed selected row copy to reflect the installed plugin state, got:\n{after}"
     );
 }

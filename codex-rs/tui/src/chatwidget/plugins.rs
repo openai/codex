@@ -687,7 +687,7 @@ impl ChatWidget {
                 plugin_brief_description(plugin, &marketplace_label, status_label_width);
             let selected_status_label = format!("{status_label:<status_label_width$}");
             let selected_description =
-                format!("{selected_status_label} · Press Enter to view plugin details.");
+                format!("{selected_status_label}   Press Enter to view plugin details.");
             let search_value = format!(
                 "{display_name} {} {} {}",
                 plugin.id, plugin.name, marketplace_label
