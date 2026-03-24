@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
+use tokio::sync::watch;
 
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -1022,6 +1023,7 @@ pub struct AuthManager {
     enable_codex_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     forced_chatgpt_workspace_id: RwLock<Option<String>>,
+    auth_state_tx: watch::Sender<()>,
 }
 
 impl AuthManager {
@@ -1034,6 +1036,7 @@ impl AuthManager {
         enable_codex_api_key_env: bool,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
     ) -> Self {
+        let (auth_state_tx, _) = watch::channel(());
         let managed_auth = load_auth(
             &codex_home,
             enable_codex_api_key_env,
@@ -1050,11 +1053,13 @@ impl AuthManager {
             enable_codex_api_key_env,
             auth_credentials_store_mode,
             forced_chatgpt_workspace_id: RwLock::new(None),
+            auth_state_tx,
         }
     }
 
     /// Create an AuthManager with a specific CodexAuth, for testing only.
     pub fn from_auth_for_testing(auth: CodexAuth) -> Arc<Self> {
+        let (auth_state_tx, _) = watch::channel(());
         let cached = CachedAuth {
             auth: Some(auth),
             external_refresher: None,
@@ -1066,11 +1071,13 @@ impl AuthManager {
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
+            auth_state_tx,
         })
     }
 
     /// Create an AuthManager with a specific CodexAuth and codex home, for testing only.
     pub fn from_auth_for_testing_with_home(auth: CodexAuth, codex_home: PathBuf) -> Arc<Self> {
+        let (auth_state_tx, _) = watch::channel(());
         let cached = CachedAuth {
             auth: Some(auth),
             external_refresher: None,
@@ -1081,6 +1088,7 @@ impl AuthManager {
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
+            auth_state_tx,
         })
     }
 
@@ -1182,6 +1190,7 @@ impl AuthManager {
             let changed = !AuthManager::auths_equal(previous, new_auth.as_ref());
             tracing::info!("Reloaded auth, changed: {changed}");
             guard.auth = new_auth;
+            self.auth_state_tx.send_replace(());
             changed
         } else {
             false
@@ -1201,8 +1210,11 @@ impl AuthManager {
     }
 
     pub fn set_forced_chatgpt_workspace_id(&self, workspace_id: Option<String>) {
-        if let Ok(mut guard) = self.forced_chatgpt_workspace_id.write() {
+        if let Ok(mut guard) = self.forced_chatgpt_workspace_id.write()
+            && *guard != workspace_id
+        {
             *guard = workspace_id;
+            self.auth_state_tx.send_replace(());
         }
     }
 
@@ -1211,6 +1223,10 @@ impl AuthManager {
             .read()
             .ok()
             .and_then(|guard| guard.clone())
+    }
+
+    pub fn subscribe_auth_state(&self) -> watch::Receiver<()> {
+        self.auth_state_tx.subscribe()
     }
 
     pub fn has_external_auth_refresher(&self) -> bool {

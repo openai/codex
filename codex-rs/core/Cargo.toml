@@ -37,6 +37,7 @@ codex-config = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
 codex-login = { workspace = true }
+ed25519-dalek = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-skills = { workspace = true }
 codex-execpolicy = { workspace = true }
@@ -146,6 +147,7 @@ codex-shell-escalation = { workspace = true }
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 codex-arg0 = { workspace = true }
+codex-keyring-store = { workspace = true }
 codex-otel = { workspace = true, features = [
     "disable-default-metrics-exporter",
 ] }
