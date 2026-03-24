@@ -4,12 +4,10 @@ use anyhow::Context;
 use anyhow::Result;
 use crypto_box::SecretKey as Curve25519SecretKey;
 use ed25519_dalek::Signer as _;
-use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest as _;
 use sha2::Sha512;
-use tracing::debug;
 use tracing::info;
 
 use super::*;
@@ -54,64 +52,42 @@ impl AgentIdentityManager {
         };
 
         let client = create_client();
-        let urls =
-            agent_task_registration_urls(&self.chatgpt_base_url, &stored_identity.agent_runtime_id);
+        let url =
+            agent_task_registration_url(&self.chatgpt_base_url, &stored_identity.agent_runtime_id);
+        let response = client
+            .post(&url)
+            .bearer_auth(&binding.access_token)
+            .header("chatgpt-account-id", &binding.chatgpt_account_id)
+            .json(&request_body)
+            .timeout(AGENT_TASK_REGISTRATION_TIMEOUT)
+            .send()
+            .await
+            .with_context(|| format!("failed to send agent task registration request to {url}"))?;
 
-        for (index, url) in urls.iter().enumerate() {
-            let response = client
-                .post(url)
-                .bearer_auth(&binding.access_token)
-                .header("chatgpt-account-id", &binding.chatgpt_account_id)
-                .json(&request_body)
-                .timeout(AGENT_TASK_REGISTRATION_TIMEOUT)
-                .send()
+        if response.status().is_success() {
+            let response_body = response
+                .json::<RegisterTaskResponse>()
                 .await
-                .with_context(|| {
-                    format!("failed to send agent task registration request to {url}")
-                })?;
-
-            if response.status().is_success() {
-                let response_body = response
-                    .json::<RegisterTaskResponse>()
-                    .await
-                    .with_context(|| format!("failed to parse agent task response from {url}"))?;
-                let registered_task = RegisteredAgentTask {
-                    agent_runtime_id: stored_identity.agent_runtime_id.clone(),
-                    task_id: decrypt_task_id_response(
-                        &stored_identity,
-                        &response_body.encrypted_task_id,
-                    )?,
-                    registered_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-                };
-                info!(
-                    agent_runtime_id = %registered_task.agent_runtime_id,
-                    task_id = %registered_task.task_id,
-                    "registered agent task"
-                );
-                return Ok(Some(registered_task));
-            }
-
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            let is_last_candidate = index + 1 == urls.len();
-            if !is_last_candidate
-                && matches!(
-                    status,
-                    StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
-                )
-            {
-                debug!(
-                    url = %url,
-                    status = %status,
-                    "agent task registration endpoint unavailable at candidate URL; trying fallback"
-                );
-                continue;
-            }
-
-            anyhow::bail!("agent task registration failed with status {status} from {url}: {body}");
+                .with_context(|| format!("failed to parse agent task response from {url}"))?;
+            let registered_task = RegisteredAgentTask {
+                agent_runtime_id: stored_identity.agent_runtime_id.clone(),
+                task_id: decrypt_task_id_response(
+                    &stored_identity,
+                    &response_body.encrypted_task_id,
+                )?,
+                registered_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+            };
+            info!(
+                agent_runtime_id = %registered_task.agent_runtime_id,
+                task_id = %registered_task.task_id,
+                "registered agent task"
+            );
+            return Ok(Some(registered_task));
         }
 
-        anyhow::bail!("no candidate URLs were available for agent task registration")
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("agent task registration failed with status {status} from {url}: {body}")
     }
 }
 
@@ -148,13 +124,13 @@ fn curve25519_secret_key_from_signing_key(signing_key: &SigningKey) -> Curve2551
     Curve25519SecretKey::from(secret_key)
 }
 
-fn agent_task_registration_urls(chatgpt_base_url: &str, agent_runtime_id: &str) -> Vec<String> {
+fn agent_task_registration_url(chatgpt_base_url: &str, agent_runtime_id: &str) -> String {
     let trimmed = chatgpt_base_url.trim_end_matches('/');
     let path = format!("/v1/agent/{agent_runtime_id}/task/register");
     if let Some(root) = trimmed.strip_suffix("/backend-api") {
-        return vec![format!("{root}{path}"), format!("{trimmed}{path}")];
+        return format!("{root}{path}");
     }
-    vec![format!("{trimmed}{path}")]
+    format!("{trimmed}{path}")
 }
 
 #[cfg(test)]
@@ -214,12 +190,12 @@ mod tests {
             format!("{}/backend-api/", server.uri()),
             SessionSource::Cli,
         );
-        let stored_identity = seed_stored_identity(&manager, &auth, "agent_123", "account-123");
+        let stored_identity = seed_stored_identity(&manager, &auth, "agent-123", "account-123");
         let encrypted_task_id =
             encrypt_task_id_for_identity(&stored_identity, "task_123").expect("task ciphertext");
 
         Mock::given(method("POST"))
-            .and(path("/v1/agent/agent_123/task/register"))
+            .and(path("/v1/agent/agent-123/task/register"))
             .and(header("authorization", "Bearer access-token-account-123"))
             .and(header("chatgpt-account-id", "account-123"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -238,7 +214,7 @@ mod tests {
         assert_eq!(
             task,
             RegisteredAgentTask {
-                agent_runtime_id: "agent_123".to_string(),
+                agent_runtime_id: "agent-123".to_string(),
                 task_id: "task_123".to_string(),
                 registered_at: task.registered_at.clone(),
             }
@@ -246,7 +222,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn register_task_falls_back_to_backend_api_v1() {
+    async fn register_task_uses_canonical_registration_url() {
         let server = MockServer::start().await;
         let auth = make_chatgpt_auth("account-123", Some("user-123"));
         let auth_manager = AuthManager::from_auth_for_testing(auth.clone());
@@ -257,18 +233,12 @@ mod tests {
             SessionSource::Cli,
         );
         let stored_identity =
-            seed_stored_identity(&manager, &auth, "agent_fallback", "account-123");
+            seed_stored_identity(&manager, &auth, "agent-fallback", "account-123");
         let encrypted_task_id = encrypt_task_id_for_identity(&stored_identity, "task_fallback")
             .expect("task ciphertext");
 
         Mock::given(method("POST"))
-            .and(path("/v1/agent/agent_fallback/task/register"))
-            .respond_with(ResponseTemplate::new(404))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/backend-api/v1/agent/agent_fallback/task/register"))
+            .and(path("/v1/agent/agent-fallback/task/register"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "encrypted_task_id": encrypted_task_id,
             })))
@@ -282,7 +252,7 @@ mod tests {
             .unwrap()
             .expect("task should be registered");
 
-        assert_eq!(task.agent_runtime_id, "agent_fallback");
+        assert_eq!(task.agent_runtime_id, "agent-fallback");
         assert_eq!(task.task_id, "task_fallback");
     }
 
