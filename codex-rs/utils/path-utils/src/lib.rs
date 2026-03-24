@@ -1,32 +1,13 @@
 //! Path normalization, symlink resolution, and atomic writes shared across Codex crates.
 
+pub mod env;
+
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashSet;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
-
-/// Returns true when the current process is running under Windows Subsystem for Linux.
-///
-/// Matches the WSL detection logic in `codex-core`'s `env` module so this crate stays
-/// independent of `codex-core`.
-fn is_wsl() -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        if std::env::var_os("WSL_DISTRO_NAME").is_some() {
-            return true;
-        }
-        match std::fs::read_to_string("/proc/version") {
-            Ok(version) => version.to_lowercase().contains("microsoft"),
-            Err(_) => false,
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        false
-    }
-}
 
 pub fn normalize_for_path_comparison(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
     let canonical = path.as_ref().canonicalize()?;
@@ -138,7 +119,7 @@ pub fn write_atomically(write_path: &Path, contents: &str) -> io::Result<()> {
 }
 
 fn normalize_for_wsl(path: PathBuf) -> PathBuf {
-    normalize_for_wsl_with_flag(path, is_wsl())
+    normalize_for_wsl_with_flag(path, env::is_wsl())
 }
 
 fn normalize_for_native_workdir_with_flag(path: PathBuf, is_windows: bool) -> PathBuf {
