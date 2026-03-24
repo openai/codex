@@ -130,8 +130,9 @@ pub(crate) fn prepare_legacy_session_security(
                 let h_token = create_workspace_write_token_with_caps_from(
                     base,
                     &[psid_generic, psid_workspace],
-                )?;
+                );
                 CloseHandle(base);
+                let h_token = h_token?;
                 (
                     h_token,
                     psid_generic,

@@ -634,6 +634,13 @@ pub async fn spawn_windows_sandbox_session_legacy(
         Ok(handles) => handles,
         Err(err) => {
             unsafe {
+                if !persist_aces && !guards.is_empty() {
+                    if let Some(sid) = convert_string_sid_to_sid(&security.cap_sid_str) {
+                        for path in &guards {
+                            revoke_ace(path, sid);
+                        }
+                    }
+                }
                 CloseHandle(security.h_token);
             }
             return Err(err);
