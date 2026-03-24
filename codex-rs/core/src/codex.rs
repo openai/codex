@@ -2215,14 +2215,11 @@ impl Session {
                     self.persist_rollout_items(&rollout_items).await;
                 }
 
-                // Append the current session's initial context after the reconstructed history.
-                let initial_context = self.build_initial_context(&turn_context).await;
-                self.record_conversation_items(&turn_context, &initial_context)
-                    .await;
-                {
-                    let mut state = self.state.lock().await;
-                    state.set_reference_context_item(Some(turn_context.to_turn_context_item()));
-                }
+                // Defer seeding the fork's current-session context until the first real turn so
+                // turn/start overrides can be merged before we write model-visible context.
+                // TODO(ccunningham): Some build_initial_context content is still not representable
+                // as steady-state diffs. Persist the remaining model-visible inputs or add
+                // explicit replay events so fork/resume can diff everything deterministically.
 
                 // Forked threads should remain file-backed immediately after startup.
                 self.ensure_rollout_materialized().await;

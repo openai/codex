@@ -1115,18 +1115,12 @@ async fn recompute_token_usage_updates_model_context_window() {
 #[tokio::test]
 async fn record_initial_history_reconstructs_forked_transcript() {
     let (session, turn_context) = make_session_and_context().await;
-    let (rollout_items, mut expected) = sample_rollout(&session, &turn_context).await;
+    let (rollout_items, expected) = sample_rollout(&session, &turn_context).await;
 
     session
         .record_initial_history(InitialHistory::Forked(rollout_items))
         .await;
 
-    let reconstruction_turn = session.new_default_turn().await;
-    expected.extend(
-        session
-            .build_initial_context(reconstruction_turn.as_ref())
-            .await,
-    );
     let history = session.state.lock().await.clone_history();
     assert_eq!(expected, history.raw_items());
 }
@@ -1244,7 +1238,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
 
     let request = first_forked_request.single_request();
     let snapshot = context_snapshot::format_labeled_requests_snapshot(
-        "First request after fork when fork startup changes approval policy and the first forked turn changes approval policy again and enters plan mode.",
+        "First request after fork when startup preserves the parent baseline, the fork changes approval policy, and the first forked turn enters plan mode.",
         &[("First Forked Turn Request", &request)],
         &ContextSnapshotOptions::default()
             .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 96 })
@@ -1309,7 +1303,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
                 text_elements: Vec::new(),
             },
         )),
-        RolloutItem::TurnContext(previous_context_item),
+        RolloutItem::TurnContext(previous_context_item.clone()),
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id,
@@ -1322,12 +1316,20 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         .record_initial_history(InitialHistory::Forked(rollout_items))
         .await;
 
+    let history = session.clone_history().await;
     assert_eq!(
         session.previous_turn_settings().await,
         Some(PreviousTurnSettings {
             model: previous_model.to_string(),
             realtime_active: Some(turn_context.realtime_active),
         })
+    );
+    assert_eq!(history.raw_items(), &[user_message("forked seed")]);
+    assert_eq!(
+        serde_json::to_value(session.reference_context_item().await)
+            .expect("serialize fork reference context item"),
+        serde_json::to_value(Some(previous_context_item))
+            .expect("serialize expected reference context item")
     );
 }
 
