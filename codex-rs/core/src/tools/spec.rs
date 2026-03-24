@@ -167,6 +167,39 @@ fn send_input_output_schema() -> JsonValue {
     })
 }
 
+fn list_agents_output_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "agents": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "agent_name": {
+                            "type": "string",
+                            "description": "Canonical task name for the agent when available, otherwise the agent id."
+                        },
+                        "agent_status": {
+                            "description": "Last known status of the agent.",
+                            "allOf": [agent_status_output_schema()]
+                        },
+                        "last_task_message": {
+                            "type": ["string", "null"],
+                            "description": "Most recent user or inter-agent instruction received by the agent, when available."
+                        }
+                    },
+                    "required": ["agent_name", "agent_status", "last_task_message"],
+                    "additionalProperties": false
+                },
+                "description": "Live agents visible in the current root thread tree."
+            }
+        },
+        "required": ["agents"],
+        "additionalProperties": false
+    })
+}
+
 fn resume_agent_output_schema() -> JsonValue {
     json!({
         "type": "object",
@@ -1481,6 +1514,32 @@ fn create_wait_agent_tool(multi_agent_v2: bool) -> ToolSpec {
     })
 }
 
+fn create_list_agents_tool() -> ToolSpec {
+    let properties = BTreeMap::from([(
+        "path_prefix".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional task-path prefix. Accepts the same relative or absolute task-path syntax as other MultiAgentV2 agent targets."
+                    .to_string(),
+            ),
+        },
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "list_agents".to_string(),
+        description: "List live agents in the current root thread tree. Optionally filter by task-path prefix."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+        output_schema: Some(list_agents_output_schema()),
+    })
+}
+
 fn create_request_user_input_tool(
     collaboration_modes_config: CollaborationModesConfig,
 ) -> ToolSpec {
@@ -2625,6 +2684,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents::SendInputHandler;
     use crate::tools::handlers::multi_agents::SpawnAgentHandler;
     use crate::tools::handlers::multi_agents::WaitAgentHandler;
+    use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SendInputHandler as SendInputHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
@@ -3040,9 +3100,16 @@ pub(crate) fn build_specs_with_discoverable_tools(
             config.code_mode_enabled,
         );
         if config.multi_agent_v2 {
+            push_tool_spec(
+                &mut builder,
+                create_list_agents_tool(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
             builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandlerV2));
             builder.register_handler("send_input", Arc::new(SendInputHandlerV2));
             builder.register_handler("wait_agent", Arc::new(WaitAgentHandlerV2));
+            builder.register_handler("list_agents", Arc::new(ListAgentsHandlerV2));
         } else {
             builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandler));
             builder.register_handler("send_input", Arc::new(SendInputHandler));

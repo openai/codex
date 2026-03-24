@@ -521,6 +521,7 @@ fn test_build_specs_collab_tools_enabled() {
         &["spawn_agent", "send_input", "wait_agent", "close_agent"],
     );
     assert_lacks_tool_name(&tools, "spawn_agents_on_csv");
+    assert_lacks_tool_name(&tools, "list_agents");
 }
 
 #[test]
@@ -541,6 +542,16 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
     let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+    assert_contains_tool_names(
+        &tools,
+        &[
+            "spawn_agent",
+            "send_input",
+            "wait_agent",
+            "close_agent",
+            "list_agents",
+        ],
+    );
 
     let spawn_agent = find_tool(&tools, "spawn_agent");
     let ToolSpec::Function(ResponsesApiTool {
@@ -609,6 +620,33 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
     assert_eq!(
         output_schema["properties"]["message"]["description"],
         json!("Brief wait summary without the agent's final content.")
+    );
+
+    let list_agents = find_tool(&tools, "list_agents");
+    let ToolSpec::Function(ResponsesApiTool {
+        parameters,
+        output_schema,
+        ..
+    }) = &list_agents.spec
+    else {
+        panic!("list_agents should be a function tool");
+    };
+    let JsonSchema::Object {
+        properties,
+        required,
+        ..
+    } = parameters
+    else {
+        panic!("list_agents should use object params");
+    };
+    assert!(properties.contains_key("path_prefix"));
+    assert_eq!(required.as_ref(), None);
+    let output_schema = output_schema
+        .as_ref()
+        .expect("list_agents should define output schema");
+    assert_eq!(
+        output_schema["properties"]["agents"]["items"]["required"],
+        json!(["agent_name", "agent_status", "last_task_message"])
     );
     assert_lacks_tool_name(&tools, "resume_agent");
 }
