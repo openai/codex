@@ -482,11 +482,11 @@ impl OauthLoginFlow {
 
             if webbrowser::open(auth_url).is_err() {
                 if !emit_browser_url {
-                    println!(
+                    eprintln!(
                         "Authorize `{server_name}` by opening this URL in your browser:\n{auth_url}\n"
                     );
                 }
-                println!("(Browser launch failed; please copy the URL above manually.)");
+                eprintln!("(Browser launch failed; please copy the URL above manually.)");
             }
         }
 
