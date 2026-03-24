@@ -309,14 +309,16 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
     #[cfg(windows)]
     const PATH_SEPARATOR: &str = ";";
 
-    let path_element = path.display();
-    let updated_path_env_var = match std::env::var("PATH") {
-        Ok(existing_path) => {
-            format!("{path_element}{PATH_SEPARATOR}{existing_path}")
+    let updated_path_env_var = match std::env::var_os("PATH") {
+        Some(existing_path) => {
+            let mut path_env_var =
+                std::ffi::OsString::with_capacity(path.as_os_str().len() + 1 + existing_path.len());
+            path_env_var.push(path);
+            path_env_var.push(PATH_SEPARATOR);
+            path_env_var.push(existing_path);
+            path_env_var
         }
-        Err(_) => {
-            format!("{path_element}")
-        }
+        None => path.as_os_str().to_owned(),
     };
 
     unsafe {

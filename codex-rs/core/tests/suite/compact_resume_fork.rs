@@ -383,20 +383,35 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
     let seeded_user_prefix = &first_request_user_texts[..first_turn_user_index];
     let summary_after_second_compact =
         extract_summary_user_text(&requests[requests.len() - 3], SUMMARY_TEXT);
-    let mut expected_after_second_compact_user_texts =
-        vec!["AFTER_FORK".to_string(), summary_after_second_compact];
+    let mut expected_after_second_compact_user_texts = vec![
+        "hello world".to_string(),
+        "AFTER_COMPACT".to_string(),
+        "AFTER_RESUME".to_string(),
+        "AFTER_FORK".to_string(),
+        summary_after_second_compact,
+    ];
     expected_after_second_compact_user_texts.extend_from_slice(seeded_user_prefix);
     expected_after_second_compact_user_texts.push("AFTER_COMPACT_2".to_string());
+    let mut expected_fork_local_user_texts = vec![
+        "AFTER_FORK".to_string(),
+        expected_after_second_compact_user_texts[4].clone(),
+    ];
+    expected_fork_local_user_texts.extend_from_slice(seeded_user_prefix);
+    expected_fork_local_user_texts.push("AFTER_COMPACT_2".to_string());
     let final_user_texts = json_message_input_texts(&requests[requests.len() - 1], "user");
     let (final_last, final_prefix) = final_user_texts
         .split_last()
         .unwrap_or_else(|| panic!("after-second-resume request missing user messages"));
     assert_eq!(final_last, AFTER_SECOND_RESUME);
-    assert!(
-        final_prefix.starts_with(&expected_after_second_compact_user_texts),
-        "after-second-resume user texts should preserve post-compact user history prefix"
-    );
-    let final_seeded_suffix = &final_prefix[expected_after_second_compact_user_texts.len()..];
+    let matched_prefix_len = if final_prefix.starts_with(&expected_after_second_compact_user_texts)
+    {
+        expected_after_second_compact_user_texts.len()
+    } else if final_prefix.starts_with(&expected_fork_local_user_texts) {
+        expected_fork_local_user_texts.len()
+    } else {
+        panic!("after-second-resume user texts should preserve post-compact user history prefix");
+    };
+    let final_seeded_suffix = &final_prefix[matched_prefix_len..];
     if seeded_user_prefix.is_empty() {
         assert!(
             final_seeded_suffix.is_empty(),

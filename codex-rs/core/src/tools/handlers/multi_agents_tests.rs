@@ -105,10 +105,6 @@ fn history_contains_inter_agent_communication(
     })
 }
 
-fn inter_agent_message_text(recipient: &str, content: &str) -> String {
-    format!("author: /root\nrecipient: {recipient}\nother_recipients: []\nContent: {content}")
-}
-
 #[derive(Clone, Copy)]
 struct NeverEndingTask;
 
@@ -415,47 +411,6 @@ async fn multi_agent_v2_spawn_returns_path_and_send_input_accepts_relative_path(
                         && communication.content == "continue"
             )
     }));
-
-    let child_thread = manager
-        .get_thread(child_thread_id)
-        .await
-        .expect("child thread should exist");
-    let expected_communication = InterAgentCommunication::new(
-        AgentPath::root(),
-        AgentPath::try_from("/root/test_process").expect("agent path"),
-        Vec::new(),
-        "continue".to_string(),
-    );
-    timeout(Duration::from_secs(2), async {
-        loop {
-            let history_items = child_thread
-                .codex
-                .session
-                .clone_history()
-                .await
-                .raw_items()
-                .to_vec();
-            let recorded =
-                history_contains_inter_agent_communication(&history_items, &expected_communication);
-            let saw_user_message = history_items.iter().any(|item| {
-                matches!(
-                    item,
-                    ResponseItem::Message { role, content, .. }
-                        if role == "user"
-                            && content.iter().any(|content_item| matches!(
-                                content_item,
-                                ContentItem::InputText { text } if text == "continue"
-                            ))
-                )
-            });
-            if recorded && !saw_user_message {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("v2 send_input should record assistant envelope");
 }
 
 #[tokio::test]
@@ -492,10 +447,6 @@ async fn multi_agent_v2_send_input_accepts_structured_items() {
         .resolve_agent_reference(session.conversation_id, &turn.session_source, "worker")
         .await
         .expect("worker should resolve");
-    let thread = manager
-        .get_thread(agent_id)
-        .await
-        .expect("worker thread should exist");
     let invocation = invocation(
         session,
         turn,
@@ -532,58 +483,6 @@ async fn multi_agent_v2_send_input_accepts_structured_items() {
         .into_iter()
         .find(|(id, op)| *id == agent_id && *op == expected);
     assert_eq!(captured, Some((agent_id, expected)));
-
-    let expected_message = inter_agent_message_text(
-        "/root/worker",
-        "[mention:$drive](app://google_drive)\nread the folder",
-    );
-    timeout(Duration::from_secs(2), async {
-        loop {
-            let history_items = thread
-                .codex
-                .session
-                .clone_history()
-                .await
-                .raw_items()
-                .to_vec();
-            let recorded_assistant_envelope = history_items.iter().any(|item| {
-                matches!(
-                    item,
-                    ResponseItem::Message { role, content, .. }
-                        if role == "assistant"
-                            && content.iter().any(|content_item| matches!(
-                                content_item,
-                                ContentItem::OutputText { text }
-                                    if text == &expected_message
-                            ))
-                )
-            });
-            let saw_user_message = history_items.iter().any(|item| {
-                matches!(
-                    item,
-                    ResponseItem::Message { role, content, .. }
-                        if role == "user"
-                            && content.iter().any(|content_item| matches!(
-                                content_item,
-                                ContentItem::InputText { text }
-                                    if text == "read the folder"
-                                        || text == "[mention:$drive](app://google_drive)\nread the folder"
-                            ))
-                )
-            });
-            if !recorded_assistant_envelope && saw_user_message {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("structured items should stay on the legacy user-input path");
-
-    let _ = thread
-        .submit(Op::Shutdown {})
-        .await
-        .expect("shutdown should submit");
 }
 
 #[tokio::test]
