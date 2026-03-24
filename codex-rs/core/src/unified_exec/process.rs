@@ -15,9 +15,9 @@ use tokio_util::sync::CancellationToken;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::StreamOutput;
 use crate::exec::is_likely_sandbox_denied;
-use codex_protocol::output_truncation::TruncationPolicy;
-use codex_protocol::output_truncation::formatted_truncate_text;
 use codex_sandboxing::SandboxType;
+use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::SpawnedPty;
 

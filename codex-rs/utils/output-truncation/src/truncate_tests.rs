@@ -1,13 +1,11 @@
-#![allow(warnings, clippy::all)]
-
-use super::TruncationPolicy;
-use super::approx_token_count;
-use super::approx_tokens_from_byte_count_i64;
-use super::formatted_truncate_text;
-use super::formatted_truncate_text_content_items_with_policy;
-use super::truncate_function_output_items_with_policy;
-use super::truncate_text;
-use crate::models::FunctionCallOutputContentItem;
+use crate::TruncationPolicy;
+use crate::approx_token_count;
+use crate::approx_tokens_from_byte_count_i64;
+use crate::formatted_truncate_text;
+use crate::formatted_truncate_text_content_items_with_policy;
+use crate::truncate_function_output_items_with_policy;
+use crate::truncate_text;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use pretty_assertions::assert_eq;
 
 #[test]

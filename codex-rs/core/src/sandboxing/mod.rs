@@ -30,8 +30,6 @@ use std::path::PathBuf;
 pub(crate) struct ExecOptions {
     pub(crate) expiration: ExecExpiration,
     pub(crate) capture_policy: ExecCapturePolicy,
-    pub(crate) sandbox_permissions: SandboxPermissions,
-    pub(crate) justification: Option<String>,
 }
 
 #[derive(Debug)]
@@ -45,11 +43,9 @@ pub struct ExecRequest {
     pub sandbox: SandboxType,
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
-    pub sandbox_permissions: SandboxPermissions,
     pub sandbox_policy: SandboxPolicy,
     pub file_system_sandbox_policy: FileSystemSandboxPolicy,
     pub network_sandbox_policy: NetworkSandboxPolicy,
-    pub justification: Option<String>,
     pub arg0: Option<String>,
 }
 
@@ -74,8 +70,6 @@ impl ExecRequest {
         let ExecOptions {
             expiration,
             capture_policy,
-            sandbox_permissions,
-            justification,
         } = options;
         if !network_sandbox_policy.is_enabled() {
             env.insert(
@@ -97,11 +91,9 @@ impl ExecRequest {
             sandbox,
             windows_sandbox_level,
             windows_sandbox_private_desktop,
-            sandbox_permissions,
             sandbox_policy,
             file_system_sandbox_policy,
             network_sandbox_policy,
-            justification,
             arg0,
         }
     }

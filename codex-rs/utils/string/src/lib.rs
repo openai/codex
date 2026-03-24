@@ -1,5 +1,3 @@
-#![allow(warnings, clippy::all)]
-
 mod truncate;
 
 pub use truncate::approx_bytes_for_tokens;

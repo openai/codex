@@ -1902,6 +1902,7 @@ dependencies = [
  "codex-utils-cargo-bin",
  "codex-utils-home-dir",
  "codex-utils-image",
+ "codex-utils-output-truncation",
  "codex-utils-pty",
  "codex-utils-readiness",
  "codex-utils-stream-parser",
@@ -2913,6 +2914,15 @@ dependencies = [
  "codex-core",
  "codex-lmstudio",
  "codex-ollama",
+]
+
+[[package]]
+name = "codex-utils-output-truncation"
+version = "0.0.0"
+dependencies = [
+ "codex-protocol",
+ "codex-utils-string",
+ "pretty_assertions",
 ]
 
 [[package]]

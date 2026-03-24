@@ -1,7 +1,5 @@
 //! Persist Codex session rollouts (.jsonl) so sessions can be replayed or inspected later.
 
-#![allow(warnings, clippy::all)]
-
 use std::fs;
 use std::fs::File;
 use std::io::Error as IoError;
@@ -59,6 +57,8 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadataBuilder;
+use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::truncate_text;
 
 /// Records all [`ResponseItem`]s for a session and flushes them to disk after
 /// every update.

@@ -29,9 +29,9 @@ use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouterParams;
 use crate::unified_exec::resolve_max_tokens;
 use codex_features::Feature;
-use codex_protocol::output_truncation::TruncationPolicy;
-use codex_protocol::output_truncation::formatted_truncate_text_content_items_with_policy;
-use codex_protocol::output_truncation::truncate_function_output_items_with_policy;
+use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::formatted_truncate_text_content_items_with_policy;
+use codex_utils_output_truncation::truncate_function_output_items_with_policy;
 
 pub(crate) use execute_handler::CodeModeExecuteHandler;
 use response_adapter::into_function_call_output_content_items;

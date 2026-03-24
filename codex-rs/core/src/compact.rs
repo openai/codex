@@ -21,10 +21,10 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::output_truncation::TruncationPolicy;
-use codex_protocol::output_truncation::approx_token_count;
-use codex_protocol::output_truncation::truncate_text;
 use codex_protocol::user_input::UserInput;
+use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::approx_token_count;
+use codex_utils_output_truncation::truncate_text;
 use futures::prelude::*;
 use tracing::error;
 
