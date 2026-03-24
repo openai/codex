@@ -1,6 +1,5 @@
 use super::*;
 use crate::codex::make_session_and_context;
-use assert_matches::assert_matches;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::protocol::ThreadRolledBackEvent;
@@ -74,7 +73,10 @@ fn truncates_rollout_from_start_before_nth_user_only() {
     );
 
     let truncated2 = truncate_rollout_before_nth_user_message_from_start(&rollout, 2);
-    assert_matches!(truncated2.as_slice(), []);
+    assert_eq!(
+        serde_json::to_value(&truncated2).unwrap(),
+        serde_json::to_value(&rollout).unwrap()
+    );
 }
 
 #[test]
