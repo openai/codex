@@ -29,8 +29,6 @@ use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::sleep;
 use tokio::time::timeout;
-
-const MULTI_AGENT_EVENTUAL_TIMEOUT: Duration = Duration::from_secs(5);
 use toml::Value as TomlValue;
 
 async fn test_config_with_cli_overrides(
@@ -962,90 +960,6 @@ async fn spawn_child_completion_notifies_parent_history() {
         .expect("child shutdown should submit");
 
     assert_eq!(wait_for_subagent_notification(&parent_thread).await, true);
-}
-
-#[tokio::test]
-async fn multi_agent_v2_completion_sends_inter_agent_message_to_direct_parent() {
-    let harness = AgentControlHarness::new().await;
-    let (root_thread_id, _) = harness.start_thread().await;
-    let mut config = harness.config.clone();
-    let _ = config.features.enable(Feature::MultiAgentV2);
-    let worker_path = AgentPath::root().join("worker_a").expect("worker path");
-    let worker_thread_id = harness
-        .control
-        .spawn_agent(
-            config.clone(),
-            text_input("hello worker"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: root_thread_id,
-                depth: 1,
-                agent_path: Some(worker_path.clone()),
-                agent_nickname: None,
-                agent_role: Some("explorer".to_string()),
-            })),
-        )
-        .await
-        .expect("worker spawn should succeed");
-    let tester_path = worker_path.join("tester").expect("tester path");
-    let tester_thread_id = harness
-        .control
-        .spawn_agent(
-            config,
-            text_input("hello tester"),
-            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id: worker_thread_id,
-                depth: 2,
-                agent_path: Some(tester_path.clone()),
-                agent_nickname: None,
-                agent_role: Some("explorer".to_string()),
-            })),
-        )
-        .await
-        .expect("tester spawn should succeed");
-
-    let tester_thread = harness
-        .manager
-        .get_thread(tester_thread_id)
-        .await
-        .expect("tester thread should exist");
-    let tester_turn = tester_thread.codex.session.new_default_turn().await;
-    tester_thread
-        .codex
-        .session
-        .send_event(
-            tester_turn.as_ref(),
-            EventMsg::TurnComplete(TurnCompleteEvent {
-                turn_id: tester_turn.sub_id.clone(),
-                last_agent_message: Some("done".to_string()),
-            }),
-        )
-        .await;
-
-    timeout(MULTI_AGENT_EVENTUAL_TIMEOUT, async {
-        loop {
-            let delivered = harness
-                .manager
-                .captured_ops()
-                .into_iter()
-                .any(|(thread_id, op)| {
-                    thread_id == worker_thread_id
-                        && matches!(
-                            op,
-                            Op::InterAgentCommunication { communication }
-                                if communication.author == tester_path
-                                    && communication.recipient == worker_path
-                                    && communication.other_recipients.is_empty()
-                                    && communication.content == "done"
-                        )
-                });
-            if delivered {
-                break;
-            }
-            sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("completion watcher should send inter-agent communication");
 }
 
 #[tokio::test]
