@@ -1364,7 +1364,7 @@ impl CodexMessageProcessor {
         let include_token = params.include_token.unwrap_or(false);
         let do_refresh = params.refresh_token.unwrap_or(false);
 
-        let refresh_outcome = self.refresh_token_if_requested(do_refresh).await;
+        self.refresh_token_if_requested(do_refresh).await;
 
         // Determine whether auth is required based on the active model provider.
         // If a custom provider is configured with `requires_openai_auth == false`,
@@ -1380,11 +1380,8 @@ impl CodexMessageProcessor {
         } else {
             match self.auth_manager.auth().await {
                 Some(auth) => {
-                    let permanent_refresh_failure = self.auth_manager.refresh_failure().is_some()
-                        || matches!(
-                            refresh_outcome,
-                            RefreshTokenRequestOutcome::FailedPermanently
-                        );
+                    let permanent_refresh_failure =
+                        self.auth_manager.refresh_failure_for_auth(&auth).is_some();
                     let auth_mode = auth.api_auth_mode();
                     let (reported_auth_method, token_opt) =
                         if include_token && permanent_refresh_failure {

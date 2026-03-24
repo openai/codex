@@ -798,7 +798,13 @@ struct CachedAuth {
     external_refresher: Option<Arc<dyn ExternalAuthRefresher>>,
     /// Permanent refresh failure cached for the current auth snapshot so
     /// later refresh attempts for the same credentials fail fast without network.
-    permanent_refresh_failure: Option<RefreshTokenFailedError>,
+    permanent_refresh_failure: Option<AuthScopedRefreshFailure>,
+}
+
+#[derive(Clone)]
+struct AuthScopedRefreshFailure {
+    auth: CodexAuth,
+    error: RefreshTokenFailedError,
 }
 
 impl Debug for CachedAuth {
@@ -817,7 +823,7 @@ impl Debug for CachedAuth {
                 &self
                     .permanent_refresh_failure
                     .as_ref()
-                    .map(|failure| failure.reason),
+                    .map(|failure| failure.error.reason),
             )
             .finish()
     }
@@ -1102,11 +1108,14 @@ impl AuthManager {
         self.inner.read().ok().and_then(|c| c.auth.clone())
     }
 
-    pub fn refresh_failure(&self) -> Option<RefreshTokenFailedError> {
-        self.inner
-            .read()
-            .ok()
-            .and_then(|cached| cached.permanent_refresh_failure.clone())
+    pub fn refresh_failure_for_auth(&self, auth: &CodexAuth) -> Option<RefreshTokenFailedError> {
+        self.inner.read().ok().and_then(|cached| {
+            cached
+                .permanent_refresh_failure
+                .as_ref()
+                .filter(|failure| Self::auths_equal_for_refresh(Some(auth), Some(&failure.auth)))
+                .map(|failure| failure.error.clone())
+        })
     }
 
     /// Current cached auth (clone). May be `None` if not logged in or load failed.
@@ -1197,7 +1206,10 @@ impl AuthManager {
             let current_auth_matches =
                 Self::auths_equal_for_refresh(Some(attempted_auth), guard.auth.as_ref());
             if current_auth_matches {
-                guard.permanent_refresh_failure = Some(error.clone());
+                guard.permanent_refresh_failure = Some(AuthScopedRefreshFailure {
+                    auth: attempted_auth.clone(),
+                    error: error.clone(),
+                });
             }
         }
     }
@@ -1332,7 +1344,7 @@ impl AuthManager {
             Some(auth) => auth,
             None => return Ok(()),
         };
-        if let Some(error) = self.refresh_failure() {
+        if let Some(error) = self.refresh_failure_for_auth(&auth) {
             return Err(RefreshTokenError::Permanent(error));
         }
 
