@@ -15,14 +15,12 @@ use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::PluginUninstallResponse;
-use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 
 const PLUGINS_SELECTION_VIEW_ID: &str = "plugins-selection";
-const SUPPORTED_MARKETPLACE_NAME: &str = OPENAI_CURATED_MARKETPLACE_NAME;
 
 #[derive(Debug, Clone, Default)]
 pub(super) enum PluginsCacheState {
@@ -625,11 +623,7 @@ impl ChatWidget {
     }
 
     fn plugins_popup_params(&self, response: &PluginListResponse) -> SelectionViewParams {
-        let marketplaces: Vec<&PluginMarketplaceEntry> = response
-            .marketplaces
-            .iter()
-            .filter(|marketplace| marketplace.name == SUPPORTED_MARKETPLACE_NAME)
-            .collect();
+        let marketplaces: Vec<&PluginMarketplaceEntry> = response.marketplaces.iter().collect();
 
         let total: usize = marketplaces
             .iter()
@@ -644,7 +638,7 @@ impl ChatWidget {
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Plugins".bold()));
         header.push(Line::from(
-            "Browse plugins from the ChatGPT marketplace.".dim(),
+            "Browse plugins from available marketplaces.".dim(),
         ));
         header.push(Line::from(
             format!("Installed {installed} of {total} available plugins.").dim(),
@@ -655,51 +649,73 @@ impl ChatWidget {
             ));
         }
 
-        let mut items: Vec<SelectionItem> = Vec::new();
-        for marketplace in marketplaces {
-            let marketplace_label = marketplace_display_name(marketplace);
-            for plugin in &marketplace.plugins {
-                let display_name = plugin_display_name(plugin);
-                let status_label = plugin_status_label(plugin);
-                let description = plugin_brief_description(plugin, &marketplace_label);
-                let selected_description =
-                    format!("{status_label}. Press Enter to view plugin details.");
-                let search_value = format!(
-                    "{display_name} {} {} {}",
-                    plugin.id, plugin.name, marketplace_label
-                );
-                let cwd = self.config.cwd.clone();
-                let plugin_display_name = display_name.clone();
-                let marketplace_path = marketplace.path.clone();
-                let plugin_name = plugin.name.clone();
+        let mut plugin_entries: Vec<(&PluginMarketplaceEntry, &PluginSummary, String)> =
+            marketplaces
+                .iter()
+                .flat_map(|marketplace| {
+                    marketplace
+                        .plugins
+                        .iter()
+                        .map(move |plugin| (*marketplace, plugin, plugin_display_name(plugin)))
+                })
+                .collect();
+        plugin_entries.sort_by(|left, right| {
+            right
+                .1
+                .installed
+                .cmp(&left.1.installed)
+                .then_with(|| {
+                    left.2
+                        .to_ascii_lowercase()
+                        .cmp(&right.2.to_ascii_lowercase())
+                })
+                .then_with(|| left.2.cmp(&right.2))
+                .then_with(|| left.1.name.cmp(&right.1.name))
+                .then_with(|| left.1.id.cmp(&right.1.id))
+        });
 
-                items.push(SelectionItem {
-                    name: format!("{display_name} · {marketplace_label}"),
-                    description: Some(description),
-                    selected_description: Some(selected_description),
-                    search_value: Some(search_value),
-                    actions: vec![Box::new(move |tx| {
-                        tx.send(AppEvent::OpenPluginDetailLoading {
-                            plugin_display_name: plugin_display_name.clone(),
-                        });
-                        tx.send(AppEvent::FetchPluginDetail {
-                            cwd: cwd.clone(),
-                            params: codex_app_server_protocol::PluginReadParams {
-                                marketplace_path: marketplace_path.clone(),
-                                plugin_name: plugin_name.clone(),
-                            },
-                        });
-                    })],
-                    ..Default::default()
-                });
-            }
+        let mut items: Vec<SelectionItem> = Vec::new();
+        for (marketplace, plugin, display_name) in plugin_entries {
+            let marketplace_label = marketplace_display_name(marketplace);
+            let status_label = plugin_status_label(plugin);
+            let description = plugin_brief_description(plugin, &marketplace_label);
+            let selected_description =
+                format!("{status_label}. Press Enter to view plugin details.");
+            let search_value = format!(
+                "{display_name} {} {} {}",
+                plugin.id, plugin.name, marketplace_label
+            );
+            let cwd = self.config.cwd.clone();
+            let plugin_display_name = display_name.clone();
+            let marketplace_path = marketplace.path.clone();
+            let plugin_name = plugin.name.clone();
+
+            items.push(SelectionItem {
+                name: format!("{display_name} · {marketplace_label}"),
+                description: Some(description),
+                selected_description: Some(selected_description),
+                search_value: Some(search_value),
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::OpenPluginDetailLoading {
+                        plugin_display_name: plugin_display_name.clone(),
+                    });
+                    tx.send(AppEvent::FetchPluginDetail {
+                        cwd: cwd.clone(),
+                        params: codex_app_server_protocol::PluginReadParams {
+                            marketplace_path: marketplace_path.clone(),
+                            plugin_name: plugin_name.clone(),
+                        },
+                    });
+                })],
+                ..Default::default()
+            });
         }
 
         if items.is_empty() {
             items.push(SelectionItem {
-                name: "No ChatGPT marketplace plugins available".to_string(),
+                name: "No marketplace plugins available".to_string(),
                 description: Some(
-                    "This first pass only surfaces the ChatGPT plugin marketplace.".to_string(),
+                    "No plugins are available in the discovered marketplaces.".to_string(),
                 ),
                 is_disabled: true,
                 ..Default::default()

@@ -178,10 +178,11 @@ trust_level = "trusted"
             anyhow::bail!("timed out waiting for codex resume to exit");
         }
     };
+    let output_text = String::from_utf8_lossy(&output);
+    let interrupted_startup = exit_code == 1 && output_text.trim() == "^C";
     anyhow::ensure!(
-        exit_code == 0 || exit_code == 130,
-        "unexpected exit code from codex resume: {exit_code}; output: {}",
-        String::from_utf8_lossy(&output)
+        exit_code == 0 || exit_code == 130 || interrupted_startup,
+        "unexpected exit code from codex resume: {exit_code}; output: {output_text}",
     );
 
     let config_contents = std::fs::read_to_string(codex_home.path().join("config.toml"))?;

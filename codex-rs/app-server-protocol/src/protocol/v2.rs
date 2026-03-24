@@ -3165,9 +3165,19 @@ pub struct PluginListParams {
 #[ts(export_to = "v2/")]
 pub struct PluginListResponse {
     pub marketplaces: Vec<PluginMarketplaceEntry>,
+    #[serde(default)]
+    pub marketplace_load_errors: Vec<MarketplaceLoadErrorInfo>,
     pub remote_sync_error: Option<String>,
     #[serde(default)]
     pub featured_plugin_ids: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct MarketplaceLoadErrorInfo {
+    pub marketplace_path: AbsolutePathBuf,
+    pub message: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

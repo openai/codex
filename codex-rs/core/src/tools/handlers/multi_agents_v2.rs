@@ -30,10 +30,15 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
-pub(crate) use send_input::Handler as SendInputHandler;
+pub(crate) use assign_task::Handler as AssignTaskHandler;
+pub(crate) use list_agents::Handler as ListAgentsHandler;
+pub(crate) use send_message::Handler as SendMessageHandler;
 pub(crate) use spawn::Handler as SpawnAgentHandler;
 pub(crate) use wait::Handler as WaitAgentHandler;
 
-mod send_input;
+mod assign_task;
+mod list_agents;
+mod message_tool;
+mod send_message;
 mod spawn;
 pub(crate) mod wait;

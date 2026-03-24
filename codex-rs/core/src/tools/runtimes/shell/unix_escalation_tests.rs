@@ -14,7 +14,6 @@ use crate::config::Constrained;
 use crate::config::Permissions;
 #[cfg(target_os = "macos")]
 use crate::config::types::ShellEnvironmentPolicy;
-use crate::exec::SandboxType;
 use crate::protocol::AskForApproval;
 use crate::protocol::GranularApprovalConfig;
 use crate::protocol::ReadOnlyAccess;
@@ -38,6 +37,7 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SkillScope;
+use codex_sandboxing::SandboxType;
 #[cfg(target_os = "macos")]
 use codex_sandboxing::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 use codex_shell_escalation::EscalationExecution;

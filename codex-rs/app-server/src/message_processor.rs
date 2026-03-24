@@ -173,8 +173,6 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
     pub(crate) loader_overrides: LoaderOverrides,
     pub(crate) cloud_requirements: CloudRequirementsLoader,
-    pub(crate) auth_manager: Option<Arc<AuthManager>>,
-    pub(crate) thread_manager: Option<Arc<ThreadManager>>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
@@ -193,36 +191,27 @@ impl MessageProcessor {
             cli_overrides,
             loader_overrides,
             cloud_requirements,
-            auth_manager,
-            thread_manager,
             feedback,
             log_db,
             config_warnings,
             session_source,
             enable_codex_api_key_env,
         } = args;
-        let (auth_manager, thread_manager) = match (auth_manager, thread_manager) {
-            (Some(auth_manager), Some(thread_manager)) => (auth_manager, thread_manager),
-            (None, None) => {
-                let auth_manager = AuthManager::shared(
-                    config.codex_home.clone(),
-                    enable_codex_api_key_env,
-                    config.cli_auth_credentials_store_mode,
-                );
-                let thread_manager = Arc::new(ThreadManager::new(
-                    config.as_ref(),
-                    auth_manager.clone(),
-                    session_source,
-                    CollaborationModesConfig {
-                        default_mode_request_user_input: config
-                            .features
-                            .enabled(Feature::DefaultModeRequestUserInput),
-                    },
-                ));
-                (auth_manager, thread_manager)
-            }
-            _ => panic!("MessageProcessorArgs must provide both auth_manager and thread_manager"),
-        };
+        let auth_manager = AuthManager::shared(
+            config.codex_home.clone(),
+            enable_codex_api_key_env,
+            config.cli_auth_credentials_store_mode,
+        );
+        let thread_manager = Arc::new(ThreadManager::new(
+            config.as_ref(),
+            auth_manager.clone(),
+            session_source,
+            CollaborationModesConfig {
+                default_mode_request_user_input: config
+                    .features
+                    .enabled(Feature::DefaultModeRequestUserInput),
+            },
+        ));
         auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
         auth_manager.set_external_auth_refresher(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),

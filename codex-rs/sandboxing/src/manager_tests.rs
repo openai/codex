@@ -1,9 +1,9 @@
+use super::SandboxCommand;
 use super::SandboxManager;
-use crate::exec::SandboxType;
-use crate::protocol::NetworkAccess;
-use crate::protocol::ReadOnlyAccess;
-use crate::protocol::SandboxPolicy;
-use crate::tools::sandboxing::SandboxablePreference;
+use super::SandboxTransformRequest;
+use super::SandboxType;
+use super::SandboxablePreference;
+use super::get_platform_sandbox;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::NetworkPermissions;
@@ -14,6 +14,9 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::NetworkAccess;
+use codex_protocol::protocol::ReadOnlyAccess;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize;
 use pretty_assertions::assert_eq;
@@ -36,7 +39,7 @@ fn danger_full_access_defaults_to_no_sandbox_without_network_requirements() {
 #[test]
 fn danger_full_access_uses_platform_sandbox_with_network_requirements() {
     let manager = SandboxManager::new();
-    let expected = crate::safety::get_platform_sandbox(false).unwrap_or(SandboxType::None);
+    let expected = get_platform_sandbox(false).unwrap_or(SandboxType::None);
     let sandbox = manager.select_initial(
         &FileSystemSandboxPolicy::unrestricted(),
         NetworkSandboxPolicy::Enabled,
@@ -50,7 +53,7 @@ fn danger_full_access_uses_platform_sandbox_with_network_requirements() {
 #[test]
 fn restricted_file_system_uses_platform_sandbox_without_managed_network() {
     let manager = SandboxManager::new();
-    let expected = crate::safety::get_platform_sandbox(false).unwrap_or(SandboxType::None);
+    let expected = get_platform_sandbox(false).unwrap_or(SandboxType::None);
     let sandbox = manager.select_initial(
         &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
@@ -71,20 +74,16 @@ fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() 
     let manager = SandboxManager::new();
     let cwd = std::env::current_dir().expect("current dir");
     let exec_request = manager
-        .transform(super::SandboxTransformRequest {
-            spec: super::CommandSpec {
+        .transform(SandboxTransformRequest {
+            command: SandboxCommand {
                 program: "true".to_string(),
                 args: Vec::new(),
                 cwd: cwd.clone(),
                 env: HashMap::new(),
-                expiration: crate::exec::ExecExpiration::DefaultTimeout,
-                capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
-                sandbox_permissions: super::SandboxPermissions::UseDefault,
                 additional_permissions: None,
-                justification: None,
             },
             policy: &SandboxPolicy::ExternalSandbox {
-                network_access: crate::protocol::NetworkAccess::Restricted,
+                network_access: NetworkAccess::Restricted,
             },
             file_system_policy: &FileSystemSandboxPolicy::unrestricted(),
             network_policy: NetworkSandboxPolicy::Restricted,
@@ -121,15 +120,12 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
     )
     .expect("absolute temp dir");
     let exec_request = manager
-        .transform(super::SandboxTransformRequest {
-            spec: super::CommandSpec {
+        .transform(SandboxTransformRequest {
+            command: SandboxCommand {
                 program: "true".to_string(),
                 args: Vec::new(),
                 cwd: cwd.clone(),
                 env: HashMap::new(),
-                expiration: crate::exec::ExecExpiration::DefaultTimeout,
-                capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
-                sandbox_permissions: super::SandboxPermissions::WithAdditionalPermissions,
                 additional_permissions: Some(PermissionProfile {
                     network: Some(NetworkPermissions {
                         enabled: Some(true),
@@ -140,7 +136,6 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
                     }),
                     ..Default::default()
                 }),
-                justification: None,
             },
             policy: &SandboxPolicy::ExternalSandbox {
                 network_access: NetworkAccess::Restricted,
@@ -184,15 +179,12 @@ fn transform_additional_permissions_preserves_denied_entries() {
     let allowed_path = workspace_root.join("allowed").expect("allowed path");
     let denied_path = workspace_root.join("denied").expect("denied path");
     let exec_request = manager
-        .transform(super::SandboxTransformRequest {
-            spec: super::CommandSpec {
+        .transform(SandboxTransformRequest {
+            command: SandboxCommand {
                 program: "true".to_string(),
                 args: Vec::new(),
                 cwd: cwd.clone(),
                 env: HashMap::new(),
-                expiration: crate::exec::ExecExpiration::DefaultTimeout,
-                capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
-                sandbox_permissions: super::SandboxPermissions::WithAdditionalPermissions,
                 additional_permissions: Some(PermissionProfile {
                     file_system: Some(FileSystemPermissions {
                         read: None,
@@ -200,7 +192,6 @@ fn transform_additional_permissions_preserves_denied_entries() {
                     }),
                     ..Default::default()
                 }),
-                justification: None,
             },
             policy: &SandboxPolicy::ReadOnly {
                 access: ReadOnlyAccess::FullAccess,
