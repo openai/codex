@@ -936,7 +936,8 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
     for item in &rollout_items {
         builder.handle_rollout_item(item);
     }
-    if builder.has_active_turn() {
+    let active_turn_id = builder.active_turn_id_if_explicit();
+    if builder.has_active_turn() && active_turn_id.is_some() {
         let active_turn_snapshot = builder.active_turn_snapshot();
         if active_turn_snapshot
             .as_ref()
@@ -951,7 +952,7 @@ fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {
 
         return SnapshotTurnState {
             ends_mid_turn: true,
-            active_turn_id: builder.active_turn_id_if_explicit(),
+            active_turn_id,
             active_turn_start_index: builder.active_turn_start_index(),
         };
     }

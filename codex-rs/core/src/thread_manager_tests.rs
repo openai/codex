@@ -381,6 +381,28 @@ fn completed_legacy_event_history_is_not_mid_turn() {
     );
 }
 
+#[test]
+fn mixed_response_and_legacy_user_event_history_is_mid_turn() {
+    let mixed_history = InitialHistory::Forked(vec![
+        RolloutItem::ResponseItem(user_msg("hello")),
+        RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "hello".to_string(),
+            images: None,
+            text_elements: Vec::new(),
+            local_images: Vec::new(),
+        })),
+    ]);
+
+    assert_eq!(
+        snapshot_turn_state(&mixed_history),
+        SnapshotTurnState {
+            ends_mid_turn: true,
+            active_turn_id: None,
+            active_turn_start_index: None,
+        },
+    );
+}
+
 #[tokio::test]
 async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_history() {
     let temp_dir = tempdir().expect("tempdir");
