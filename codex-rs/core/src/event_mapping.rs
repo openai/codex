@@ -36,10 +36,17 @@ pub(crate) fn is_contextual_user_message_content(message: &[ContentItem]) -> boo
     message.iter().any(is_contextual_user_fragment)
 }
 
+/// Returns true when a developer message contains any rollback-trimmable contextual fragment.
+///
+/// `build_initial_context` can bundle these fragments together with persistent developer text in a
+/// single developer message, so callers that care about invalidating a stored reference baseline
+/// should pair this with `has_non_contextual_dev_message_content`.
 pub(crate) fn is_contextual_dev_message_content(message: &[ContentItem]) -> bool {
     message.iter().any(is_contextual_dev_fragment)
 }
 
+/// Returns true when a developer message contains any fragment that is not part of the
+/// rollback-trimmable contextual prefix set.
 pub(crate) fn has_non_contextual_dev_message_content(message: &[ContentItem]) -> bool {
     message
         .iter()

@@ -42,7 +42,9 @@ pub(crate) struct ContextManager {
     /// match the current turn after context updates are persisted.
     ///
     /// When this is `None`, settings diffing treats the next turn as having no
-    /// baseline and emits a full reinjection of context state.
+    /// baseline and emits a full reinjection of context state. Rollback may
+    /// also clear this when it trims a mixed initial-context developer bundle
+    /// whose non-diff fragments no longer exist in the surviving history.
     reference_context_item: Option<TurnContextItem>,
 }
 
@@ -218,19 +220,21 @@ impl ContextManager {
     /// - if `num_turns` exceeds the number of user turns, all user turns are dropped while
     ///   preserving any items that occurred before the first user message.
     ///
-    /// Returns true when rollback trimmed a developer context bundle that also contained
-    /// non-context fragments, so callers should clear the final `reference_context_item`
-    /// baseline and force a full reinjection on the next real user turn.
-    pub(crate) fn drop_last_n_user_turns(&mut self, num_turns: u32) -> bool {
+    /// If rollback trims a pre-turn developer message that mixes contextual fragments with
+    /// persistent developer text from `build_initial_context`, this also clears
+    /// `reference_context_item`. The surviving history no longer contains the full bundle that
+    /// established the prior baseline, so future turns must fall back to full reinjection instead
+    /// of diffing against stale state.
+    pub(crate) fn drop_last_n_user_turns(&mut self, num_turns: u32) {
         if num_turns == 0 {
-            return false;
+            return;
         }
 
         let snapshot = self.items.clone();
         let user_positions = user_message_positions(&snapshot);
         let Some(&first_user_idx) = user_positions.first() else {
             self.replace(snapshot);
-            return false;
+            return;
         };
 
         let n_from_end = usize::try_from(num_turns).unwrap_or(usize::MAX);
@@ -240,13 +244,13 @@ impl ContextManager {
             user_positions[user_positions.len() - n_from_end]
         };
 
-        let mut should_clear_reference_context_item = false;
+        let mut trimmed_mixed_developer_context_bundle = false;
         while cut_idx > first_user_idx {
             match &snapshot[cut_idx - 1] {
                 ResponseItem::Message { role, content, .. }
                     if role == "developer" && is_contextual_dev_message_content(content) =>
                 {
-                    should_clear_reference_context_item |=
+                    trimmed_mixed_developer_context_bundle |=
                         has_non_contextual_dev_message_content(content);
                     cut_idx -= 1;
                 }
@@ -260,7 +264,10 @@ impl ContextManager {
         }
 
         self.replace(snapshot[..cut_idx].to_vec());
-        should_clear_reference_context_item
+        if trimmed_mixed_developer_context_bundle {
+            // Must rebuild full context since we trimmed full context reinjection after backtracking
+            self.reference_context_item = None;
+        }
     }
 
     pub(crate) fn update_token_info(
