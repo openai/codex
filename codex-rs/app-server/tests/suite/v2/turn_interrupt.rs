@@ -124,10 +124,17 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
 
 #[tokio::test]
 async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()> {
+    #[cfg(target_os = "windows")]
+    let shell_command = vec![
+        "powershell".to_string(),
+        "-Command".to_string(),
+        "Start-Sleep -Seconds 10".to_string(),
+    ];
+    #[cfg(not(target_os = "windows"))]
     let shell_command = vec![
         "python3".to_string(),
         "-c".to_string(),
-        "print(42)".to_string(),
+        "import time; time.sleep(10)".to_string(),
     ];
 
     let tmp = TempDir::new()?;
@@ -140,7 +147,7 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
         shell_command.clone(),
         Some(&working_directory),
         Some(10_000),
-        "call_python_approval",
+        "call_sleep_approval",
     )?])
     .await;
     create_config_toml(&codex_home, &server.uri(), "untrusted", "read-only")?;
@@ -169,6 +176,7 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
                 text_elements: Vec::new(),
             }],
             cwd: Some(working_directory),
+            approval_policy: Some(codex_app_server_protocol::AskForApproval::UnlessTrusted),
             ..Default::default()
         })
         .await?;
@@ -187,7 +195,7 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
     let ServerRequest::CommandExecutionRequestApproval { request_id, params } = request else {
         panic!("expected CommandExecutionRequestApproval request");
     };
-    assert_eq!(params.item_id, "call_python_approval");
+    assert_eq!(params.item_id, "call_sleep_approval");
     assert_eq!(params.thread_id, thread.id);
     assert_eq!(params.turn_id, turn.id);
 
@@ -248,6 +256,7 @@ fn create_config_toml(
             r#"
 model = "mock-model"
 approval_policy = "{approval_policy}"
+approvals_reviewer = "user"
 sandbox_mode = "{sandbox_mode}"
 
 model_provider = "mock_provider"

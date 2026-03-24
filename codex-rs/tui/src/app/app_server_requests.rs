@@ -656,7 +656,6 @@ mod tests {
                     cwd: None,
                     command_actions: None,
                     additional_permissions: None,
-                    skill_metadata: None,
                     proposed_execpolicy_amendment: None,
                     proposed_network_policy_amendments: None,
                     available_decisions: None,

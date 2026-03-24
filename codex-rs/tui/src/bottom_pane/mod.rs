@@ -370,6 +370,18 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    fn pop_active_view(&mut self) {
+        if self.view_stack.pop().is_some() {
+            self.on_view_stack_depth_decreased();
+        }
+    }
+
+    fn on_view_stack_depth_decreased(&mut self) {
+        if self.view_stack.is_empty() {
+            self.on_active_view_complete();
+        }
+    }
+
     /// Forward a key event to the active view or the composer.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
         // If a modal/view is active, handle it here; otherwise forward to composer.
@@ -399,16 +411,14 @@ impl BottomPane {
             };
 
             if ctrl_c_completed {
-                self.view_stack.pop();
-                self.on_active_view_complete();
+                self.pop_active_view();
                 if let Some(next_view) = self.view_stack.last()
                     && next_view.is_in_paste_burst()
                 {
                     self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
                 }
             } else if view_complete {
-                self.view_stack.clear();
-                self.on_active_view_complete();
+                self.pop_active_view();
             } else if view_in_paste_burst {
                 self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
             }
@@ -459,10 +469,10 @@ impl BottomPane {
     pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
         if let Some(view) = self.view_stack.last_mut() {
             let event = view.on_ctrl_c();
+            let view_complete = view.is_complete();
             if matches!(event, CancellationEvent::Handled) {
-                if view.is_complete() {
-                    self.view_stack.pop();
-                    self.on_active_view_complete();
+                if view_complete {
+                    self.pop_active_view();
                 }
                 self.show_quit_shortcut_hint(key_hint::ctrl(KeyCode::Char('c')));
                 self.request_redraw();
@@ -480,17 +490,13 @@ impl BottomPane {
     }
 
     pub fn handle_paste(&mut self, pasted: String) {
-        if !self.view_stack.is_empty() {
-            let (needs_redraw, view_complete) = {
-                let last_index = self.view_stack.len() - 1;
-                let view = &mut self.view_stack[last_index];
-                (view.handle_paste(pasted), view.is_complete())
-            };
+        if let Some(view) = self.view_stack.last_mut() {
+            let needs_redraw = view.handle_paste(pasted);
+            let view_complete = view.is_complete();
             if view_complete {
-                self.view_stack.clear();
-                self.on_active_view_complete();
+                self.pop_active_view();
             }
-            if needs_redraw {
+            if needs_redraw || view_complete {
                 self.request_redraw();
             }
         } else {
@@ -1023,17 +1029,29 @@ impl BottomPane {
         &mut self,
         request: &ResolvedAppServerRequest,
     ) -> bool {
-        let Some(view) = self.view_stack.last_mut() else {
+        if self.view_stack.is_empty() {
             return false;
-        };
-        let changed = view.dismiss_app_server_request(request);
+        }
+
+        let mut changed = false;
+        let mut completed_indices = Vec::new();
+        for index in (0..self.view_stack.len()).rev() {
+            let view = &mut self.view_stack[index];
+            if !view.dismiss_app_server_request(request) {
+                continue;
+            }
+            changed = true;
+            if view.is_complete() {
+                completed_indices.push(index);
+            }
+        }
         if !changed {
             return false;
         }
-        if view.is_complete() {
-            self.view_stack.pop();
-            self.on_active_view_complete();
+        for index in completed_indices {
+            self.view_stack.remove(index);
         }
+        self.on_view_stack_depth_decreased();
         self.request_redraw();
         true
     }
@@ -1247,14 +1265,18 @@ impl Renderable for BottomPane {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::app_server_requests::ResolvedAppServerRequest;
     use crate::app_event::AppEvent;
     use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
     use crate::status_indicator_widget::StatusDetailsCapitalization;
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::SkillScope;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
     use crossterm::event::KeyEventKind;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
+    use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
     use std::cell::Cell;
@@ -1280,6 +1302,19 @@ mod tests {
         snapshot_buffer(&buf)
     }
 
+    fn test_pane(app_event_tx: AppEventSender) -> BottomPane {
+        BottomPane::new(BottomPaneParams {
+            app_event_tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        })
+    }
+
     fn exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
             thread_id: codex_protocol::ThreadId::new(),
@@ -1293,6 +1328,73 @@ mod tests {
             ],
             network_approval_context: None,
             additional_permissions: None,
+        }
+    }
+
+    #[derive(Default)]
+    struct DismissibleView {
+        id: Option<&'static str>,
+        dismiss_exec_id: Option<&'static str>,
+        complete: bool,
+    }
+
+    impl Renderable for DismissibleView {
+        fn render(&self, _area: Rect, _buf: &mut Buffer) {}
+
+        fn desired_height(&self, _width: u16) -> u16 {
+            0
+        }
+    }
+
+    impl BottomPaneView for DismissibleView {
+        fn is_complete(&self) -> bool {
+            self.complete
+        }
+
+        fn view_id(&self) -> Option<&'static str> {
+            self.id
+        }
+
+        fn dismiss_app_server_request(&mut self, request: &ResolvedAppServerRequest) -> bool {
+            let ResolvedAppServerRequest::ExecApproval { id } = request else {
+                return false;
+            };
+            if self.dismiss_exec_id != Some(id.as_str()) {
+                return false;
+            }
+
+            self.complete = true;
+            true
+        }
+    }
+
+    #[derive(Default)]
+    struct CompletingView {
+        id: Option<&'static str>,
+        complete: bool,
+    }
+
+    impl Renderable for CompletingView {
+        fn render(&self, _area: Rect, _buf: &mut Buffer) {}
+
+        fn desired_height(&self, _width: u16) -> u16 {
+            0
+        }
+    }
+
+    impl BottomPaneView for CompletingView {
+        fn handle_key_event(&mut self, key_event: KeyEvent) {
+            if key_event.code == KeyCode::Enter {
+                self.complete = true;
+            }
+        }
+
+        fn is_complete(&self) -> bool {
+            self.complete
+        }
+
+        fn view_id(&self) -> Option<&'static str> {
+            self.id
         }
     }
 
@@ -1350,6 +1452,89 @@ mod tests {
         assert!(
             !r0.contains("Working"),
             "overlay should not render above modal"
+        );
+    }
+
+    #[test]
+    fn dismiss_app_server_request_removes_matching_buried_view() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = test_pane(tx);
+
+        pane.push_view(Box::new(DismissibleView {
+            id: Some("buried"),
+            dismiss_exec_id: Some("request-1"),
+            complete: false,
+        }));
+        pane.push_view(Box::new(DismissibleView {
+            id: Some("top"),
+            dismiss_exec_id: None,
+            complete: false,
+        }));
+
+        assert!(
+            pane.dismiss_app_server_request(&ResolvedAppServerRequest::ExecApproval {
+                id: "request-1".to_string(),
+            })
+        );
+        assert_eq!(pane.view_stack.len(), 1);
+        assert_eq!(
+            pane.view_stack.last().and_then(|view| view.view_id()),
+            Some("top")
+        );
+    }
+
+    #[test]
+    fn dismiss_app_server_request_returns_false_when_no_view_matches() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = test_pane(tx);
+
+        pane.push_view(Box::new(DismissibleView {
+            id: Some("first"),
+            dismiss_exec_id: Some("other-request"),
+            complete: false,
+        }));
+        pane.push_view(Box::new(DismissibleView {
+            id: Some("second"),
+            dismiss_exec_id: None,
+            complete: false,
+        }));
+
+        assert!(
+            !pane.dismiss_app_server_request(&ResolvedAppServerRequest::ExecApproval {
+                id: "request-1".to_string(),
+            })
+        );
+        assert_eq!(pane.view_stack.len(), 2);
+        assert_eq!(
+            pane.view_stack.last().and_then(|view| view.view_id()),
+            Some("second")
+        );
+    }
+
+    #[test]
+    fn completing_top_view_preserves_underlying_view() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut pane = test_pane(tx);
+
+        pane.push_view(Box::new(DismissibleView {
+            id: Some("underlying"),
+            dismiss_exec_id: None,
+            complete: false,
+        }));
+        pane.push_view(Box::new(CompletingView {
+            id: Some("top"),
+            complete: false,
+        }));
+
+        pane.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(pane.view_stack.len(), 1);
+        assert_eq!(
+            pane.view_stack.last().and_then(|view| view.view_id()),
+            Some("underlying")
         );
     }
 
