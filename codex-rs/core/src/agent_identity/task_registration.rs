@@ -71,7 +71,10 @@ impl AgentIdentityManager {
                 .with_context(|| format!("failed to parse agent task response from {url}"))?;
             let registered_task = RegisteredAgentTask {
                 agent_runtime_id: stored_identity.agent_runtime_id.clone(),
-                task_id: decrypt_task_id_response(&stored_identity, &response_body.encrypted_task_id)?,
+                task_id: decrypt_task_id_response(
+                    &stored_identity,
+                    &response_body.encrypted_task_id,
+                )?,
                 registered_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
             };
             info!(
