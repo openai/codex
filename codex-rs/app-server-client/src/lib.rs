@@ -954,15 +954,7 @@ mod tests {
             })
             .await
             .expect("typed request should succeed");
-        let shutdown_result = client.shutdown().await;
-        assert!(
-            shutdown_result.is_ok()
-                || matches!(
-                    shutdown_result.as_ref().map_err(|error| error.kind()),
-                    Err(ErrorKind::BrokenPipe)
-                ),
-            "shutdown should complete: {shutdown_result:?}"
-        );
+        client.shutdown().await.expect("shutdown should complete");
     }
 
     #[tokio::test]

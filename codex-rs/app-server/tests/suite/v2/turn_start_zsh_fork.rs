@@ -676,8 +676,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             if let Some(output) = aggregated_output.as_deref() {
                 assert!(
                     output == "exec command rejected by user"
-                        || output.contains("sandbox denied exec error")
-                        || output == "sandbox error: command timed out",
+                        || output.contains("sandbox denied exec error"),
                     "unexpected aggregated output: {output}"
                 );
             }

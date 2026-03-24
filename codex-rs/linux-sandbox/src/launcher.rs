@@ -210,11 +210,7 @@ exit 1
 
     fn write_fake_bwrap(contents: &str) -> TempPath {
         // Linux rejects exec-ing a file that is still open for writing.
-        let temp_file = std::env::current_dir()
-            .ok()
-            .and_then(|cwd| NamedTempFile::new_in(cwd).ok())
-            .unwrap_or_else(|| NamedTempFile::new().expect("temp file"));
-        let path = temp_file.into_temp_path();
+        let path = NamedTempFile::new().expect("temp file").into_temp_path();
         fs::write(&path, contents).expect("write fake bwrap");
         let permissions = fs::Permissions::from_mode(0o755);
         fs::set_permissions(&path, permissions).expect("chmod fake bwrap");
