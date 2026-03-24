@@ -178,41 +178,41 @@ fn resume_agent_output_schema() -> JsonValue {
     })
 }
 
-fn wait_output_schema(multi_agent_v2: bool) -> JsonValue {
-    if multi_agent_v2 {
-        json!({
-            "type": "object",
-            "properties": {
-                "message": {
-                    "type": "string",
-                    "description": "Brief wait summary without the agent's final content."
-                },
-                "timed_out": {
-                    "type": "boolean",
-                    "description": "Whether the wait call returned due to timeout before any agent reached a final status."
-                }
+fn wait_output_schema_v1() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "status": {
+                "type": "object",
+                "description": "Final statuses keyed by canonical task name when available, otherwise by agent id.",
+                "additionalProperties": agent_status_output_schema()
             },
-            "required": ["message", "timed_out"],
-            "additionalProperties": false
-        })
-    } else {
-        json!({
-            "type": "object",
-            "properties": {
-                "status": {
-                    "type": "object",
-                    "description": "Final statuses keyed by canonical task name when available, otherwise by agent id.",
-                    "additionalProperties": agent_status_output_schema()
-                },
-                "timed_out": {
-                    "type": "boolean",
-                    "description": "Whether the wait call returned due to timeout before any agent reached a final status."
-                }
+            "timed_out": {
+                "type": "boolean",
+                "description": "Whether the wait call returned due to timeout before any agent reached a final status."
+            }
+        },
+        "required": ["status", "timed_out"],
+        "additionalProperties": false
+    })
+}
+
+fn wait_output_schema_v2() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "message": {
+                "type": "string",
+                "description": "Brief wait summary without the agent's final content."
             },
-            "required": ["status", "timed_out"],
-            "additionalProperties": false
-        })
-    }
+            "timed_out": {
+                "type": "boolean",
+                "description": "Whether the wait call returned due to timeout before any agent reached a final status."
+            }
+        },
+        "required": ["message", "timed_out"],
+        "additionalProperties": false
+    })
 }
 
 fn close_agent_output_schema() -> JsonValue {
@@ -1440,7 +1440,7 @@ fn create_resume_agent_tool() -> ToolSpec {
     })
 }
 
-fn create_wait_agent_tool(multi_agent_v2: bool) -> ToolSpec {
+fn wait_agent_tool_parameters() -> JsonSchema {
     let mut properties = BTreeMap::new();
     properties.insert(
         "targets".to_string(),
@@ -1461,23 +1461,34 @@ fn create_wait_agent_tool(multi_agent_v2: bool) -> ToolSpec {
         },
     );
 
+    JsonSchema::Object {
+        properties,
+        required: Some(vec!["targets".to_string()]),
+        additional_properties: Some(false.into()),
+    }
+}
+
+fn create_wait_agent_tool_v1() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "wait_agent".to_string(),
-        description: if multi_agent_v2 {
-            "Wait for agents to reach a final status. Returns a brief wait summary instead of the agent's final content. Returns a timeout summary when no agent reaches a final status before the deadline."
-                .to_string()
-        } else {
-            "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out. Once the agent reaches a final status, a notification message will be received containing the same completed status."
-                .to_string()
-        },
+        description: "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out. Once the agent reaches a final status, a notification message will be received containing the same completed status."
+            .to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["targets".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: Some(wait_output_schema(multi_agent_v2)),
+        parameters: wait_agent_tool_parameters(),
+        output_schema: Some(wait_output_schema_v1()),
+    })
+}
+
+fn create_wait_agent_tool_v2() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: "wait_agent".to_string(),
+        description: "Wait for agents to reach a final status. Returns a brief wait summary instead of the agent's final content. Returns a timeout summary when no agent reaches a final status before the deadline."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: wait_agent_tool_parameters(),
+        output_schema: Some(wait_output_schema_v2()),
     })
 }
 
@@ -3029,7 +3040,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
         }
         push_tool_spec(
             &mut builder,
-            create_wait_agent_tool(config.multi_agent_v2),
+            if config.multi_agent_v2 {
+                create_wait_agent_tool_v2()
+            } else {
+                create_wait_agent_tool_v1()
+            },
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
