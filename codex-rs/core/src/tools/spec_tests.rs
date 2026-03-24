@@ -469,7 +469,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         create_view_image_tool(config.can_request_original_image_detail),
         create_spawn_agent_tool(&config),
         create_send_input_tool(),
-        create_wait_agent_tool(),
+        create_wait_agent_tool(config.multi_agent_v2),
         create_close_agent_tool(),
     ] {
         expected.insert(tool_name(&spec).to_string(), spec);
@@ -607,8 +607,8 @@ fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
         .as_ref()
         .expect("wait_agent should define output schema");
     assert_eq!(
-        output_schema["properties"]["status"]["description"],
-        json!("Final statuses keyed by canonical task name when available, otherwise by agent id.")
+        output_schema["properties"]["message"]["description"],
+        json!("Brief wait summary without the agent's final content.")
     );
     assert_lacks_tool_name(&tools, "resume_agent");
 }

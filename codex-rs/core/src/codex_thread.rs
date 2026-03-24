@@ -1,6 +1,4 @@
 use crate::agent::AgentStatus;
-use crate::agent::inter_agent_instruction::InterAgentDelivery;
-use crate::agent::inter_agent_instruction::InterAgentInstruction;
 use crate::codex::Codex;
 use crate::codex::SteerInputError;
 use crate::config::ConstraintResult;
@@ -158,6 +156,7 @@ impl CodexThread {
     /// If the thread already has an active turn, the message is queued as pending input for that
     /// turn. Otherwise it is queued at session scope and a regular turn is started so the agent
     /// can consume that pending input through the normal turn pipeline.
+    #[cfg(test)]
     pub(crate) async fn append_message(&self, message: ResponseItem) -> CodexResult<String> {
         let submission_id = uuid::Uuid::new_v4().to_string();
         let pending_item = pending_message_input_item(&message)?;
@@ -177,36 +176,6 @@ impl CodexThread {
                 .await;
         }
 
-        Ok(submission_id)
-    }
-
-    pub(crate) async fn deliver_inter_agent_instruction(
-        &self,
-        instruction: InterAgentInstruction,
-        delivery: InterAgentDelivery,
-    ) -> CodexResult<String> {
-        let message = instruction.to_response_item();
-        match delivery {
-            InterAgentDelivery::CurrentTurn => self.append_message(message).await,
-            InterAgentDelivery::NextTurn => self.queue_message_for_next_turn(message).await,
-        }
-    }
-
-    /// Queue a prebuilt message so the next turn records it before any submitted user input.
-    pub(crate) async fn queue_message_for_next_turn(
-        &self,
-        message: ResponseItem,
-    ) -> CodexResult<String> {
-        let submission_id = uuid::Uuid::new_v4().to_string();
-        let pending_item = pending_message_input_item(&message)?;
-        self.codex
-            .session
-            .queue_response_items_for_next_turn(vec![pending_item])
-            .await;
-        self.codex
-            .session
-            .ensure_task_for_queued_response_items()
-            .await;
         Ok(submission_id)
     }
 
