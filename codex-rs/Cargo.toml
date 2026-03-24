@@ -40,6 +40,7 @@ members = [
     "ollama",
     "process-hardening",
     "protocol",
+    "rollout",
     "rmcp-client",
     "responses-api-proxy",
     "sandboxing",
@@ -65,7 +66,6 @@ members = [
     "utils/sleep-inhibitor",
     "utils/approval-presets",
     "utils/oss",
-    "utils/output-truncation",
     "utils/fuzzy-match",
     "utils/stream-parser",
     "codex-client",
@@ -130,6 +130,7 @@ codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
+codex-rollout = { path = "rollout" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-sandboxing = { path = "sandboxing" }
@@ -155,7 +156,6 @@ codex-utils-home-dir = { path = "utils/home-dir" }
 codex-utils-image = { path = "utils/image" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-oss = { path = "utils/oss" }
-codex-utils-output-truncation = { path = "utils/output-truncation" }
 codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }

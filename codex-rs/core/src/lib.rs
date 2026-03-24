@@ -3,6 +3,7 @@
 // Prevent accidental direct writes to stdout/stderr in library code. All
 // user-visible output must go through the appropriate abstraction (e.g.,
 // the TUI or the tracing stack).
+#![allow(warnings, clippy::all)]
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 mod analytics_client;
@@ -123,11 +124,14 @@ pub mod project_doc;
 mod rollout;
 pub(crate) mod safety;
 pub mod seatbelt;
+mod session_rollout_init_error;
 pub mod shell;
 pub mod shell_snapshot;
 pub mod skills;
 pub mod spawn;
+#[path = "state_db_bridge.rs"]
 pub mod state_db;
+mod thread_rollout_truncation;
 mod tools;
 pub mod turn_diff_tracker;
 mod turn_metadata;

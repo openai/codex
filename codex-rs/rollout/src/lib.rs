@@ -1,8 +1,26 @@
-//! Rollout module: persistence and discovery of session rollout files.
+//! Rollout persistence and discovery for Codex session files.
 
 use std::sync::LazyLock;
 
 use codex_protocol::protocol::SessionSource;
+
+pub mod config;
+#[path = "state_db.rs"]
+pub mod db;
+pub mod list;
+pub mod metadata;
+pub mod policy;
+pub mod recorder;
+pub mod session_index;
+
+mod path_utils;
+
+pub(crate) mod default_client {
+    pub use codex_login::default_client::*;
+}
+
+pub(crate) use codex_protocol::protocol;
+pub(crate) use db as state_db;
 
 pub const SESSIONS_SUBDIR: &str = "sessions";
 pub const ARCHIVED_SESSIONS_SUBDIR: &str = "archived_sessions";
@@ -15,26 +33,22 @@ pub static INTERACTIVE_SESSION_SOURCES: LazyLock<Vec<SessionSource>> = LazyLock:
     ]
 });
 
-pub(crate) mod error;
-pub mod list;
-pub(crate) mod metadata;
-pub(crate) mod policy;
-pub mod recorder;
-pub(crate) mod session_index;
-pub(crate) mod truncation;
-
 pub use codex_protocol::protocol::SessionMeta;
-pub(crate) use error::map_session_init_error;
+pub use config::RolloutConfig;
+pub use config::RolloutConfigView;
+pub use db::StateDbHandle;
 pub use list::find_archived_thread_path_by_id_str;
 pub use list::find_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]
 pub use list::find_thread_path_by_id_str as find_conversation_path_by_id_str;
 pub use list::rollout_date_parts;
+pub use policy::EventPersistenceMode;
 pub use recorder::RolloutRecorder;
 pub use recorder::RolloutRecorderParams;
 pub use session_index::append_thread_name;
 pub use session_index::find_thread_name_by_id;
+pub use session_index::find_thread_names_by_ids;
 pub use session_index::find_thread_path_by_name_str;
 
 #[cfg(test)]
-pub mod tests;
+mod tests;

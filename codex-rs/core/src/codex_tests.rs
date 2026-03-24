@@ -1287,7 +1287,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         user_instructions: None,
         developer_instructions: None,
         final_output_json_schema: None,
-        truncation_policy: Some(turn_context.truncation_policy),
+        truncation_policy: Some(turn_context.truncation_policy.into()),
     };
     let turn_id = previous_context_item
         .turn_id

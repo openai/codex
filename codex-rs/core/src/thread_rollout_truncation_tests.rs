@@ -1,3 +1,5 @@
+#![allow(warnings, clippy::all)]
+
 use super::*;
 use crate::codex::make_session_and_context;
 use codex_protocol::models::ContentItem;

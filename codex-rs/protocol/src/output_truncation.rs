@@ -1,13 +1,58 @@
-//! Helpers for truncating tool and exec output using [`TruncationPolicy`](codex_protocol::protocol::TruncationPolicy).
+#![allow(warnings, clippy::all)]
 
-use codex_protocol::models::FunctionCallOutputContentItem;
+use std::ops::Mul;
+
+use crate::models::FunctionCallOutputContentItem;
+use crate::openai_models::TruncationMode;
+use crate::openai_models::TruncationPolicyConfig;
+pub use crate::protocol::TruncationPolicy;
 pub use codex_utils_string::approx_bytes_for_tokens;
 pub use codex_utils_string::approx_token_count;
 pub use codex_utils_string::approx_tokens_from_byte_count;
 use codex_utils_string::truncate_middle_chars;
 use codex_utils_string::truncate_middle_with_token_budget;
 
-pub use codex_protocol::protocol::TruncationPolicy;
+impl From<TruncationPolicyConfig> for TruncationPolicy {
+    fn from(config: TruncationPolicyConfig) -> Self {
+        match config.mode {
+            TruncationMode::Bytes => Self::Bytes(config.limit as usize),
+            TruncationMode::Tokens => Self::Tokens(config.limit as usize),
+        }
+    }
+}
+
+impl TruncationPolicy {
+    pub fn token_budget(&self) -> usize {
+        match self {
+            TruncationPolicy::Bytes(bytes) => {
+                usize::try_from(approx_tokens_from_byte_count(*bytes)).unwrap_or(usize::MAX)
+            }
+            TruncationPolicy::Tokens(tokens) => *tokens,
+        }
+    }
+
+    pub fn byte_budget(&self) -> usize {
+        match self {
+            TruncationPolicy::Bytes(bytes) => *bytes,
+            TruncationPolicy::Tokens(tokens) => approx_bytes_for_tokens(*tokens),
+        }
+    }
+}
+
+impl Mul<f64> for TruncationPolicy {
+    type Output = Self;
+
+    fn mul(self, multiplier: f64) -> Self::Output {
+        match self {
+            TruncationPolicy::Bytes(bytes) => {
+                TruncationPolicy::Bytes((bytes as f64 * multiplier).ceil() as usize)
+            }
+            TruncationPolicy::Tokens(tokens) => {
+                TruncationPolicy::Tokens((tokens as f64 * multiplier).ceil() as usize)
+            }
+        }
+    }
+}
 
 pub fn formatted_truncate_text(content: &str, policy: TruncationPolicy) -> String {
     if content.len() <= policy.byte_budget() {

@@ -1881,7 +1881,6 @@ dependencies = [
  "codex-exec-server",
  "codex-execpolicy",
  "codex-features",
- "codex-file-search",
  "codex-git-utils",
  "codex-hooks",
  "codex-login",
@@ -1890,6 +1889,7 @@ dependencies = [
  "codex-protocol",
  "codex-rmcp-client",
  "codex-sandboxing",
+ "codex-rollout",
  "codex-secrets",
  "codex-shell-command",
  "codex-shell-escalation",
@@ -1902,7 +1902,6 @@ dependencies = [
  "codex-utils-cargo-bin",
  "codex-utils-home-dir",
  "codex-utils-image",
- "codex-utils-output-truncation",
  "codex-utils-pty",
  "codex-utils-readiness",
  "codex-utils-stream-parser",
@@ -1950,7 +1949,6 @@ dependencies = [
  "test-case",
  "test-log",
  "thiserror 2.0.18",
- "time",
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
@@ -2400,7 +2398,6 @@ dependencies = [
  "codex-git-utils",
  "codex-utils-absolute-path",
  "codex-utils-image",
- "codex-utils-string",
  "icu_decimal",
  "icu_locale_core",
  "icu_provider",
@@ -2467,6 +2464,30 @@ dependencies = [
  "urlencoding",
  "webbrowser",
  "which 8.0.0",
+]
+
+[[package]]
+name = "codex-rollout"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "codex-file-search",
+ "codex-git-utils",
+ "codex-login",
+ "codex-otel",
+ "codex-protocol",
+ "codex-state",
+ "codex-utils-string",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -2891,15 +2912,6 @@ dependencies = [
  "codex-core",
  "codex-lmstudio",
  "codex-ollama",
-]
-
-[[package]]
-name = "codex-utils-output-truncation"
-version = "0.0.0"
-dependencies = [
- "codex-protocol",
- "codex-utils-string",
- "pretty_assertions",
 ]
 
 [[package]]

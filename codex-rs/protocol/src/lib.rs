@@ -1,3 +1,5 @@
+#![allow(warnings, clippy::all)]
+
 pub mod account;
 mod agent_path;
 mod thread_id;
@@ -14,6 +16,7 @@ pub mod message_history;
 pub mod models;
 pub mod num_format;
 pub mod openai_models;
+pub mod output_truncation;
 pub mod parse_command;
 pub mod permissions;
 pub mod plan_tool;

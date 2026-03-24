@@ -1,8 +1,9 @@
-use crate::config::Config;
+use crate::config::RolloutConfig;
+use crate::config::RolloutConfigView;
+use crate::list::Cursor;
+use crate::list::ThreadSortKey;
+use crate::metadata;
 use crate::path_utils::normalize_for_path_comparison;
-use crate::rollout::list::Cursor;
-use crate::rollout::list::ThreadSortKey;
-use crate::rollout::metadata;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Timelike;
@@ -23,9 +24,9 @@ use uuid::Uuid;
 /// Core-facing handle to the SQLite-backed state runtime.
 pub type StateDbHandle = Arc<codex_state::StateRuntime>;
 
-/// Initialize the state runtime for thread state persistence and backfill checks. To only be used
-/// inside `core`. The initialization should not be done anywhere else.
-pub(crate) async fn init(config: &Config) -> Option<StateDbHandle> {
+/// Initialize the state runtime for thread state persistence and backfill checks.
+pub async fn init(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
+    let config = RolloutConfig::from_view(config);
     let runtime = match codex_state::StateRuntime::init(
         config.sqlite_home.clone(),
         config.model_provider_id.clone(),
@@ -62,18 +63,18 @@ pub(crate) async fn init(config: &Config) -> Option<StateDbHandle> {
 }
 
 /// Get the DB if the feature is enabled and the DB exists.
-pub async fn get_state_db(config: &Config) -> Option<StateDbHandle> {
-    let state_path = codex_state::state_db_path(config.sqlite_home.as_path());
+pub async fn get_state_db(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
+    let state_path = codex_state::state_db_path(config.sqlite_home());
     if !tokio::fs::try_exists(&state_path).await.unwrap_or(false) {
         return None;
     }
     let runtime = codex_state::StateRuntime::init(
-        config.sqlite_home.clone(),
-        config.model_provider_id.clone(),
+        config.sqlite_home().to_path_buf(),
+        config.model_provider_id().to_string(),
     )
     .await
     .ok()?;
-    require_backfill_complete(runtime, config.sqlite_home.as_path()).await
+    require_backfill_complete(runtime, config.sqlite_home()).await
 }
 
 /// Open the state runtime when the SQLite file exists, without feature gating.
@@ -135,7 +136,7 @@ fn cursor_to_anchor(cursor: Option<&Cursor>) -> Option<codex_state::Anchor> {
     Some(codex_state::Anchor { ts, id })
 }
 
-pub(crate) fn normalize_cwd_for_state_db(cwd: &Path) -> PathBuf {
+pub fn normalize_cwd_for_state_db(cwd: &Path) -> PathBuf {
     normalize_for_path_comparison(cwd).unwrap_or_else(|_| cwd.to_path_buf())
 }
 
@@ -398,7 +399,7 @@ pub async fn reconcile_rollout(
         );
         return;
     }
-    if let Ok(meta_line) = crate::rollout::list::read_session_meta_line(rollout_path).await {
+    if let Ok(meta_line) = crate::list::read_session_meta_line(rollout_path).await {
         persist_dynamic_tools(
             Some(ctx),
             meta_line.meta.id,
@@ -463,7 +464,7 @@ pub async fn read_repair_rollout_path(
     if !saw_existing_metadata {
         warn!("state db discrepancy during read_repair_rollout_path: upsert_needed (slow path)");
     }
-    let default_provider = crate::rollout::list::read_session_meta_line(rollout_path)
+    let default_provider = crate::list::read_session_meta_line(rollout_path)
         .await
         .ok()
         .and_then(|meta| meta.meta.model_provider)

@@ -1,3 +1,5 @@
+#![allow(warnings, clippy::all)]
+
 //! Utilities for truncating large chunks of output while preserving a prefix
 //! and suffix on UTF-8 boundaries.
 

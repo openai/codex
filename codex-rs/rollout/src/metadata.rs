@@ -1,7 +1,9 @@
-use crate::config::Config;
-use crate::rollout;
-use crate::rollout::list::parse_timestamp_uuid_from_filename;
-use crate::rollout::recorder::RolloutRecorder;
+use crate::ARCHIVED_SESSIONS_SUBDIR;
+use crate::SESSIONS_SUBDIR;
+use crate::config::RolloutConfigView;
+use crate::list;
+use crate::list::parse_timestamp_uuid_from_filename;
+use crate::recorder::RolloutRecorder;
 use crate::state_db::normalize_cwd_for_state_db;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
@@ -62,7 +64,7 @@ pub(crate) fn builder_from_session_meta(
     Some(builder)
 }
 
-pub(crate) fn builder_from_items(
+pub fn builder_from_items(
     items: &[RolloutItem],
     rollout_path: &Path,
 ) -> Option<ThreadMetadataBuilder> {
@@ -93,7 +95,7 @@ pub(crate) fn builder_from_items(
     ))
 }
 
-pub(crate) async fn extract_metadata_from_rollout(
+pub async fn extract_metadata_from_rollout(
     rollout_path: &Path,
     default_provider: &str,
 ) -> anyhow::Result<ExtractionOutcome> {
@@ -131,7 +133,10 @@ pub(crate) async fn extract_metadata_from_rollout(
     })
 }
 
-pub(crate) async fn backfill_sessions(runtime: &codex_state::StateRuntime, config: &Config) {
+pub(crate) async fn backfill_sessions(
+    runtime: &codex_state::StateRuntime,
+    config: &impl RolloutConfigView,
+) {
     let metric_client = codex_otel::metrics::global();
     let timer = metric_client
         .as_ref()
@@ -141,7 +146,7 @@ pub(crate) async fn backfill_sessions(runtime: &codex_state::StateRuntime, confi
         Err(err) => {
             warn!(
                 "failed to read backfill state at {}: {err}",
-                config.codex_home.display()
+                config.codex_home().display()
             );
             BackfillState::default()
         }
@@ -154,7 +159,7 @@ pub(crate) async fn backfill_sessions(runtime: &codex_state::StateRuntime, confi
         Err(err) => {
             warn!(
                 "failed to claim backfill worker at {}: {err}",
-                config.codex_home.display()
+                config.codex_home().display()
             );
             return;
         }
@@ -162,7 +167,7 @@ pub(crate) async fn backfill_sessions(runtime: &codex_state::StateRuntime, confi
     if !claimed {
         info!(
             "state db backfill already running at {}; skipping duplicate worker",
-            config.codex_home.display()
+            config.codex_home().display()
         );
         return;
     }
@@ -171,7 +176,7 @@ pub(crate) async fn backfill_sessions(runtime: &codex_state::StateRuntime, confi
         Err(err) => {
             warn!(
                 "failed to read claimed backfill state at {}: {err}",
-                config.codex_home.display()
+                config.codex_home().display()
             );
             BackfillState {
                 status: BackfillStatus::Running,
@@ -183,15 +188,15 @@ pub(crate) async fn backfill_sessions(runtime: &codex_state::StateRuntime, confi
         if let Err(err) = runtime.mark_backfill_running().await {
             warn!(
                 "failed to mark backfill running at {}: {err}",
-                config.codex_home.display()
+                config.codex_home().display()
             );
         } else {
             backfill_state.status = BackfillStatus::Running;
         }
     }
 
-    let sessions_root = config.codex_home.join(rollout::SESSIONS_SUBDIR);
-    let archived_root = config.codex_home.join(rollout::ARCHIVED_SESSIONS_SUBDIR);
+    let sessions_root = config.codex_home().join(SESSIONS_SUBDIR);
+    let archived_root = config.codex_home().join(ARCHIVED_SESSIONS_SUBDIR);
     let mut rollout_paths: Vec<BackfillRolloutPath> = Vec::new();
     for (root, archived) in [(sessions_root, false), (archived_root, true)] {
         if !tokio::fs::try_exists(&root).await.unwrap_or(false) {
@@ -200,7 +205,7 @@ pub(crate) async fn backfill_sessions(runtime: &codex_state::StateRuntime, confi
         match collect_rollout_paths(&root).await {
             Ok(paths) => {
                 rollout_paths.extend(paths.into_iter().map(|path| BackfillRolloutPath {
-                    watermark: backfill_watermark_for_path(config.codex_home.as_path(), &path),
+                    watermark: backfill_watermark_for_path(config.codex_home(), &path),
                     path,
                     archived,
                 }));
@@ -227,9 +232,7 @@ pub(crate) async fn backfill_sessions(runtime: &codex_state::StateRuntime, confi
     for batch in rollout_paths.chunks(BACKFILL_BATCH_SIZE) {
         for rollout in batch {
             stats.scanned = stats.scanned.saturating_add(1);
-            match extract_metadata_from_rollout(&rollout.path, config.model_provider_id.as_str())
-                .await
-            {
+            match extract_metadata_from_rollout(&rollout.path, config.model_provider_id()).await {
                 Ok(outcome) => {
                     if outcome.parse_errors > 0
                         && let Some(ref metric_client) = metric_client
@@ -268,9 +271,7 @@ pub(crate) async fn backfill_sessions(runtime: &codex_state::StateRuntime, confi
                             continue;
                         }
                         stats.upserted = stats.upserted.saturating_add(1);
-                        if let Ok(meta_line) =
-                            rollout::list::read_session_meta_line(&rollout.path).await
-                        {
+                        if let Ok(meta_line) = list::read_session_meta_line(&rollout.path).await {
                             if let Err(err) = runtime
                                 .persist_dynamic_tools(
                                     meta_line.meta.id,
@@ -308,7 +309,7 @@ pub(crate) async fn backfill_sessions(runtime: &codex_state::StateRuntime, confi
             {
                 warn!(
                     "failed to checkpoint backfill at {}: {err}",
-                    config.codex_home.display()
+                    config.codex_home().display()
                 );
             } else {
                 last_watermark = Some(last_entry.watermark.clone());
@@ -321,7 +322,7 @@ pub(crate) async fn backfill_sessions(runtime: &codex_state::StateRuntime, confi
     {
         warn!(
             "failed to mark backfill complete at {}: {err}",
-            config.codex_home.display()
+            config.codex_home().display()
         );
     }
 

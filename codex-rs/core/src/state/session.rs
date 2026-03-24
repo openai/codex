@@ -13,8 +13,8 @@ use crate::protocol::RateLimitSnapshot;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
+use codex_protocol::output_truncation::TruncationPolicy;
 use codex_protocol::protocol::TurnContextItem;
-use codex_utils_output_truncation::TruncationPolicy;
 
 /// Persistent, session-scoped state previously stored directly on `Session`.
 pub(crate) struct SessionState {

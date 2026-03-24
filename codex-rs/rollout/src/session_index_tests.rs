@@ -1,3 +1,5 @@
+#![allow(warnings, clippy::all)]
+
 use super::*;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;

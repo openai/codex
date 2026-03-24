@@ -11,7 +11,7 @@ use codex_protocol::openai_models::default_input_modalities;
 
 use crate::config::Config;
 use codex_features::Feature;
-use codex_utils_output_truncation::approx_bytes_for_tokens;
+use codex_protocol::output_truncation::approx_bytes_for_tokens;
 use tracing::warn;
 
 pub const BASE_INSTRUCTIONS: &str = include_str!("../../prompt.md");
