@@ -21,6 +21,7 @@ use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::output_truncation::TruncationPolicy;
 use codex_protocol::output_truncation::truncate_text;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnContextItem;
