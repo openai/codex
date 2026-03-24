@@ -35,6 +35,21 @@ fn assistant_message(text: &str) -> ResponseItem {
     }
 }
 
+fn developer_message_with_fragments(texts: &[&str]) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: texts
+            .iter()
+            .map(|text| ContentItem::InputText {
+                text: (*text).to_string(),
+            })
+            .collect(),
+        end_turn: None,
+        phase: None,
+    }
+}
+
 fn inter_agent_assistant_message(text: &str) -> ResponseItem {
     let communication = InterAgentCommunication::new(
         AgentPath::root(),
@@ -259,6 +274,156 @@ async fn reconstruct_history_rollback_keeps_history_and_metadata_in_sync_for_com
             .expect("serialize reconstructed reference context item"),
         serde_json::to_value(Some(first_context_item))
             .expect("serialize expected reference context item")
+    );
+}
+
+#[tokio::test]
+async fn reconstruct_history_rollback_preserves_later_reference_context_item_after_mixed_trim() {
+    let (session, turn_context) = make_session_and_context().await;
+    let first_context_item = turn_context.to_turn_context_item();
+    let first_turn_id = first_context_item
+        .turn_id
+        .clone()
+        .expect("turn context should have turn_id");
+    let mut rolled_back_context_item = first_context_item.clone();
+    rolled_back_context_item.turn_id = Some("rolled-back-turn".to_string());
+    rolled_back_context_item.model = "rolled-back-model".to_string();
+    let rolled_back_turn_id = rolled_back_context_item
+        .turn_id
+        .clone()
+        .expect("turn context should have turn_id");
+    let mut follow_up_context_item = first_context_item.clone();
+    follow_up_context_item.turn_id = Some("follow-up-turn".to_string());
+    follow_up_context_item.model = "follow-up-model".to_string();
+    let follow_up_turn_id = follow_up_context_item
+        .turn_id
+        .clone()
+        .expect("turn context should have turn_id");
+    let turn_one_user = user_message("turn 1 user");
+    let turn_one_assistant = assistant_message("turn 1 assistant");
+    let turn_three_contextual_user =
+        user_message("<environment_context><cwd>follow-up-cwd</cwd></environment_context>");
+    let turn_three_user = user_message("turn 3 user");
+    let turn_three_assistant = assistant_message("turn 3 assistant");
+    let turn_three_developer = developer_message_with_fragments(&[
+        "<permissions instructions>follow-up contextual permissions</permissions instructions>",
+        "follow-up persistent plugin instructions",
+    ]);
+
+    let rollout_items = vec![
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: first_turn_id.clone(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: "turn 1 user".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        )),
+        RolloutItem::TurnContext(first_context_item.clone()),
+        RolloutItem::ResponseItem(turn_one_user.clone()),
+        RolloutItem::ResponseItem(turn_one_assistant.clone()),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(
+            codex_protocol::protocol::TurnCompleteEvent {
+                turn_id: first_turn_id,
+                last_agent_message: None,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: rolled_back_turn_id.clone(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: "turn 2 user".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        )),
+        RolloutItem::TurnContext(rolled_back_context_item),
+        RolloutItem::ResponseItem(developer_message_with_fragments(&[
+            "<permissions instructions>contextual permissions</permissions instructions>",
+            "persistent plugin instructions",
+        ])),
+        RolloutItem::ResponseItem(user_message(
+            "<environment_context><cwd>rolled-back-cwd</cwd></environment_context>",
+        )),
+        RolloutItem::ResponseItem(user_message("turn 2 user")),
+        RolloutItem::ResponseItem(assistant_message("turn 2 assistant")),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(
+            codex_protocol::protocol::TurnCompleteEvent {
+                turn_id: rolled_back_turn_id,
+                last_agent_message: None,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(
+            codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
+        )),
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: follow_up_turn_id.clone(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: "turn 3 user".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        )),
+        RolloutItem::TurnContext(follow_up_context_item.clone()),
+        RolloutItem::ResponseItem(turn_three_developer.clone()),
+        RolloutItem::ResponseItem(turn_three_contextual_user.clone()),
+        RolloutItem::ResponseItem(turn_three_user.clone()),
+        RolloutItem::ResponseItem(turn_three_assistant.clone()),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(
+            codex_protocol::protocol::TurnCompleteEvent {
+                turn_id: follow_up_turn_id,
+                last_agent_message: None,
+            },
+        )),
+    ];
+
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+
+    assert_eq!(
+        reconstructed.history,
+        vec![
+            turn_one_user,
+            turn_one_assistant,
+            turn_three_developer,
+            turn_three_contextual_user,
+            turn_three_user,
+            turn_three_assistant,
+        ]
+    );
+    assert_eq!(
+        reconstructed.previous_turn_settings,
+        Some(PreviousTurnSettings {
+            model: "follow-up-model".to_string(),
+            realtime_active: Some(turn_context.realtime_active),
+        })
+    );
+    assert_eq!(
+        serde_json::to_value(reconstructed.reference_context_item)
+            .expect("serialize reconstructed reference context item"),
+        serde_json::to_value(Some(follow_up_context_item))
+            .expect("serialize expected reconstructed reference context item")
     );
 }
 

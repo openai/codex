@@ -90,6 +90,33 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
     }
 }
 
+fn developer_msg(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }
+}
+
+fn developer_msg_with_fragments(texts: &[&str]) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: texts
+            .iter()
+            .map(|text| ContentItem::InputText {
+                text: (*text).to_string(),
+            })
+            .collect(),
+        end_turn: None,
+        phase: None,
+    }
+}
+
 fn custom_tool_call_output(call_id: &str, output: &str) -> ResponseItem {
     ResponseItem::CustomToolCallOutput {
         call_id: call_id.to_string(),
@@ -849,6 +876,67 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
     ]);
     history.drop_last_n_user_turns(3);
     assert_eq!(history.for_prompt(&modalities), expected_prefix_only);
+}
+
+#[test]
+fn drop_last_n_user_turns_trims_context_updates_above_rolled_back_turn() {
+    let items = vec![
+        assistant_msg("session prefix item"),
+        user_input_text_msg("turn 1 user"),
+        assistant_msg("turn 1 assistant"),
+        developer_msg("Generated images are saved to /tmp as /tmp/image-1.png by default."),
+        developer_msg("<collaboration_mode>ROLLED_BACK_DEV_INSTRUCTIONS</collaboration_mode>"),
+        user_input_text_msg(
+            "<environment_context><cwd>PRETURN_CONTEXT_DIFF_CWD</cwd></environment_context>",
+        ),
+        user_input_text_msg("turn 2 user"),
+        assistant_msg("turn 2 assistant"),
+    ];
+
+    let modalities = default_input_modalities();
+    let mut history = create_history_with_items(items);
+    let should_clear_reference_context_item = history.drop_last_n_user_turns(1);
+
+    assert_eq!(
+        history.for_prompt(&modalities),
+        vec![
+            assistant_msg("session prefix item"),
+            user_input_text_msg("turn 1 user"),
+            assistant_msg("turn 1 assistant"),
+            developer_msg("Generated images are saved to /tmp as /tmp/image-1.png by default."),
+        ]
+    );
+    assert!(!should_clear_reference_context_item);
+}
+
+#[test]
+fn drop_last_n_user_turns_flags_mixed_developer_context_bundles_for_reference_clear() {
+    let items = vec![
+        user_input_text_msg("turn 1 user"),
+        assistant_msg("turn 1 assistant"),
+        developer_msg_with_fragments(&[
+            "<permissions instructions>contextual permissions</permissions instructions>",
+            "persistent plugin instructions",
+        ]),
+        user_input_text_msg(
+            "<environment_context><cwd>PRETURN_CONTEXT_DIFF_CWD</cwd></environment_context>",
+        ),
+        user_input_text_msg("turn 2 user"),
+        assistant_msg("turn 2 assistant"),
+    ];
+
+    let modalities = default_input_modalities();
+    let mut history = create_history_with_items(items);
+    let should_clear_reference_context_item = history.drop_last_n_user_turns(1);
+
+    assert_eq!(
+        history.for_prompt(&modalities),
+        vec![
+            user_input_text_msg("turn 1 user"),
+            assistant_msg("turn 1 assistant"),
+        ]
+    );
+    assert!(should_clear_reference_context_item);
 }
 
 #[test]

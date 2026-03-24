@@ -1,8 +1,8 @@
 ---
 source: core/tests/suite/compact_resume_fork.rs
-expression: "context_snapshot::format_labeled_requests_snapshot(\"rollback currently duplicates pre-turn override context updates on the follow-up request\",\n&[(\"rolled-back turn request\", &requests[1]),\n(\"follow-up request after rollback\", &requests[2]),],\n&ContextSnapshotOptions::default().strip_capability_instructions().render_mode(ContextSnapshotRenderMode::KindWithTextPrefix\n{ max_chars: 96 }),)"
+expression: "context_snapshot::format_labeled_requests_snapshot(\"rollback trims pre-turn override context updates before the follow-up request\",\n&[(\"rolled-back turn request\", &requests[1]),\n(\"follow-up request after rollback\", &requests[2]),],\n&ContextSnapshotOptions::default().strip_capability_instructions().render_mode(ContextSnapshotRenderMode::KindWithTextPrefix\n{ max_chars: 96 }),)"
 ---
-Scenario: rollback currently duplicates pre-turn override context updates on the follow-up request
+Scenario: rollback trims pre-turn override context updates before the follow-up request
 
 ## rolled-back turn request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
@@ -20,6 +20,4 @@ Scenario: rollback currently duplicates pre-turn override context updates on the
 03:message/assistant:turn 1 assistant
 04:message/developer:<collaboration_mode>ROLLED_BACK_DEV_INSTRUCTIONS</collaboration_mode>
 05:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-06:message/developer:<collaboration_mode>ROLLED_BACK_DEV_INSTRUCTIONS</collaboration_mode>
-07:message/user:<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>
-08:message/user:follow-up user
+06:message/user:follow-up user

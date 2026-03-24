@@ -157,6 +157,21 @@ fn skill_message(text: &str) -> ResponseItem {
     }
 }
 
+fn developer_message_with_fragments(texts: &[&str]) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: texts
+            .iter()
+            .map(|text| ContentItem::InputText {
+                text: (*text).to_string(),
+            })
+            .collect(),
+        end_turn: None,
+        phase: None,
+    }
+}
+
 #[tokio::test]
 async fn regular_turn_emits_turn_started_without_waiting_for_startup_prewarm() {
     let (sess, tc, rx) = make_session_and_context_with_rx().await;
@@ -1515,6 +1530,106 @@ async fn thread_rollback_recomputes_previous_turn_settings_and_reference_context
         serde_json::to_value(Some(first_context_item))
             .expect("serialize expected reference context item")
     );
+}
+
+#[tokio::test]
+async fn thread_rollback_clears_reference_context_item_for_trimmed_mixed_context_bundle() {
+    let (sess, tc, rx) = make_session_and_context_with_rx().await;
+    attach_rollout_recorder(&sess).await;
+
+    let first_context_item = tc.to_turn_context_item();
+    let first_turn_id = first_context_item
+        .turn_id
+        .clone()
+        .expect("turn context should have turn_id");
+    let mut rolled_back_context_item = first_context_item.clone();
+    rolled_back_context_item.turn_id = Some("rolled-back-turn".to_string());
+    rolled_back_context_item.model = "rolled-back-model".to_string();
+    let rolled_back_turn_id = rolled_back_context_item
+        .turn_id
+        .clone()
+        .expect("turn context should have turn_id");
+    let turn_one_user = user_message("turn 1 user");
+    let turn_one_assistant = assistant_message("turn 1 assistant");
+    let turn_two_user = user_message("turn 2 user");
+    let turn_two_assistant = assistant_message("turn 2 assistant");
+
+    sess.persist_rollout_items(&[
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: first_turn_id.clone(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: "turn 1 user".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        )),
+        RolloutItem::TurnContext(first_context_item.clone()),
+        RolloutItem::ResponseItem(turn_one_user.clone()),
+        RolloutItem::ResponseItem(turn_one_assistant.clone()),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: first_turn_id,
+            last_agent_message: None,
+        })),
+        RolloutItem::EventMsg(EventMsg::TurnStarted(
+            codex_protocol::protocol::TurnStartedEvent {
+                turn_id: rolled_back_turn_id.clone(),
+                model_context_window: Some(128_000),
+                collaboration_mode_kind: ModeKind::Default,
+            },
+        )),
+        RolloutItem::EventMsg(EventMsg::UserMessage(
+            codex_protocol::protocol::UserMessageEvent {
+                message: "turn 2 user".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        )),
+        RolloutItem::TurnContext(rolled_back_context_item),
+        RolloutItem::ResponseItem(developer_message_with_fragments(&[
+            "<permissions instructions>contextual permissions</permissions instructions>",
+            "persistent plugin instructions",
+        ])),
+        RolloutItem::ResponseItem(user_message(
+            "<environment_context><cwd>rolled-back-cwd</cwd></environment_context>",
+        )),
+        RolloutItem::ResponseItem(turn_two_user),
+        RolloutItem::ResponseItem(turn_two_assistant),
+        RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+            turn_id: rolled_back_turn_id,
+            last_agent_message: None,
+        })),
+    ])
+    .await;
+    sess.replace_history(
+        vec![assistant_message("stale history")],
+        Some(first_context_item.clone()),
+    )
+    .await;
+
+    handlers::thread_rollback(&sess, "sub-1".to_string(), 1).await;
+    let rollback_event = wait_for_thread_rolled_back(&rx).await;
+    assert_eq!(rollback_event.num_turns, 1);
+
+    assert_eq!(
+        sess.clone_history().await.raw_items(),
+        vec![turn_one_user, turn_one_assistant]
+    );
+    assert_eq!(
+        sess.previous_turn_settings().await,
+        Some(PreviousTurnSettings {
+            model: tc.model_info.slug.clone(),
+            realtime_active: Some(tc.realtime_active),
+        })
+    );
+    assert!(sess.reference_context_item().await.is_none());
 }
 
 #[tokio::test]

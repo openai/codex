@@ -233,6 +233,10 @@ impl Session {
 
         let mut history = ContextManager::new();
         let mut saw_legacy_compaction_without_replacement_history = false;
+        // Trimming a mixed rollback bundle removes non-diff developer content, so the final
+        // baseline must be cleared unless a later real user turn re-establishes it.
+        let mut should_clear_reference_context_item = false;
+        let mut saw_user_turn_since_mixed_context_trim = false;
         if let Some(base_replacement_history) = base_replacement_history {
             history.replace(base_replacement_history.to_vec());
         }
@@ -246,6 +250,7 @@ impl Session {
                         std::iter::once(response_item),
                         turn_context.truncation_policy,
                     );
+                    saw_user_turn_since_mixed_context_trim |= is_user_turn_boundary(response_item);
                 }
                 RolloutItem::Compacted(compacted) => {
                     if let Some(replacement_history) = &compacted.replacement_history {
@@ -271,12 +276,21 @@ impl Session {
                         history.replace(rebuilt);
                     }
                 }
-                RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
-                    history.drop_last_n_user_turns(rollback.num_turns);
+                RolloutItem::EventMsg(EventMsg::UserMessage(_)) => {
+                    saw_user_turn_since_mixed_context_trim = true;
                 }
-                RolloutItem::EventMsg(_)
-                | RolloutItem::TurnContext(_)
-                | RolloutItem::SessionMeta(_) => {}
+                RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                    should_clear_reference_context_item |=
+                        history.drop_last_n_user_turns(rollback.num_turns);
+                    saw_user_turn_since_mixed_context_trim = false;
+                }
+                RolloutItem::TurnContext(_) => {
+                    if should_clear_reference_context_item && saw_user_turn_since_mixed_context_trim
+                    {
+                        should_clear_reference_context_item = false;
+                    }
+                }
+                RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => {}
             }
         }
 
@@ -286,7 +300,9 @@ impl Session {
                 Some(*turn_reference_context_item)
             }
         };
-        let reference_context_item = if saw_legacy_compaction_without_replacement_history {
+        let reference_context_item = if saw_legacy_compaction_without_replacement_history
+            || should_clear_reference_context_item
+        {
             None
         } else {
             reference_context_item

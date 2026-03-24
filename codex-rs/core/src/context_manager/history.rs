@@ -1,5 +1,7 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
+use crate::event_mapping::has_non_contextual_dev_message_content;
+use crate::event_mapping::is_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_user_message_content;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::approx_bytes_for_tokens;
@@ -215,26 +217,50 @@ impl ContextManager {
     /// - if there are no user turns, this is a no-op
     /// - if `num_turns` exceeds the number of user turns, all user turns are dropped while
     ///   preserving any items that occurred before the first user message.
-    pub(crate) fn drop_last_n_user_turns(&mut self, num_turns: u32) {
+    ///
+    /// Returns true when rollback trimmed a developer context bundle that also contained
+    /// non-context fragments, so callers should clear the final `reference_context_item`
+    /// baseline and force a full reinjection on the next real user turn.
+    pub(crate) fn drop_last_n_user_turns(&mut self, num_turns: u32) -> bool {
         if num_turns == 0 {
-            return;
+            return false;
         }
 
         let snapshot = self.items.clone();
         let user_positions = user_message_positions(&snapshot);
         let Some(&first_user_idx) = user_positions.first() else {
             self.replace(snapshot);
-            return;
+            return false;
         };
 
         let n_from_end = usize::try_from(num_turns).unwrap_or(usize::MAX);
-        let cut_idx = if n_from_end >= user_positions.len() {
+        let mut cut_idx = if n_from_end >= user_positions.len() {
             first_user_idx
         } else {
             user_positions[user_positions.len() - n_from_end]
         };
 
+        let mut should_clear_reference_context_item = false;
+        while cut_idx > first_user_idx {
+            match &snapshot[cut_idx - 1] {
+                ResponseItem::Message { role, content, .. }
+                    if role == "developer" && is_contextual_dev_message_content(content) =>
+                {
+                    should_clear_reference_context_item |=
+                        has_non_contextual_dev_message_content(content);
+                    cut_idx -= 1;
+                }
+                ResponseItem::Message { role, content, .. }
+                    if role == "user" && is_contextual_user_message_content(content) =>
+                {
+                    cut_idx -= 1;
+                }
+                _ => break,
+            }
+        }
+
         self.replace(snapshot[..cut_idx].to_vec());
+        should_clear_reference_context_item
     }
 
     pub(crate) fn update_token_info(
