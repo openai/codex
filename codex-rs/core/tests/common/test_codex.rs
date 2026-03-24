@@ -723,6 +723,7 @@ impl TestCodex {
                 final_output_json_schema: None,
                 cwd: self.config.cwd.clone(),
                 approval_policy,
+                approvals_reviewer: None,
                 sandbox_policy,
                 model: session_model,
                 effort: None,

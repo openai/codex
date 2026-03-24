@@ -13,6 +13,7 @@ members = [
     "feedback",
     "features",
     "codex-backend-openapi-models",
+    "code-mode",
     "cloud-requirements",
     "cloud-tasks",
     "cloud-tasks-client",
@@ -92,6 +93,7 @@ app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
 codex-artifacts = { path = "artifacts" }
+codex-code-mode = { path = "code-mode" }
 codex-package-manager = { path = "package-manager" }
 codex-app-server = { path = "app-server" }
 codex-app-server-client = { path = "app-server-client" }
@@ -376,7 +378,7 @@ ignored = [
     "openssl-sys",
     "codex-utils-readiness",
     "codex-secrets",
-    "codex-v8-poc"
+    "codex-v8-poc",
 ]
 
 [profile.release]

@@ -65,7 +65,7 @@ Since only 1 `Task` can be run at a time, for parallel tasks it is recommended t
 For complete documentation of the `Op` and `EventMsg` variants, refer to [protocol.rs](../protocol/src/protocol.rs). Some example payload types:
 
 - `Op`
-  - `Op::UserTurn` – Any input from the user to kick off a `Turn`
+  - `Op::UserTurn` – Any input from the user to kick off a `Turn`, including full per-turn context such as cwd, model, sandbox, approval policy, and optional `approvals_reviewer`
   - `Op::UserInput` – Legacy form of user input
   - `Op::Interrupt` – Interrupts a running turn
   - `Op::ExecApproval` – Approve or deny code execution

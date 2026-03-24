@@ -66,6 +66,7 @@ use codex_protocol::protocol::HookRunSummary as CoreHookRunSummary;
 use codex_protocol::protocol::HookScope as CoreHookScope;
 use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
+use codex_protocol::protocol::NonSteerableTurnKind as CoreNonSteerableTurnKind;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
@@ -128,6 +129,14 @@ macro_rules! v2_enum_from_core {
     };
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum NonSteerableTurnKind {
+    Review,
+    Compact,
+}
+
 /// This translation layer make sure that we expose codex error code in camel case.
 ///
 /// When an upstream HTTP status is available (for example, from the Responses API or a provider),
@@ -167,6 +176,13 @@ pub enum CodexErrorInfo {
         #[ts(rename = "httpStatusCode")]
         http_status_code: Option<u16>,
     },
+    /// Returned when `turn/start` or `turn/steer` is submitted while the current active turn
+    /// cannot accept same-turn steering, for example `/review` or manual `/compact`.
+    ActiveTurnNotSteerable {
+        #[serde(rename = "turnKind")]
+        #[ts(rename = "turnKind")]
+        turn_kind: NonSteerableTurnKind,
+    },
     Other,
 }
 
@@ -193,7 +209,21 @@ impl From<CoreCodexErrorInfo> for CodexErrorInfo {
             CoreCodexErrorInfo::ResponseTooManyFailedAttempts { http_status_code } => {
                 CodexErrorInfo::ResponseTooManyFailedAttempts { http_status_code }
             }
+            CoreCodexErrorInfo::ActiveTurnNotSteerable { turn_kind } => {
+                CodexErrorInfo::ActiveTurnNotSteerable {
+                    turn_kind: turn_kind.into(),
+                }
+            }
             CoreCodexErrorInfo::Other => CodexErrorInfo::Other,
+        }
+    }
+}
+
+impl From<CoreNonSteerableTurnKind> for NonSteerableTurnKind {
+    fn from(value: CoreNonSteerableTurnKind) -> Self {
+        match value {
+            CoreNonSteerableTurnKind::Review => Self::Review,
+            CoreNonSteerableTurnKind::Compact => Self::Compact,
         }
     }
 }
@@ -347,7 +377,7 @@ v2_enum_from_core!(
 
 v2_enum_from_core!(
     pub enum HookEventName from CoreHookEventName {
-        SessionStart, UserPromptSubmit, Stop
+        PreToolUse, SessionStart, UserPromptSubmit, Stop
     }
 );
 
@@ -3310,6 +3340,7 @@ pub struct SkillSummary {
     pub short_description: Option<String>,
     pub interface: Option<SkillInterface>,
     pub path: PathBuf,
+    pub enabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3348,7 +3379,12 @@ pub enum PluginSource {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct SkillsConfigWriteParams {
-    pub path: PathBuf,
+    /// Path-based selector.
+    #[ts(optional = nullable)]
+    pub path: Option<AbsolutePathBuf>,
+    /// Name-based selector.
+    #[ts(optional = nullable)]
+    pub name: Option<String>,
     pub enabled: bool,
 }
 
@@ -7827,6 +7863,22 @@ mod tests {
             json!({
                 "responseTooManyFailedAttempts": {
                     "httpStatusCode": 401
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn codex_error_info_serializes_active_turn_not_steerable_turn_kind_in_camel_case() {
+        let value = CodexErrorInfo::ActiveTurnNotSteerable {
+            turn_kind: NonSteerableTurnKind::Review,
+        };
+
+        assert_eq!(
+            serde_json::to_value(value).unwrap(),
+            json!({
+                "activeTurnNotSteerable": {
+                    "turnKind": "review"
                 }
             })
         );

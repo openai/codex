@@ -821,8 +821,10 @@ impl BottomPane {
         &mut self,
         queued: Vec<String>,
         pending_steers: Vec<String>,
+        rejected_steers: Vec<String>,
     ) {
         self.pending_input_preview.pending_steers = pending_steers;
+        self.pending_input_preview.rejected_steers = rejected_steers;
         self.pending_input_preview.queued_messages = queued;
         self.request_redraw();
     }
@@ -1143,7 +1145,8 @@ impl BottomPane {
             }
             let has_pending_thread_approvals = !self.pending_thread_approvals.is_empty();
             let has_pending_input = !self.pending_input_preview.queued_messages.is_empty()
-                || !self.pending_input_preview.pending_steers.is_empty();
+                || !self.pending_input_preview.pending_steers.is_empty()
+                || !self.pending_input_preview.rejected_steers.is_empty();
             let has_status_or_footer =
                 self.status.is_some() || !self.unified_exec_footer.is_empty();
             let has_inline_previews = has_pending_thread_approvals || has_pending_input;
@@ -1546,7 +1549,11 @@ mod tests {
             StatusDetailsCapitalization::CapitalizeFirst,
             STATUS_DETAILS_DEFAULT_MAX_LINES,
         );
-        pane.set_pending_input_preview(vec!["Queued follow-up question".to_string()], Vec::new());
+        pane.set_pending_input_preview(
+            vec!["Queued follow-up question".to_string()],
+            Vec::new(),
+            Vec::new(),
+        );
 
         let width = 48;
         let height = pane.desired_height(width);
@@ -1573,7 +1580,11 @@ mod tests {
         });
 
         pane.set_task_running(true);
-        pane.set_pending_input_preview(vec!["Queued follow-up question".to_string()], Vec::new());
+        pane.set_pending_input_preview(
+            vec!["Queued follow-up question".to_string()],
+            Vec::new(),
+            Vec::new(),
+        );
         pane.hide_status_indicator();
 
         let width = 48;
@@ -1601,7 +1612,11 @@ mod tests {
         });
 
         pane.set_task_running(true);
-        pane.set_pending_input_preview(vec!["Queued follow-up question".to_string()], Vec::new());
+        pane.set_pending_input_preview(
+            vec!["Queued follow-up question".to_string()],
+            Vec::new(),
+            Vec::new(),
+        );
 
         let width = 48;
         let height = pane.desired_height(width);

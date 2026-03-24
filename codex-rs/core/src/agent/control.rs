@@ -1,6 +1,6 @@
 use crate::agent::AgentStatus;
-use crate::agent::guards::AgentMetadata;
-use crate::agent::guards::Guards;
+use crate::agent::registry::AgentMetadata;
+use crate::agent::registry::AgentRegistry;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::resolve_role_config;
 use crate::agent::status::is_final;
@@ -21,6 +21,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
@@ -80,14 +81,14 @@ fn agent_nickname_candidates(
 /// spawn new agents and the inter-agent communication layer.
 /// An `AgentControl` instance is intended to be created at most once per root thread/session
 /// tree. That same `AgentControl` is then shared with every sub-agent spawned from that root,
-/// which keeps the guards scoped to that root thread rather than the entire `ThreadManager`.
+/// which keeps the registry scoped to that root thread rather than the entire `ThreadManager`.
 #[derive(Clone, Default)]
 pub(crate) struct AgentControl {
     /// Weak handle back to the global thread registry/state.
     /// This is `Weak` to avoid reference cycles and shadow persistence of the form
     /// `ThreadManagerState -> CodexThread -> Session -> SessionServices -> ThreadManagerState`.
     manager: Weak<ThreadManagerState>,
-    state: Arc<Guards>,
+    state: Arc<AgentRegistry>,
 }
 
 impl AgentControl {
@@ -265,6 +266,7 @@ impl AgentControl {
             new_thread.thread_id,
             notification_source,
             child_reference,
+            agent_metadata.agent_path.clone(),
         );
 
         Ok(LiveAgent {
@@ -436,6 +438,7 @@ impl AgentControl {
             resumed_thread.thread_id,
             Some(notification_source.clone()),
             child_reference,
+            agent_metadata.agent_path.clone(),
         );
         self.persist_thread_spawn_edge_for_source(
             resumed_thread.thread.as_ref(),
@@ -454,26 +457,71 @@ impl AgentControl {
         items: Vec<UserInput>,
     ) -> CodexResult<String> {
         let state = self.upgrade()?;
-        let result = state
-            .send_op(
-                agent_id,
-                Op::UserInput {
-                    items,
-                    final_output_json_schema: None,
-                },
-            )
-            .await;
-        if matches!(result, Err(CodexErr::InternalAgentDied)) {
-            let _ = state.remove_thread(&agent_id).await;
-            self.state.release_spawned_thread(agent_id);
-        }
-        result
+        self.handle_thread_request_result(
+            agent_id,
+            &state,
+            state
+                .send_op(
+                    agent_id,
+                    Op::UserInput {
+                        items,
+                        final_output_json_schema: None,
+                    },
+                )
+                .await,
+        )
+        .await
+    }
+
+    /// Append a prebuilt message to an existing agent thread outside the normal user-input path.
+    #[cfg(test)]
+    pub(crate) async fn append_message(
+        &self,
+        agent_id: ThreadId,
+        message: ResponseItem,
+    ) -> CodexResult<String> {
+        let state = self.upgrade()?;
+        self.handle_thread_request_result(
+            agent_id,
+            &state,
+            state.append_message(agent_id, message).await,
+        )
+        .await
+    }
+
+    pub(crate) async fn send_inter_agent_communication(
+        &self,
+        agent_id: ThreadId,
+        communication: InterAgentCommunication,
+    ) -> CodexResult<String> {
+        let state = self.upgrade()?;
+        self.handle_thread_request_result(
+            agent_id,
+            &state,
+            state
+                .send_op(agent_id, Op::InterAgentCommunication { communication })
+                .await,
+        )
+        .await
     }
 
     /// Interrupt the current task for an existing agent thread.
     pub(crate) async fn interrupt_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
         state.send_op(agent_id, Op::Interrupt).await
+    }
+
+    async fn handle_thread_request_result(
+        &self,
+        agent_id: ThreadId,
+        state: &Arc<ThreadManagerState>,
+        result: CodexResult<String>,
+    ) -> CodexResult<String> {
+        if matches!(result, Err(CodexErr::InternalAgentDied)) {
+            let _ = state.remove_thread(&agent_id).await;
+            self.state.release_spawned_thread(agent_id);
+        }
+        result
     }
 
     /// Submit a shutdown request for a live agent without marking it explicitly closed in
@@ -641,6 +689,7 @@ impl AgentControl {
         child_thread_id: ThreadId,
         session_source: Option<SessionSource>,
         child_reference: String,
+        child_agent_path: Option<AgentPath>,
     ) {
         let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
@@ -671,6 +720,39 @@ impl AgentControl {
             let Ok(state) = control.upgrade() else {
                 return;
             };
+            let child_thread = state.get_thread(child_thread_id).await.ok();
+            if let Some(child_agent_path) = child_agent_path
+                && child_thread
+                    .as_ref()
+                    .map(|thread| thread.enabled(Feature::MultiAgentV2))
+                    .unwrap_or(true)
+            {
+                let AgentStatus::Completed(Some(content)) = &status else {
+                    return;
+                };
+                let Some((parent_path, _)) = child_agent_path.as_str().rsplit_once('/') else {
+                    return;
+                };
+                let Ok(parent_agent_path) = AgentPath::try_from(parent_path) else {
+                    return;
+                };
+                let Some(parent_thread_id) = control.state.agent_id_for_path(&parent_agent_path)
+                else {
+                    return;
+                };
+                let _ = control
+                    .send_inter_agent_communication(
+                        parent_thread_id,
+                        InterAgentCommunication::new(
+                            child_agent_path,
+                            parent_agent_path,
+                            Vec::new(),
+                            content.clone(),
+                        ),
+                    )
+                    .await;
+                return;
+            }
             let Ok(parent_thread) = state.get_thread(parent_thread_id).await else {
                 return;
             };
@@ -686,7 +768,7 @@ impl AgentControl {
     #[allow(clippy::too_many_arguments)]
     fn prepare_thread_spawn(
         &self,
-        reservation: &mut crate::agent::guards::SpawnReservation,
+        reservation: &mut crate::agent::registry::SpawnReservation,
         config: &crate::config::Config,
         parent_thread_id: ThreadId,
         depth: i32,

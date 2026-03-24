@@ -2251,6 +2251,28 @@
           ],
           "title": "ResponseTooManyFailedAttemptsCodexErrorInfo",
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Returned when `turn/start` or `turn/steer` is submitted while the current active turn cannot accept same-turn steering, for example `/review` or manual `/compact`.",
+          "properties": {
+            "activeTurnNotSteerable": {
+              "properties": {
+                "turnKind": {
+                  "$ref": "#/definitions/NonSteerableTurnKind"
+                }
+              },
+              "required": [
+                "turnKind"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "activeTurnNotSteerable"
+          ],
+          "title": "ActiveTurnNotSteerableCodexErrorInfo",
+          "type": "object"
         }
       ]
     },
@@ -4676,6 +4698,7 @@
     },
     "HookEventName": {
       "enum": [
+        "preToolUse",
         "sessionStart",
         "userPromptSubmit",
         "stop"
@@ -5862,6 +5885,13 @@
         }
       },
       "type": "object"
+    },
+    "NonSteerableTurnKind": {
+      "enum": [
+        "review",
+        "compact"
+      ],
+      "type": "string"
     },
     "OverriddenMetadata": {
       "properties": {
@@ -9083,6 +9113,9 @@
         "description": {
           "type": "string"
         },
+        "enabled": {
+          "type": "boolean"
+        },
         "interface": {
           "anyOf": [
             {
@@ -9108,6 +9141,7 @@
       },
       "required": [
         "description",
+        "enabled",
         "name",
         "path"
       ],
@@ -9164,13 +9198,27 @@
         "enabled": {
           "type": "boolean"
         },
+        "name": {
+          "description": "Name-based selector.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "path": {
-          "type": "string"
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Path-based selector."
         }
       },
       "required": [
-        "enabled",
-        "path"
+        "enabled"
       ],
       "title": "SkillsConfigWriteParams",
       "type": "object"

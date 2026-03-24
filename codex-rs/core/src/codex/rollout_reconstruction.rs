@@ -1,4 +1,5 @@
 use super::*;
+use crate::context_manager::is_user_turn_boundary;
 
 // Return value of `Session::reconstruct_history_from_rollout`, bundling the rebuilt history with
 // the resume/fork hydration metadata derived from the same replay.
@@ -201,9 +202,12 @@ impl Session {
                         );
                     }
                 }
-                RolloutItem::ResponseItem(_)
-                | RolloutItem::EventMsg(_)
-                | RolloutItem::SessionMeta(_) => {}
+                RolloutItem::ResponseItem(response_item) => {
+                    let active_segment =
+                        active_segment.get_or_insert_with(ActiveReplaySegment::default);
+                    active_segment.counts_as_user_turn |= is_user_turn_boundary(response_item);
+                }
+                RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => {}
             }
 
             if base_replacement_history.is_some()

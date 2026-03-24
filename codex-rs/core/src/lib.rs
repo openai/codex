@@ -96,6 +96,7 @@ pub mod review_prompts;
 mod thread_manager;
 pub mod web_search;
 pub mod windows_sandbox_read_grants;
+pub use thread_manager::ForkSnapshot;
 pub use thread_manager::NewThread;
 pub use thread_manager::ThreadManager;
 #[deprecated(note = "use ThreadManager")]

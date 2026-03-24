@@ -5582,16 +5582,76 @@ shell_tool = true
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 #[test]
-fn missing_system_bwrap_warning_matches_system_bwrap_presence() {
-    #[cfg(target_os = "linux")]
-    assert_eq!(
-        missing_system_bwrap_warning().is_some(),
-        !Path::new("/usr/bin/bwrap").is_file()
-    );
+fn system_bwrap_warning_reports_missing_system_bwrap() {
+    let warning = system_bwrap_warning_for_path(Path::new("/definitely/not/a/bwrap"))
+        .expect("missing system bwrap should emit a warning");
 
-    #[cfg(not(target_os = "linux"))]
-    assert!(missing_system_bwrap_warning().is_none());
+    assert!(warning.contains("could not find system bubblewrap"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn system_bwrap_warning_reports_too_old_system_bwrap() {
+    let fake_bwrap = write_fake_bwrap(
+        r#"#!/bin/sh
+if [ "$1" = "--help" ]; then
+  echo 'usage: bwrap [OPTION...] COMMAND'
+  exit 0
+fi
+exit 1
+"#,
+    );
+    let fake_bwrap_path: &Path = fake_bwrap.as_ref();
+    let warning = system_bwrap_warning_for_path(fake_bwrap_path)
+        .expect("old system bwrap should emit a warning");
+
+    assert!(warning.contains("too old to support `--argv0`"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn system_bwrap_warning_skips_supported_system_bwrap() {
+    let fake_bwrap = write_fake_bwrap(
+        r#"#!/bin/sh
+if [ "$1" = "--help" ]; then
+  echo '  --argv0 PROGRAM'
+  exit 0
+fi
+exit 1
+"#,
+    );
+    let fake_bwrap_path: &Path = fake_bwrap.as_ref();
+
+    assert_eq!(system_bwrap_warning_for_path(fake_bwrap_path), None);
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn system_bwrap_warning_is_disabled_off_linux() {
+    assert!(system_bwrap_warning().is_none());
+}
+
+#[cfg(target_os = "linux")]
+fn write_fake_bwrap(contents: &str) -> tempfile::TempPath {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::NamedTempFile;
+
+    // Bazel can mount the OS temp directory `noexec`, so prefer the current
+    // working directory for fake executables and fall back to the default temp
+    // dir outside that environment.
+    let temp_file = std::env::current_dir()
+        .ok()
+        .and_then(|dir| NamedTempFile::new_in(dir).ok())
+        .unwrap_or_else(|| NamedTempFile::new().expect("temp file"));
+    // Linux rejects exec-ing a file that is still open for writing.
+    let path = temp_file.into_temp_path();
+    fs::write(&path, contents).expect("write fake bwrap");
+    let permissions = fs::Permissions::from_mode(0o755);
+    fs::set_permissions(&path, permissions).expect("chmod fake bwrap");
+    path
 }
 
 #[tokio::test]
@@ -5677,7 +5737,7 @@ approvals_reviewer = "guardian_subagent"
 }
 
 #[tokio::test]
-async fn smart_approvals_alias_is_migrated_to_guardian_approval() -> std::io::Result<()> {
+async fn smart_approvals_alias_is_ignored() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -5692,23 +5752,19 @@ smart_approvals = true
         .build()
         .await?;
 
-    assert!(config.features.enabled(Feature::GuardianApproval));
-    assert_eq!(config.features.legacy_feature_usages().count(), 0);
-    assert_eq!(
-        config.approvals_reviewer,
-        ApprovalsReviewer::GuardianSubagent
-    );
+    assert!(!config.features.enabled(Feature::GuardianApproval));
+    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
 
     let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
-    assert!(serialized.contains("guardian_approval = true"));
-    assert!(serialized.contains("approvals_reviewer = \"guardian_subagent\""));
-    assert!(!serialized.contains("smart_approvals"));
+    assert!(serialized.contains("smart_approvals = true"));
+    assert!(!serialized.contains("guardian_approval"));
+    assert!(!serialized.contains("approvals_reviewer"));
 
     Ok(())
 }
 
 #[tokio::test]
-async fn smart_approvals_alias_is_migrated_in_profiles() -> std::io::Result<()> {
+async fn smart_approvals_alias_is_ignored_in_profiles() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -5725,113 +5781,14 @@ smart_approvals = true
         .build()
         .await?;
 
-    assert!(config.features.enabled(Feature::GuardianApproval));
-    assert_eq!(config.features.legacy_feature_usages().count(), 0);
-    assert_eq!(
-        config.approvals_reviewer,
-        ApprovalsReviewer::GuardianSubagent
-    );
-
-    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
-    assert!(serialized.contains("[profiles.guardian.features]"));
-    assert!(serialized.contains("guardian_approval = true"));
-    assert!(serialized.contains("approvals_reviewer = \"guardian_subagent\""));
-    assert!(!serialized.contains("smart_approvals"));
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn smart_approvals_alias_migration_preserves_disabled_profile_override() -> std::io::Result<()>
-{
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"[features]
-guardian_approval = true
-
-[profiles.guardian.features]
-smart_approvals = false
-"#,
-    )?;
-
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .harness_overrides(ConfigOverrides {
-            config_profile: Some("guardian".to_string()),
-            ..Default::default()
-        })
-        .build()
-        .await?;
-
-    assert!(!config.features.enabled(Feature::GuardianApproval));
-    assert_eq!(config.features.legacy_feature_usages().count(), 0);
-    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
-
-    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
-    assert!(serialized.contains("[profiles.guardian.features]"));
-    assert!(serialized.contains("guardian_approval = false"));
-    assert!(!serialized.contains("smart_approvals"));
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn smart_approvals_alias_migration_preserves_existing_approvals_reviewer()
--> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"approvals_reviewer = "user"
-
-[features]
-smart_approvals = true
-"#,
-    )?;
-
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
-
-    assert!(config.features.enabled(Feature::GuardianApproval));
-    assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
-
-    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
-    assert!(serialized.contains("guardian_approval = true"));
-    assert!(serialized.contains("approvals_reviewer = \"user\""));
-    assert!(!serialized.contains("smart_approvals"));
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn smart_approvals_alias_migration_does_not_override_canonical_disabled_flag()
--> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"[features]
-guardian_approval = false
-smart_approvals = true
-"#,
-    )?;
-
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .build()
-        .await?;
-
     assert!(!config.features.enabled(Feature::GuardianApproval));
     assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
 
     let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
-    assert!(serialized.contains("guardian_approval = false"));
-    assert!(!serialized.contains("approvals_reviewer = \"guardian_subagent\""));
-    assert!(!serialized.contains("smart_approvals"));
+    assert!(serialized.contains("[profiles.guardian.features]"));
+    assert!(serialized.contains("smart_approvals = true"));
+    assert!(!serialized.contains("guardian_approval"));
+    assert!(!serialized.contains("approvals_reviewer"));
 
     Ok(())
 }
