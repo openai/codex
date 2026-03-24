@@ -560,8 +560,8 @@ async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -
 
 async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
     let output =
-    run_git_command_with_timeout(&["diff", "--no-textconv", "--no-ext-diff", &sha.0], cwd)
-    .await?;
+        run_git_command_with_timeout(&["diff", "--no-textconv", "--no-ext-diff", &sha.0], cwd)
+            .await?;
     // 0 is success and no diff.
     // 1 is success but there is a diff.
     let exit_ok = output.status.code().is_some_and(|c| c == 0 || c == 1);
