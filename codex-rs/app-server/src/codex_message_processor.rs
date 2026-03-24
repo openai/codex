@@ -591,6 +591,42 @@ impl CodexMessageProcessor {
         ))
     }
 
+    async fn effective_cli_overrides_or_current(
+        &self,
+        fallback_cwd: Option<PathBuf>,
+        cloud_requirements: CloudRequirementsLoader,
+        context: &str,
+    ) -> Vec<(String, TomlValue)> {
+        match self
+            .effective_cli_overrides(fallback_cwd, cloud_requirements)
+            .await
+        {
+            Ok(cli_overrides) => cli_overrides,
+            Err(err) => {
+                warn!("failed to resolve feature overrides for {context}: {err:?}");
+                self.current_cli_overrides()
+            }
+        }
+    }
+
+    async fn effective_cli_overrides_or_send_error(
+        &self,
+        request_id: &ConnectionRequestId,
+        fallback_cwd: Option<PathBuf>,
+        cloud_requirements: CloudRequirementsLoader,
+    ) -> Option<Vec<(String, TomlValue)>> {
+        match self
+            .effective_cli_overrides(fallback_cwd, cloud_requirements)
+            .await
+        {
+            Ok(cli_overrides) => Some(cli_overrides),
+            Err(err) => {
+                self.outgoing.send_error(request_id.clone(), err).await;
+                None
+            }
+        }
+    }
+
     /// If a client sends `developer_instructions: null` during a mode switch,
     /// use the built-in instructions for that mode.
     fn normalize_turn_start_collaboration_mode(
@@ -1136,21 +1172,13 @@ impl CodexMessageProcessor {
                     let cloud_requirements = self.cloud_requirements.clone();
                     let chatgpt_base_url = self.config.chatgpt_base_url.clone();
                     let codex_home = self.config.codex_home.clone();
-                    let cli_overrides = match self
-                        .effective_cli_overrides(
+                    let cli_overrides = self
+                        .effective_cli_overrides_or_current(
                             /*fallback_cwd*/ None,
                             self.current_cloud_requirements(),
+                            "login completion",
                         )
-                        .await
-                    {
-                        Ok(cli_overrides) => cli_overrides,
-                        Err(err) => {
-                            warn!(
-                                "failed to resolve feature overrides for login completion: {err:?}"
-                            );
-                            self.current_cli_overrides()
-                        }
-                    };
+                        .await;
                     let auth_url = server.auth_url.clone();
                     tokio::spawn(async move {
                         let (success, error_msg) = match tokio::time::timeout(
@@ -1338,23 +1366,15 @@ impl CodexMessageProcessor {
             self.config.chatgpt_base_url.clone(),
             self.config.codex_home.clone(),
         );
-        sync_default_client_residency_requirement(
-            &match self
-                .effective_cli_overrides(
-                    /*fallback_cwd*/ None,
-                    self.current_cloud_requirements(),
-                )
-                .await
-            {
-                Ok(cli_overrides) => cli_overrides,
-                Err(err) => {
-                    warn!("failed to resolve feature overrides for residency sync: {err:?}");
-                    self.current_cli_overrides()
-                }
-            },
-            self.cloud_requirements.as_ref(),
-        )
-        .await;
+        let cli_overrides = self
+            .effective_cli_overrides_or_current(
+                /*fallback_cwd*/ None,
+                self.current_cloud_requirements(),
+                "residency sync",
+            )
+            .await;
+        sync_default_client_residency_requirement(&cli_overrides, self.cloud_requirements.as_ref())
+            .await;
 
         self.outgoing
             .send_response(request_id, LoginAccountResponse::ChatgptAuthTokens {})
@@ -1957,15 +1977,15 @@ impl CodexMessageProcessor {
         );
         typesafe_overrides.ephemeral = ephemeral;
         let cloud_requirements = self.current_cloud_requirements();
-        let cli_overrides = match self
-            .effective_cli_overrides(/*fallback_cwd*/ None, cloud_requirements.clone())
+        let Some(cli_overrides) = self
+            .effective_cli_overrides_or_send_error(
+                &request_id,
+                typesafe_overrides.cwd.clone(),
+                cloud_requirements.clone(),
+            )
             .await
-        {
-            Ok(cli_overrides) => cli_overrides,
-            Err(err) => {
-                self.outgoing.send_error(request_id, err).await;
-                return;
-            }
+        else {
+            return;
         };
         let listener_task_context = ListenerTaskContext {
             thread_manager: Arc::clone(&self.thread_manager),
@@ -3563,15 +3583,15 @@ impl CodexMessageProcessor {
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let cloud_requirements = self.current_cloud_requirements();
-        let effective_cli_overrides = match self
-            .effective_cli_overrides(history_cwd.clone(), cloud_requirements.clone())
+        let Some(effective_cli_overrides) = self
+            .effective_cli_overrides_or_send_error(
+                &request_id,
+                history_cwd.clone(),
+                cloud_requirements.clone(),
+            )
             .await
-        {
-            Ok(cli_overrides) => cli_overrides,
-            Err(err) => {
-                self.outgoing.send_error(request_id, err).await;
-                return;
-            }
+        else {
+            return;
         };
         let config = match derive_config_for_cwd(
             &effective_cli_overrides,
@@ -4115,15 +4135,15 @@ impl CodexMessageProcessor {
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
         let cloud_requirements = self.current_cloud_requirements();
-        let effective_cli_overrides = match self
-            .effective_cli_overrides(history_cwd.clone(), cloud_requirements.clone())
+        let Some(effective_cli_overrides) = self
+            .effective_cli_overrides_or_send_error(
+                &request_id,
+                history_cwd.clone(),
+                cloud_requirements.clone(),
+            )
             .await
-        {
-            Ok(cli_overrides) => cli_overrides,
-            Err(err) => {
-                self.outgoing.send_error(request_id, err).await;
-                return;
-            }
+        else {
+            return;
         };
         let config = match derive_config_for_cwd(
             &effective_cli_overrides,
@@ -7345,16 +7365,13 @@ impl CodexMessageProcessor {
             .cwd
             .map(PathBuf::from)
             .unwrap_or_else(|| config.cwd.clone());
-        let cli_overrides = match self
-            .effective_cli_overrides(Some(command_cwd.clone()), cloud_requirements.clone())
-            .await
-        {
-            Ok(cli_overrides) => cli_overrides,
-            Err(err) => {
-                warn!("failed to resolve feature overrides for windows sandbox setup: {err:?}");
-                self.current_cli_overrides()
-            }
-        };
+        let cli_overrides = self
+            .effective_cli_overrides_or_current(
+                Some(command_cwd.clone()),
+                cloud_requirements.clone(),
+                "windows sandbox setup",
+            )
+            .await;
         let outgoing = Arc::clone(&self.outgoing);
         let connection_id = request_id.connection_id;
 
