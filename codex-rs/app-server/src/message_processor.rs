@@ -451,6 +451,10 @@ impl MessageProcessor {
         self.codex_message_processor.drain_background_tasks().await;
     }
 
+    pub(crate) async fn cancel_active_login(&self) {
+        self.codex_message_processor.cancel_active_login().await;
+    }
+
     pub(crate) async fn clear_all_thread_listeners(&self) {
         self.codex_message_processor
             .clear_all_thread_listeners()

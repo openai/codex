@@ -457,6 +457,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
             }
 
             processor.clear_runtime_references();
+            processor.cancel_active_login().await;
             processor.connection_closed(IN_PROCESS_CONNECTION_ID).await;
             processor.clear_all_thread_listeners().await;
             processor.drain_background_tasks().await;
