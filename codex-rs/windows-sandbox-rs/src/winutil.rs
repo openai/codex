@@ -73,6 +73,16 @@ fn is_cmd_executable(program: &str) -> bool {
     matches!(lower.as_str(), "cmd" | "cmd.exe")
 }
 
+fn cmd_single_suffix_looks_precomposed(arg: &str) -> bool {
+    arg.contains('"')
+        || arg.contains('&')
+        || arg.contains('|')
+        || arg.contains('<')
+        || arg.contains('>')
+        || arg.contains('(')
+        || arg.contains(')')
+}
+
 /// Build a Windows command line for CreateProcess-style APIs.
 ///
 /// Most programs should receive CRT-style quoted arguments. `cmd.exe` is the exception:
@@ -99,7 +109,11 @@ pub fn argv_to_command_line(argv: &[String]) -> String {
                 .collect::<Vec<_>>();
             let suffix = &args[index + 1..];
             if suffix.len() == 1 {
-                rendered.push(quote_windows_arg(&suffix[0]));
+                if cmd_single_suffix_looks_precomposed(&suffix[0]) {
+                    rendered.push(suffix[0].clone());
+                } else {
+                    rendered.push(quote_windows_arg(&suffix[0]));
+                }
             } else {
                 rendered.extend(suffix.iter().map(|arg| quote_windows_arg(arg)));
             }
