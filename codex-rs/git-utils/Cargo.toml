@@ -9,7 +9,7 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
-futures = { workspace = true }
+futures = { workspace = true, features = ["alloc"] }
 once_cell = { workspace = true }
 regex = "1"
 schemars = { workspace = true }
