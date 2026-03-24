@@ -21,6 +21,9 @@ mod tool_suggest;
 pub(crate) mod unified_exec;
 mod view_image;
 
+use codex_sandboxing::policy_transforms::intersect_permission_profiles;
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
+use codex_sandboxing::policy_transforms::normalize_additional_permissions;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 pub use plan::PLAN_TOOL;
 use serde::Deserialize;
@@ -31,8 +34,6 @@ use std::path::PathBuf;
 use crate::codex::Session;
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
-use crate::sandboxing::merge_permission_profiles;
-use crate::sandboxing::normalize_additional_permissions;
 pub(crate) use crate::tools::code_mode::CodeModeExecuteHandler;
 pub(crate) use crate::tools::code_mode::CodeModeWaitHandler;
 pub use apply_patch::ApplyPatchHandler;
@@ -208,10 +209,8 @@ pub(super) async fn apply_granted_turn_permissions(
     );
     let permissions_preapproved = match (effective_permissions.as_ref(), granted_permissions) {
         (Some(effective_permissions), Some(granted_permissions)) => {
-            crate::sandboxing::intersect_permission_profiles(
-                effective_permissions.clone(),
-                granted_permissions,
-            ) == *effective_permissions
+            intersect_permission_profiles(effective_permissions.clone(), granted_permissions)
+                == *effective_permissions
         }
         _ => false,
     };
