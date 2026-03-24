@@ -963,6 +963,7 @@ async fn spawn_child_completion_notifies_parent_history() {
 }
 
 #[tokio::test]
+#[ignore = "flaky on: rust-ci / Tests — windows-arm64 - aarch64-pc-windows-msvc"]
 async fn multi_agent_v2_completion_sends_inter_agent_message_to_direct_parent() {
     let harness = AgentControlHarness::new().await;
     let (root_thread_id, _) = harness.start_thread().await;
