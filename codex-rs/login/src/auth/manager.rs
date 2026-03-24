@@ -1103,8 +1103,10 @@ impl AuthManager {
     }
 
     pub fn refresh_failure(&self) -> Option<RefreshTokenFailedError> {
-        let auth = self.auth_cached()?;
-        self.permanent_refresh_failure_for_auth(&auth)
+        self.inner
+            .read()
+            .ok()
+            .and_then(|cached| cached.permanent_refresh_failure.clone())
     }
 
     /// Current cached auth (clone). May be `None` if not logged in or load failed.
@@ -1182,22 +1184,6 @@ impl AuthManager {
             (Some(a), Some(b)) => a == b,
             _ => false,
         }
-    }
-
-    /// Returns the cached permanent refresh failure only when `auth` still
-    /// matches the current cached auth snapshot.
-    fn permanent_refresh_failure_for_auth(
-        &self,
-        auth: &CodexAuth,
-    ) -> Option<RefreshTokenFailedError> {
-        self.inner
-            .read()
-            .ok()
-            .and_then(|cached| cached.permanent_refresh_failure.clone())
-            .filter(|_| {
-                let current_auth = self.auth_cached();
-                Self::auths_equal_for_refresh(Some(auth), current_auth.as_ref())
-            })
     }
 
     /// Records a permanent refresh failure only if the failed refresh was
@@ -1346,7 +1332,7 @@ impl AuthManager {
             Some(auth) => auth,
             None => return Ok(()),
         };
-        if let Some(error) = self.permanent_refresh_failure_for_auth(&auth) {
+        if let Some(error) = self.refresh_failure() {
             return Err(RefreshTokenError::Permanent(error));
         }
 
