@@ -5,22 +5,18 @@ use std::sync::LazyLock;
 use codex_protocol::protocol::SessionSource;
 
 pub mod config;
-#[path = "state_db.rs"]
-pub mod db;
 pub mod list;
 pub mod metadata;
 pub mod policy;
 pub mod recorder;
 pub mod session_index;
-
-mod path_utils;
+pub mod state_db;
 
 pub(crate) mod default_client {
     pub use codex_login::default_client::*;
 }
 
 pub(crate) use codex_protocol::protocol;
-pub(crate) use db as state_db;
 
 pub const SESSIONS_SUBDIR: &str = "sessions";
 pub const ARCHIVED_SESSIONS_SUBDIR: &str = "archived_sessions";
@@ -36,7 +32,6 @@ pub static INTERACTIVE_SESSION_SOURCES: LazyLock<Vec<SessionSource>> = LazyLock:
 pub use codex_protocol::protocol::SessionMeta;
 pub use config::RolloutConfig;
 pub use config::RolloutConfigView;
-pub use db::StateDbHandle;
 pub use list::find_archived_thread_path_by_id_str;
 pub use list::find_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]
@@ -49,6 +44,7 @@ pub use session_index::append_thread_name;
 pub use session_index::find_thread_name_by_id;
 pub use session_index::find_thread_names_by_ids;
 pub use session_index::find_thread_path_by_name_str;
+pub use state_db::StateDbHandle;
 
 #[cfg(test)]
 mod tests;

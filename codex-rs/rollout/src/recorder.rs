@@ -42,7 +42,6 @@ use super::policy::EventPersistenceMode;
 use super::policy::is_persisted_response_item;
 use crate::config::RolloutConfigView;
 use crate::default_client::originator;
-use crate::path_utils;
 use crate::state_db;
 use crate::state_db::StateDbHandle;
 use codex_git_utils::collect_git_info;
@@ -57,8 +56,7 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadataBuilder;
-use codex_utils_output_truncation::TruncationPolicy;
-use codex_utils_output_truncation::truncate_text;
+use codex_utils_path as path_utils;
 
 /// Records all [`ResponseItem`]s for a session and flushes them to disk after
 /// every update.

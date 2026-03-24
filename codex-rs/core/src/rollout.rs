@@ -1,4 +1,18 @@
 use crate::config::Config;
+pub use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
+pub use codex_rollout::INTERACTIVE_SESSION_SOURCES;
+pub use codex_rollout::RolloutRecorder;
+pub use codex_rollout::RolloutRecorderParams;
+pub use codex_rollout::SESSIONS_SUBDIR;
+pub use codex_rollout::SessionMeta;
+pub use codex_rollout::append_thread_name;
+pub use codex_rollout::find_archived_thread_path_by_id_str;
+#[deprecated(note = "use find_thread_path_by_id_str")]
+pub use codex_rollout::find_conversation_path_by_id_str;
+pub use codex_rollout::find_thread_name_by_id;
+pub use codex_rollout::find_thread_path_by_id_str;
+pub use codex_rollout::find_thread_path_by_name_str;
+pub use codex_rollout::rollout_date_parts;
 
 impl codex_rollout::RolloutConfigView for Config {
     fn codex_home(&self) -> &std::path::Path {
@@ -21,21 +35,6 @@ impl codex_rollout::RolloutConfigView for Config {
         self.memories.generate_memories
     }
 }
-
-pub use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
-pub use codex_rollout::INTERACTIVE_SESSION_SOURCES;
-pub use codex_rollout::RolloutRecorder;
-pub use codex_rollout::RolloutRecorderParams;
-pub use codex_rollout::SESSIONS_SUBDIR;
-pub use codex_rollout::SessionMeta;
-pub use codex_rollout::append_thread_name;
-pub use codex_rollout::find_archived_thread_path_by_id_str;
-#[deprecated(note = "use find_thread_path_by_id_str")]
-pub use codex_rollout::find_conversation_path_by_id_str;
-pub use codex_rollout::find_thread_name_by_id;
-pub use codex_rollout::find_thread_path_by_id_str;
-pub use codex_rollout::find_thread_path_by_name_str;
-pub use codex_rollout::rollout_date_parts;
 
 pub mod list {
     pub use codex_rollout::list::*;

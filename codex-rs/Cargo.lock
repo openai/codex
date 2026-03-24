@@ -1903,6 +1903,7 @@ dependencies = [
  "codex-utils-home-dir",
  "codex-utils-image",
  "codex-utils-output-truncation",
+ "codex-utils-path",
  "codex-utils-pty",
  "codex-utils-readiness",
  "codex-utils-stream-parser",
@@ -2481,6 +2482,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-state",
+ "codex-utils-path",
  "codex-utils-string",
  "pretty_assertions",
  "serde",
@@ -2923,6 +2925,16 @@ dependencies = [
  "codex-protocol",
  "codex-utils-string",
  "pretty_assertions",
+]
+
+[[package]]
+name = "codex-utils-path"
+version = "0.0.0"
+dependencies = [
+ "codex-utils-absolute-path",
+ "dunce",
+ "pretty_assertions",
+ "tempfile",
 ]
 
 [[package]]

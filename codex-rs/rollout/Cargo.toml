@@ -22,6 +22,7 @@ codex-login = { workspace = true }
 codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-state = { workspace = true }
+codex-utils-path = { workspace = true }
 codex-utils-string = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
