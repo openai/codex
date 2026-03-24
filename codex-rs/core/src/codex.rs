@@ -235,9 +235,6 @@ pub(crate) struct PreviousTurnSettings {
 
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
-use crate::file_watcher::FileWatcher;
-use crate::file_watcher::FileWatcherEvent;
-use crate::git_info::get_git_repo_root;
 use crate::guardian::GuardianReviewSessionManager;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
