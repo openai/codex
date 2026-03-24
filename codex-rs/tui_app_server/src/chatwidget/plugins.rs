@@ -25,10 +25,12 @@ use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::prelude::Widget;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
+use ratatui::widgets::Wrap;
 
 const PLUGINS_SELECTION_VIEW_ID: &str = "plugins-selection";
 const LOADING_ANIMATION_DELAY: Duration = Duration::from_secs(1);
@@ -102,12 +104,18 @@ struct PluginDisclosureLine {
 
 impl Renderable for PluginDisclosureLine {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.line.render(area, buf);
+        Paragraph::new(self.line.clone())
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
         mark_url_hyperlink(buf, area, APPS_HELP_ARTICLE_URL);
     }
 
-    fn desired_height(&self, _width: u16) -> u16 {
-        1
+    fn desired_height(&self, width: u16) -> u16 {
+        Paragraph::new(self.line.clone())
+            .wrap(Wrap { trim: false })
+            .line_count(width)
+            .try_into()
+            .unwrap_or(u16::MAX)
     }
 }
 

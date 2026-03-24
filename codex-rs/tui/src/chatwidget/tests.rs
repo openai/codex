@@ -7083,6 +7083,40 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     lines.join("\n")
 }
 
+fn strip_osc8_for_snapshot(text: &str) -> String {
+    // Snapshots should assert the visible popup text, not terminal hyperlink escapes.
+    let bytes = text.as_bytes();
+    let mut stripped = String::with_capacity(text.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"\x1B]8;;") {
+            i += 5;
+            while i < bytes.len() {
+                if bytes[i] == b'\x07' {
+                    i += 1;
+                    break;
+                }
+                if i + 1 < bytes.len() && bytes[i] == b'\x1B' && bytes[i + 1] == b'\\' {
+                    i += 2;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        let ch = text[i..]
+            .chars()
+            .next()
+            .expect("slice should always contain a char");
+        stripped.push(ch);
+        i += ch.len_utf8();
+    }
+
+    stripped
+}
+
 fn plugins_test_absolute_path(path: &str) -> AbsolutePathBuf {
     AbsolutePathBuf::try_from(
         std::env::temp_dir()
@@ -7338,7 +7372,10 @@ async fn plugin_detail_popup_snapshot_shows_install_actions_and_capability_summa
     );
 
     let popup = render_bottom_popup(&chat, 100);
-    assert_snapshot!("plugin_detail_popup_installable", popup);
+    assert_snapshot!(
+        "plugin_detail_popup_installable",
+        strip_osc8_for_snapshot(&popup)
+    );
 }
 
 #[tokio::test]
