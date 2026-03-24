@@ -20,6 +20,7 @@ use crate::ExecBackend;
 use crate::ExecProcess;
 use crate::ExecServerError;
 use crate::ExecSessionEvent;
+use crate::ProcessId;
 use crate::protocol::EXEC_CLOSED_METHOD;
 use crate::protocol::ExecClosedNotification;
 use crate::protocol::ExecExitedNotification;
@@ -86,9 +87,8 @@ pub(crate) struct LocalProcess {
     inner: Arc<Inner>,
 }
 
-#[derive(Clone)]
 struct LocalExecProcess {
-    process_id: String,
+    process_id: ProcessId,
     events: StdMutex<broadcast::Receiver<ExecSessionEvent>>,
     backend: LocalProcess,
 }
@@ -463,7 +463,7 @@ impl ExecBackend for LocalProcess {
             .await
             .map_err(map_handler_error)?;
         Ok(Arc::new(LocalExecProcess {
-            process_id: response.process_id,
+            process_id: response.process_id.into(),
             events: StdMutex::new(events),
             backend: self.clone(),
         }))
@@ -472,20 +472,19 @@ impl ExecBackend for LocalProcess {
 
 #[async_trait]
 impl ExecProcess for LocalExecProcess {
-    fn process_id(&self) -> &str {
+    fn process_id(&self) -> &ProcessId {
         &self.process_id
     }
 
     fn subscribe(&self) -> broadcast::Receiver<ExecSessionEvent> {
-        self
-            .events
+        self.events
             .lock()
             .expect("local exec process events mutex should not be poisoned")
             .resubscribe()
     }
 
-    async fn write_stdin(&self, chunk: Vec<u8>) -> Result<(), ExecServerError> {
-        self.backend.write_stdin(&self.process_id, chunk).await
+    async fn write(&self, chunk: Vec<u8>) -> Result<(), ExecServerError> {
+        self.backend.write(&self.process_id, chunk).await
     }
 
     async fn terminate(&self) -> Result<(), ExecServerError> {
@@ -494,7 +493,7 @@ impl ExecProcess for LocalExecProcess {
 }
 
 impl LocalProcess {
-    async fn write_stdin(&self, process_id: &str, chunk: Vec<u8>) -> Result<(), ExecServerError> {
+    async fn write(&self, process_id: &str, chunk: Vec<u8>) -> Result<(), ExecServerError> {
         let response = self
             .exec_write(WriteParams {
                 process_id: process_id.to_string(),
@@ -700,7 +699,5 @@ async fn maybe_emit_closed(process_id: String, inner: Arc<Inner>) {
         .notify(EXEC_CLOSED_METHOD, &notification)
         .await
         .is_err()
-    {
-        return;
-    }
+    {}
 }

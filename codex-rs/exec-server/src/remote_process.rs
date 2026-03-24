@@ -9,6 +9,7 @@ use crate::ExecProcess;
 use crate::ExecServerClient;
 use crate::ExecServerError;
 use crate::ExecSessionEvent;
+use crate::ProcessId;
 use crate::protocol::ExecParams;
 
 #[derive(Clone)]
@@ -17,7 +18,7 @@ pub(crate) struct RemoteProcess {
 }
 
 struct RemoteExecProcess {
-    process_id: String,
+    process_id: ProcessId,
     events: StdMutex<broadcast::Receiver<ExecSessionEvent>>,
     backend: RemoteProcess,
 }
@@ -27,7 +28,7 @@ impl RemoteProcess {
         Self { client }
     }
 
-    async fn write_stdin(&self, process_id: &str, chunk: Vec<u8>) -> Result<(), ExecServerError> {
+    async fn write(&self, process_id: &str, chunk: Vec<u8>) -> Result<(), ExecServerError> {
         let response = self.client.write(process_id, chunk).await?;
         if response.accepted {
             Ok(())
@@ -55,7 +56,7 @@ impl ExecBackend for RemoteProcess {
         }
 
         Ok(Arc::new(RemoteExecProcess {
-            process_id,
+            process_id: process_id.into(),
             events: StdMutex::new(events),
             backend: self.clone(),
         }))
@@ -64,20 +65,19 @@ impl ExecBackend for RemoteProcess {
 
 #[async_trait]
 impl ExecProcess for RemoteExecProcess {
-    fn process_id(&self) -> &str {
+    fn process_id(&self) -> &ProcessId {
         &self.process_id
     }
 
     fn subscribe(&self) -> broadcast::Receiver<ExecSessionEvent> {
-        self
-            .events
+        self.events
             .lock()
             .expect("remote exec process events mutex should not be poisoned")
             .resubscribe()
     }
 
-    async fn write_stdin(&self, chunk: Vec<u8>) -> Result<(), ExecServerError> {
-        self.backend.write_stdin(&self.process_id, chunk).await
+    async fn write(&self, chunk: Vec<u8>) -> Result<(), ExecServerError> {
+        self.backend.write(&self.process_id, chunk).await
     }
 
     async fn terminate(&self) -> Result<(), ExecServerError> {
