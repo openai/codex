@@ -548,7 +548,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         SnapshotTurnState {
             ends_mid_turn: true,
             active_turn_id: Some("turn-explicit".to_string()),
-            active_turn_start_index: Some(0),
+            active_turn_start_index: Some(1),
         },
     );
 
