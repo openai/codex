@@ -23,6 +23,4 @@ Scenario: rollback past compaction replay after rollback
 01:message/user:<COMPACTION_SUMMARY>\nSUMMARY_ONLY_CONTEXT
 02:message/developer:<PERMISSIONS_INSTRUCTIONS>
 03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-04:message/developer:<PERMISSIONS_INSTRUCTIONS>
-05:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
-06:message/user:AFTER_ROLLBACK
+04:message/user:AFTER_ROLLBACK

@@ -3787,7 +3787,7 @@ impl ChatComposer {
 
     #[cfg(not(target_os = "linux"))]
     fn schedule_space_hold_timer(flag: Arc<AtomicBool>, frame: Option<FrameRequester>) {
-        const HOLD_DELAY_MILLIS: u64 = 500;
+        const HOLD_DELAY_MILLIS: u64 = 1_000;
         if let Ok(handle) = Handle::try_current() {
             let flag_clone = flag;
             let frame_clone = frame;
@@ -3875,7 +3875,7 @@ impl ChatComposer {
         }
     }
 
-    /// Called when the 500ms space hold timeout elapses.
+    /// Called when the 1s space hold timeout elapses.
     ///
     /// On terminals without key-release reporting, this only transitions into voice capture if we
     /// observed repeated Space events while pending; otherwise the keypress is treated as a typed
@@ -5493,6 +5493,56 @@ mod tests {
         let mentions = composer.mention_items();
         assert_eq!(mentions.len(), 1);
         assert_eq!(mentions[0].display_name, "Google Calendar".to_string());
+        assert_eq!(mentions[0].category_tag, Some("[Plugin]".to_string()));
+        assert_eq!(
+            mentions[0].path,
+            Some("plugin://google-calendar@debug".to_string())
+        );
+    }
+
+    #[test]
+    fn mention_items_hide_plugin_owned_app_duplicates_when_provenance_matches() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_connectors_enabled(true);
+        composer.set_text_content("$goog".to_string(), Vec::new(), Vec::new());
+        composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
+            config_name: "google-calendar@debug".to_string(),
+            display_name: "Google Calendar".to_string(),
+            description: None,
+            has_skills: false,
+            mcp_server_names: vec!["google-calendar".to_string()],
+            app_connector_ids: vec![codex_core::plugins::AppConnectorId(
+                "google_calendar".to_string(),
+            )],
+        }]));
+        composer.set_connector_mentions(Some(ConnectorsSnapshot {
+            connectors: vec![AppInfo {
+                id: "google_calendar".to_string(),
+                name: "Google Calendar".to_string(),
+                description: Some("Look up events and availability".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/google-calendar".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: vec!["Google Calendar".to_string()],
+            }],
+        }));
+
+        let mentions = composer.mention_items();
+        assert_eq!(mentions.len(), 1);
         assert_eq!(mentions[0].category_tag, Some("[Plugin]".to_string()));
         assert_eq!(
             mentions[0].path,

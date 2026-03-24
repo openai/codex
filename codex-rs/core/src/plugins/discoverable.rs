@@ -39,7 +39,8 @@ pub(crate) fn list_tool_suggest_discoverable_plugins(
         .collect::<HashSet<_>>();
     let marketplaces = plugins_manager
         .list_marketplaces_for_config(config, &[])
-        .context("failed to list plugin marketplaces for tool suggestions")?;
+        .context("failed to list plugin marketplaces for tool suggestions")?
+        .marketplaces;
     let Some(curated_marketplace) = marketplaces
         .into_iter()
         .find(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)

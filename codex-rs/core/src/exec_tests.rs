@@ -1,5 +1,6 @@
 use super::*;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_sandboxing::SandboxType;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -542,7 +543,7 @@ fn windows_elevated_sandbox_allows_restricted_read_only_policies() {
 
 #[test]
 fn process_exec_tool_call_uses_platform_sandbox_for_network_only_restrictions() {
-    let expected = crate::get_platform_sandbox(false).unwrap_or(SandboxType::None);
+    let expected = codex_sandboxing::get_platform_sandbox(false).unwrap_or(SandboxType::None);
 
     assert_eq!(
         select_process_exec_tool_sandbox_type(

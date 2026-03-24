@@ -38,6 +38,7 @@ use crate::protocol::NetworkApprovalProtocol;
 use crate::protocol::RateLimitSnapshot;
 use crate::protocol::RateLimitWindow;
 use crate::protocol::ResumedHistory;
+use crate::protocol::RolloutItem;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
@@ -1166,6 +1167,35 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
         })
         .await?;
     wait_for_event(&initial.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    // The parent rollout writer drains asynchronously after turn completion.
+    // Wait until the persisted JSONL includes the source user turn before forking from it.
+    let mut source_history_persisted = false;
+    for _ in 0..100 {
+        let history = RolloutRecorder::get_rollout_history(&rollout_path).await;
+        source_history_persisted = history.ok().is_some_and(|history| {
+            history.get_rollout_items().into_iter().any(|item| {
+                matches!(
+                        item,
+                        RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. })
+                            if role == "user"
+                                && content.iter().any(|content_item| {
+                                    matches!(
+                                        content_item,
+                                        ContentItem::InputText { text } if text == "fork seed"
+                                    )
+                                })
+                )
+            })
+        });
+        if source_history_persisted {
+            break;
+        }
+        sleep(StdDuration::from_millis(10)).await;
+    }
+    assert!(
+        source_history_persisted,
+        "source rollout should contain the completed pre-fork user turn before forking"
+    );
 
     let mut fork_config = initial.config.clone();
     fork_config.permissions.approval_policy =
@@ -2494,7 +2524,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         skills_manager,
         plugins_manager,
         mcp_manager,
-        Arc::new(FileWatcher::noop()),
+        Arc::new(SkillsWatcher::noop()),
         AgentControl::default(),
     )
     .await;
@@ -2593,7 +2623,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             .expect("create environment"),
     );
 
-    let file_watcher = Arc::new(FileWatcher::noop());
+    let skills_watcher = Arc::new(SkillsWatcher::noop());
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(
             McpConnectionManager::new_mcp_connection_manager_for_tests(
@@ -2627,7 +2657,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         skills_manager,
         plugins_manager,
         mcp_manager,
-        file_watcher,
+        skills_watcher,
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
@@ -3014,6 +3044,41 @@ fn op_kind_distinguishes_turn_ops() {
 }
 
 #[tokio::test]
+async fn user_turn_updates_approvals_reviewer() {
+    let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
+    let config = session.get_config().await;
+
+    handlers::user_input_or_turn(
+        &session,
+        "sub-1".to_string(),
+        Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            cwd: config.cwd.clone(),
+            approval_policy: config.permissions.approval_policy.value(),
+            approvals_reviewer: Some(crate::config::types::ApprovalsReviewer::GuardianSubagent),
+            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            model: turn_context.model_info.slug.clone(),
+            effort: config.model_reasoning_effort,
+            summary: config.model_reasoning_summary,
+            service_tier: None,
+            final_output_json_schema: None,
+            collaboration_mode: None,
+            personality: config.personality,
+        },
+    )
+    .await;
+
+    let state = session.state.lock().await;
+    assert_eq!(
+        state.session_configuration.approvals_reviewer,
+        crate::config::types::ApprovalsReviewer::GuardianSubagent
+    );
+}
+
+#[tokio::test]
 async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
     struct TraceCaptureTask {
         captured_trace: Arc<std::sync::Mutex<Option<W3cTraceContext>>>,
@@ -3393,7 +3458,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             .expect("create environment"),
     );
 
-    let file_watcher = Arc::new(FileWatcher::noop());
+    let skills_watcher = Arc::new(SkillsWatcher::noop());
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(
             McpConnectionManager::new_mcp_connection_manager_for_tests(
@@ -3427,7 +3492,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         skills_manager,
         plugins_manager,
         mcp_manager,
-        file_watcher,
+        skills_watcher,
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),

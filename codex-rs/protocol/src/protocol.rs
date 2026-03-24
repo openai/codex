@@ -255,6 +255,11 @@ pub enum Op {
         /// Policy to use for command approval.
         approval_policy: AskForApproval,
 
+        /// Reviewer to use for approval requests raised during this turn.
+        ///
+        /// When omitted, the session keeps the current setting
+        approvals_reviewer: Option<ApprovalsReviewer>,
+
         /// Policy to use for tool calls such as `local_shell`.
         sandbox_policy: SandboxPolicy,
 
@@ -513,6 +518,7 @@ pub struct InterAgentCommunication {
     #[serde(default)]
     pub other_recipients: Vec<AgentPath>,
     pub content: String,
+    pub trigger_turn: bool,
 }
 
 impl InterAgentCommunication {
@@ -521,24 +527,14 @@ impl InterAgentCommunication {
         recipient: AgentPath,
         other_recipients: Vec<AgentPath>,
         content: String,
+        trigger_turn: bool,
     ) -> Self {
         Self {
             author,
             recipient,
             other_recipients,
             content,
-        }
-    }
-
-    pub fn to_response_item(&self) -> ResponseItem {
-        ResponseItem::Message {
-            id: None,
-            role: "assistant".to_string(),
-            content: vec![ContentItem::OutputText {
-                text: self.as_text(),
-            }],
-            end_turn: None,
-            phase: None,
+            trigger_turn,
         }
     }
 
@@ -546,38 +542,22 @@ impl InterAgentCommunication {
         ResponseInputItem::Message {
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
-                text: self.as_text(),
+                text: serde_json::to_string(self).unwrap_or_default(),
             }],
         }
     }
 
     pub fn is_message_content(content: &[ContentItem]) -> bool {
-        content.iter().any(|content_item| match content_item {
-            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
-                Self::is_instruction_text(text)
+        Self::from_message_content(content).is_some()
+    }
+
+    pub fn from_message_content(content: &[ContentItem]) -> Option<Self> {
+        match content {
+            [ContentItem::InputText { text }] | [ContentItem::OutputText { text }] => {
+                serde_json::from_str(text).ok()
             }
-            _ => false,
-        })
-    }
-
-    fn as_text(&self) -> String {
-        let other_recipients = self
-            .other_recipients
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!(
-            "author: {}\nrecipient: {}\nother_recipients: [{other_recipients}]\nContent: {}",
-            self.author, self.recipient, self.content
-        )
-    }
-
-    fn is_instruction_text(text: &str) -> bool {
-        text.starts_with("author: ")
-            && text.contains("\nrecipient: ")
-            && text.contains("\nother_recipients: [")
-            && text.contains("]\nContent: ")
+            _ => None,
+        }
     }
 }
 

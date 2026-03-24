@@ -123,7 +123,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
         "expected forked thread to include one turn"
     );
     let turn = &thread.turns[0];
-    assert_eq!(turn.status, TurnStatus::Completed);
+    assert_eq!(turn.status, TurnStatus::Interrupted);
     assert_eq!(turn.items.len(), 1, "expected user message item");
     match &turn.items[0] {
         ThreadItem::UserMessage { content, .. } => {
