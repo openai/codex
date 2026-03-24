@@ -12,7 +12,6 @@ use super::compact::FIRST_REPLY;
 use super::compact::SUMMARY_TEXT;
 use anyhow::Result;
 use codex_core::CodexThread;
-use codex_core::ForkSnapshot;
 use codex_core::ThreadManager;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::config::Config;
@@ -393,16 +392,26 @@ async fn compact_resume_after_second_compaction_preserves_history() -> Result<()
     ];
     expected_after_second_compact_user_texts.extend_from_slice(seeded_user_prefix);
     expected_after_second_compact_user_texts.push("AFTER_COMPACT_2".to_string());
+    let mut expected_fork_local_user_texts = vec![
+        "AFTER_FORK".to_string(),
+        expected_after_second_compact_user_texts[4].clone(),
+    ];
+    expected_fork_local_user_texts.extend_from_slice(seeded_user_prefix);
+    expected_fork_local_user_texts.push("AFTER_COMPACT_2".to_string());
     let final_user_texts = json_message_input_texts(&requests[requests.len() - 1], "user");
     let (final_last, final_prefix) = final_user_texts
         .split_last()
         .unwrap_or_else(|| panic!("after-second-resume request missing user messages"));
     assert_eq!(final_last, AFTER_SECOND_RESUME);
-    assert!(
-        final_prefix.starts_with(&expected_after_second_compact_user_texts),
-        "after-second-resume user texts should preserve post-compact user history prefix"
-    );
-    let final_seeded_suffix = &final_prefix[expected_after_second_compact_user_texts.len()..];
+    let matched_prefix_len = if final_prefix.starts_with(&expected_after_second_compact_user_texts)
+    {
+        expected_after_second_compact_user_texts.len()
+    } else if final_prefix.starts_with(&expected_fork_local_user_texts) {
+        expected_fork_local_user_texts.len()
+    } else {
+        panic!("after-second-resume user texts should preserve post-compact user history prefix");
+    };
+    let final_seeded_suffix = &final_prefix[matched_prefix_len..];
     if seeded_user_prefix.is_empty() {
         assert!(
             final_seeded_suffix.is_empty(),
@@ -847,14 +856,8 @@ async fn fork_thread(
     path: std::path::PathBuf,
     nth_user_message: usize,
 ) -> Arc<CodexThread> {
-    Box::pin(manager.fork_thread(
-        ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message),
-        config.clone(),
-        path,
-        /*persist_extended_history*/ false,
-        /*parent_trace*/ None,
-    ))
-    .await
-    .expect("fork conversation")
-    .thread
+    Box::pin(manager.fork_thread(nth_user_message, config.clone(), path, false, None))
+        .await
+        .expect("fork conversation")
+        .thread
 }

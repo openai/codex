@@ -1033,6 +1033,7 @@ impl App {
             .await?;
         self.apply_runtime_policy_overrides(&mut config);
         self.config = config;
+        self.chat_widget.sync_plugin_mentions_config(&self.config);
         Ok(())
     }
 
@@ -3181,6 +3182,7 @@ impl App {
                     if let Err(err) = self.refresh_in_memory_config_from_disk().await {
                         tracing::warn!(error = %err, "failed to refresh config after plugin install");
                     }
+                    self.chat_widget.refresh_plugin_mentions();
                     self.chat_widget.submit_op(Op::ReloadUserConfig);
                 }
                 let should_refresh_plugin_detail = self.chat_widget.on_plugin_install_loaded(
@@ -3634,6 +3636,7 @@ impl App {
                             "failed to refresh config after plugin uninstall"
                         );
                     }
+                    self.chat_widget.refresh_plugin_mentions();
                     self.chat_widget.submit_op(Op::ReloadUserConfig);
                 }
                 self.chat_widget.on_plugin_uninstall_loaded(

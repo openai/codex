@@ -7836,7 +7836,7 @@ async fn plugins_popup_loading_state_snapshot() {
 }
 
 #[tokio::test]
-async fn plugins_popup_snapshot_filters_to_curated_marketplace_and_preserves_response_order() {
+async fn plugins_popup_snapshot_shows_all_marketplaces_and_sorts_installed_then_name() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.set_feature_enabled(Feature::Plugins, true);
 
@@ -7885,15 +7885,17 @@ async fn plugins_popup_snapshot_filters_to_curated_marketplace_and_preserves_res
     let popup = render_loaded_plugins_popup(&mut chat, response);
     assert_snapshot!("plugins_popup_curated_marketplace", popup);
     assert!(
-        !popup.contains("Hidden Repo Plugin"),
-        "expected /plugins to hide non-ChatGPT marketplaces, got:\n{popup}"
+        popup.contains("Hidden Repo Plugin"),
+        "expected /plugins to include non-curated marketplaces, got:\n{popup}"
     );
     assert!(
-        plugins_test_popup_row_position(&popup, "Bravo Search")
-            < plugins_test_popup_row_position(&popup, "Alpha Sync")
-            && plugins_test_popup_row_position(&popup, "Alpha Sync")
+        plugins_test_popup_row_position(&popup, "Alpha Sync")
+            < plugins_test_popup_row_position(&popup, "Bravo Search")
+            && plugins_test_popup_row_position(&popup, "Bravo Search")
+                < plugins_test_popup_row_position(&popup, "Hidden Repo Plugin")
+            && plugins_test_popup_row_position(&popup, "Hidden Repo Plugin")
                 < plugins_test_popup_row_position(&popup, "Starter"),
-        "expected /plugins rows to keep response order, got:\n{popup}"
+        "expected /plugins rows to sort installed plugins first, then alphabetically, got:\n{popup}"
     );
 }
 

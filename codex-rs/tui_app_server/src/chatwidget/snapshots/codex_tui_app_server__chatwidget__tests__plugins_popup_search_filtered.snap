@@ -3,7 +3,7 @@ source: tui_app_server/src/chatwidget/tests.rs
 expression: popup
 ---
   Plugins
-  Browse plugins from the ChatGPT marketplace.
+  Browse plugins from available marketplaces.
   Installed 0 of 3 available plugins.
 
   sla

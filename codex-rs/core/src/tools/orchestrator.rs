@@ -12,7 +12,6 @@ use crate::exec::ExecToolCallOutput;
 use crate::guardian::GUARDIAN_REJECTION_MESSAGE;
 use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::network_approval_context_from_payload;
-use crate::sandboxing::SandboxManager;
 use crate::tools::network_approval::DeferredNetworkApproval;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::begin_network_approval;
@@ -30,6 +29,8 @@ use codex_otel::ToolDecisionSource;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxType;
 
 pub(crate) struct ToolOrchestrator {
     sandbox: SandboxManager,
@@ -178,7 +179,7 @@ impl ToolOrchestrator {
             .network
             .is_some();
         let initial_sandbox = match tool.sandbox_mode_for_first_attempt(req) {
-            SandboxOverride::BypassSandboxFirstAttempt => crate::exec::SandboxType::None,
+            SandboxOverride::BypassSandboxFirstAttempt => SandboxType::None,
             SandboxOverride::NoOverride => self.sandbox.select_initial(
                 &turn_ctx.file_system_sandbox_policy,
                 turn_ctx.network_sandbox_policy,
@@ -188,8 +189,7 @@ impl ToolOrchestrator {
             ),
         };
 
-        // Platform-specific flag gating is handled by SandboxManager::select_initial
-        // via crate::safety::get_platform_sandbox(..).
+        // Platform-specific flag gating is handled by SandboxManager::select_initial.
         let use_legacy_landlock = turn_ctx.features.use_legacy_landlock();
         let initial_attempt = SandboxAttempt {
             sandbox: initial_sandbox,
@@ -323,7 +323,7 @@ impl ToolOrchestrator {
                 }
 
                 let escalated_attempt = SandboxAttempt {
-                    sandbox: crate::exec::SandboxType::None,
+                    sandbox: SandboxType::None,
                     policy: &turn_ctx.sandbox_policy,
                     file_system_policy: &turn_ctx.file_system_sandbox_policy,
                     network_policy: turn_ctx.network_sandbox_policy,
