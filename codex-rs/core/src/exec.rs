@@ -81,6 +81,9 @@ pub struct ExecParams {
     pub capture_policy: ExecCapturePolicy,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
+    /// Parent tool item id to propagate through managed proxy settings so
+    /// blocked requests can be attributed back to the originating tool call.
+    pub parent_tool_item_id: Option<String>,
     pub sandbox_permissions: SandboxPermissions,
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
@@ -263,6 +266,7 @@ pub fn build_exec_request(
         expiration,
         capture_policy,
         network,
+        parent_tool_item_id,
         sandbox_permissions,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
@@ -270,7 +274,7 @@ pub fn build_exec_request(
         arg0: _,
     } = params;
     if let Some(network) = network.as_ref() {
-        network.apply_to_env(&mut env);
+        network.apply_to_env_for_parent_tool_item(&mut env, parent_tool_item_id.as_deref());
     }
     let (program, args) = command.split_first().ok_or_else(|| {
         CodexErr::Io(io::Error::new(
@@ -301,6 +305,7 @@ pub fn build_exec_request(
             sandbox: sandbox_type,
             enforce_managed_network,
             network: network.as_ref(),
+            parent_tool_item_id: parent_tool_item_id.as_deref(),
             sandbox_policy_cwd: sandbox_cwd,
             #[cfg(target_os = "macos")]
             macos_seatbelt_profile_extensions: None,
@@ -324,6 +329,7 @@ pub(crate) async fn execute_exec_request(
         cwd,
         env,
         network,
+        parent_tool_item_id,
         expiration,
         capture_policy,
         sandbox,
@@ -345,6 +351,7 @@ pub(crate) async fn execute_exec_request(
         capture_policy,
         env,
         network: network.clone(),
+        parent_tool_item_id,
         sandbox_permissions,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
@@ -448,6 +455,7 @@ async fn exec_windows_sandbox(
         cwd,
         mut env,
         network,
+        parent_tool_item_id,
         expiration,
         capture_policy,
         windows_sandbox_level,
@@ -455,7 +463,7 @@ async fn exec_windows_sandbox(
         ..
     } = params;
     if let Some(network) = network.as_ref() {
-        network.apply_to_env(&mut env);
+        network.apply_to_env_for_parent_tool_item(&mut env, parent_tool_item_id.as_deref());
     }
 
     // TODO(iceweasel-oai): run_windows_sandbox_capture should support all
@@ -838,6 +846,7 @@ async fn exec(
         cwd,
         mut env,
         network,
+        parent_tool_item_id,
         arg0,
         expiration,
         capture_policy,
@@ -845,7 +854,7 @@ async fn exec(
         ..
     } = params;
     if let Some(network) = network.as_ref() {
-        network.apply_to_env(&mut env);
+        network.apply_to_env_for_parent_tool_item(&mut env, parent_tool_item_id.as_deref());
     }
 
     let (program, args) = command.split_first().ok_or_else(|| {

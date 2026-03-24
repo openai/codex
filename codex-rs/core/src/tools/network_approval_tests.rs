@@ -180,9 +180,17 @@ fn only_never_policy_disables_network_approval_flow() {
 }
 
 fn denied_blocked_request(host: &str) -> BlockedRequest {
+    denied_blocked_request_with_parent_tool_item(host, None)
+}
+
+fn denied_blocked_request_with_parent_tool_item(
+    host: &str,
+    parent_tool_item_id: Option<&str>,
+) -> BlockedRequest {
     BlockedRequest::new(BlockedRequestArgs {
         host: host.to_string(),
         reason: "not_allowed".to_string(),
+        parent_tool_item_id: parent_tool_item_id.map(ToString::to_string),
         client: None,
         method: None,
         mode: None,
@@ -194,10 +202,10 @@ fn denied_blocked_request(host: &str) -> BlockedRequest {
 }
 
 #[tokio::test]
-async fn record_blocked_request_sets_policy_outcome_for_owner_call() {
+async fn record_blocked_request_sets_policy_outcome_for_active_call() {
     let service = NetworkApprovalService::default();
     service
-        .register_call("registration-1".to_string(), "turn-1".to_string())
+        .register_call("turn-1".to_string(), "command-1".to_string())
         .await;
 
     service
@@ -205,7 +213,7 @@ async fn record_blocked_request_sets_policy_outcome_for_owner_call() {
         .await;
 
     assert_eq!(
-            service.take_call_outcome("registration-1").await,
+            service.take_call_outcome("command-1").await,
             Some(NetworkApprovalOutcome::DeniedByPolicy(
                 "Network access to \"example.com\" was blocked: domain is not on the allowlist for the current sandbox mode.".to_string()
             ))
@@ -216,18 +224,18 @@ async fn record_blocked_request_sets_policy_outcome_for_owner_call() {
 async fn blocked_request_policy_does_not_override_user_denial_outcome() {
     let service = NetworkApprovalService::default();
     service
-        .register_call("registration-1".to_string(), "turn-1".to_string())
+        .register_call("turn-1".to_string(), "command-1".to_string())
         .await;
 
     service
-        .record_call_outcome("registration-1", NetworkApprovalOutcome::DeniedByUser)
+        .record_call_outcome("command-1", NetworkApprovalOutcome::DeniedByUser)
         .await;
     service
         .record_blocked_request(denied_blocked_request("example.com"))
         .await;
 
     assert_eq!(
-        service.take_call_outcome("registration-1").await,
+        service.take_call_outcome("command-1").await,
         Some(NetworkApprovalOutcome::DeniedByUser)
     );
 }
@@ -236,16 +244,61 @@ async fn blocked_request_policy_does_not_override_user_denial_outcome() {
 async fn record_blocked_request_ignores_ambiguous_unattributed_blocked_requests() {
     let service = NetworkApprovalService::default();
     service
-        .register_call("registration-1".to_string(), "turn-1".to_string())
+        .register_call("turn-1".to_string(), "command-1".to_string())
         .await;
     service
-        .register_call("registration-2".to_string(), "turn-1".to_string())
+        .register_call("turn-1".to_string(), "command-2".to_string())
         .await;
 
     service
         .record_blocked_request(denied_blocked_request("example.com"))
         .await;
 
-    assert_eq!(service.take_call_outcome("registration-1").await, None);
-    assert_eq!(service.take_call_outcome("registration-2").await, None);
+    assert_eq!(service.take_call_outcome("command-1").await, None);
+    assert_eq!(service.take_call_outcome("command-2").await, None);
+}
+
+#[tokio::test]
+async fn resolve_active_call_uses_parent_tool_item_id_when_multiple_calls_are_active() {
+    let service = NetworkApprovalService::default();
+    service
+        .register_call("turn-1".to_string(), "command-1".to_string())
+        .await;
+    service
+        .register_call("turn-2".to_string(), "command-2".to_string())
+        .await;
+
+    let active_call = service
+        .resolve_active_call(Some("command-2"))
+        .await
+        .expect("active call should resolve");
+
+    assert_eq!(active_call.turn_id, "turn-2");
+    assert_eq!(active_call.parent_tool_item_id, "command-2");
+}
+
+#[tokio::test]
+async fn record_blocked_request_uses_parent_tool_item_id_when_multiple_calls_are_active() {
+    let service = NetworkApprovalService::default();
+    service
+        .register_call("turn-1".to_string(), "command-1".to_string())
+        .await;
+    service
+        .register_call("turn-2".to_string(), "command-2".to_string())
+        .await;
+
+    service
+        .record_blocked_request(denied_blocked_request_with_parent_tool_item(
+            "example.com",
+            Some("command-2"),
+        ))
+        .await;
+
+    assert_eq!(service.take_call_outcome("command-1").await, None);
+    assert_eq!(
+        service.take_call_outcome("command-2").await,
+        Some(NetworkApprovalOutcome::DeniedByPolicy(
+            "Network access to \"example.com\" was blocked: domain is not on the allowlist for the current sandbox mode.".to_string()
+        ))
+    );
 }

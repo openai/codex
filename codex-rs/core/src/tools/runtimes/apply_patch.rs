@@ -208,7 +208,9 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
     ) -> Result<ExecToolCallOutput, ToolError> {
         let spec = Self::build_command_spec(req, &ctx.turn.config.codex_home)?;
         let env = attempt
-            .env_for(spec, /*network*/ None)
+            .env_for(
+                spec, /*network*/ None, /*parent_tool_item_id*/ None,
+            )
             .map_err(|err| ToolError::Codex(err.into()))?;
         let out = execute_env(env, Self::stdout_stream(ctx))
             .await

@@ -171,6 +171,7 @@ fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() 
             sandbox: SandboxType::None,
             enforce_managed_network: false,
             network: None,
+            parent_tool_item_id: None,
             sandbox_policy_cwd: cwd.as_path(),
             #[cfg(target_os = "macos")]
             macos_seatbelt_profile_extensions: None,
@@ -541,6 +542,7 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
             sandbox: SandboxType::None,
             enforce_managed_network: false,
             network: None,
+            parent_tool_item_id: None,
             sandbox_policy_cwd: cwd.as_path(),
             #[cfg(target_os = "macos")]
             macos_seatbelt_profile_extensions: None,
@@ -615,6 +617,7 @@ fn transform_additional_permissions_preserves_denied_entries() {
             sandbox: SandboxType::None,
             enforce_managed_network: false,
             network: None,
+            parent_tool_item_id: None,
             sandbox_policy_cwd: cwd.as_path(),
             #[cfg(target_os = "macos")]
             macos_seatbelt_profile_extensions: None,

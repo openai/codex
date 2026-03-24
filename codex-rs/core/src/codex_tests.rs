@@ -5033,6 +5033,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
         network: None,
+        parent_tool_item_id: None,
         sandbox_permissions,
         windows_sandbox_level: turn_context.windows_sandbox_level,
         windows_sandbox_private_desktop: turn_context
@@ -5051,6 +5052,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
         capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
         network: None,
+        parent_tool_item_id: None,
         windows_sandbox_level: turn_context.windows_sandbox_level,
         windows_sandbox_private_desktop: turn_context
             .config

@@ -253,7 +253,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             req.justification.clone(),
         )?;
         let env = attempt
-            .env_for(spec, req.network.as_ref())
+            .env_for(spec, req.network.as_ref(), Some(ctx.call_id.as_str()))
             .map_err(|err| ToolError::Codex(err.into()))?;
         let out = execute_env(env, Self::stdout_stream(ctx))
             .await

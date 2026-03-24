@@ -341,6 +341,7 @@ impl<'a> SandboxAttempt<'a> {
         &self,
         spec: CommandSpec,
         network: Option<&NetworkProxy>,
+        parent_tool_item_id: Option<&str>,
     ) -> Result<crate::sandboxing::ExecRequest, SandboxTransformError> {
         self.manager
             .transform(crate::sandboxing::SandboxTransformRequest {
@@ -351,6 +352,7 @@ impl<'a> SandboxAttempt<'a> {
                 sandbox: self.sandbox,
                 enforce_managed_network: self.enforce_managed_network,
                 network,
+                parent_tool_item_id,
                 sandbox_policy_cwd: self.sandbox_cwd,
                 #[cfg(target_os = "macos")]
                 macos_seatbelt_profile_extensions: None,

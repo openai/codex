@@ -156,6 +156,7 @@ fn denied_network_policy_message_requires_deny_decision() {
     let blocked = BlockedRequest {
         host: "example.com".to_string(),
         reason: "not_allowed".to_string(),
+        parent_tool_item_id: None,
         client: None,
         method: Some("GET".to_string()),
         mode: None,
@@ -173,6 +174,7 @@ fn denied_network_policy_message_for_denylist_block_is_explicit() {
     let blocked = BlockedRequest {
         host: "example.com".to_string(),
         reason: "denied".to_string(),
+        parent_tool_item_id: None,
         client: None,
         method: Some("GET".to_string()),
         mode: None,

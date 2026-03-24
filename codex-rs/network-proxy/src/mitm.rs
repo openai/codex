@@ -289,6 +289,7 @@ async fn mitm_blocking_response(
             .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                 host: policy.target_host.clone(),
                 reason: reason.to_string(),
+                parent_tool_item_id: None,
                 client: client.clone(),
                 method: Some(method.clone()),
                 mode: Some(policy.mode),
@@ -311,6 +312,7 @@ async fn mitm_blocking_response(
             .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                 host: policy.target_host.clone(),
                 reason: REASON_METHOD_NOT_ALLOWED.to_string(),
+                parent_tool_item_id: None,
                 client: client.clone(),
                 method: Some(method.clone()),
                 mode: Some(policy.mode),

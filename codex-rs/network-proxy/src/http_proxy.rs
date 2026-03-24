@@ -50,6 +50,7 @@ use rama_http::StatusCode;
 use rama_http::header;
 use rama_http::headers::HeaderMapExt;
 use rama_http::headers::Host;
+use rama_http::headers::ProxyAuthorization;
 use rama_http::layer::remove_header::RemoveResponseHeaderLayer;
 use rama_http::matcher::MethodMatcher;
 use rama_http_backend::client::proxy::layer::HttpProxyConnector;
@@ -65,6 +66,7 @@ use rama_net::proxy::ProxyRequest;
 use rama_net::proxy::ProxyTarget;
 use rama_net::proxy::StreamForwardService;
 use rama_net::stream::SocketInfo;
+use rama_net::user::Basic;
 use rama_tcp::client::Request as TcpRequest;
 use rama_tcp::client::service::TcpConnector;
 use rama_tcp::server::TcpListener;
@@ -149,6 +151,12 @@ async fn run_http_proxy_with_listener(
     Ok(())
 }
 
+fn proxy_authorization_parent_tool_item_id<T>(req: &Request<T>) -> Option<String> {
+    req.headers()
+        .typed_get::<ProxyAuthorization<Basic>>()
+        .map(|header| header.0.username().to_string())
+}
+
 async fn http_connect_accept(
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     mut req: Request,
@@ -173,6 +181,7 @@ async fn http_connect_accept(
     }
 
     let client = client_addr(&req);
+    let parent_tool_item_id = proxy_authorization_parent_tool_item_id(&req);
     let enabled = app_state
         .enabled()
         .await
@@ -182,12 +191,15 @@ async fn http_connect_accept(
         warn!("CONNECT blocked; proxy disabled (client={client}, host={host})");
         return Err(proxy_disabled_response(
             &app_state,
-            host,
-            authority.port,
-            client_addr(&req),
-            Some("CONNECT".to_string()),
-            NetworkProtocol::HttpsConnect,
-            /*audit_endpoint_override*/ None,
+            ProxyDisabledResponseArgs {
+                host,
+                port: authority.port,
+                client: client_addr(&req),
+                parent_tool_item_id,
+                method: Some("CONNECT".to_string()),
+                protocol: NetworkProtocol::HttpsConnect,
+                audit_endpoint_override: None,
+            },
         )
         .await);
     }
@@ -196,6 +208,7 @@ async fn http_connect_accept(
         protocol: NetworkProtocol::HttpsConnect,
         host: host.clone(),
         port: authority.port,
+        parent_tool_item_id: parent_tool_item_id.clone(),
         client_addr: client.clone(),
         method: Some("CONNECT".to_string()),
         command: None,
@@ -220,6 +233,7 @@ async fn http_connect_accept(
                 .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                     host: host.clone(),
                     reason: reason.clone(),
+                    parent_tool_item_id,
                     client: client.clone(),
                     method: Some("CONNECT".to_string()),
                     mode: None,
@@ -283,6 +297,7 @@ async fn http_connect_accept(
             .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                 host: host.clone(),
                 reason: REASON_MITM_REQUIRED.to_string(),
+                parent_tool_item_id,
                 client: client.clone(),
                 method: Some("CONNECT".to_string()),
                 mode: Some(NetworkMode::Limited),
@@ -432,6 +447,7 @@ async fn http_plain_proxy(
         }
     };
     let client = client_addr(&req);
+    let parent_tool_item_id = proxy_authorization_parent_tool_item_id(&req);
     let method_allowed = match app_state
         .method_allowed(req.method().as_str())
         .await
@@ -468,12 +484,15 @@ async fn http_plain_proxy(
             warn!("unix socket blocked; proxy disabled (client={client}, path={socket_path})");
             return Ok(proxy_disabled_response(
                 &app_state,
-                socket_path,
-                /*port*/ 0,
-                client_addr(&req),
-                Some(req.method().as_str().to_string()),
-                NetworkProtocol::Http,
-                Some(("unix-socket", 0)),
+                ProxyDisabledResponseArgs {
+                    host: socket_path,
+                    port: 0,
+                    client: client_addr(&req),
+                    parent_tool_item_id: parent_tool_item_id.clone(),
+                    method: Some(req.method().as_str().to_string()),
+                    protocol: NetworkProtocol::Http,
+                    audit_endpoint_override: Some(("unix-socket", 0)),
+                },
             )
             .await);
         }
@@ -613,12 +632,15 @@ async fn http_plain_proxy(
         warn!("request blocked; proxy disabled (client={client}, host={host}, method={method})");
         return Ok(proxy_disabled_response(
             &app_state,
-            host,
-            port,
-            client_addr(&req),
-            Some(req.method().as_str().to_string()),
-            NetworkProtocol::Http,
-            /*audit_endpoint_override*/ None,
+            ProxyDisabledResponseArgs {
+                host,
+                port,
+                client: client_addr(&req),
+                parent_tool_item_id: parent_tool_item_id.clone(),
+                method: Some(req.method().as_str().to_string()),
+                protocol: NetworkProtocol::Http,
+                audit_endpoint_override: None,
+            },
         )
         .await);
     }
@@ -627,6 +649,7 @@ async fn http_plain_proxy(
         protocol: NetworkProtocol::Http,
         host: host.clone(),
         port,
+        parent_tool_item_id: parent_tool_item_id.clone(),
         client_addr: client.clone(),
         method: Some(req.method().as_str().to_string()),
         command: None,
@@ -651,6 +674,7 @@ async fn http_plain_proxy(
                 .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                     host: host.clone(),
                     reason: reason.clone(),
+                    parent_tool_item_id: parent_tool_item_id.clone(),
                     client: client.clone(),
                     method: Some(req.method().as_str().to_string()),
                     mode: None,
@@ -696,6 +720,7 @@ async fn http_plain_proxy(
             .record_blocked(BlockedRequest::new(BlockedRequestArgs {
                 host: host.clone(),
                 reason: REASON_METHOD_NOT_ALLOWED.to_string(),
+                parent_tool_item_id,
                 client: client.clone(),
                 method: Some(req.method().as_str().to_string()),
                 mode: Some(NetworkMode::Limited),
@@ -884,15 +909,29 @@ fn blocked_text_with_details(reason: &str, details: &PolicyDecisionDetails<'_>) 
     blocked_text_response_with_policy(reason, details)
 }
 
-async fn proxy_disabled_response(
-    app_state: &NetworkProxyState,
+struct ProxyDisabledResponseArgs {
     host: String,
     port: u16,
     client: Option<String>,
+    parent_tool_item_id: Option<String>,
     method: Option<String>,
     protocol: NetworkProtocol,
-    audit_endpoint_override: Option<(&str, u16)>,
+    audit_endpoint_override: Option<(&'static str, u16)>,
+}
+
+async fn proxy_disabled_response(
+    app_state: &NetworkProxyState,
+    args: ProxyDisabledResponseArgs,
 ) -> Response {
+    let ProxyDisabledResponseArgs {
+        host,
+        port,
+        client,
+        parent_tool_item_id,
+        method,
+        protocol,
+        audit_endpoint_override,
+    } = args;
     let (audit_server_address, audit_server_port) =
         audit_endpoint_override.unwrap_or((host.as_str(), port));
     emit_http_block_decision_audit_event(
@@ -913,6 +952,7 @@ async fn proxy_disabled_response(
         .record_blocked(BlockedRequest::new(BlockedRequestArgs {
             host: blocked_host,
             reason: REASON_PROXY_DISABLED.to_string(),
+            parent_tool_item_id,
             client,
             method,
             mode: None,
@@ -1013,15 +1053,36 @@ mod tests {
             .method(Method::CONNECT)
             .uri("https://example.com:443")
             .header("host", "example.com:443")
+            .header(header::PROXY_AUTHORIZATION, "Basic Y29tbWFuZC0xOg==")
             .body(Body::empty())
             .unwrap();
-        req.extensions_mut().insert(state);
+        req.extensions_mut().insert(Arc::clone(&state));
 
         let response = http_connect_accept(None, req).await.unwrap_err();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(
             response.headers().get("x-proxy-error").unwrap(),
             "blocked-by-mitm-required"
+        );
+        let blocked = state
+            .blocked_snapshot()
+            .await
+            .expect("blocked snapshot should succeed");
+        assert_eq!(
+            blocked,
+            vec![BlockedRequest {
+                host: "example.com".to_string(),
+                reason: REASON_MITM_REQUIRED.to_string(),
+                parent_tool_item_id: Some("command-1".to_string()),
+                client: None,
+                method: Some("CONNECT".to_string()),
+                mode: Some(NetworkMode::Limited),
+                protocol: "http-connect".to_string(),
+                decision: Some("deny".to_string()),
+                source: Some("mode_guard".to_string()),
+                port: Some(443),
+                timestamp: blocked[0].timestamp,
+            }]
         );
     }
 

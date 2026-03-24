@@ -60,18 +60,12 @@ impl ToolOrchestrator {
         let network_approval = begin_network_approval(
             &tool_ctx.session,
             &tool_ctx.turn.sub_id,
+            &tool_ctx.call_id,
             has_managed_network_requirements,
             tool.network_approval_spec(req, tool_ctx),
         )
         .await;
-
-        let attempt_tool_ctx = ToolCtx {
-            session: tool_ctx.session.clone(),
-            turn: tool_ctx.turn.clone(),
-            call_id: tool_ctx.call_id.clone(),
-            tool_name: tool_ctx.tool_name.clone(),
-        };
-        let run_result = tool.run(req, attempt, &attempt_tool_ctx).await;
+        let run_result = tool.run(req, attempt, tool_ctx).await;
 
         let Some(network_approval) = network_approval else {
             return (run_result, None);

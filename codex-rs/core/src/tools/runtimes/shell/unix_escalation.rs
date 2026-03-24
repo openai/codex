@@ -117,13 +117,14 @@ pub(super) async fn try_run_zsh_fork(
         req.justification.clone(),
     )?;
     let sandbox_exec_request = attempt
-        .env_for(spec, req.network.as_ref())
+        .env_for(spec, req.network.as_ref(), Some(ctx.call_id.as_str()))
         .map_err(|err| ToolError::Codex(err.into()))?;
     let crate::sandboxing::ExecRequest {
         command,
         cwd: sandbox_cwd,
         env: sandbox_env,
         network: sandbox_network,
+        parent_tool_item_id,
         expiration: _sandbox_expiration,
         capture_policy: _capture_policy,
         sandbox,
@@ -153,6 +154,7 @@ pub(super) async fn try_run_zsh_fork(
         sandbox,
         env: sandbox_env,
         network: sandbox_network,
+        parent_tool_item_id,
         windows_sandbox_level,
         sandbox_permissions,
         justification,
@@ -259,6 +261,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         sandbox: exec_request.sandbox,
         env: exec_request.env.clone(),
         network: exec_request.network.clone(),
+        parent_tool_item_id: exec_request.parent_tool_item_id.clone(),
         windows_sandbox_level: exec_request.windows_sandbox_level,
         sandbox_permissions: exec_request.sandbox_permissions,
         justification: exec_request.justification.clone(),
@@ -856,6 +859,7 @@ struct CoreShellCommandExecutor {
     sandbox: SandboxType,
     env: HashMap<String, String>,
     network: Option<codex_network_proxy::NetworkProxy>,
+    parent_tool_item_id: Option<String>,
     windows_sandbox_level: WindowsSandboxLevel,
     sandbox_permissions: SandboxPermissions,
     justification: Option<String>,
@@ -904,6 +908,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 cwd: self.cwd.clone(),
                 env: exec_env,
                 network: self.network.clone(),
+                parent_tool_item_id: self.parent_tool_item_id.clone(),
                 expiration: ExecExpiration::Cancellation(cancel_rx),
                 capture_policy: ExecCapturePolicy::ShellTool,
                 sandbox: self.sandbox,
@@ -1060,6 +1065,7 @@ impl CoreShellCommandExecutor {
                 sandbox,
                 enforce_managed_network: self.network.is_some(),
                 network: self.network.as_ref(),
+                parent_tool_item_id: self.parent_tool_item_id.as_deref(),
                 sandbox_policy_cwd: &self.sandbox_policy_cwd,
                 #[cfg(target_os = "macos")]
                 macos_seatbelt_profile_extensions,
@@ -1069,7 +1075,10 @@ impl CoreShellCommandExecutor {
                 windows_sandbox_private_desktop: false,
             })?;
         if let Some(network) = exec_request.network.as_ref() {
-            network.apply_to_env(&mut exec_request.env);
+            network.apply_to_env_for_parent_tool_item(
+                &mut exec_request.env,
+                exec_request.parent_tool_item_id.as_deref(),
+            );
         }
 
         Ok(PreparedExec {

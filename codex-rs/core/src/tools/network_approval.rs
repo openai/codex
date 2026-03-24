@@ -28,7 +28,6 @@ use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
 use tracing::warn;
-use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NetworkApprovalMode {
@@ -44,18 +43,18 @@ pub(crate) struct NetworkApprovalSpec {
 
 #[derive(Clone, Debug)]
 pub(crate) struct DeferredNetworkApproval {
-    registration_id: String,
+    parent_tool_item_id: String,
 }
 
 impl DeferredNetworkApproval {
-    pub(crate) fn registration_id(&self) -> &str {
-        &self.registration_id
+    pub(crate) fn parent_tool_item_id(&self) -> &str {
+        &self.parent_tool_item_id
     }
 }
 
 #[derive(Debug)]
 pub(crate) struct ActiveNetworkApproval {
-    registration_id: Option<String>,
+    parent_tool_item_id: Option<String>,
     mode: NetworkApprovalMode,
 }
 
@@ -65,9 +64,11 @@ impl ActiveNetworkApproval {
     }
 
     pub(crate) fn into_deferred(self) -> Option<DeferredNetworkApproval> {
-        match (self.mode, self.registration_id) {
-            (NetworkApprovalMode::Deferred, Some(registration_id)) => {
-                Some(DeferredNetworkApproval { registration_id })
+        match (self.mode, self.parent_tool_item_id) {
+            (NetworkApprovalMode::Deferred, Some(parent_tool_item_id)) => {
+                Some(DeferredNetworkApproval {
+                    parent_tool_item_id,
+                })
             }
             _ => None,
         }
@@ -160,8 +161,8 @@ impl PendingHostApproval {
 }
 
 struct ActiveNetworkApprovalCall {
-    registration_id: String,
     turn_id: String,
+    parent_tool_item_id: String,
 }
 
 pub(crate) struct NetworkApprovalService {
@@ -194,23 +195,35 @@ impl NetworkApprovalService {
         other_approved_hosts.extend(approved_hosts.iter().cloned());
     }
 
-    async fn register_call(&self, registration_id: String, turn_id: String) {
+    async fn register_call(&self, turn_id: String, parent_tool_item_id: String) {
         let mut active_calls = self.active_calls.lock().await;
-        let key = registration_id.clone();
+        let key = parent_tool_item_id.clone();
         active_calls.insert(
             key,
             Arc::new(ActiveNetworkApprovalCall {
-                registration_id,
                 turn_id,
+                parent_tool_item_id,
             }),
         );
     }
 
-    pub(crate) async fn unregister_call(&self, registration_id: &str) {
+    pub(crate) async fn unregister_call(&self, parent_tool_item_id: &str) {
         let mut active_calls = self.active_calls.lock().await;
-        active_calls.shift_remove(registration_id);
+        active_calls.shift_remove(parent_tool_item_id);
         let mut call_outcomes = self.call_outcomes.lock().await;
-        call_outcomes.remove(registration_id);
+        call_outcomes.remove(parent_tool_item_id);
+    }
+
+    async fn resolve_active_call(
+        &self,
+        parent_tool_item_id: Option<&str>,
+    ) -> Option<Arc<ActiveNetworkApprovalCall>> {
+        if let Some(parent_tool_item_id) = parent_tool_item_id {
+            let active_calls = self.active_calls.lock().await;
+            return active_calls.get(parent_tool_item_id).cloned();
+        }
+
+        self.resolve_single_active_call().await
     }
 
     async fn resolve_single_active_call(&self) -> Option<Arc<ActiveNetworkApprovalCall>> {
@@ -236,28 +249,36 @@ impl NetworkApprovalService {
         (created, true)
     }
 
-    async fn record_outcome_for_single_active_call(&self, outcome: NetworkApprovalOutcome) {
-        let Some(owner_call) = self.resolve_single_active_call().await else {
+    async fn record_outcome_for_active_call(
+        &self,
+        parent_tool_item_id: Option<&str>,
+        outcome: NetworkApprovalOutcome,
+    ) {
+        let Some(active_call) = self.resolve_active_call(parent_tool_item_id).await else {
             return;
         };
-        self.record_call_outcome(&owner_call.registration_id, outcome)
+        self.record_call_outcome(&active_call.parent_tool_item_id, outcome)
             .await;
     }
 
-    async fn take_call_outcome(&self, registration_id: &str) -> Option<NetworkApprovalOutcome> {
+    async fn take_call_outcome(&self, parent_tool_item_id: &str) -> Option<NetworkApprovalOutcome> {
         let mut call_outcomes = self.call_outcomes.lock().await;
-        call_outcomes.remove(registration_id)
+        call_outcomes.remove(parent_tool_item_id)
     }
 
-    async fn record_call_outcome(&self, registration_id: &str, outcome: NetworkApprovalOutcome) {
+    async fn record_call_outcome(
+        &self,
+        parent_tool_item_id: &str,
+        outcome: NetworkApprovalOutcome,
+    ) {
         let mut call_outcomes = self.call_outcomes.lock().await;
         if matches!(
-            call_outcomes.get(registration_id),
+            call_outcomes.get(parent_tool_item_id),
             Some(NetworkApprovalOutcome::DeniedByUser)
         ) {
             return;
         }
-        call_outcomes.insert(registration_id.to_string(), outcome);
+        call_outcomes.insert(parent_tool_item_id.to_string(), outcome);
     }
 
     pub(crate) async fn record_blocked_request(&self, blocked: BlockedRequest) {
@@ -265,8 +286,11 @@ impl NetworkApprovalService {
             return;
         };
 
-        self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(message))
-            .await;
+        self.record_outcome_for_active_call(
+            blocked.parent_tool_item_id.as_deref(),
+            NetworkApprovalOutcome::DeniedByPolicy(message),
+        )
+        .await;
     }
 
     async fn active_turn_context(session: &Session) -> Option<Arc<crate::codex::TurnContext>> {
@@ -328,9 +352,10 @@ impl NetworkApprovalService {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             let mut pending_approvals = self.pending_host_approvals.lock().await;
             pending_approvals.remove(&key);
-            self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(
-                policy_denial_message,
-            ))
+            self.record_outcome_for_active_call(
+                request.parent_tool_item_id.as_deref(),
+                NetworkApprovalOutcome::DeniedByPolicy(policy_denial_message),
+            )
             .await;
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         };
@@ -338,9 +363,10 @@ impl NetworkApprovalService {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             let mut pending_approvals = self.pending_host_approvals.lock().await;
             pending_approvals.remove(&key);
-            self.record_outcome_for_single_active_call(NetworkApprovalOutcome::DeniedByPolicy(
-                policy_denial_message,
-            ))
+            self.record_outcome_for_active_call(
+                request.parent_tool_item_id.as_deref(),
+                NetworkApprovalOutcome::DeniedByPolicy(policy_denial_message),
+            )
             .await;
             return NetworkDecision::deny(REASON_NOT_ALLOWED);
         }
@@ -349,18 +375,23 @@ impl NetworkApprovalService {
             host: request.host.clone(),
             protocol,
         };
-        let owner_call = self.resolve_single_active_call().await;
+        let active_call = self
+            .resolve_active_call(request.parent_tool_item_id.as_deref())
+            .await;
         let approval_decision = if routes_approval_to_guardian(&turn_context) {
             // TODO(ccunningham): Attach guardian network reviews to the reviewed tool item
-            // lifecycle instead of this temporary standalone network approval id.
+            // lifecycle instead of this temporary standalone network review id.
             review_approval_request(
                 &session,
                 &turn_context,
                 GuardianApprovalRequest::NetworkAccess {
                     id: Self::approval_id_for_key(&key),
-                    turn_id: owner_call
+                    turn_id: active_call
                         .as_ref()
                         .map_or_else(|| turn_context.sub_id.clone(), |call| call.turn_id.clone()),
+                    parent_tool_item_id: active_call
+                        .as_ref()
+                        .map(|call| call.parent_tool_item_id.clone()),
                     target,
                     host: request.host,
                     protocol,
@@ -457,9 +488,9 @@ impl NetworkApprovalService {
                                 .await;
                         }
                     }
-                    if let Some(owner_call) = owner_call.as_ref() {
+                    if let Some(active_call) = active_call.as_ref() {
                         self.record_call_outcome(
-                            &owner_call.registration_id,
+                            &active_call.parent_tool_item_id,
                             NetworkApprovalOutcome::DeniedByUser,
                         )
                         .await;
@@ -470,18 +501,18 @@ impl NetworkApprovalService {
             },
             ReviewDecision::Denied | ReviewDecision::Abort => {
                 if routes_approval_to_guardian(&turn_context) {
-                    if let Some(owner_call) = owner_call.as_ref() {
+                    if let Some(active_call) = active_call.as_ref() {
                         self.record_call_outcome(
-                            &owner_call.registration_id,
+                            &active_call.parent_tool_item_id,
                             NetworkApprovalOutcome::DeniedByPolicy(
                                 GUARDIAN_REJECTION_MESSAGE.to_string(),
                             ),
                         )
                         .await;
                     }
-                } else if let Some(owner_call) = owner_call.as_ref() {
+                } else if let Some(active_call) = active_call.as_ref() {
                     self.record_call_outcome(
-                        &owner_call.registration_id,
+                        &active_call.parent_tool_item_id,
                         NetworkApprovalOutcome::DeniedByUser,
                     )
                     .await;
@@ -548,6 +579,7 @@ pub(crate) fn build_network_policy_decider(
 pub(crate) async fn begin_network_approval(
     session: &Session,
     turn_id: &str,
+    parent_tool_item_id: &str,
     has_managed_network_requirements: bool,
     spec: Option<NetworkApprovalSpec>,
 ) -> Option<ActiveNetworkApproval> {
@@ -556,15 +588,14 @@ pub(crate) async fn begin_network_approval(
         return None;
     }
 
-    let registration_id = Uuid::new_v4().to_string();
     session
         .services
         .network_approval
-        .register_call(registration_id.clone(), turn_id.to_string())
+        .register_call(turn_id.to_string(), parent_tool_item_id.to_string())
         .await;
 
     Some(ActiveNetworkApproval {
-        registration_id: Some(registration_id),
+        parent_tool_item_id: Some(parent_tool_item_id.to_string()),
         mode: spec.mode,
     })
 }
@@ -573,20 +604,20 @@ pub(crate) async fn finish_immediate_network_approval(
     session: &Session,
     active: ActiveNetworkApproval,
 ) -> Result<(), ToolError> {
-    let Some(registration_id) = active.registration_id.as_deref() else {
+    let Some(parent_tool_item_id) = active.parent_tool_item_id.as_deref() else {
         return Ok(());
     };
 
     let approval_outcome = session
         .services
         .network_approval
-        .take_call_outcome(registration_id)
+        .take_call_outcome(parent_tool_item_id)
         .await;
 
     session
         .services
         .network_approval
-        .unregister_call(registration_id)
+        .unregister_call(parent_tool_item_id)
         .await;
 
     match approval_outcome {
@@ -608,7 +639,7 @@ pub(crate) async fn finish_deferred_network_approval(
     session
         .services
         .network_approval
-        .unregister_call(deferred.registration_id())
+        .unregister_call(deferred.parent_tool_item_id())
         .await;
 }
 
