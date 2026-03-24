@@ -585,10 +585,9 @@ request_max_retries = 0
 stream_max_retries = 0
 
 [mcp_servers.required_broken]
-{required_broken_transport}
+command = "codex-definitely-not-a-real-binary"
 required = true
-"#,
-            required_broken_transport = broken_mcp_transport_toml()
+"#
         ),
     )
 }
@@ -616,21 +615,8 @@ request_max_retries = 0
 stream_max_retries = 0
 
 [mcp_servers.optional_broken]
-{optional_broken_transport}
-"#,
-            optional_broken_transport = broken_mcp_transport_toml()
+command = "codex-definitely-not-a-real-binary"
+"#
         ),
     )
-}
-
-#[cfg(target_os = "windows")]
-fn broken_mcp_transport_toml() -> &'static str {
-    r#"command = "cmd"
-args = ["/C", "exit 1"]"#
-}
-
-#[cfg(not(target_os = "windows"))]
-fn broken_mcp_transport_toml() -> &'static str {
-    r#"command = "/bin/sh"
-args = ["-c", "exit 1"]"#
 }

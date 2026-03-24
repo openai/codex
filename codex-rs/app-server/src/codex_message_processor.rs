@@ -182,7 +182,6 @@ use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::CodexThread;
 use codex_core::Cursor as RolloutCursor;
-use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
@@ -4039,7 +4038,7 @@ impl CodexMessageProcessor {
         } = match self
             .thread_manager
             .fork_thread(
-                ForkSnapshot::Interrupted,
+                usize::MAX,
                 config,
                 rollout_path.clone(),
                 persist_extended_history,
@@ -6508,7 +6507,7 @@ impl CodexMessageProcessor {
         } = self
             .thread_manager
             .fork_thread(
-                ForkSnapshot::Interrupted,
+                usize::MAX,
                 config,
                 rollout_path,
                 /*persist_extended_history*/ false,

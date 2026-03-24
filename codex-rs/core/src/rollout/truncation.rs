@@ -46,8 +46,8 @@ pub(crate) fn user_message_positions_in_rollout(items: &[RolloutItem]) -> Vec<us
 /// a prefix that excludes the first user message and everything after it).
 ///
 /// If `n_from_start` is `usize::MAX`, this returns the full rollout (no truncation).
-/// If fewer than or equal to `n_from_start` user messages exist, this returns the full
-/// rollout unchanged.
+/// If fewer than or equal to `n_from_start` user messages exist, this returns an empty
+/// vector (out of range).
 pub(crate) fn truncate_rollout_before_nth_user_message_from_start(
     items: &[RolloutItem],
     n_from_start: usize,
@@ -58,9 +58,9 @@ pub(crate) fn truncate_rollout_before_nth_user_message_from_start(
 
     let user_positions = user_message_positions_in_rollout(items);
 
-    // If fewer than or equal to n user messages exist, keep the full rollout.
+    // If fewer than or equal to n user messages exist, treat as empty (out of range).
     if user_positions.len() <= n_from_start {
-        return items.to_vec();
+        return Vec::new();
     }
 
     // Cut strictly before the nth user message (do not keep the nth itself).

@@ -1,7 +1,7 @@
-use super::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 use super::MACOS_SEATBELT_BASE_POLICY;
 use super::ProxyPolicyInputs;
 use super::UnixDomainSocketPolicy;
+use super::create_seatbelt_command_args;
 use super::create_seatbelt_command_args_for_policies_with_extensions;
 use super::create_seatbelt_command_args_with_extensions;
 use super::dynamic_network_policy;
@@ -9,18 +9,18 @@ use super::macos_dir_params;
 use super::normalize_path_for_sandbox;
 use super::unix_socket_dir_params;
 use super::unix_socket_policy;
-use codex_protocol::models::MacOsAutomationPermission;
-use codex_protocol::models::MacOsContactsPermission;
-use codex_protocol::models::MacOsPreferencesPermission;
-use codex_protocol::models::MacOsSeatbeltProfileExtensions;
+use crate::protocol::ReadOnlyAccess;
+use crate::protocol::SandboxPolicy;
+use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
+use crate::seatbelt_permissions::MacOsAutomationPermission;
+use crate::seatbelt_permissions::MacOsContactsPermission;
+use crate::seatbelt_permissions::MacOsPreferencesPermission;
+use crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
-use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::ReadOnlyAccess;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::fs;
@@ -105,7 +105,7 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
-                value: FileSystemSpecialPath::Root,
+                value: crate::protocol::FileSystemSpecialPath::Root,
             },
             access: FileSystemAccessMode::Write,
         },
@@ -277,13 +277,12 @@ sys.exit(0 if allowed else 13)
 #[test]
 fn seatbelt_args_without_extension_profile_keep_legacy_preferences_read_access() {
     let cwd = std::env::temp_dir();
-    let args = create_seatbelt_command_args_with_extensions(
+    let args = create_seatbelt_command_args(
         vec!["echo".to_string(), "ok".to_string()],
         &SandboxPolicy::new_read_only_policy(),
         cwd.as_path(),
-        /*enforce_managed_network*/ false,
+        false,
         None,
-        /*extensions*/ None,
     );
     let policy = &args[1];
     assert!(policy.contains("(allow user-preference-read)"));
@@ -296,7 +295,7 @@ fn seatbelt_legacy_workspace_write_nested_readable_root_stays_writable() {
     let cwd = tmp.path().join("workspace");
     fs::create_dir_all(cwd.join("docs")).expect("create docs");
     let docs = AbsolutePathBuf::from_absolute_path(cwd.join("docs")).expect("absolute docs");
-    let args = create_seatbelt_command_args_with_extensions(
+    let args = create_seatbelt_command_args(
         vec!["/bin/true".to_string()],
         &SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
@@ -309,9 +308,8 @@ fn seatbelt_legacy_workspace_write_nested_readable_root_stays_writable() {
             exclude_slash_tmp: true,
         },
         cwd.as_path(),
-        /*enforce_managed_network*/ false,
+        false,
         None,
-        /*extensions*/ None,
     );
 
     let docs_param = format!("-DWRITABLE_ROOT_0_RO_0={}", docs.as_path().display());
@@ -638,14 +636,7 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let args = create_seatbelt_command_args_with_extensions(
-        shell_command.clone(),
-        &policy,
-        &cwd,
-        /*enforce_managed_network*/ false,
-        None,
-        /*extensions*/ None,
-    );
+    let args = create_seatbelt_command_args(shell_command.clone(), &policy, &cwd, false, None);
 
     // Build the expected policy text using a raw string for readability.
     // Note that the policy includes:
@@ -749,14 +740,8 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let write_hooks_file_args = create_seatbelt_command_args_with_extensions(
-        shell_command_git,
-        &policy,
-        &cwd,
-        /*enforce_managed_network*/ false,
-        None,
-        /*extensions*/ None,
-    );
+    let write_hooks_file_args =
+        create_seatbelt_command_args(shell_command_git, &policy, &cwd, false, None);
     let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
         .args(&write_hooks_file_args)
         .current_dir(&cwd)
@@ -786,14 +771,8 @@ fn create_seatbelt_args_with_read_only_git_and_codex_subpaths() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let write_allowed_file_args = create_seatbelt_command_args_with_extensions(
-        shell_command_allowed,
-        &policy,
-        &cwd,
-        /*enforce_managed_network*/ false,
-        None,
-        /*extensions*/ None,
-    );
+    let write_allowed_file_args =
+        create_seatbelt_command_args(shell_command_allowed, &policy, &cwd, false, None);
     let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
         .args(&write_allowed_file_args)
         .current_dir(&cwd)
@@ -854,14 +833,7 @@ fn create_seatbelt_args_with_read_only_git_pointer_file() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let args = create_seatbelt_command_args_with_extensions(
-        shell_command,
-        &policy,
-        &cwd,
-        /*enforce_managed_network*/ false,
-        None,
-        /*extensions*/ None,
-    );
+    let args = create_seatbelt_command_args(shell_command, &policy, &cwd, false, None);
 
     let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
         .args(&args)
@@ -891,14 +863,8 @@ fn create_seatbelt_args_with_read_only_git_pointer_file() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let gitdir_args = create_seatbelt_command_args_with_extensions(
-        shell_command_gitdir,
-        &policy,
-        &cwd,
-        /*enforce_managed_network*/ false,
-        None,
-        /*extensions*/ None,
-    );
+    let gitdir_args =
+        create_seatbelt_command_args(shell_command_gitdir, &policy, &cwd, false, None);
     let output = Command::new(MACOS_PATH_TO_SEATBELT_EXECUTABLE)
         .args(&gitdir_args)
         .current_dir(&cwd)
@@ -955,13 +921,12 @@ fn create_seatbelt_args_for_cwd_as_git_repo() {
     .iter()
     .map(std::string::ToString::to_string)
     .collect();
-    let args = create_seatbelt_command_args_with_extensions(
+    let args = create_seatbelt_command_args(
         shell_command.clone(),
         &policy,
         vulnerable_root.as_path(),
-        /*enforce_managed_network*/ false,
+        false,
         None,
-        /*extensions*/ None,
     );
 
     let tmpdir_env_var = std::env::var("TMPDIR")

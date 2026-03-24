@@ -7,7 +7,7 @@ use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 
 /// Merges macOS seatbelt profile extensions by taking the permissive union of
 /// each permission field.
-pub fn merge_macos_seatbelt_profile_extensions(
+pub(crate) fn merge_macos_seatbelt_profile_extensions(
     base: Option<&MacOsSeatbeltProfileExtensions>,
     permissions: Option<&MacOsSeatbeltProfileExtensions>,
 ) -> Option<MacOsSeatbeltProfileExtensions> {
@@ -38,7 +38,7 @@ pub fn merge_macos_seatbelt_profile_extensions(
     }
 }
 
-pub fn intersect_macos_seatbelt_profile_extensions(
+pub(crate) fn intersect_macos_seatbelt_profile_extensions(
     requested: Option<MacOsSeatbeltProfileExtensions>,
     granted: Option<MacOsSeatbeltProfileExtensions>,
 ) -> Option<MacOsSeatbeltProfileExtensions> {

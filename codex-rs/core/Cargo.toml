@@ -48,7 +48,6 @@ codex-otel = { workspace = true }
 codex-artifacts = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rmcp-client = { workspace = true }
-codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-utils-absolute-path = { workspace = true }

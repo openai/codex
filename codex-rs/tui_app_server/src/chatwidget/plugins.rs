@@ -15,12 +15,14 @@ use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::PluginUninstallResponse;
+use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 
 const PLUGINS_SELECTION_VIEW_ID: &str = "plugins-selection";
+const SUPPORTED_MARKETPLACE_NAME: &str = OPENAI_CURATED_MARKETPLACE_NAME;
 
 #[derive(Debug, Clone, Default)]
 pub(super) enum PluginsCacheState {
@@ -623,7 +625,11 @@ impl ChatWidget {
     }
 
     fn plugins_popup_params(&self, response: &PluginListResponse) -> SelectionViewParams {
-        let marketplaces: Vec<&PluginMarketplaceEntry> = response.marketplaces.iter().collect();
+        let marketplaces: Vec<&PluginMarketplaceEntry> = response
+            .marketplaces
+            .iter()
+            .filter(|marketplace| marketplace.name == SUPPORTED_MARKETPLACE_NAME)
+            .collect();
 
         let total: usize = marketplaces
             .iter()
@@ -638,7 +644,7 @@ impl ChatWidget {
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Plugins".bold()));
         header.push(Line::from(
-            "Browse plugins from available marketplaces.".dim(),
+            "Browse plugins from the ChatGPT marketplace.".dim(),
         ));
         header.push(Line::from(
             format!("Installed {installed} of {total} available plugins.").dim(),
@@ -691,9 +697,9 @@ impl ChatWidget {
 
         if items.is_empty() {
             items.push(SelectionItem {
-                name: "No marketplace plugins available".to_string(),
+                name: "No ChatGPT marketplace plugins available".to_string(),
                 description: Some(
-                    "No plugins are available in the discovered marketplaces.".to_string(),
+                    "This first pass only surfaces the ChatGPT plugin marketplace.".to_string(),
                 ),
                 is_disabled: true,
                 ..Default::default()

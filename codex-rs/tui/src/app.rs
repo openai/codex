@@ -57,7 +57,6 @@ use codex_app_server_protocol::RequestId;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
-use codex_core::ForkSnapshot;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -2503,7 +2502,7 @@ impl App {
                 );
                 let forked = thread_manager
                     .fork_thread(
-                        ForkSnapshot::Interrupted,
+                        usize::MAX,
                         config.clone(),
                         target_session.path.clone(),
                         /*persist_extended_history*/ false,
@@ -2926,7 +2925,7 @@ impl App {
                         match self
                             .server
                             .fork_thread(
-                                ForkSnapshot::Interrupted,
+                                usize::MAX,
                                 self.config.clone(),
                                 path.clone(),
                                 /*persist_extended_history*/ false,

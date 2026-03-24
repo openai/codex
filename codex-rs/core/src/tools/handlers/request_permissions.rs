@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use codex_protocol::request_permissions::RequestPermissionsArgs;
-use codex_sandboxing::policy_transforms::normalize_additional_permissions;
 
 use crate::function_tool::FunctionCallError;
+use crate::sandboxing::normalize_additional_permissions;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
