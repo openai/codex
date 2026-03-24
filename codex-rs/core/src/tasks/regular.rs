@@ -63,14 +63,22 @@ impl SessionTask for RegularTask {
                 Some(*prewarmed_client_session)
             }
         };
-        run_turn(
-            sess,
-            ctx,
-            input,
-            prewarmed_client_session,
-            cancellation_token,
-        )
-        .instrument(run_turn_span)
-        .await
+        let mut next_input = input;
+        let mut prewarmed_client_session = prewarmed_client_session;
+        loop {
+            let last_agent_message = run_turn(
+                Arc::clone(&sess),
+                Arc::clone(&ctx),
+                next_input,
+                prewarmed_client_session.take(),
+                cancellation_token.child_token(),
+            )
+            .instrument(run_turn_span.clone())
+            .await;
+            if !sess.has_pending_input().await {
+                return last_agent_message;
+            }
+            next_input = Vec::new();
+        }
     }
 }

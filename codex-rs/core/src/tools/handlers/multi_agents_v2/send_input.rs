@@ -1,6 +1,5 @@
 use super::*;
-use crate::agent::inter_agent_instruction::InterAgentDelivery;
-use crate::agent::inter_agent_instruction::InterAgentInstruction;
+use codex_protocol::protocol::InterAgentCommunication;
 
 pub(crate) struct Handler;
 
@@ -66,7 +65,7 @@ impl ToolHandler for Handler {
                     "target agent is missing an agent_path".to_string(),
                 )
             })?;
-            let instruction = InterAgentInstruction::new(
+            let communication = InterAgentCommunication::new(
                 turn.session_source
                     .get_agent_path()
                     .unwrap_or_else(AgentPath::root),
@@ -77,15 +76,7 @@ impl ToolHandler for Handler {
             session
                 .services
                 .agent_control
-                .deliver_inter_agent_instruction(
-                    receiver_thread_id,
-                    instruction,
-                    if args.interrupt {
-                        InterAgentDelivery::NextTurn
-                    } else {
-                        InterAgentDelivery::CurrentTurn
-                    },
-                )
+                .send_inter_agent_communication(receiver_thread_id, communication)
                 .await
         } else {
             session

@@ -7239,7 +7239,7 @@ async fn plugins_popup_loading_state_snapshot() {
 }
 
 #[tokio::test]
-async fn plugins_popup_snapshot_filters_to_curated_marketplace_and_preserves_response_order() {
+async fn plugins_popup_snapshot_shows_all_marketplaces_and_sorts_installed_then_name() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.set_feature_enabled(Feature::Plugins, true);
 
@@ -7288,15 +7288,17 @@ async fn plugins_popup_snapshot_filters_to_curated_marketplace_and_preserves_res
     let popup = render_loaded_plugins_popup(&mut chat, response);
     assert_snapshot!("plugins_popup_curated_marketplace", popup);
     assert!(
-        !popup.contains("Hidden Repo Plugin"),
-        "expected /plugins to hide non-ChatGPT marketplaces, got:\n{popup}"
+        popup.contains("Hidden Repo Plugin"),
+        "expected /plugins to include non-curated marketplaces, got:\n{popup}"
     );
     assert!(
-        plugins_test_popup_row_position(&popup, "Bravo Search")
-            < plugins_test_popup_row_position(&popup, "Alpha Sync")
-            && plugins_test_popup_row_position(&popup, "Alpha Sync")
+        plugins_test_popup_row_position(&popup, "Alpha Sync")
+            < plugins_test_popup_row_position(&popup, "Bravo Search")
+            && plugins_test_popup_row_position(&popup, "Bravo Search")
+                < plugins_test_popup_row_position(&popup, "Hidden Repo Plugin")
+            && plugins_test_popup_row_position(&popup, "Hidden Repo Plugin")
                 < plugins_test_popup_row_position(&popup, "Starter"),
-        "expected /plugins rows to keep response order, got:\n{popup}"
+        "expected /plugins rows to sort installed plugins first, then alphabetically, got:\n{popup}"
     );
 }
 
@@ -12052,7 +12054,33 @@ async fn deltas_then_same_final_message_are_rendered_snapshot() {
 }
 
 #[tokio::test]
-async fn hook_events_render_snapshot() {
+async fn pre_tool_use_hook_events_render_snapshot() {
+    assert_hook_events_snapshot(
+        codex_protocol::protocol::HookEventName::PreToolUse,
+        "pre-tool-use:0:/tmp/hooks.json",
+        "warming the shell",
+        "pre_tool_use_hook_events_render_snapshot",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn session_start_hook_events_render_snapshot() {
+    assert_hook_events_snapshot(
+        codex_protocol::protocol::HookEventName::SessionStart,
+        "session-start:0:/tmp/hooks.json",
+        "warming the shell",
+        "session_start_hook_events_render_snapshot",
+    )
+    .await;
+}
+
+async fn assert_hook_events_snapshot(
+    event_name: codex_protocol::protocol::HookEventName,
+    run_id: &str,
+    status_message: &str,
+    snapshot_name: &str,
+) {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.handle_codex_event(Event {
@@ -12060,15 +12088,15 @@ async fn hook_events_render_snapshot() {
         msg: EventMsg::HookStarted(codex_protocol::protocol::HookStartedEvent {
             turn_id: None,
             run: codex_protocol::protocol::HookRunSummary {
-                id: "session-start:0:/tmp/hooks.json".to_string(),
-                event_name: codex_protocol::protocol::HookEventName::SessionStart,
+                id: run_id.to_string(),
+                event_name,
                 handler_type: codex_protocol::protocol::HookHandlerType::Command,
                 execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
-                scope: codex_protocol::protocol::HookScope::Thread,
+                scope: codex_protocol::protocol::HookScope::Turn,
                 source_path: PathBuf::from("/tmp/hooks.json"),
                 display_order: 0,
                 status: codex_protocol::protocol::HookRunStatus::Running,
-                status_message: Some("warming the shell".to_string()),
+                status_message: Some(status_message.to_string()),
                 started_at: 1,
                 completed_at: None,
                 duration_ms: None,
@@ -12082,15 +12110,15 @@ async fn hook_events_render_snapshot() {
         msg: EventMsg::HookCompleted(codex_protocol::protocol::HookCompletedEvent {
             turn_id: None,
             run: codex_protocol::protocol::HookRunSummary {
-                id: "session-start:0:/tmp/hooks.json".to_string(),
-                event_name: codex_protocol::protocol::HookEventName::SessionStart,
+                id: run_id.to_string(),
+                event_name,
                 handler_type: codex_protocol::protocol::HookHandlerType::Command,
                 execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
-                scope: codex_protocol::protocol::HookScope::Thread,
+                scope: codex_protocol::protocol::HookScope::Turn,
                 source_path: PathBuf::from("/tmp/hooks.json"),
                 display_order: 0,
                 status: codex_protocol::protocol::HookRunStatus::Completed,
-                status_message: Some("warming the shell".to_string()),
+                status_message: Some(status_message.to_string()),
                 started_at: 1,
                 completed_at: Some(11),
                 duration_ms: Some(10),
@@ -12113,7 +12141,7 @@ async fn hook_events_render_snapshot() {
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
-    assert_snapshot!("hook_events_render_snapshot", combined);
+    assert_snapshot!(snapshot_name, combined);
 }
 
 // Combined visual snapshot using vt100 for history + direct buffer overlay for UI.

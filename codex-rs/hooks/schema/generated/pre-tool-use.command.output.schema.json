@@ -1,0 +1,101 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "HookEventNameWire": {
+      "enum": [
+        "PreToolUse",
+        "SessionStart",
+        "UserPromptSubmit",
+        "Stop"
+      ],
+      "type": "string"
+    },
+    "PreToolUseDecisionWire": {
+      "enum": [
+        "approve",
+        "block"
+      ],
+      "type": "string"
+    },
+    "PreToolUseHookSpecificOutputWire": {
+      "additionalProperties": false,
+      "properties": {
+        "additionalContext": {
+          "default": null,
+          "type": "string"
+        },
+        "hookEventName": {
+          "$ref": "#/definitions/HookEventNameWire"
+        },
+        "permissionDecision": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PreToolUsePermissionDecisionWire"
+            }
+          ],
+          "default": null
+        },
+        "permissionDecisionReason": {
+          "default": null,
+          "type": "string"
+        },
+        "updatedInput": {
+          "default": null
+        }
+      },
+      "required": [
+        "hookEventName"
+      ],
+      "type": "object"
+    },
+    "PreToolUsePermissionDecisionWire": {
+      "enum": [
+        "allow",
+        "deny",
+        "ask"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "continue": {
+      "default": true,
+      "type": "boolean"
+    },
+    "decision": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/PreToolUseDecisionWire"
+        }
+      ],
+      "default": null
+    },
+    "hookSpecificOutput": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/PreToolUseHookSpecificOutputWire"
+        }
+      ],
+      "default": null
+    },
+    "reason": {
+      "default": null,
+      "type": "string"
+    },
+    "stopReason": {
+      "default": null,
+      "type": "string"
+    },
+    "suppressOutput": {
+      "default": false,
+      "type": "boolean"
+    },
+    "systemMessage": {
+      "default": null,
+      "type": "string"
+    }
+  },
+  "title": "pre-tool-use.command.output",
+  "type": "object"
+}

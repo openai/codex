@@ -568,39 +568,6 @@ impl OutgoingMessageSender {
         let _ = write_complete_rx.await;
     }
 
-    pub(crate) async fn send_notification_to_connections(
-        &self,
-        connection_ids: &[ConnectionId],
-        notification: OutgoingNotification,
-    ) {
-        let outgoing_message = OutgoingMessage::Notification(notification);
-        if connection_ids.is_empty() {
-            if let Err(err) = self
-                .sender
-                .send(OutgoingEnvelope::Broadcast {
-                    message: outgoing_message,
-                })
-                .await
-            {
-                warn!("failed to send notification to client: {err:?}");
-            }
-            return;
-        }
-        for connection_id in connection_ids {
-            if let Err(err) = self
-                .sender
-                .send(OutgoingEnvelope::ToConnection {
-                    connection_id: *connection_id,
-                    message: outgoing_message.clone(),
-                    write_complete_tx: None,
-                })
-                .await
-            {
-                warn!("failed to send notification to client: {err:?}");
-            }
-        }
-    }
-
     pub(crate) async fn send_error(
         &self,
         request_id: ConnectionRequestId,
@@ -659,19 +626,11 @@ impl OutgoingMessageSender {
 #[serde(untagged)]
 pub(crate) enum OutgoingMessage {
     Request(ServerRequest),
-    Notification(OutgoingNotification),
     /// AppServerNotification is specific to the case where this is run as an
     /// "app server" as opposed to an MCP server.
     AppServerNotification(ServerNotification),
     Response(OutgoingResponse),
     Error(OutgoingError),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub(crate) struct OutgoingNotification {
-    pub method: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub params: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
