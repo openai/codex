@@ -99,7 +99,7 @@ pub fn argv_to_command_line(argv: &[String]) -> String {
                 .collect::<Vec<_>>();
             let suffix = &args[index + 1..];
             if suffix.len() == 1 {
-                rendered.push(suffix[0].clone());
+                rendered.push(quote_windows_arg(&suffix[0]));
             } else {
                 rendered.extend(suffix.iter().map(|arg| quote_windows_arg(arg)));
             }
@@ -214,6 +214,20 @@ mod tests {
         assert_eq!(
             argv_to_command_line(&argv),
             "cmd.exe /c type \"C:\\Program Files\\a.txt\""
+        );
+    }
+
+    #[test]
+    fn argv_to_command_line_quotes_single_cmd_suffix_with_spaces() {
+        let argv = vec![
+            "cmd.exe".to_string(),
+            "/c".to_string(),
+            "C:\\Program Files\\tool.exe".to_string(),
+        ];
+
+        assert_eq!(
+            argv_to_command_line(&argv),
+            "cmd.exe /c \"C:\\Program Files\\tool.exe\""
         );
     }
 }
