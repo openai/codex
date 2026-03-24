@@ -3369,6 +3369,13 @@
           "type": "string"
         },
         {
+          "description": "User has approved this request and wants the requested filesystem permissions persisted into a named permission profile.",
+          "enum": [
+            "approved_persist_to_profile"
+          ],
+          "type": "string"
+        },
+        {
           "additionalProperties": false,
           "description": "User chose to persist a network policy rule (allow/deny) for future requests to the same host.",
           "properties": {

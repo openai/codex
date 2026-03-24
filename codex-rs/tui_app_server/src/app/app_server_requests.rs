@@ -265,6 +265,7 @@ fn file_change_decision(decision: &ReviewDecision) -> Result<FileChangeApprovalD
     match decision {
         ReviewDecision::Approved => Ok(FileChangeApprovalDecision::Accept),
         ReviewDecision::ApprovedForSession => Ok(FileChangeApprovalDecision::AcceptForSession),
+        ReviewDecision::ApprovedPersistToProfile => Ok(FileChangeApprovalDecision::Accept),
         ReviewDecision::Denied => Ok(FileChangeApprovalDecision::Decline),
         ReviewDecision::Abort => Ok(FileChangeApprovalDecision::Cancel),
         ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
@@ -383,6 +384,7 @@ mod tests {
                     .expect("valid permissions"),
                     scope: codex_protocol::request_permissions::PermissionGrantScope::Session,
                 },
+                persist_permissions: None,
             })
             .expect("permissions response should serialize")
             .expect("permissions request should be pending");

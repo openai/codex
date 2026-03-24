@@ -561,15 +561,7 @@ impl TestCodexBuilder {
         for hook in self.pre_build_hooks.drain(..) {
             hook(home.path());
         }
-        if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
-            config.codex_linux_sandbox_exe = Some(path);
-        } else if let Ok(exe) = std::env::current_exe()
-            && let Some(path) = exe
-                .parent()
-                .and_then(|parent| parent.parent())
-                .map(|parent| parent.join("codex"))
-            && path.is_file()
-        {
+        if let Some(path) = find_codex_cli_exe() {
             config.codex_linux_sandbox_exe = Some(path);
         }
 
@@ -588,6 +580,20 @@ impl TestCodexBuilder {
 
         Ok((config, cwd))
     }
+}
+
+fn find_codex_cli_exe() -> Option<PathBuf> {
+    codex_utils_cargo_bin::cargo_bin("codex")
+        .ok()
+        .filter(|path| path.file_stem().is_some_and(|stem| stem == "codex"))
+        .or_else(|| {
+            std::env::current_exe().ok().and_then(|exe| {
+                exe.parent()
+                    .and_then(|parent| parent.parent())
+                    .map(|parent| parent.join(format!("codex{}", std::env::consts::EXE_SUFFIX)))
+                    .filter(|path| path.is_file())
+            })
+        })
 }
 
 fn ensure_test_model_catalog(config: &mut Config) -> Result<()> {

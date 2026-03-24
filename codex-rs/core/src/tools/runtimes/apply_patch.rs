@@ -54,6 +54,23 @@ impl ApplyPatchRuntime {
         Self
     }
 
+    fn execution_sandbox_permissions(req: &ApplyPatchRequest) -> SandboxPermissions {
+        if req.permissions_preapproved
+            && matches!(
+                req.sandbox_permissions,
+                SandboxPermissions::WithAdditionalPermissions
+            )
+        {
+            SandboxPermissions::UseDefault
+        } else {
+            req.sandbox_permissions
+        }
+    }
+
+    fn execution_additional_permissions(req: &ApplyPatchRequest) -> Option<PermissionProfile> {
+        req.additional_permissions.clone()
+    }
+
     fn build_guardian_review_request(
         req: &ApplyPatchRequest,
         call_id: &str,
@@ -97,8 +114,8 @@ impl ApplyPatchRuntime {
             capture_policy: ExecCapturePolicy::ShellTool,
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
-            sandbox_permissions: req.sandbox_permissions,
-            additional_permissions: req.additional_permissions.clone(),
+            sandbox_permissions: Self::execution_sandbox_permissions(req),
+            additional_permissions: Self::execution_additional_permissions(req),
             justification: None,
         })
     }

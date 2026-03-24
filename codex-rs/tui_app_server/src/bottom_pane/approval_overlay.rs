@@ -279,7 +279,9 @@ impl ApprovalOverlay {
             return;
         };
         let granted_permissions = match decision {
-            ReviewDecision::Approved | ReviewDecision::ApprovedForSession => permissions.clone(),
+            ReviewDecision::Approved
+            | ReviewDecision::ApprovedForSession
+            | ReviewDecision::ApprovedPersistToProfile => permissions.clone(),
             ReviewDecision::Denied | ReviewDecision::Abort => Default::default(),
             ReviewDecision::ApprovedExecpolicyAmendment { .. }
             | ReviewDecision::NetworkPolicyAmendment { .. } => Default::default(),
@@ -695,6 +697,7 @@ fn exec_options(
                 display_shortcut: None,
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
             }),
+            ReviewDecision::ApprovedPersistToProfile => None,
             ReviewDecision::NetworkPolicyAmendment {
                 network_policy_amendment,
             } => {

@@ -1,6 +1,7 @@
 // Aggregates all former standalone integration tests as modules.
 use std::ffi::OsString;
 
+use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
 use codex_arg0::Arg0PathEntryGuard;
 use codex_arg0::arg0_dispatch;
 use ctor::ctor;
@@ -20,6 +21,25 @@ const CODEX_HOME_ENV_VAR: &str = "CODEX_HOME";
 // NOTE: this doesn't work on ARM
 #[ctor]
 pub static CODEX_ALIASES_TEMP_DIR: TestCodexAliasesGuard = unsafe {
+    if std::env::args().nth(1).as_deref() == Some(CODEX_CORE_APPLY_PATCH_ARG1) {
+        let patch_arg = std::env::args().nth(2);
+        let exit_code = match patch_arg {
+            Some(patch_arg) => {
+                let mut stdout = std::io::stdout();
+                let mut stderr = std::io::stderr();
+                match codex_apply_patch::apply_patch(&patch_arg, &mut stdout, &mut stderr) {
+                    Ok(()) => 0,
+                    Err(_) => 1,
+                }
+            }
+            None => {
+                eprintln!("Error: {CODEX_CORE_APPLY_PATCH_ARG1} requires a UTF-8 PATCH argument.");
+                1
+            }
+        };
+        std::process::exit(exit_code);
+    }
+
     #[allow(clippy::unwrap_used)]
     let codex_home = tempfile::Builder::new()
         .prefix("codex-core-tests")

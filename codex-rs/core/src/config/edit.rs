@@ -8,7 +8,10 @@ use codex_features::FEATURES;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
+use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::protocol::PersistPermissionProfileAction;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -58,6 +61,8 @@ pub enum ConfigEdit {
         segments: Vec<String>,
         value: TomlItem,
     },
+    /// Persist filesystem-only permissions into a named profile.
+    PersistPermissionProfile(PersistPermissionProfileAction),
     /// Remove the value stored at the exact dotted path.
     ClearPath { segments: Vec<String> },
 }
@@ -401,6 +406,9 @@ impl ConfigDocument {
                 Ok(self.set_skill_config(SkillConfigSelector::Name(name.clone()), *enabled))
             }
             ConfigEdit::SetPath { segments, value } => Ok(self.insert(segments, value.clone())),
+            ConfigEdit::PersistPermissionProfile(action) => {
+                Ok(self.persist_permission_profile(action))
+            }
             ConfigEdit::ClearPath { segments } => Ok(self.clear_owned(segments)),
             ConfigEdit::SetProjectTrustLevel { path, level } => {
                 // Delegate to the existing, tested logic in config.rs to
@@ -434,6 +442,23 @@ impl ConfigDocument {
 
     fn clear_owned(&mut self, segments: &[String]) -> bool {
         self.remove(segments)
+    }
+
+    fn persist_permission_profile(&mut self, action: &PersistPermissionProfileAction) -> bool {
+        filesystem_path_access(action.permissions.file_system.as_ref())
+            .into_iter()
+            .fold(false, |mut mutated, (path, access)| {
+                mutated |= self.insert(
+                    &[
+                        "permissions".to_string(),
+                        action.profile_name.clone(),
+                        "filesystem".to_string(),
+                        path,
+                    ],
+                    value(access.to_string()),
+                );
+                mutated
+            })
     }
 
     fn replace_mcp_servers(&mut self, servers: &BTreeMap<String, McpServerConfig>) -> bool {
@@ -712,6 +737,32 @@ fn normalize_skill_config_path(path: &Path) -> String {
         .unwrap_or_else(|_| path.to_path_buf())
         .to_string_lossy()
         .to_string()
+}
+
+fn filesystem_path_access(
+    file_system: Option<&FileSystemPermissions>,
+) -> BTreeMap<String, FileSystemAccessMode> {
+    let Some(file_system) = file_system else {
+        return BTreeMap::new();
+    };
+
+    let mut path_access = BTreeMap::new();
+
+    if let Some(read_roots) = file_system.read.as_ref() {
+        for path in read_roots {
+            path_access
+                .entry(path.display().to_string())
+                .or_insert(FileSystemAccessMode::Read);
+        }
+    }
+
+    if let Some(write_roots) = file_system.write.as_ref() {
+        for path in write_roots {
+            path_access.insert(path.display().to_string(), FileSystemAccessMode::Write);
+        }
+    }
+
+    path_access
 }
 
 fn skill_config_selector_from_table(table: &TomlTable) -> Option<SkillConfigSelector> {
@@ -1019,6 +1070,12 @@ impl ConfigEditsBuilder {
         I: IntoIterator<Item = ConfigEdit>,
     {
         self.edits.extend(edits);
+        self
+    }
+
+    pub fn persist_permission_profile(mut self, action: PersistPermissionProfileAction) -> Self {
+        self.edits
+            .push(ConfigEdit::PersistPermissionProfile(action));
         self
     }
 

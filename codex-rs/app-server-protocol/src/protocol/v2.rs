@@ -1023,6 +1023,7 @@ impl From<CoreReviewDecision> for CommandExecutionApprovalDecision {
                 execpolicy_amendment: proposed_execpolicy_amendment.into(),
             },
             CoreReviewDecision::ApprovedForSession => Self::AcceptForSession,
+            CoreReviewDecision::ApprovedPersistToProfile => Self::Accept,
             CoreReviewDecision::NetworkPolicyAmendment {
                 network_policy_amendment,
             } => Self::ApplyNetworkPolicyAmendment {

@@ -700,6 +700,7 @@ async fn maybe_auto_review_mcp_request_user_input(
             .map(|option| option.label.clone())
             .unwrap_or_else(|| MCP_TOOL_APPROVAL_ACCEPT.to_string()),
         ReviewDecision::Approved
+        | ReviewDecision::ApprovedPersistToProfile
         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
         | ReviewDecision::NetworkPolicyAmendment { .. } => MCP_TOOL_APPROVAL_ACCEPT.to_string(),
         ReviewDecision::Denied | ReviewDecision::Abort => {
@@ -764,6 +765,9 @@ async fn handle_request_permissions(
         .submit(Op::RequestPermissionsResponse {
             id: call_id,
             response,
+            // TODO: Thread the user's persist_permissions choice back through
+            // parent_session.request_permissions instead of dropping it here.
+            persist_permissions: None,
         })
         .await;
 }

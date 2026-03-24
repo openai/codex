@@ -888,6 +888,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     .submit(Op::RequestPermissionsResponse {
                         id: request.call_id,
                         response: empty,
+                        persist_permissions: None,
                     })
                     .await
                 {
@@ -2464,6 +2465,7 @@ async fn on_request_permissions_response(
         .submit(Op::RequestPermissionsResponse {
             id: call_id,
             response,
+            persist_permissions: None,
         })
         .await
     {

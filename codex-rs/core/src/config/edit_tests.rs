@@ -1,6 +1,9 @@
 use super::*;
 use crate::config::types::McpServerTransportConfig;
+use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::PersistPermissionProfileAction;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
@@ -44,6 +47,57 @@ fn builder_with_edits_applies_custom_paths() {
 
     let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
     assert_eq!(contents, "enabled = true\n");
+}
+
+fn absolute_path(path: &str) -> AbsolutePathBuf {
+    AbsolutePathBuf::from_absolute_path(path).expect("absolute path")
+}
+
+#[test]
+fn persist_permission_profile_writes_filesystem_entries() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+    let read_path = absolute_path("/tmp/read");
+    let write_path = absolute_path("/tmp/write");
+
+    ConfigEditsBuilder::new(codex_home)
+        .persist_permission_profile(PersistPermissionProfileAction {
+            profile_name: "workspace".to_string(),
+            permissions: codex_protocol::models::PermissionProfile {
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![read_path.clone(), write_path.clone()]),
+                    write: Some(vec![write_path.clone()]),
+                }),
+                ..Default::default()
+            },
+        })
+        .apply_blocking()
+        .expect("persist");
+
+    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+    let mut filesystem = toml::map::Map::new();
+    filesystem.insert(
+        read_path.display().to_string(),
+        TomlValue::String("read".to_string()),
+    );
+    filesystem.insert(
+        write_path.display().to_string(),
+        TomlValue::String("write".to_string()),
+    );
+
+    let mut workspace = toml::map::Map::new();
+    workspace.insert("filesystem".to_string(), TomlValue::Table(filesystem));
+
+    let mut permissions = toml::map::Map::new();
+    permissions.insert("workspace".to_string(), TomlValue::Table(workspace));
+
+    let mut expected = toml::map::Map::new();
+    expected.insert("permissions".to_string(), TomlValue::Table(permissions));
+
+    assert_eq!(
+        toml::from_str::<TomlValue>(&contents).expect("parse config"),
+        TomlValue::Table(expected)
+    );
 }
 
 #[test]

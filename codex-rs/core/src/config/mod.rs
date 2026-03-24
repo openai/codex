@@ -129,6 +129,7 @@ pub use permissions::FilesystemPermissionsToml;
 pub use permissions::NetworkToml;
 pub use permissions::PermissionProfileToml;
 pub use permissions::PermissionsToml;
+pub(crate) use permissions::persistence_target_for_permissions;
 pub(crate) use permissions::resolve_permission_profile;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;

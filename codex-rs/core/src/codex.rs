@@ -25,6 +25,7 @@ use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
+use crate::config::persistence_target_for_permissions;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
 #[cfg(test)]
@@ -3034,7 +3035,11 @@ impl Session {
             call_id,
             turn_id: turn_context.sub_id.clone(),
             reason: args.reason,
-            permissions: args.permissions,
+            permissions: args.permissions.clone(),
+            permissions_profile_persistence: persistence_target_for_permissions(
+                turn_context.config.as_ref(),
+                &args.permissions.into(),
+            ),
         });
         self.send_event(turn_context, event).await;
         rx_response.await.ok()
@@ -4326,8 +4331,18 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::request_user_input_response(&sess, id, response).await;
                     false
                 }
-                Op::RequestPermissionsResponse { id, response } => {
-                    handlers::request_permissions_response(&sess, id, response).await;
+                Op::RequestPermissionsResponse {
+                    id,
+                    response,
+                    persist_permissions,
+                } => {
+                    handlers::request_permissions_response(
+                        &sess,
+                        id,
+                        response,
+                        persist_permissions,
+                    )
+                    .await;
                     false
                 }
                 Op::DynamicToolResponse { id, response } => {
@@ -4473,6 +4488,7 @@ mod handlers {
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
+    use crate::config::edit::ConfigEditsBuilder;
 
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
@@ -4494,6 +4510,7 @@ mod handlers {
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
     use codex_protocol::protocol::Op;
+    use codex_protocol::protocol::PersistPermissionProfileAction;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::RolloutItem;
@@ -4788,7 +4805,26 @@ mod handlers {
         sess: &Arc<Session>,
         id: String,
         response: RequestPermissionsResponse,
+        persist_permissions: Option<PersistPermissionProfileAction>,
     ) {
+        if let Some(action) = persist_permissions {
+            let codex_home = sess.codex_home().await;
+            if let Err(err) = ConfigEditsBuilder::new(&codex_home)
+                .persist_permission_profile(action)
+                .apply()
+                .await
+            {
+                let message = format!("Failed to update permissions profile: {err}");
+                tracing::warn!("{message}");
+                sess.send_event_raw(Event {
+                    id: id.clone(),
+                    msg: EventMsg::Warning(WarningEvent { message }),
+                })
+                .await;
+            } else {
+                sess.reload_user_config_layer().await;
+            }
+        }
         sess.notify_request_permissions_response(&id, response)
             .await;
     }

@@ -1,4 +1,6 @@
 use super::*;
+use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::GranularApprovalConfig;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -67,4 +69,46 @@ fn guardian_review_request_includes_patch_context() {
             patch: expected_patch,
         }
     );
+}
+
+#[test]
+fn build_command_spec_preserves_preapproved_additional_permissions() {
+    let path = std::env::temp_dir().join("apply-patch-preapproved.txt");
+    let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
+    let additional_permissions = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: None,
+            write: Some(vec![
+                AbsolutePathBuf::from_absolute_path(&path).expect("temp path should be absolute"),
+            ]),
+        }),
+        ..Default::default()
+    };
+    let request = ApplyPatchRequest {
+        action,
+        file_paths: vec![
+            AbsolutePathBuf::from_absolute_path(&path).expect("temp path should be absolute"),
+        ],
+        changes: HashMap::from([(
+            path,
+            FileChange::Add {
+                content: "hello".to_string(),
+            },
+        )]),
+        exec_approval_requirement: ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
+        },
+        sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
+        additional_permissions: Some(additional_permissions.clone()),
+        permissions_preapproved: true,
+        timeout_ms: None,
+        codex_exe: None,
+    };
+
+    let spec = ApplyPatchRuntime::build_command_spec(&request, std::path::Path::new("/tmp"))
+        .expect("spec should build");
+
+    assert_eq!(spec.sandbox_permissions, SandboxPermissions::UseDefault);
+    assert_eq!(spec.additional_permissions, Some(additional_permissions));
 }

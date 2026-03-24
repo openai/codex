@@ -415,6 +415,9 @@ pub enum Op {
         id: String,
         /// User-granted permissions.
         response: RequestPermissionsResponse,
+        /// Optional permission-profile mutation to persist alongside the grant.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        persist_permissions: Option<PersistPermissionProfileAction>,
     },
 
     /// Resolve a dynamic tool call request.
@@ -3250,6 +3253,10 @@ pub enum ReviewDecision {
     /// remainder of the session.
     ApprovedForSession,
 
+    /// User has approved this request and wants the requested filesystem
+    /// permissions persisted into a named permission profile.
+    ApprovedPersistToProfile,
+
     /// User chose to persist a network policy rule (allow/deny) for future
     /// requests to the same host.
     NetworkPolicyAmendment {
@@ -3274,6 +3281,7 @@ impl ReviewDecision {
             ReviewDecision::Approved => "approved",
             ReviewDecision::ApprovedExecpolicyAmendment { .. } => "approved_with_amendment",
             ReviewDecision::ApprovedForSession => "approved_for_session",
+            ReviewDecision::ApprovedPersistToProfile => "approved_persist_to_profile",
             ReviewDecision::NetworkPolicyAmendment {
                 network_policy_amendment,
             } => match network_policy_amendment.action {
@@ -3284,6 +3292,12 @@ impl ReviewDecision {
             ReviewDecision::Abort => "abort",
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct PersistPermissionProfileAction {
+    pub profile_name: String,
+    pub permissions: crate::models::PermissionProfile,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]

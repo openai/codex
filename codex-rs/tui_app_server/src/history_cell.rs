@@ -846,6 +846,18 @@ pub fn new_approval_decision_cell(
                 ],
             )
         }
+        ApprovedPersistToProfile => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✔ ".green(),
+                vec![
+                    actor.subject().into(),
+                    "approved".bold(),
+                    " codex to persist permissions for ".into(),
+                    snippet,
+                ],
+            )
+        }
         NetworkPolicyAmendment {
             network_policy_amendment,
         } => match network_policy_amendment.action {

@@ -155,6 +155,7 @@ impl ToolOrchestrator {
                         return Err(ToolError::Rejected(reason));
                     }
                     ReviewDecision::Approved
+                    | ReviewDecision::ApprovedPersistToProfile
                     | ReviewDecision::ApprovedExecpolicyAmendment { .. }
                     | ReviewDecision::ApprovedForSession => {}
                     ReviewDecision::NetworkPolicyAmendment {
@@ -309,6 +310,7 @@ impl ToolOrchestrator {
                             return Err(ToolError::Rejected(reason));
                         }
                         ReviewDecision::Approved
+                        | ReviewDecision::ApprovedPersistToProfile
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
                         | ReviewDecision::ApprovedForSession => {}
                         ReviewDecision::NetworkPolicyAmendment {

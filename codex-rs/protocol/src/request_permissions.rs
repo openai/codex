@@ -14,6 +14,11 @@ pub enum PermissionGrantScope {
     Session,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct PermissionProfilePersistence {
+    pub profile_name: String,
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct RequestPermissionProfile {
@@ -71,4 +76,7 @@ pub struct RequestPermissionsEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub permissions: RequestPermissionProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub permissions_profile_persistence: Option<PermissionProfilePersistence>,
 }

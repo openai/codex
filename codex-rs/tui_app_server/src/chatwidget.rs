@@ -1413,6 +1413,7 @@ fn request_permissions_from_params(
             serde_json::to_value(params.permissions).unwrap_or(serde_json::Value::Null),
         )
         .unwrap_or_default(),
+        permissions_profile_persistence: None,
     }
 }
 
