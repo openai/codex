@@ -195,6 +195,10 @@ fn exec_resume_last_accepts_prompt_after_flag_in_json_mode() -> anyhow::Result<(
     let marker2 = format!("resume-last-json-2-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");
 
+    // `resume --last` sorts by second-granularity rollout metadata, so sleep to
+    // avoid tying the original session creation time on fast CI.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
     test.cmd()
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
         .env("OPENAI_BASE_URL", "http://unused.local")
