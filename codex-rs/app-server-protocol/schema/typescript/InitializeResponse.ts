@@ -4,6 +4,10 @@
 
 export type InitializeResponse = { userAgent: string, 
 /**
+ * Absolute path to the server's Codex home directory.
+ */
+codexHome: string,
+/**
  * Platform family for the running app-server target, for example
  * `"unix"` or `"windows"`.
  */
