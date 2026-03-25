@@ -68,12 +68,17 @@ impl ApplyPatchRuntime {
     fn build_sandbox_command(
         req: &ApplyPatchRequest,
         _codex_home: &std::path::Path,
+        configured_codex_exe: Option<&PathBuf>,
     ) -> Result<SandboxCommand, ToolError> {
         #[cfg(target_os = "windows")]
         let exe = codex_windows_sandbox::resolve_current_exe_for_launch(_codex_home, "codex.exe");
         #[cfg(not(target_os = "windows"))]
-        let exe = std::env::current_exe()
-            .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))?;
+        let exe = if let Some(path) = configured_codex_exe {
+            path.clone()
+        } else {
+            std::env::current_exe()
+                .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))?
+        };
         Ok(SandboxCommand {
             program: exe.to_string_lossy().to_string(),
             args: vec![
@@ -124,12 +129,12 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         let approval_keys = self.approval_keys(req);
         let changes = req.changes.clone();
         Box::pin(async move {
+            if req.permissions_preapproved && retry_reason.is_none() {
+                return ReviewDecision::Approved;
+            }
             if routes_approval_to_guardian(turn) {
                 let action = ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id);
                 return review_approval_request(session, turn, action, retry_reason).await;
-            }
-            if req.permissions_preapproved && retry_reason.is_none() {
-                return ReviewDecision::Approved;
             }
             if let Some(reason) = retry_reason {
                 let rx_approve = session
@@ -190,7 +195,11 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        let command = Self::build_sandbox_command(req, &ctx.turn.config.codex_home)?;
+        let command = Self::build_sandbox_command(
+            req,
+            &ctx.turn.config.codex_home,
+            ctx.turn.codex_linux_sandbox_exe.as_ref(),
+        )?;
         let options = ExecOptions {
             expiration: req.timeout_ms.into(),
             capture_policy: ExecCapturePolicy::ShellTool,

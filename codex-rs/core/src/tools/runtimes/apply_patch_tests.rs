@@ -4,6 +4,8 @@ use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 #[cfg(not(target_os = "windows"))]
 use std::path::Path;
+#[cfg(not(target_os = "windows"))]
+use std::path::PathBuf;
 
 #[test]
 fn wants_no_sandbox_approval_granular_respects_sandbox_flag() {
@@ -71,7 +73,46 @@ fn guardian_review_request_includes_patch_context() {
 
 #[cfg(not(target_os = "windows"))]
 #[test]
-fn build_sandbox_command_uses_current_exe_for_apply_patch() {
+fn build_sandbox_command_prefers_configured_codex_exe_for_apply_patch() {
+    let path = std::env::temp_dir().join("apply-patch-current-exe-test.txt");
+    let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
+    let request = ApplyPatchRequest {
+        action,
+        file_paths: vec![
+            AbsolutePathBuf::from_absolute_path(&path).expect("temp path should be absolute"),
+        ],
+        changes: HashMap::from([(
+            path,
+            FileChange::Add {
+                content: "hello".to_string(),
+            },
+        )]),
+        exec_approval_requirement: ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
+        },
+        additional_permissions: None,
+        permissions_preapproved: false,
+        timeout_ms: None,
+    };
+    let configured_codex_exe = PathBuf::from("/tmp/codex");
+
+    let command = ApplyPatchRuntime::build_sandbox_command(
+        &request,
+        Path::new("/tmp"),
+        Some(&configured_codex_exe),
+    )
+    .expect("build sandbox command");
+
+    assert_eq!(
+        command.program,
+        configured_codex_exe.to_string_lossy().to_string()
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn build_sandbox_command_falls_back_to_current_exe_for_apply_patch() {
     let path = std::env::temp_dir().join("apply-patch-current-exe-test.txt");
     let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
     let request = ApplyPatchRequest {
@@ -94,7 +135,7 @@ fn build_sandbox_command_uses_current_exe_for_apply_patch() {
         timeout_ms: None,
     };
 
-    let command = ApplyPatchRuntime::build_sandbox_command(&request, Path::new("/tmp"))
+    let command = ApplyPatchRuntime::build_sandbox_command(&request, Path::new("/tmp"), None)
         .expect("build sandbox command");
 
     assert_eq!(
