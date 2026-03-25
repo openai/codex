@@ -10,7 +10,6 @@ use chrono::TimeZone;
 use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_state::Stage1Output;
-use core_test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -436,6 +435,7 @@ mod phase2 {
     use codex_state::Phase2JobClaimOutcome;
     use codex_state::Stage1Output;
     use codex_state::ThreadMetadataBuilder;
+    use core_test_support::PathBufExt;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
