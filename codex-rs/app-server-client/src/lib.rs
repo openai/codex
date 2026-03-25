@@ -1445,48 +1445,51 @@ mod tests {
             )) if notification.delta == "stdout-1"
         ));
 
-        let second_event = timeout(Duration::from_secs(2), client.next_event())
-            .await
-            .expect("second event should arrive before timeout")
-            .expect("event stream should stay open");
-        assert!(matches!(
-            second_event,
-            AppServerEvent::Lagged { skipped: 1 }
-        ));
+        let mut remaining_events = Vec::new();
+        for _ in 0..4 {
+            remaining_events.push(
+                timeout(Duration::from_secs(2), client.next_event())
+                    .await
+                    .expect("event should arrive before timeout")
+                    .expect("event stream should stay open"),
+            );
+        }
 
-        let third_event = timeout(Duration::from_secs(2), client.next_event())
-            .await
-            .expect("third event should arrive before timeout")
-            .expect("event stream should stay open");
-        assert!(matches!(
-            third_event,
-            AppServerEvent::ServerNotification(ServerNotification::AgentMessageDelta(
-                notification
-            )) if notification.delta == "hello"
-        ));
-
-        let fourth_event = timeout(Duration::from_secs(2), client.next_event())
-            .await
-            .expect("fourth event should arrive before timeout")
-            .expect("event stream should stay open");
-        assert!(matches!(
-            fourth_event,
-            AppServerEvent::ServerNotification(ServerNotification::ItemCompleted(notification))
-                if matches!(
+        let mut transcript_event_names = Vec::new();
+        for event in &remaining_events {
+            match event {
+                AppServerEvent::Lagged { skipped: 1 } => {}
+                AppServerEvent::ServerNotification(
+                    ServerNotification::CommandExecutionOutputDelta(notification),
+                ) if notification.delta == "stdout-2" => {}
+                AppServerEvent::ServerNotification(ServerNotification::AgentMessageDelta(
+                    notification,
+                )) if notification.delta == "hello" => {
+                    transcript_event_names.push("agent_message_delta");
+                }
+                AppServerEvent::ServerNotification(ServerNotification::ItemCompleted(
+                    notification,
+                )) if matches!(
                     &notification.item,
                     codex_app_server_protocol::ThreadItem::AgentMessage { text, .. } if text == "hello"
-                )
-        ));
-
-        let fifth_event = timeout(Duration::from_secs(2), client.next_event())
-            .await
-            .expect("fifth event should arrive before timeout")
-            .expect("event stream should stay open");
-        assert!(matches!(
-            fifth_event,
-            AppServerEvent::ServerNotification(ServerNotification::TurnCompleted(notification))
-                if notification.turn.status == codex_app_server_protocol::TurnStatus::Completed
-        ));
+                ) =>
+                {
+                    transcript_event_names.push("item_completed");
+                }
+                AppServerEvent::ServerNotification(ServerNotification::TurnCompleted(
+                    notification,
+                )) if notification.turn.status
+                    == codex_app_server_protocol::TurnStatus::Completed =>
+                {
+                    transcript_event_names.push("turn_completed");
+                }
+                _ => panic!("unexpected remaining event: {event:?}"),
+            }
+        }
+        assert_eq!(
+            transcript_event_names,
+            vec!["agent_message_delta", "item_completed", "turn_completed"]
+        );
 
         done_tx
             .send(())
