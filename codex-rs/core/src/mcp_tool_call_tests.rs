@@ -212,7 +212,7 @@ fn mcp_call_metric_tags_include_connector_metadata_when_available() {
         tags,
         vec![
             ("status", "ok".to_string()),
-            ("tool_name", "calendar_create_event".to_string()),
+            ("tool", "calendar_create_event".to_string()),
             ("connector_id", "connector_calendar".to_string()),
             ("connector_name", "Google_Calendar".to_string()),
         ]
@@ -227,7 +227,7 @@ fn mcp_call_metric_tags_skip_missing_connector_metadata() {
         tags,
         vec![
             ("status", "error".to_string()),
-            ("tool_name", "echo".to_string()),
+            ("tool", "echo".to_string()),
         ]
     );
 }
@@ -265,7 +265,7 @@ fn mcp_call_duration_metric_records_connector_metadata_when_available() {
             ("connector_id".to_string(), "connector_calendar".to_string()),
             ("connector_name".to_string(), "Google_Calendar".to_string()),
             ("status".to_string(), "ok".to_string()),
-            ("tool_name".to_string(), "calendar_create_event".to_string()),
+            ("tool".to_string(), "calendar_create_event".to_string()),
         ])
     );
 }

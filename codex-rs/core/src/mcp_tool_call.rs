@@ -120,23 +120,11 @@ pub(crate) async fn handle_mcp_tool_call(
         )
         .await;
         let status = if result.is_ok() { "ok" } else { "error" };
-        let tags = mcp_call_metric_tags(
-            status,
-            &tool_name,
-            metadata
-                .as_ref()
-                .and_then(|metadata| metadata.connector_id.as_deref()),
-            metadata
-                .as_ref()
-                .and_then(|metadata| metadata.connector_name.as_deref()),
+        turn_context.session_telemetry.counter(
+            MCP_CALL_COUNT_METRIC,
+            /*inc*/ 1,
+            &[("status", status)],
         );
-        let tag_refs: Vec<(&str, &str)> = tags
-            .iter()
-            .map(|(key, value)| (*key, value.as_str()))
-            .collect();
-        turn_context
-            .session_telemetry
-            .counter(MCP_CALL_COUNT_METRIC, /*inc*/ 1, &tag_refs);
         return CallToolResult::from_result(result);
     }
     let request_meta =
@@ -290,14 +278,22 @@ pub(crate) async fn handle_mcp_tool_call(
             .iter()
             .map(|(key, value)| (*key, value.as_str()))
             .collect();
-        turn_context
-            .session_telemetry
-            .counter(MCP_CALL_COUNT_METRIC, /*inc*/ 1, &tag_refs);
         if let Some(duration) = call_duration {
+            turn_context.session_telemetry.counter(
+                MCP_CALL_COUNT_METRIC,
+                /*inc*/ 1,
+                &tag_refs,
+            );
             turn_context.session_telemetry.record_duration(
                 MCP_CALL_DURATION_METRIC,
                 duration,
                 &tag_refs,
+            );
+        } else {
+            turn_context.session_telemetry.counter(
+                MCP_CALL_COUNT_METRIC,
+                /*inc*/ 1,
+                &[("status", status)],
             );
         }
 
@@ -381,7 +377,7 @@ fn mcp_call_metric_tags(
 ) -> Vec<(&'static str, String)> {
     let mut tags = vec![
         ("status", sanitize_metric_tag_value(status)),
-        ("tool_name", sanitize_metric_tag_value(tool_name)),
+        ("tool", sanitize_metric_tag_value(tool_name)),
     ];
     if let Some(connector_id) = connector_id.filter(|connector_id| !connector_id.is_empty()) {
         tags.push(("connector_id", sanitize_metric_tag_value(connector_id)));
