@@ -616,9 +616,7 @@ fn ensure_test_model_catalog(config: &mut Config) -> Result<()> {
         .unwrap_or_else(|| panic!("missing bundled model gpt-5.1-codex"));
     model.slug = TEST_MODEL_WITH_EXPERIMENTAL_TOOLS.to_string();
     model.display_name = TEST_MODEL_WITH_EXPERIMENTAL_TOOLS.to_string();
-    model.experimental_supported_tools = vec![
-        "test_sync_tool".to_string(),
-    ];
+    model.experimental_supported_tools = vec!["test_sync_tool".to_string()];
     config.model_catalog = Some(ModelsResponse {
         models: vec![model],
     });
