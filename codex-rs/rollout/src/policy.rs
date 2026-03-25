@@ -11,7 +11,6 @@ pub enum EventPersistenceMode {
 
 /// Whether a rollout `item` should be persisted in rollout files for the
 /// provided persistence `mode`.
-#[inline]
 pub fn is_persisted_response_item(item: &RolloutItem, mode: EventPersistenceMode) -> bool {
     match item {
         RolloutItem::ResponseItem(item) => should_persist_response_item(item),
