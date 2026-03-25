@@ -1,9 +1,7 @@
 use super::*;
-use crate::truncate;
-use crate::truncate::TruncationPolicy;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use codex_git::GhostCommit;
+use codex_git_utils::GhostCommit;
 use codex_protocol::AgentPath;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::BaseInstructions;
@@ -23,6 +21,8 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnContextItem;
+use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::truncate_text;
 use image::ImageBuffer;
 use image::ImageFormat;
 use image::Rgba;
@@ -179,7 +179,7 @@ fn reasoning_with_encrypted_content(len: usize) -> ResponseItem {
 }
 
 fn truncate_exec_output(content: &str) -> String {
-    truncate::truncate_text(content, TruncationPolicy::Tokens(EXEC_FORMAT_MAX_TOKENS))
+    truncate_text(content, TruncationPolicy::Tokens(EXEC_FORMAT_MAX_TOKENS))
 }
 
 fn approx_token_count_for_text(text: &str) -> i64 {
