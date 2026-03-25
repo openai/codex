@@ -3,7 +3,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 
 use crate::ExecServerError;
 use crate::protocol::ExecOutputStream;
@@ -27,6 +27,11 @@ pub enum ExecSessionEvent {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProcessId(String);
+
+pub struct StartedExecProcess {
+    pub process: Arc<dyn ExecProcess>,
+    pub events: mpsc::UnboundedReceiver<ExecSessionEvent>,
+}
 
 impl ProcessId {
     pub fn as_str(&self) -> &str {
@@ -68,8 +73,6 @@ impl From<String> for ProcessId {
 pub trait ExecProcess: Send + Sync {
     fn process_id(&self) -> &ProcessId;
 
-    fn subscribe(&self) -> broadcast::Receiver<ExecSessionEvent>;
-
     async fn write(&self, chunk: Vec<u8>) -> Result<(), ExecServerError>;
 
     async fn terminate(&self) -> Result<(), ExecServerError>;
@@ -77,5 +80,5 @@ pub trait ExecProcess: Send + Sync {
 
 #[async_trait]
 pub trait ExecBackend: Send + Sync {
-    async fn start(&self, params: ExecParams) -> Result<Arc<dyn ExecProcess>, ExecServerError>;
+    async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError>;
 }

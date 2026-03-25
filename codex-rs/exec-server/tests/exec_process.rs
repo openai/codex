@@ -8,9 +8,12 @@ use anyhow::Result;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecBackend;
 use codex_exec_server::ExecParams;
+use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecSessionEvent;
+use codex_exec_server::StartedExecProcess;
 use pretty_assertions::assert_eq;
 use test_case::test_case;
+use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tokio::time::timeout;
 
@@ -52,17 +55,20 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
             arg0: None,
         })
         .await?;
-    assert_eq!(session.process_id().as_str(), "proc-1");
-    let mut events = session.subscribe();
+    assert_eq!(session.process.process_id().as_str(), "proc-1");
+    let mut events = session.events;
 
     let mut exit_code = None;
     loop {
-        match timeout(Duration::from_secs(2), events.recv()).await?? {
-            ExecSessionEvent::Exited {
-                exit_code: code, ..
-            } => exit_code = Some(code),
-            ExecSessionEvent::Closed { .. } => break,
-            ExecSessionEvent::Output { .. } => {}
+        match timeout(Duration::from_secs(2), events.recv()).await? {
+            Some(event) => match event {
+                ExecSessionEvent::Exited {
+                    exit_code: code, ..
+                } => exit_code = Some(code),
+                ExecSessionEvent::Closed { .. } => break,
+                ExecSessionEvent::Output { .. } => {}
+            },
+            None => anyhow::bail!("event stream closed before Closed event"),
         }
     }
 
@@ -71,24 +77,30 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
 }
 
 async fn collect_process_output_from_events(
-    session: Arc<dyn codex_exec_server::ExecProcess>,
+    session: Arc<dyn ExecProcess>,
+    mut events: mpsc::UnboundedReceiver<ExecSessionEvent>,
 ) -> Result<(String, i32, bool)> {
-    let mut events = session.subscribe();
     let mut output = String::new();
     let mut exit_code = None;
     loop {
-        match timeout(Duration::from_secs(2), events.recv()).await?? {
-            ExecSessionEvent::Output { chunk, .. } => {
-                output.push_str(&String::from_utf8_lossy(&chunk));
-            }
-            ExecSessionEvent::Exited {
-                exit_code: code, ..
-            } => exit_code = Some(code),
-            ExecSessionEvent::Closed { .. } => {
-                break;
+        match timeout(Duration::from_secs(2), events.recv()).await? {
+            Some(event) => match event {
+                ExecSessionEvent::Output { chunk, .. } => {
+                    output.push_str(&String::from_utf8_lossy(&chunk));
+                }
+                ExecSessionEvent::Exited {
+                    exit_code: code, ..
+                } => exit_code = Some(code),
+                ExecSessionEvent::Closed { .. } => {
+                    break;
+                }
+            },
+            None => {
+                anyhow::bail!("event stream closed before Closed event");
             }
         }
     }
+    drop(session);
     Ok((output, exit_code.unwrap_or(-1), true))
 }
 
@@ -110,9 +122,10 @@ async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
             arg0: None,
         })
         .await?;
-    assert_eq!(session.process_id().as_str(), process_id);
+    assert_eq!(session.process.process_id().as_str(), process_id);
 
-    let (output, exit_code, closed) = collect_process_output_from_events(session).await?;
+    let StartedExecProcess { process, events } = session;
+    let (output, exit_code, closed) = collect_process_output_from_events(process, events).await?;
     assert_eq!(output, "session output\n");
     assert_eq!(exit_code, 0);
     assert!(closed);
@@ -137,11 +150,12 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
             arg0: None,
         })
         .await?;
-    assert_eq!(session.process_id().as_str(), process_id);
+    assert_eq!(session.process.process_id().as_str(), process_id);
 
     tokio::time::sleep(Duration::from_millis(200)).await;
-    session.write(b"hello\n".to_vec()).await?;
-    let (output, exit_code, closed) = collect_process_output_from_events(session).await?;
+    session.process.write(b"hello\n".to_vec()).await?;
+    let StartedExecProcess { process, events } = session;
+    let (output, exit_code, closed) = collect_process_output_from_events(process, events).await?;
 
     assert!(
         output.contains("from-stdin:hello"),
@@ -174,7 +188,8 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let (output, exit_code, closed) = collect_process_output_from_events(session).await?;
+    let StartedExecProcess { process, events } = session;
+    let (output, exit_code, closed) = collect_process_output_from_events(process, events).await?;
     assert_eq!(output, "queued output\n");
     assert_eq!(exit_code, 0);
     assert!(closed);

@@ -20,7 +20,7 @@ use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::JSONRPCNotification;
 use serde_json::Value;
 use tokio::sync::Mutex;
-use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
 use tracing::debug;
@@ -97,7 +97,14 @@ impl RemoteExecServerConnectArgs {
 
 struct Inner {
     client: RpcClient,
-    sessions: ArcSwap<HashMap<String, broadcast::Sender<ExecSessionEvent>>>,
+    // The remote transport delivers one shared notification stream for every
+    // process on the connection. Keep a local process_id -> sender registry so
+    // we can demux those connection-global notifications into the single
+    // process-scoped event channel returned by ExecBackend::start().
+    sessions: ArcSwap<HashMap<String, mpsc::UnboundedSender<ExecSessionEvent>>>,
+    // ArcSwap makes reads cheap on the hot notification path, but writes still
+    // need serialization so concurrent register/remove operations do not
+    // overwrite each other's copy-on-write updates.
     sessions_write_lock: Mutex<()>,
     reader_task: tokio::task::JoinHandle<()>,
 }
@@ -312,14 +319,8 @@ impl ExecServerClient {
     pub(crate) async fn register_session(
         &self,
         process_id: &str,
-    ) -> Result<
-        (
-            broadcast::Sender<ExecSessionEvent>,
-            broadcast::Receiver<ExecSessionEvent>,
-        ),
-        ExecServerError,
-    > {
-        let (events_tx, events_rx) = broadcast::channel(256);
+    ) -> Result<mpsc::UnboundedReceiver<ExecSessionEvent>, ExecServerError> {
+        let (events_tx, events_rx) = mpsc::unbounded_channel();
         let _sessions_write_guard = self.inner.sessions_write_lock.lock().await;
         let sessions = self.inner.sessions.load();
         if sessions.contains_key(process_id) {
@@ -328,9 +329,9 @@ impl ExecServerClient {
             )));
         }
         let mut next_sessions = sessions.as_ref().clone();
-        next_sessions.insert(process_id.to_string(), events_tx.clone());
+        next_sessions.insert(process_id.to_string(), events_tx);
         self.inner.sessions.store(Arc::new(next_sessions));
-        Ok((events_tx, events_rx))
+        Ok(events_rx)
     }
 
     pub(crate) async fn unregister_session(&self, process_id: &str) {
@@ -416,6 +417,8 @@ async fn handle_server_notification(
         EXEC_OUTPUT_DELTA_METHOD => {
             let params: ExecOutputDeltaNotification =
                 serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
+            // Remote exec-server notifications are connection-global, so route
+            // each event to the single local receiver that owns this process.
             let events_tx = inner.sessions.load().get(&params.process_id).cloned();
             if let Some(events_tx) = events_tx {
                 let _ = events_tx.send(ExecSessionEvent::Output {
@@ -444,6 +447,8 @@ async fn handle_server_notification(
                 let sessions = inner.sessions.load();
                 let events_tx = sessions.get(&params.process_id).cloned();
                 if events_tx.is_some() {
+                    // Closed is the terminal lifecycle event for this process,
+                    // so drop the routing entry before forwarding it.
                     let mut next_sessions = sessions.as_ref().clone();
                     next_sessions.remove(&params.process_id);
                     inner.sessions.store(Arc::new(next_sessions));

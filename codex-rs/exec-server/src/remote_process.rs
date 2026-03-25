@@ -1,15 +1,13 @@
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
 
 use async_trait::async_trait;
-use tokio::sync::broadcast;
 
 use crate::ExecBackend;
 use crate::ExecProcess;
 use crate::ExecServerClient;
 use crate::ExecServerError;
-use crate::ExecSessionEvent;
 use crate::ProcessId;
+use crate::StartedExecProcess;
 use crate::protocol::ExecParams;
 
 #[derive(Clone)]
@@ -19,8 +17,6 @@ pub(crate) struct RemoteProcess {
 
 struct RemoteExecProcess {
     process_id: ProcessId,
-    events_tx: broadcast::Sender<ExecSessionEvent>,
-    initial_events_rx: StdMutex<Option<broadcast::Receiver<ExecSessionEvent>>>,
     backend: RemoteProcess,
 }
 
@@ -48,20 +44,21 @@ impl RemoteProcess {
 
 #[async_trait]
 impl ExecBackend for RemoteProcess {
-    async fn start(&self, params: ExecParams) -> Result<Arc<dyn ExecProcess>, ExecServerError> {
+    async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError> {
         let process_id = params.process_id.clone();
-        let (events_tx, events_rx) = self.client.register_session(&process_id).await?;
+        let events = self.client.register_session(&process_id).await?;
         if let Err(err) = self.client.exec(params).await {
             self.client.unregister_session(&process_id).await;
             return Err(err);
         }
 
-        Ok(Arc::new(RemoteExecProcess {
-            process_id: process_id.into(),
-            events_tx,
-            initial_events_rx: StdMutex::new(Some(events_rx)),
-            backend: self.clone(),
-        }))
+        Ok(StartedExecProcess {
+            process: Arc::new(RemoteExecProcess {
+                process_id: process_id.into(),
+                backend: self.clone(),
+            }),
+            events,
+        })
     }
 }
 
@@ -69,16 +66,6 @@ impl ExecBackend for RemoteProcess {
 impl ExecProcess for RemoteExecProcess {
     fn process_id(&self) -> &ProcessId {
         &self.process_id
-    }
-
-    fn subscribe(&self) -> broadcast::Receiver<ExecSessionEvent> {
-        let mut initial_events_rx = self
-            .initial_events_rx
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        initial_events_rx
-            .take()
-            .unwrap_or_else(|| self.events_tx.subscribe())
     }
 
     async fn write(&self, chunk: Vec<u8>) -> Result<(), ExecServerError> {

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -12,7 +11,6 @@ use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::TerminalSize;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
-use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tracing::warn;
 
@@ -21,6 +19,7 @@ use crate::ExecProcess;
 use crate::ExecServerError;
 use crate::ExecSessionEvent;
 use crate::ProcessId;
+use crate::StartedExecProcess;
 use crate::protocol::EXEC_CLOSED_METHOD;
 use crate::protocol::ExecClosedNotification;
 use crate::protocol::ExecExitedNotification;
@@ -43,7 +42,6 @@ use crate::rpc::invalid_params;
 use crate::rpc::invalid_request;
 
 const RETAINED_OUTPUT_BYTES_PER_PROCESS: usize = 1024 * 1024;
-const EVENT_CHANNEL_CAPACITY: usize = 256;
 const NOTIFICATION_CHANNEL_CAPACITY: usize = 256;
 #[cfg(test)]
 const EXITED_PROCESS_RETENTION: Duration = Duration::from_millis(25);
@@ -65,7 +63,7 @@ struct RunningProcess {
     next_seq: u64,
     exit_code: Option<i32>,
     output_notify: Arc<Notify>,
-    session_events_tx: broadcast::Sender<ExecSessionEvent>,
+    session_events_tx: mpsc::UnboundedSender<ExecSessionEvent>,
     open_streams: usize,
     closed: bool,
 }
@@ -89,8 +87,6 @@ pub(crate) struct LocalProcess {
 
 struct LocalExecProcess {
     process_id: ProcessId,
-    events_tx: broadcast::Sender<ExecSessionEvent>,
-    initial_events_rx: StdMutex<Option<broadcast::Receiver<ExecSessionEvent>>>,
     backend: LocalProcess,
 }
 
@@ -174,14 +170,7 @@ impl LocalProcess {
     async fn start_process(
         &self,
         params: ExecParams,
-    ) -> Result<
-        (
-            ExecResponse,
-            broadcast::Sender<ExecSessionEvent>,
-            broadcast::Receiver<ExecSessionEvent>,
-        ),
-        JSONRPCErrorError,
-    > {
+    ) -> Result<(ExecResponse, mpsc::UnboundedReceiver<ExecSessionEvent>), JSONRPCErrorError> {
         self.require_initialized_for("exec")?;
         let process_id = params.process_id.clone();
         warn!(
@@ -244,7 +233,7 @@ impl LocalProcess {
         };
 
         let output_notify = Arc::new(Notify::new());
-        let (session_events_tx, session_events_rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        let (session_events_tx, session_events_rx) = mpsc::unbounded_channel();
         {
             let mut process_map = self.inner.processes.lock().await;
             process_map.insert(
@@ -298,17 +287,13 @@ impl LocalProcess {
             tty = params.tty,
             "exec-server started process"
         );
-        Ok((
-            ExecResponse { process_id },
-            session_events_tx,
-            session_events_rx,
-        ))
+        Ok((ExecResponse { process_id }, session_events_rx))
     }
 
     pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
         self.start_process(params)
             .await
-            .map(|(response, _, _)| response)
+            .map(|(response, _)| response)
     }
 
     pub(crate) async fn exec_read(
@@ -469,17 +454,18 @@ impl LocalProcess {
 
 #[async_trait]
 impl ExecBackend for LocalProcess {
-    async fn start(&self, params: ExecParams) -> Result<Arc<dyn ExecProcess>, ExecServerError> {
-        let (response, events_tx, events_rx) = self
+    async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError> {
+        let (response, events) = self
             .start_process(params)
             .await
             .map_err(map_handler_error)?;
-        Ok(Arc::new(LocalExecProcess {
-            process_id: response.process_id.into(),
-            events_tx,
-            initial_events_rx: StdMutex::new(Some(events_rx)),
-            backend: self.clone(),
-        }))
+        Ok(StartedExecProcess {
+            process: Arc::new(LocalExecProcess {
+                process_id: response.process_id.into(),
+                backend: self.clone(),
+            }),
+            events,
+        })
     }
 }
 
@@ -487,16 +473,6 @@ impl ExecBackend for LocalProcess {
 impl ExecProcess for LocalExecProcess {
     fn process_id(&self) -> &ProcessId {
         &self.process_id
-    }
-
-    fn subscribe(&self) -> broadcast::Receiver<ExecSessionEvent> {
-        let mut initial_events_rx = self
-            .initial_events_rx
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        initial_events_rx
-            .take()
-            .unwrap_or_else(|| self.events_tx.subscribe())
     }
 
     async fn write(&self, chunk: Vec<u8>) -> Result<(), ExecServerError> {

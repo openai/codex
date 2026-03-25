@@ -142,6 +142,6 @@ mod tests {
             .await
             .expect("start process");
 
-        assert_eq!(response.process_id().as_str(), "default-env-proc");
+        assert_eq!(response.process.process_id().as_str(), "default-env-proc");
     }
 }

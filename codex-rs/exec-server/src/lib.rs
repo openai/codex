@@ -43,6 +43,7 @@ pub use process::ExecBackend;
 pub use process::ExecProcess;
 pub use process::ExecSessionEvent;
 pub use process::ProcessId;
+pub use process::StartedExecProcess;
 pub use protocol::ExecClosedNotification;
 pub use protocol::ExecExitedNotification;
 pub use protocol::ExecOutputDeltaNotification;
