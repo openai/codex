@@ -163,14 +163,20 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
         .await?;
     let actual = set_experimental_feature_enablement(
         &mut mcp,
-        BTreeMap::from([("plugins".to_string(), true)]),
+        BTreeMap::from([
+            ("plugins".to_string(), true),
+            ("tool_search".to_string(), true),
+        ]),
     )
     .await?;
 
     assert_eq!(
         actual,
         ExperimentalFeatureEnablementSetResponse {
-            enablement: BTreeMap::from([("plugins".to_string(), true)]),
+            enablement: BTreeMap::from([
+                ("plugins".to_string(), true),
+                ("tool_search".to_string(), true),
+            ]),
         }
     );
 
@@ -188,6 +194,13 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
             .additional
             .get("features")
             .and_then(|features| features.get("plugins")),
+        Some(&json!(true))
+    );
+    assert_eq!(
+        config
+            .additional
+            .get("features")
+            .and_then(|features| features.get("tool_search")),
         Some(&json!(true))
     );
 
@@ -249,7 +262,11 @@ async fn experimental_feature_enablement_set_rejects_non_allowlisted_feature() -
         "{}",
         error.message
     );
-    assert!(error.message.contains("apps, plugins"), "{}", error.message);
+    assert!(
+        error.message.contains("apps, plugins, tool_search"),
+        "{}",
+        error.message
+    );
 
     Ok(())
 }

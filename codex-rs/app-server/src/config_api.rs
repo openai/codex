@@ -40,7 +40,7 @@ use std::sync::RwLock;
 use toml::Value as TomlValue;
 use tracing::warn;
 
-const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &["apps", "plugins"];
+const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &["apps", "plugins", "tool_search"];
 
 #[async_trait]
 pub(crate) trait UserConfigReloader: Send + Sync {
