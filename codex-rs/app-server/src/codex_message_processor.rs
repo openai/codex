@@ -1281,7 +1281,7 @@ impl CodexMessageProcessor {
                     let cloud_requirements = self.cloud_requirements.clone();
                     let chatgpt_base_url = self.config.chatgpt_base_url.clone();
                     let codex_home = self.config.codex_home.clone();
-                    let cli_overrides = self.cli_overrides.clone();
+                    let cli_overrides = self.current_cli_overrides();
                     tokio::spawn(async move {
                         let (success, error_msg) = tokio::select! {
                             _ = cancel.cancelled() => {
