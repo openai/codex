@@ -1556,6 +1556,13 @@
             "$ref": "#/definitions/SkillConfig"
           },
           "type": "array"
+        },
+        "roots": {
+          "description": "Additional absolute skill root directories to scan for `SKILL.md`.\n\nWhen non-empty, these roots override default local skill roots.",
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
         }
       },
       "type": "object"

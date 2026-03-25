@@ -826,6 +826,12 @@ pub struct SkillsConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bundled: Option<BundledSkillsConfig>,
 
+    /// Additional absolute skill root directories to scan for `SKILL.md`.
+    ///
+    /// When non-empty, these roots override default local skill roots.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roots: Vec<AbsolutePathBuf>,
+
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config: Vec<SkillConfig>,
 }
