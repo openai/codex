@@ -542,6 +542,7 @@ impl CoreShellActionProvider {
                         .await?
                     {
                         ReviewDecision::Approved
+                        | ReviewDecision::ApprovedPersistToProfile
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
                             if needs_escalation {
                                 EscalationDecision::escalate(escalation_execution.clone())

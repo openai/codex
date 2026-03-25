@@ -230,6 +230,7 @@ async fn run_codex_tool_session_inner(
                             additional_permissions: _,
                             skill_metadata: _,
                             available_decisions: _,
+                            permissions_profile_persistence: _,
                         } = ev;
                         handle_exec_approval_request(
                             command,

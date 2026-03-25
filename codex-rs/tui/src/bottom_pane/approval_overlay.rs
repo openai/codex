@@ -28,8 +28,10 @@ use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::NetworkApprovalContext;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::PersistPermissionProfileAction;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::request_permissions::PermissionGrantScope;
+use codex_protocol::request_permissions::PermissionProfilePersistence;
 use codex_protocol::request_permissions::RequestPermissionProfile;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -62,6 +64,7 @@ pub(crate) enum ApprovalRequest {
         call_id: String,
         reason: Option<String>,
         permissions: RequestPermissionProfile,
+        permissions_profile_persistence: Option<PermissionProfilePersistence>,
     },
     ApplyPatch {
         thread_id: ThreadId,
@@ -168,8 +171,11 @@ impl ApprovalOverlay {
                     },
                 ),
             ),
-            ApprovalRequest::Permissions { .. } => (
-                permissions_options(),
+            ApprovalRequest::Permissions {
+                permissions_profile_persistence,
+                ..
+            } => (
+                permissions_options(permissions_profile_persistence.as_ref()),
                 "Would you like to grant these permissions?".to_string(),
             ),
             ApprovalRequest::ApplyPatch { .. } => (
@@ -226,10 +232,16 @@ impl ApprovalOverlay {
                     ApprovalRequest::Permissions {
                         call_id,
                         permissions,
+                        permissions_profile_persistence,
                         ..
                     },
                     ApprovalDecision::Review(decision),
-                ) => self.handle_permissions_decision(call_id, permissions, decision.clone()),
+                ) => self.handle_permissions_decision(
+                    call_id,
+                    permissions,
+                    permissions_profile_persistence.as_ref(),
+                    decision.clone(),
+                ),
                 (ApprovalRequest::ApplyPatch { id, .. }, ApprovalDecision::Review(decision)) => {
                     self.handle_patch_decision(id, decision.clone());
                 }
@@ -278,13 +290,16 @@ impl ApprovalOverlay {
         &self,
         call_id: &str,
         permissions: &RequestPermissionProfile,
+        permissions_profile_persistence: Option<&PermissionProfilePersistence>,
         decision: ReviewDecision,
     ) {
         let Some(request) = self.current_request.as_ref() else {
             return;
         };
         let granted_permissions = match decision {
-            ReviewDecision::Approved | ReviewDecision::ApprovedForSession => permissions.clone(),
+            ReviewDecision::Approved
+            | ReviewDecision::ApprovedForSession
+            | ReviewDecision::ApprovedPersistToProfile => permissions.clone(),
             ReviewDecision::Denied | ReviewDecision::Abort => Default::default(),
             ReviewDecision::ApprovedExecpolicyAmendment { .. }
             | ReviewDecision::NetworkPolicyAmendment { .. } => Default::default(),
@@ -307,6 +322,11 @@ impl ApprovalOverlay {
             )));
         }
         let thread_id = request.thread_id();
+        let persist_permissions = persist_permissions_for_permissions_decision(
+            &decision,
+            permissions_profile_persistence,
+            &granted_permissions,
+        );
         self.app_event_tx.send(AppEvent::SubmitThreadOp {
             thread_id,
             op: Op::RequestPermissionsResponse {
@@ -315,6 +335,7 @@ impl ApprovalOverlay {
                     permissions: granted_permissions,
                     scope,
                 },
+                persist_permissions,
             },
         });
     }
@@ -443,9 +464,15 @@ impl BottomPaneView for ApprovalOverlay {
                 ApprovalRequest::Permissions {
                     call_id,
                     permissions,
+                    permissions_profile_persistence,
                     ..
                 } => {
-                    self.handle_permissions_decision(call_id, permissions, ReviewDecision::Abort);
+                    self.handle_permissions_decision(
+                        call_id,
+                        permissions,
+                        permissions_profile_persistence.as_ref(),
+                        ReviewDecision::Abort,
+                    );
                 }
                 ApprovalRequest::ApplyPatch { id, .. } => {
                     self.handle_patch_decision(id, ReviewDecision::Abort);
@@ -855,8 +882,10 @@ fn patch_options() -> Vec<ApprovalOption> {
     ]
 }
 
-fn permissions_options() -> Vec<ApprovalOption> {
-    vec![
+fn permissions_options(
+    permissions_profile_persistence: Option<&PermissionProfilePersistence>,
+) -> Vec<ApprovalOption> {
+    let mut options = vec![
         ApprovalOption {
             label: "Yes, grant these permissions".to_string(),
             decision: ApprovalDecision::Review(ReviewDecision::Approved),
@@ -875,7 +904,50 @@ fn permissions_options() -> Vec<ApprovalOption> {
             display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
         },
-    ]
+    ];
+    if permissions_profile_persistence.is_some() {
+        options.insert(
+            1,
+            ApprovalOption {
+                label: "Yes, always allow these permissions".to_string(),
+                decision: ApprovalDecision::Review(ReviewDecision::ApprovedPersistToProfile),
+                display_shortcut: None,
+                additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
+            },
+        );
+    }
+    options
+}
+
+fn persist_permissions_for_exec_decision(
+    decision: &ReviewDecision,
+    additional_permissions: Option<&PermissionProfile>,
+    permissions_profile_persistence: Option<&PermissionProfilePersistence>,
+) -> Option<PersistPermissionProfileAction> {
+    if !matches!(decision, ReviewDecision::ApprovedPersistToProfile) {
+        return None;
+    }
+    let permissions = additional_permissions?.clone();
+    let profile_name = permissions_profile_persistence?.profile_name.clone();
+    Some(PersistPermissionProfileAction {
+        profile_name,
+        permissions,
+    })
+}
+
+fn persist_permissions_for_permissions_decision(
+    decision: &ReviewDecision,
+    permissions_profile_persistence: Option<&PermissionProfilePersistence>,
+    granted_permissions: &RequestPermissionProfile,
+) -> Option<PersistPermissionProfileAction> {
+    if !matches!(decision, ReviewDecision::ApprovedPersistToProfile) {
+        return None;
+    }
+    let profile_name = permissions_profile_persistence?.profile_name.clone();
+    Some(PersistPermissionProfileAction {
+        profile_name,
+        permissions: granted_permissions.clone().into(),
+    })
 }
 
 fn elicitation_options() -> Vec<ApprovalOption> {
@@ -1336,6 +1408,7 @@ mod tests {
                 }),
                 ..Default::default()
             }),
+            permissions_profile_persistence: None,
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());

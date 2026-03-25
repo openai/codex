@@ -103,6 +103,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::Approved,
+            persist_permissions: None,
         })
         .await
         .expect("submit exec approval");

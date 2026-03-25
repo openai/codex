@@ -85,6 +85,7 @@ use codex_protocol::protocol::SubAgentSource as CoreSubAgentSource;
 use codex_protocol::protocol::TokenUsage as CoreTokenUsage;
 use codex_protocol::protocol::TokenUsageInfo as CoreTokenUsageInfo;
 use codex_protocol::request_permissions::PermissionGrantScope as CorePermissionGrantScope;
+use codex_protocol::request_permissions::PermissionProfilePersistence as CorePermissionProfilePersistence;
 use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequestPermissionProfile;
 use codex_protocol::user_input::ByteRange as CoreByteRange;
 use codex_protocol::user_input::TextElement as CoreTextElement;
@@ -1157,6 +1158,21 @@ impl From<AdditionalNetworkPermissions> for CoreNetworkPermissions {
 pub struct RequestPermissionProfile {
     pub network: Option<AdditionalNetworkPermissions>,
     pub file_system: Option<AdditionalFileSystemPermissions>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PermissionProfilePersistence {
+    pub profile_name: String,
+}
+
+impl From<CorePermissionProfilePersistence> for PermissionProfilePersistence {
+    fn from(value: CorePermissionProfilePersistence) -> Self {
+        Self {
+            profile_name: value.profile_name,
+        }
+    }
 }
 
 impl From<CoreRequestPermissionProfile> for RequestPermissionProfile {
@@ -5792,6 +5808,9 @@ pub struct PermissionsRequestApprovalParams {
     pub item_id: String,
     pub reason: Option<String>,
     pub permissions: RequestPermissionProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub permissions_profile_persistence: Option<PermissionProfilePersistence>,
 }
 
 v2_enum_from_core!(
@@ -5810,6 +5829,8 @@ pub struct PermissionsRequestApprovalResponse {
     pub permissions: GrantedPermissionProfile,
     #[serde(default)]
     pub scope: PermissionGrantScope,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub persist_to_profile: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

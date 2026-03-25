@@ -10,6 +10,7 @@ use crate::permissions::NetworkSandboxPolicy;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
+use crate::request_permissions::PermissionProfilePersistence;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -181,6 +182,11 @@ pub struct ExecApprovalRequestEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub additional_permissions: Option<PermissionProfile>,
+    /// Optional named permissions profile that can absorb the requested
+    /// filesystem permissions for future approvals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub permissions_profile_persistence: Option<PermissionProfilePersistence>,
     /// Optional skill metadata when the approval was triggered by a skill script.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -212,6 +218,7 @@ impl ExecApprovalRequestEvent {
                 self.proposed_execpolicy_amendment.as_ref(),
                 self.proposed_network_policy_amendments.as_deref(),
                 self.additional_permissions.as_ref(),
+                self.permissions_profile_persistence.as_ref(),
             ),
         }
     }
@@ -221,6 +228,7 @@ impl ExecApprovalRequestEvent {
         proposed_execpolicy_amendment: Option<&ExecPolicyAmendment>,
         proposed_network_policy_amendments: Option<&[NetworkPolicyAmendment]>,
         additional_permissions: Option<&PermissionProfile>,
+        permissions_profile_persistence: Option<&PermissionProfilePersistence>,
     ) -> Vec<ReviewDecision> {
         if network_approval_context.is_some() {
             let mut decisions = vec![ReviewDecision::Approved, ReviewDecision::ApprovedForSession];
@@ -238,7 +246,12 @@ impl ExecApprovalRequestEvent {
         }
 
         if additional_permissions.is_some() {
-            return vec![ReviewDecision::Approved, ReviewDecision::Abort];
+            let mut decisions = vec![ReviewDecision::Approved];
+            if permissions_profile_persistence.is_some() {
+                decisions.push(ReviewDecision::ApprovedPersistToProfile);
+            }
+            decisions.push(ReviewDecision::Abort);
+            return decisions;
         }
 
         let mut decisions = vec![ReviewDecision::Approved];

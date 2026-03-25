@@ -139,6 +139,7 @@ async fn on_exec_approval_response(
             id: approval_id,
             turn_id: Some(event_id),
             decision: response.decision,
+            persist_permissions: None,
         })
         .await
     {

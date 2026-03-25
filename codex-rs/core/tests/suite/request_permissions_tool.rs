@@ -262,6 +262,7 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
                 permissions: normalized_requested_permissions,
                 scope: PermissionGrantScope::Turn,
             },
+            persist_permissions: None,
         })
         .await?;
 
@@ -278,6 +279,7 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
                 id: approval.effective_approval_id(),
                 turn_id: None,
                 decision: ReviewDecision::Approved,
+                persist_permissions: None,
             })
             .await?;
         wait_for_event(&test.codex, |event| {
@@ -381,6 +383,7 @@ async fn approved_folder_write_request_permissions_unblocks_later_apply_patch_wi
                 permissions: normalized_requested_permissions,
                 scope: PermissionGrantScope::Turn,
             },
+            persist_permissions: None,
         })
         .await?;
 
