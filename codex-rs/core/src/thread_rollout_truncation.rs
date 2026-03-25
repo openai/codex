@@ -7,6 +7,7 @@ use crate::event_mapping;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::RolloutItem;
 
 /// Return the indices of user message boundaries in a rollout.
@@ -40,6 +41,32 @@ pub(crate) fn user_message_positions_in_rollout(items: &[RolloutItem]) -> Vec<us
     user_positions
 }
 
+/// Return the indices of fork-turn boundaries in a rollout.
+///
+/// A fork-turn boundary is either:
+/// - a real user message boundary, or
+/// - an assistant inter-agent envelope whose parsed `trigger_turn` is `true`.
+///
+/// Like `user_message_positions_in_rollout`, this applies `ThreadRolledBack` markers so indexing
+/// reflects the effective post-rollback history.
+pub(crate) fn fork_turn_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize> {
+    let mut fork_turn_positions = Vec::new();
+    for (idx, item) in items.iter().enumerate() {
+        match item {
+            RolloutItem::ResponseItem(item) if is_fork_turn_boundary(item) => {
+                fork_turn_positions.push(idx);
+            }
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
+                let new_len = fork_turn_positions.len().saturating_sub(num_turns);
+                fork_turn_positions.truncate(new_len);
+            }
+            _ => {}
+        }
+    }
+    fork_turn_positions
+}
+
 /// Return a prefix of `items` obtained by cutting strictly before the nth user message.
 ///
 /// The boundary index is 0-based from the start of `items` (so `n_from_start = 0` returns
@@ -66,6 +93,43 @@ pub(crate) fn truncate_rollout_before_nth_user_message_from_start(
     // Cut strictly before the nth user message (do not keep the nth itself).
     let cut_idx = user_positions[n_from_start];
     items[..cut_idx].to_vec()
+}
+
+/// Return a suffix of `items` that keeps the last `n_from_end` fork turns.
+///
+/// If fewer than or equal to `n_from_end` fork turns exist, this returns the full rollout.
+pub(crate) fn truncate_rollout_to_last_n_fork_turns(
+    items: &[RolloutItem],
+    n_from_end: usize,
+) -> Vec<RolloutItem> {
+    if n_from_end == 0 {
+        return Vec::new();
+    }
+
+    let fork_turn_positions = fork_turn_positions_in_rollout(items);
+    if fork_turn_positions.len() <= n_from_end {
+        return items.to_vec();
+    }
+
+    let keep_idx = fork_turn_positions[fork_turn_positions.len() - n_from_end];
+    items[keep_idx..].to_vec()
+}
+
+fn is_fork_turn_boundary(item: &ResponseItem) -> bool {
+    if matches!(
+        event_mapping::parse_turn_item(item),
+        Some(TurnItem::UserMessage(_))
+    ) {
+        return true;
+    }
+
+    let ResponseItem::Message { role, content, .. } = item else {
+        return false;
+    };
+
+    role == "assistant"
+        && InterAgentCommunication::from_message_content(content)
+            .is_some_and(|communication| communication.trigger_turn)
 }
 
 #[cfg(test)]
