@@ -7,6 +7,8 @@ Use this ONLY when:
 - And tool_search fails to find a good match
 - AND the user's request strongly matches one of the discoverable tools listed below.
 
+Exception: if the user is actively using an installed plugin and one of that plugin's discoverable connectors/apps is not installed but can be installed, suggest installing that connector/app immediately. In that case, do not wait for `tool_search` or other fallback attempts to fail first.
+
 Tool suggestions should only use the discoverable tools listed here. DO NOT explore or recommend tools that are not on this list.
 
 Discoverable tools:

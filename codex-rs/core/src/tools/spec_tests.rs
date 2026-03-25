@@ -2334,6 +2334,9 @@ fn tool_suggest_description_lists_discoverable_tools() {
     assert!(
         description.contains("skills; MCP servers: sample-docs; app connectors: connector_sample")
     );
+    assert!(description.contains(
+        "if the user is actively using an installed plugin and one of that plugin's discoverable connectors/apps is not installed but can be installed, suggest installing that connector/app immediately"
+    ));
     assert!(description.contains("DO NOT explore or recommend tools that are not on this list."));
     let JsonSchema::Object { required, .. } = parameters else {
         panic!("expected object parameters");
