@@ -417,6 +417,9 @@ pub enum Op {
         id: String,
         /// User-granted permissions.
         response: RequestPermissionsResponse,
+        /// Optional permission-profile mutation to persist alongside the grant.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        persist_permissions: Option<PersistPermissionProfileAction>,
     },
 
     /// Resolve a dynamic tool call request.
@@ -3334,6 +3337,12 @@ impl ReviewDecision {
             ReviewDecision::Abort => "abort",
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct PersistPermissionProfileAction {
+    pub profile_name: String,
+    pub permissions: crate::models::PermissionProfile,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]

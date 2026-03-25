@@ -764,6 +764,7 @@ async fn handle_request_permissions(
         .submit(Op::RequestPermissionsResponse {
             id: call_id,
             response,
+            persist_permissions: None,
         })
         .await;
 }

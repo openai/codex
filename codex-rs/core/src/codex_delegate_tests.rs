@@ -200,6 +200,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
                         }),
                         ..RequestPermissionProfile::default()
                     },
+                    permissions_profile_persistence: None,
                 },
                 &cancel_token,
             )
@@ -234,6 +235,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
         Op::RequestPermissionsResponse {
             id: call_id,
             response: expected_response,
+            persist_permissions: None,
         }
     );
 }
