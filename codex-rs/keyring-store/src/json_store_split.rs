@@ -395,8 +395,7 @@ fn load_secret_from_keyring<K: KeyringStore + ?Sized>(
     field: &str,
 ) -> Result<Option<Vec<u8>>, SplitJsonKeyringError> {
     keyring_store
-        .load(service, key)
-        .map(|value| value.map(String::into_bytes))
+        .load_secret(service, key)
         .map_err(|err| credential_store_error("load", field, err))
 }
 
@@ -407,11 +406,8 @@ fn save_secret_to_keyring<K: KeyringStore + ?Sized>(
     value: &[u8],
     field: &str,
 ) -> Result<(), SplitJsonKeyringError> {
-    let value = std::str::from_utf8(value).map_err(|err| {
-        SplitJsonKeyringError::new(format!("failed to encode {field} as UTF-8: {err}"))
-    })?;
     keyring_store
-        .save(service, key, value)
+        .save_secret(service, key, value)
         .map_err(|err| credential_store_error("write", field, err))
 }
 
@@ -666,7 +662,7 @@ mod tests {
 
         let root_value_key = value_key(BASE_KEY, "");
         assert_eq!(
-            store.saved_value(&root_value_key),
+            store.saved_secret_utf8(&root_value_key),
             Some("\"value\"".to_string())
         );
 
@@ -719,11 +715,11 @@ mod tests {
         assert!(!store.contains(&stale_value_key));
         assert!(store.contains(&manifest_key));
         assert_eq!(
-            store.saved_value(&value_key(BASE_KEY, "/value")),
+            store.saved_secret_utf8(&value_key(BASE_KEY, "/value")),
             Some("\"second\"".to_string())
         );
         assert_eq!(
-            store.saved_value(&value_key(BASE_KEY, "/extra")),
+            store.saved_secret_utf8(&value_key(BASE_KEY, "/extra")),
             Some("1".to_string())
         );
 
