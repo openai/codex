@@ -166,13 +166,21 @@ pub fn system_bwrap_warning() -> Option<String> {
 
 #[cfg(target_os = "linux")]
 fn system_bwrap_warning_for_path(system_bwrap_path: &Path) -> Option<String> {
+    system_bwrap_warning_for_path_with_probe(system_bwrap_path, system_bwrap_supports_argv0)
+}
+
+#[cfg(target_os = "linux")]
+fn system_bwrap_warning_for_path_with_probe(
+    system_bwrap_path: &Path,
+    supports_argv0: impl FnOnce(&Path) -> bool,
+) -> Option<String> {
     if !system_bwrap_path.is_file() {
         return Some(format!(
             "Codex could not find system bubblewrap at {}. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime.",
             system_bwrap_path.display()
         ));
     }
-    if system_bwrap_supports_argv0(system_bwrap_path) {
+    if supports_argv0(system_bwrap_path) {
         return None;
     }
 

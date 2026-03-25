@@ -34,6 +34,7 @@ codex-async-utils = { workspace = true }
 codex-code-mode = { workspace = true }
 codex-connectors = { workspace = true }
 codex-config = { workspace = true }
+crypto_box = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
 codex-login = { workspace = true }
@@ -89,6 +90,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 sha1 = { workspace = true }
+sha2 = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }
 tempfile = { workspace = true }

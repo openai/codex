@@ -5594,17 +5594,9 @@ fn system_bwrap_warning_reports_missing_system_bwrap() {
 #[cfg(target_os = "linux")]
 #[test]
 fn system_bwrap_warning_reports_too_old_system_bwrap() {
-    let fake_bwrap = write_fake_bwrap(
-        r#"#!/bin/sh
-if [ "$1" = "--help" ]; then
-  echo 'usage: bwrap [OPTION...] COMMAND'
-  exit 0
-fi
-exit 1
-"#,
-    );
-    let fake_bwrap_path: &Path = fake_bwrap.as_ref();
-    let warning = system_bwrap_warning_for_path(fake_bwrap_path)
+    let fake_bwrap = tempfile::NamedTempFile::new().expect("temp file");
+    let fake_bwrap_path = fake_bwrap.path();
+    let warning = system_bwrap_warning_for_path_with_probe(fake_bwrap_path, |_| false)
         .expect("old system bwrap should emit a warning");
 
     assert!(warning.contains("too old to support `--argv0`"));
@@ -5613,38 +5605,13 @@ exit 1
 #[cfg(target_os = "linux")]
 #[test]
 fn system_bwrap_warning_skips_supported_system_bwrap() {
-    let fake_bwrap = write_fake_bwrap(
-        r#"#!/bin/sh
-if [ "$1" = "--help" ]; then
-  echo '  --argv0 PROGRAM'
-  exit 0
-fi
-exit 1
-"#,
+    let fake_bwrap = tempfile::NamedTempFile::new().expect("temp file");
+    let fake_bwrap_path = fake_bwrap.path();
+
+    assert_eq!(
+        system_bwrap_warning_for_path_with_probe(fake_bwrap_path, |_| true),
+        None
     );
-    let fake_bwrap_path: &Path = fake_bwrap.as_ref();
-
-    assert_eq!(system_bwrap_warning_for_path(fake_bwrap_path), None);
-}
-
-#[cfg(not(target_os = "linux"))]
-#[test]
-fn system_bwrap_warning_is_disabled_off_linux() {
-    assert!(system_bwrap_warning().is_none());
-}
-
-#[cfg(target_os = "linux")]
-fn write_fake_bwrap(contents: &str) -> tempfile::TempPath {
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
-    use tempfile::NamedTempFile;
-
-    // Linux rejects exec-ing a file that is still open for writing.
-    let path = NamedTempFile::new().expect("temp file").into_temp_path();
-    fs::write(&path, contents).expect("write fake bwrap");
-    let permissions = fs::Permissions::from_mode(0o755);
-    fs::set_permissions(&path, permissions).expect("chmod fake bwrap");
-    path
 }
 
 #[tokio::test]
@@ -5660,6 +5627,12 @@ async fn approvals_reviewer_defaults_to_manual_only_without_guardian_feature() -
 
     assert_eq!(config.approvals_reviewer, ApprovalsReviewer::User);
     Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn system_bwrap_warning_is_disabled_off_linux() {
+    assert!(system_bwrap_warning().is_none());
 }
 
 #[tokio::test]

@@ -31,6 +31,10 @@ use tracing::warn;
 use crate::config::Config;
 use crate::default_client::create_client;
 
+mod task_registration;
+
+pub(crate) use task_registration::RegisteredAgentTask;
+
 const AGENT_IDENTITY_SECRET_NAME: &str = "AGENT_IDENTITY";
 const AGENT_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -116,15 +120,7 @@ impl AgentIdentityManager {
             return Ok(None);
         }
 
-        let Some(auth) = self.auth_manager.auth().await else {
-            debug!("skipping agent identity registration because no auth is available");
-            return Ok(None);
-        };
-
-        let Some(binding) =
-            AgentIdentityBinding::from_auth(&auth, self.auth_manager.forced_chatgpt_workspace_id())
-        else {
-            debug!("skipping agent identity registration because ChatGPT auth is unavailable");
+        let Some(binding) = self.current_binding().await else {
             return Ok(None);
         };
 
@@ -142,6 +138,20 @@ impl AgentIdentityManager {
         let stored_identity = self.register_agent_identity(&binding).await?;
         self.store_identity(&binding, &stored_identity)?;
         Ok(Some(stored_identity))
+    }
+
+    async fn current_binding(&self) -> Option<AgentIdentityBinding> {
+        let Some(auth) = self.auth_manager.auth().await else {
+            debug!("skipping agent identity flow because no auth is available");
+            return None;
+        };
+
+        let binding =
+            AgentIdentityBinding::from_auth(&auth, self.auth_manager.forced_chatgpt_workspace_id());
+        if binding.is_none() {
+            debug!("skipping agent identity flow because ChatGPT auth is unavailable");
+        }
+        binding
     }
 
     async fn register_agent_identity(

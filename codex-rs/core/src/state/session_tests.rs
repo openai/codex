@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent_identity::RegisteredAgentTask;
 use crate::codex::make_session_configuration_for_tests;
 use crate::protocol::RateLimitWindow;
 use pretty_assertions::assert_eq;
@@ -30,6 +31,21 @@ async fn clear_connector_selection_removes_entries() {
     state.clear_connector_selection();
 
     assert_eq!(state.get_connector_selection(), HashSet::new());
+}
+
+#[tokio::test]
+async fn set_agent_task_persists_plaintext_task_for_session_reuse() {
+    let session_configuration = make_session_configuration_for_tests().await;
+    let mut state = SessionState::new(session_configuration);
+    let agent_task = RegisteredAgentTask {
+        agent_runtime_id: "agent_123".to_string(),
+        task_id: "task_123".to_string(),
+        registered_at: "2026-03-23T12:00:00Z".to_string(),
+    };
+
+    state.set_agent_task(agent_task.clone());
+
+    assert_eq!(state.agent_task(), Some(agent_task));
 }
 
 #[tokio::test]
