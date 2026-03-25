@@ -2350,6 +2350,7 @@ text(
                     text: "hidden-ok".to_string(),
                 }],
                 success: true,
+                approved_arguments: None,
             },
         })
         .await?;

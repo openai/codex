@@ -29,6 +29,7 @@ pub struct DynamicToolCallRequest {
 pub struct DynamicToolResponse {
     pub content_items: Vec<DynamicToolCallOutputContentItem>,
     pub success: bool,
+    pub approved_arguments: Option<JsonValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]

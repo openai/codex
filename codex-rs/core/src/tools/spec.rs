@@ -2398,6 +2398,89 @@ pub fn parse_tool_input_schema(input_schema: &JsonValue) -> Result<JsonSchema, s
     serde_json::from_value::<JsonSchema>(input_schema)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn validate_tool_input_value(schema: &JsonSchema, value: &JsonValue) -> Result<(), String> {
+    validate_tool_input_value_at_path(schema, value, "$")
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn validate_tool_input_value_at_path(
+    schema: &JsonSchema,
+    value: &JsonValue,
+    path: &str,
+) -> Result<(), String> {
+    match schema {
+        JsonSchema::Boolean { .. } => {
+            if value.is_boolean() {
+                Ok(())
+            } else {
+                Err(format!("{path}: expected boolean"))
+            }
+        }
+        JsonSchema::String { .. } => {
+            if value.is_string() {
+                Ok(())
+            } else {
+                Err(format!("{path}: expected string"))
+            }
+        }
+        JsonSchema::Number { .. } => {
+            if value.is_number() {
+                Ok(())
+            } else {
+                Err(format!("{path}: expected number"))
+            }
+        }
+        JsonSchema::Array { items, .. } => {
+            let JsonValue::Array(values) = value else {
+                return Err(format!("{path}: expected array"));
+            };
+
+            for (index, entry) in values.iter().enumerate() {
+                validate_tool_input_value_at_path(items, entry, &format!("{path}[{index}]"))?;
+            }
+            Ok(())
+        }
+        JsonSchema::Object {
+            properties,
+            required,
+            additional_properties,
+        } => {
+            let JsonValue::Object(map) = value else {
+                return Err(format!("{path}: expected object"));
+            };
+
+            if let Some(required) = required {
+                for key in required {
+                    if !map.contains_key(key) {
+                        return Err(format!("{path}: missing required property `{key}`"));
+                    }
+                }
+            }
+
+            for (key, entry) in map {
+                let child_path = format!("{path}.{key}");
+                if let Some(property_schema) = properties.get(key) {
+                    validate_tool_input_value_at_path(property_schema, entry, &child_path)?;
+                    continue;
+                }
+
+                match additional_properties {
+                    None | Some(AdditionalProperties::Boolean(true)) => {}
+                    Some(AdditionalProperties::Boolean(false)) => {
+                        return Err(format!("{path}: unexpected property `{key}`"));
+                    }
+                    Some(AdditionalProperties::Schema(schema)) => {
+                        validate_tool_input_value_at_path(schema, entry, &child_path)?;
+                    }
+                }
+            }
+
+            Ok(())
+        }
+    }
+}
+
 fn mcp_tool_to_openai_tool_parts(
     tool: rmcp::model::Tool,
 ) -> Result<(String, JsonSchema, Option<JsonValue>), serde_json::Error> {

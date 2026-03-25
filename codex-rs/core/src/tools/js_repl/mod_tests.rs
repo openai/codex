@@ -1893,6 +1893,7 @@ await codex.emitImage(out);
                                 },
                             ],
                             success: true,
+                            approved_arguments: None,
                         },
                     )
                     .await;
@@ -1984,6 +1985,7 @@ console.log(text);
                                     text: expected_text_for_response.clone(),
                                 }],
                                 success: true,
+                                approved_arguments: None,
                             },
                         )
                         .await;
@@ -2057,6 +2059,7 @@ console.log(JSON.stringify(out));
                                 text: "hidden-ok".to_string(),
                             }],
                             success: true,
+                            approved_arguments: None,
                         },
                     )
                     .await;

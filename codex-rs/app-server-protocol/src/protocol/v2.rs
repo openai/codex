@@ -5818,6 +5818,9 @@ pub struct PermissionsRequestApprovalResponse {
 pub struct DynamicToolCallResponse {
     pub content_items: Vec<DynamicToolCallOutputContentItem>,
     pub success: bool,
+    /// Optional client-approved replacement arguments. When present, this must
+    /// fully match the existing registered schema for the same dynamic tool.
+    pub approved_arguments: Option<JsonValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -7993,6 +7996,7 @@ mod tests {
                 text: "dynamic-ok".to_string(),
             }],
             success: true,
+            approved_arguments: None,
         })
         .unwrap();
 
@@ -8005,6 +8009,7 @@ mod tests {
                         "text": "dynamic-ok"
                     }
                 ],
+                "approvedArguments": null,
                 "success": true,
             })
         );
@@ -8022,6 +8027,7 @@ mod tests {
                 },
             ],
             success: true,
+            approved_arguments: None,
         })
         .unwrap();
 
@@ -8038,8 +8044,48 @@ mod tests {
                         "imageUrl": "data:image/png;base64,AAA"
                     }
                 ],
+                "approvedArguments": null,
                 "success": true,
             })
+        );
+    }
+
+    #[test]
+    fn dynamic_tool_response_round_trips_non_null_approved_arguments() {
+        let value = serde_json::to_value(DynamicToolCallResponse {
+            content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                text: "dynamic-ok".to_string(),
+            }],
+            success: true,
+            approved_arguments: Some(json!({ "city": "Tokyo" })),
+        })
+        .unwrap();
+
+        assert_eq!(
+            value,
+            json!({
+                "contentItems": [
+                    {
+                        "type": "inputText",
+                        "text": "dynamic-ok"
+                    }
+                ],
+                "approvedArguments": {
+                    "city": "Tokyo"
+                },
+                "success": true,
+            })
+        );
+
+        assert_eq!(
+            serde_json::from_value::<DynamicToolCallResponse>(value).unwrap(),
+            DynamicToolCallResponse {
+                content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                    text: "dynamic-ok".to_string(),
+                }],
+                success: true,
+                approved_arguments: Some(json!({ "city": "Tokyo" })),
+            }
         );
     }
 

@@ -1944,6 +1944,65 @@ mod tests {
     }
 
     #[test]
+    fn reconstructs_dynamic_tool_items_using_authoritative_response_arguments() {
+        let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".into(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+            EventMsg::UserMessage(UserMessageEvent {
+                message: "run dynamic tool".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            }),
+            EventMsg::DynamicToolCallRequest(
+                codex_protocol::dynamic_tools::DynamicToolCallRequest {
+                    call_id: "dyn-1".into(),
+                    turn_id: "turn-1".into(),
+                    tool: "lookup_ticket".into(),
+                    arguments: serde_json::json!({"id":"ABC-123"}),
+                },
+            ),
+            EventMsg::DynamicToolCallResponse(DynamicToolCallResponseEvent {
+                call_id: "dyn-1".into(),
+                turn_id: "turn-1".into(),
+                tool: "lookup_ticket".into(),
+                arguments: serde_json::json!({"id":"ABC-456"}),
+                content_items: vec![CoreDynamicToolCallOutputContentItem::InputText {
+                    text: "Ticket is open".into(),
+                }],
+                success: true,
+                error: None,
+                duration: Duration::from_millis(42),
+            }),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].items.len(), 2);
+        assert_eq!(
+            turns[0].items[1],
+            ThreadItem::DynamicToolCall {
+                id: "dyn-1".into(),
+                tool: "lookup_ticket".into(),
+                arguments: serde_json::json!({"id":"ABC-456"}),
+                status: DynamicToolCallStatus::Completed,
+                content_items: Some(vec![DynamicToolCallOutputContentItem::InputText {
+                    text: "Ticket is open".into(),
+                }]),
+                success: Some(true),
+                duration_ms: Some(42),
+            }
+        );
+    }
+
+    #[test]
     fn reconstructs_declined_exec_and_patch_items() {
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {

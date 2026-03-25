@@ -87,6 +87,155 @@ fn mcp_tool_to_openai_tool_inserts_empty_properties() {
 }
 
 #[test]
+fn validate_tool_input_value_accepts_matching_nested_object() {
+    let schema = JsonSchema::Object {
+        properties: BTreeMap::from([(
+            "payload".to_string(),
+            JsonSchema::Object {
+                properties: BTreeMap::from([(
+                    "cities".to_string(),
+                    JsonSchema::Array {
+                        items: Box::new(JsonSchema::String { description: None }),
+                        description: None,
+                    },
+                )]),
+                required: Some(vec!["cities".to_string()]),
+                additional_properties: Some(false.into()),
+            },
+        )]),
+        required: Some(vec!["payload".to_string()]),
+        additional_properties: Some(false.into()),
+    };
+
+    let value = serde_json::json!({
+        "payload": {
+            "cities": ["Paris", "Tokyo"]
+        }
+    });
+
+    assert_eq!(validate_tool_input_value(&schema, &value), Ok(()));
+}
+
+#[test]
+fn validate_tool_input_value_rejects_missing_required_property() {
+    let schema = JsonSchema::Object {
+        properties: BTreeMap::from([(
+            "city".to_string(),
+            JsonSchema::String { description: None },
+        )]),
+        required: Some(vec!["city".to_string()]),
+        additional_properties: Some(false.into()),
+    };
+
+    let value = serde_json::json!({});
+
+    assert_eq!(
+        validate_tool_input_value(&schema, &value),
+        Err("$: missing required property `city`".to_string())
+    );
+}
+
+#[test]
+fn validate_tool_input_value_rejects_unexpected_property() {
+    let schema = JsonSchema::Object {
+        properties: BTreeMap::from([(
+            "city".to_string(),
+            JsonSchema::String { description: None },
+        )]),
+        required: None,
+        additional_properties: Some(false.into()),
+    };
+
+    let value = serde_json::json!({
+        "city": "Paris",
+        "country": "France"
+    });
+
+    assert_eq!(
+        validate_tool_input_value(&schema, &value),
+        Err("$: unexpected property `country`".to_string())
+    );
+}
+
+#[test]
+fn validate_tool_input_value_validates_array_entries() {
+    let schema = JsonSchema::Array {
+        items: Box::new(JsonSchema::String { description: None }),
+        description: None,
+    };
+
+    let value = serde_json::json!(["Paris", 7]);
+
+    assert_eq!(
+        validate_tool_input_value(&schema, &value),
+        Err("$[1]: expected string".to_string())
+    );
+}
+
+#[test]
+fn validate_tool_input_value_validates_additional_properties_schema() {
+    let schema = JsonSchema::Object {
+        properties: BTreeMap::new(),
+        required: None,
+        additional_properties: Some(JsonSchema::String { description: None }.into()),
+    };
+
+    let value = serde_json::json!({
+        "city": 7
+    });
+
+    assert_eq!(
+        validate_tool_input_value(&schema, &value),
+        Err("$.city: expected string".to_string())
+    );
+}
+
+#[test]
+fn validate_tool_input_value_accepts_top_level_boolean() {
+    let schema = JsonSchema::Boolean { description: None };
+    let value = serde_json::json!(true);
+
+    assert_eq!(validate_tool_input_value(&schema, &value), Ok(()));
+}
+
+#[test]
+fn validate_tool_input_value_accepts_top_level_number() {
+    let schema = JsonSchema::Number { description: None };
+    let value = serde_json::json!(7);
+
+    assert_eq!(validate_tool_input_value(&schema, &value), Ok(()));
+}
+
+#[test]
+fn validate_tool_input_value_rejects_top_level_object_type_mismatch() {
+    let schema = JsonSchema::Object {
+        properties: BTreeMap::new(),
+        required: None,
+        additional_properties: Some(false.into()),
+    };
+    let value = serde_json::json!("Paris");
+
+    assert_eq!(
+        validate_tool_input_value(&schema, &value),
+        Err("$: expected object".to_string())
+    );
+}
+
+#[test]
+fn validate_tool_input_value_rejects_top_level_array_type_mismatch() {
+    let schema = JsonSchema::Array {
+        items: Box::new(JsonSchema::String { description: None }),
+        description: None,
+    };
+    let value = serde_json::json!({ "city": "Paris" });
+
+    assert_eq!(
+        validate_tool_input_value(&schema, &value),
+        Err("$: expected array".to_string())
+    );
+}
+
+#[test]
 fn mcp_tool_to_openai_tool_preserves_top_level_output_schema() {
     let mut input_schema = rmcp::model::JsonObject::new();
     input_schema.insert("type".to_string(), serde_json::json!("object"));

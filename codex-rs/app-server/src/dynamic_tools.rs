@@ -33,6 +33,7 @@ pub(crate) async fn on_call_response(
     let DynamicToolCallResponse {
         content_items,
         success,
+        approved_arguments,
     } = response.clone();
     let core_response = CoreDynamicToolResponse {
         content_items: content_items
@@ -40,6 +41,7 @@ pub(crate) async fn on_call_response(
             .map(CoreDynamicToolCallOutputContentItem::from)
             .collect(),
         success,
+        approved_arguments,
     };
     if let Err(err) = conversation
         .submit(Op::DynamicToolResponse {
@@ -69,6 +71,7 @@ fn fallback_response(message: &str) -> (DynamicToolCallResponse, Option<String>)
                 text: message.to_string(),
             }],
             success: false,
+            approved_arguments: None,
         },
         Some(message.to_string()),
     )

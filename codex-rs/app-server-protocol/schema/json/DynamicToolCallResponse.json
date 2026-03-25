@@ -47,6 +47,9 @@
     }
   },
   "properties": {
+    "approvedArguments": {
+      "description": "Optional client-approved replacement arguments. When present, this must fully match the existing registered schema for the same dynamic tool."
+    },
     "contentItems": {
       "items": {
         "$ref": "#/definitions/DynamicToolCallOutputContentItem"
