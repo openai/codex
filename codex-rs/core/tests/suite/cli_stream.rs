@@ -1,5 +1,6 @@
 use assert_cmd::Command as AssertCommand;
 use codex_core::auth::CODEX_API_KEY_ENV_VAR;
+use codex_git_utils::collect_git_info;
 use codex_protocol::protocol::GitInfo;
 use codex_utils_cargo_bin::find_resource;
 use core_test_support::fs_wait;
@@ -596,7 +597,7 @@ async fn integration_git_info_unit_test() {
         .unwrap();
 
     // 3. Test git info collection directly
-    let git_info = codex_core::git_info::collect_git_info(&git_repo).await;
+    let git_info = collect_git_info(&git_repo).await;
 
     // 4. Verify git info is present and contains expected data
     assert!(git_info.is_some(), "Git info should be collected");
@@ -608,7 +609,7 @@ async fn integration_git_info_unit_test() {
         git_info.commit_hash.is_some(),
         "Git info should contain commit_hash"
     );
-    let commit_hash = git_info.commit_hash.as_ref().unwrap();
+    let commit_hash = &git_info.commit_hash.as_ref().unwrap().0;
     assert_eq!(commit_hash.len(), 40, "Commit hash should be 40 characters");
     assert!(
         commit_hash.chars().all(|c| c.is_ascii_hexdigit()),

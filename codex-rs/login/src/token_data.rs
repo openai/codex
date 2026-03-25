@@ -1,6 +1,9 @@
 use base64::Engine;
+use chrono::DateTime;
+use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use thiserror::Error;
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Default)]
@@ -117,6 +120,12 @@ struct AuthClaims {
     chatgpt_account_id: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct StandardJwtClaims {
+    #[serde(default)]
+    exp: Option<i64>,
+}
+
 #[derive(Debug, Error)]
 pub enum IdTokenInfoError {
     #[error("invalid ID token format")]
@@ -127,7 +136,7 @@ pub enum IdTokenInfoError {
     Json(#[from] serde_json::Error),
 }
 
-pub fn parse_chatgpt_jwt_claims(jwt: &str) -> Result<IdTokenInfo, IdTokenInfoError> {
+fn decode_jwt_payload<T: DeserializeOwned>(jwt: &str) -> Result<T, IdTokenInfoError> {
     // JWT format: header.payload.signature
     let mut parts = jwt.split('.');
     let (_header_b64, payload_b64, _sig_b64) = match (parts.next(), parts.next(), parts.next()) {
@@ -136,7 +145,19 @@ pub fn parse_chatgpt_jwt_claims(jwt: &str) -> Result<IdTokenInfo, IdTokenInfoErr
     };
 
     let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload_b64)?;
-    let claims: IdClaims = serde_json::from_slice(&payload_bytes)?;
+    let claims = serde_json::from_slice(&payload_bytes)?;
+    Ok(claims)
+}
+
+pub fn parse_jwt_expiration(jwt: &str) -> Result<Option<DateTime<Utc>>, IdTokenInfoError> {
+    let claims: StandardJwtClaims = decode_jwt_payload(jwt)?;
+    Ok(claims
+        .exp
+        .and_then(|exp| DateTime::<Utc>::from_timestamp(exp, 0)))
+}
+
+pub fn parse_chatgpt_jwt_claims(jwt: &str) -> Result<IdTokenInfo, IdTokenInfoError> {
+    let claims: IdClaims = decode_jwt_payload(jwt)?;
     let email = claims
         .email
         .or_else(|| claims.profile.and_then(|profile| profile.email));

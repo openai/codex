@@ -60,6 +60,7 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::OutboundConnectionState;
 use crate::transport::route_outgoing_envelope;
@@ -353,7 +354,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(channel_capacity);
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
 
-        let (writer_tx, mut writer_rx) = mpsc::channel::<OutgoingMessage>(channel_capacity);
+        let (writer_tx, mut writer_rx) = mpsc::channel::<QueuedOutgoingMessage>(channel_capacity);
         let outbound_initialized = Arc::new(AtomicBool::new(false));
         let outbound_experimental_api_enabled = Arc::new(AtomicBool::new(false));
         let outbound_opted_out_notification_methods = Arc::new(RwLock::new(HashSet::new()));
@@ -457,6 +458,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
             }
 
             processor.clear_runtime_references();
+            processor.cancel_active_login().await;
             processor.connection_closed(IN_PROCESS_CONNECTION_ID).await;
             processor.clear_all_thread_listeners().await;
             processor.drain_background_tasks().await;
@@ -547,10 +549,11 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                         }
                     }
                 }
-                outgoing_message = writer_rx.recv() => {
-                    let Some(outgoing_message) = outgoing_message else {
+                queued_message = writer_rx.recv() => {
+                    let Some(queued_message) = queued_message else {
                         break;
                     };
+                    let outgoing_message = queued_message.message;
                     match outgoing_message {
                         OutgoingMessage::Response(response) => {
                             if let Some(response_tx) = pending_request_responses.remove(&response.id) {
@@ -628,6 +631,9 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                                 }
                             }
                         }
+                    }
+                    if let Some(write_complete_tx) = queued_message.write_complete_tx {
+                        let _ = write_complete_tx.send(());
                     }
                 }
             }

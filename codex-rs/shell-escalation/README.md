@@ -15,14 +15,15 @@ decision to the shell-escalation protocol over a shared file descriptor (specifi
 - `Deny`: the server has declared the proposed command to be forbidden, so
   `codex-execve-wrapper` prints an error to `stderr` and exits with `1`.
 
-## Patched Bash
+## Patched zsh
 
-We carry a small patch to `execute_cmd.c` (see `patches/bash-exec-wrapper.patch`) that adds support for `EXEC_WRAPPER`. The original commit message is “add support for BASH_EXEC_WRAPPER” and the patch applies cleanly to `a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b` from https://github.com/bminor/bash. To rebuild manually:
+We carry a small patch to `Src/exec.c` (see `patches/zsh-exec-wrapper.patch`) that adds support for `EXEC_WRAPPER`. The patch applies to `77045ef899e53b9598bebc5a41db93a548a40ca6` from https://git.code.sf.net/p/zsh/code. To rebuild manually:
 
 ```bash
-git clone https://git.savannah.gnu.org/git/bash
-git checkout a8a1c2fac029404d3f42cd39f5a20f24b6e4fe4b
-git apply /path/to/patches/bash-exec-wrapper.patch
-./configure --without-bash-malloc
+git clone https://git.code.sf.net/p/zsh/code
+git checkout 77045ef899e53b9598bebc5a41db93a548a40ca6
+git apply /path/to/patches/zsh-exec-wrapper.patch
+./Util/preconfig
+./configure
 make -j"$(nproc)"
 ```

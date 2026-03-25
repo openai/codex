@@ -197,6 +197,49 @@ fn unauthorized_recovery_reports_mode_and_step_names() {
     assert_eq!(external.step_name(), "external_refresh");
 }
 
+#[test]
+fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
+    let codex_home = tempdir().unwrap();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("org_mine".to_string()),
+        },
+        codex_home.path(),
+    )
+    .expect("failed to write auth file");
+
+    let auth = super::load_auth(codex_home.path(), false, AuthCredentialsStoreMode::File)
+        .expect("load auth")
+        .expect("auth available");
+    let mut updated_auth_dot_json = auth
+        .get_current_auth_json()
+        .expect("AuthDotJson should exist");
+    let updated_tokens = updated_auth_dot_json
+        .tokens
+        .as_mut()
+        .expect("tokens should exist");
+    updated_tokens.access_token = "new-access-token".to_string();
+    updated_tokens.refresh_token = "new-refresh-token".to_string();
+    let updated_auth = CodexAuth::from_auth_dot_json(
+        codex_home.path(),
+        updated_auth_dot_json,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("updated auth should parse");
+
+    let manager = AuthManager::from_auth_for_testing(auth.clone());
+    let error = RefreshTokenFailedError::new(
+        RefreshTokenFailedReason::Exhausted,
+        "refresh token already used",
+    );
+    manager.record_permanent_refresh_failure_if_unchanged(&auth, &error);
+
+    assert_eq!(manager.refresh_failure_for_auth(&auth), Some(error));
+    assert_eq!(manager.refresh_failure_for_auth(&updated_auth), None);
+}
+
 struct AuthFileParams {
     openai_api_key: Option<String>,
     chatgpt_plan_type: Option<String>,

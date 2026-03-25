@@ -80,6 +80,7 @@ use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::W3cTraceContext;
+use core_test_support::PathBufExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
@@ -1115,18 +1116,12 @@ async fn recompute_token_usage_updates_model_context_window() {
 #[tokio::test]
 async fn record_initial_history_reconstructs_forked_transcript() {
     let (session, turn_context) = make_session_and_context().await;
-    let (rollout_items, mut expected) = sample_rollout(&session, &turn_context).await;
+    let (rollout_items, expected) = sample_rollout(&session, &turn_context).await;
 
     session
         .record_initial_history(InitialHistory::Forked(rollout_items))
         .await;
 
-    let reconstruction_turn = session.new_default_turn().await;
-    expected.extend(
-        session
-            .build_initial_context(reconstruction_turn.as_ref())
-            .await,
-    );
     let history = session.state.lock().await.clone_history();
     assert_eq!(expected, history.raw_items());
 }
@@ -1244,7 +1239,7 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
 
     let request = first_forked_request.single_request();
     let snapshot = context_snapshot::format_labeled_requests_snapshot(
-        "First request after fork when fork startup changes approval policy and the first forked turn changes approval policy again and enters plan mode.",
+        "First request after fork when startup preserves the parent baseline, the fork changes approval policy, and the first forked turn enters plan mode.",
         &[("First Forked Turn Request", &request)],
         &ContextSnapshotOptions::default()
             .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 96 })
@@ -1272,7 +1267,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
     let previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
         trace_id: turn_context.trace_id.clone(),
-        cwd: turn_context.cwd.clone(),
+        cwd: turn_context.cwd.to_path_buf(),
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
@@ -1287,7 +1282,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         user_instructions: None,
         developer_instructions: None,
         final_output_json_schema: None,
-        truncation_policy: Some(turn_context.truncation_policy.into()),
+        truncation_policy: Some(turn_context.truncation_policy),
     };
     let turn_id = previous_context_item
         .turn_id
@@ -1309,7 +1304,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
                 text_elements: Vec::new(),
             },
         )),
-        RolloutItem::TurnContext(previous_context_item),
+        RolloutItem::TurnContext(previous_context_item.clone()),
         RolloutItem::EventMsg(EventMsg::TurnComplete(
             codex_protocol::protocol::TurnCompleteEvent {
                 turn_id,
@@ -1322,12 +1317,20 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         .record_initial_history(InitialHistory::Forked(rollout_items))
         .await;
 
+    let history = session.clone_history().await;
     assert_eq!(
         session.previous_turn_settings().await,
         Some(PreviousTurnSettings {
             model: previous_model.to_string(),
             realtime_active: Some(turn_context.realtime_active),
         })
+    );
+    assert_eq!(history.raw_items(), &[]);
+    assert_eq!(
+        serde_json::to_value(session.reference_context_item().await)
+            .expect("serialize fork reference context item"),
+        serde_json::to_value(Some(previous_context_item))
+            .expect("serialize expected reference context item")
     );
 }
 
@@ -2280,10 +2283,9 @@ async fn session_configuration_apply_preserves_split_file_system_policy_on_cwd_o
     let original_cwd = project_root.join("subdir");
     let docs_dir = original_cwd.join("docs");
     std::fs::create_dir_all(&docs_dir).expect("create docs dir");
-    let docs_dir =
-        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs_dir).expect("docs");
+    let docs_dir = docs_dir.abs();
 
-    session_configuration.cwd = original_cwd;
+    session_configuration.cwd = original_cwd.abs();
     session_configuration.sandbox_policy =
         codex_config::Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
@@ -2405,10 +2407,9 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
     let original_cwd = project_root.join("subdir");
     let docs_dir = original_cwd.join("docs");
     std::fs::create_dir_all(&docs_dir).expect("create docs dir");
-    let docs_dir =
-        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs_dir).expect("docs");
+    let docs_dir = docs_dir.abs();
 
-    session_configuration.cwd = original_cwd;
+    session_configuration.cwd = original_cwd.abs();
     session_configuration.sandbox_policy =
         codex_config::Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
@@ -2440,6 +2441,36 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
             &project_root,
         )
     );
+}
+
+#[tokio::test]
+async fn session_update_settings_keeps_runtime_cwds_absolute() {
+    let (session, turn_context) = make_session_and_context().await;
+    let updated_cwd = turn_context
+        .cwd
+        .join("project")
+        .expect("resolve project dir");
+    std::fs::create_dir_all(updated_cwd.as_path()).expect("create project dir");
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            cwd: Some(PathBuf::from("project")),
+            ..Default::default()
+        })
+        .await
+        .expect("cwd update should succeed");
+
+    let session_cwd = {
+        let state = session.state.lock().await;
+        state.session_configuration.cwd.clone()
+    };
+    let config = session.get_config().await;
+    let next_turn = session.new_default_turn().await;
+
+    assert_eq!(session_cwd, updated_cwd);
+    assert_eq!(config.cwd, turn_context.cwd);
+    assert_eq!(next_turn.cwd, updated_cwd);
+    assert_eq!(next_turn.config.cwd, updated_cwd);
 }
 
 #[tokio::test]
@@ -2524,7 +2555,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         skills_manager,
         plugins_manager,
         mcp_manager,
-        Arc::new(FileWatcher::noop()),
+        Arc::new(SkillsWatcher::noop()),
         AgentControl::default(),
     )
     .await;
@@ -2623,7 +2654,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             .expect("create environment"),
     );
 
-    let file_watcher = Arc::new(FileWatcher::noop());
+    let skills_watcher = Arc::new(SkillsWatcher::noop());
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(
             McpConnectionManager::new_mcp_connection_manager_for_tests(
@@ -2657,7 +2688,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         skills_manager,
         plugins_manager,
         mcp_manager,
-        file_watcher,
+        skills_watcher,
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
@@ -3056,7 +3087,7 @@ async fn user_turn_updates_approvals_reviewer() {
                 text: "hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            cwd: config.cwd.clone(),
+            cwd: config.cwd.to_path_buf(),
             approval_policy: config.permissions.approval_policy.value(),
             approvals_reviewer: Some(crate::config::types::ApprovalsReviewer::GuardianSubagent),
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
@@ -3458,7 +3489,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             .expect("create environment"),
     );
 
-    let file_watcher = Arc::new(FileWatcher::noop());
+    let skills_watcher = Arc::new(SkillsWatcher::noop());
     let services = SessionServices {
         mcp_connection_manager: Arc::new(RwLock::new(
             McpConnectionManager::new_mcp_connection_manager_for_tests(
@@ -3492,7 +3523,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         skills_manager,
         plugins_manager,
         mcp_manager,
-        file_watcher,
+        skills_watcher,
         agent_control,
         network_proxy: None,
         network_approval: Arc::clone(&network_approval),
@@ -5058,7 +5089,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
                 "echo hi".to_string(),
             ]
         },
-        cwd: turn_context.cwd.clone(),
+        cwd: turn_context.cwd.to_path_buf(),
         expiration: timeout_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),

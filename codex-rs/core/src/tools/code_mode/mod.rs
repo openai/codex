@@ -27,11 +27,11 @@ use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouterParams;
-use crate::truncate::TruncationPolicy;
-use crate::truncate::formatted_truncate_text_content_items_with_policy;
-use crate::truncate::truncate_function_output_items_with_policy;
 use crate::unified_exec::resolve_max_tokens;
 use codex_features::Feature;
+use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::formatted_truncate_text_content_items_with_policy;
+use codex_utils_output_truncation::truncate_function_output_items_with_policy;
 
 pub(crate) use execute_handler::CodeModeExecuteHandler;
 use response_adapter::into_function_call_output_content_items;

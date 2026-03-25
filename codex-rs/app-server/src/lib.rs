@@ -22,6 +22,7 @@ use crate::message_processor::MessageProcessorArgs;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::ConnectionState;
 use crate::transport::OutboundConnectionState;
@@ -66,6 +67,7 @@ mod error_code;
 mod external_agent_config_api;
 mod filters;
 mod fs_api;
+mod fs_watch;
 mod fuzzy_file_search;
 pub mod in_process;
 mod message_processor;
@@ -103,7 +105,7 @@ enum OutboundControlEvent {
     /// Register a new writer for an opened connection.
     Opened {
         connection_id: ConnectionId,
-        writer: mpsc::Sender<crate::outgoing_message::OutgoingMessage>,
+        writer: mpsc::Sender<QueuedOutgoingMessage>,
         disconnect_sender: Option<CancellationToken>,
         initialized: Arc<AtomicBool>,
         experimental_api_enabled: Arc<AtomicBool>,

@@ -23,7 +23,8 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::PathExt;
+use core_test_support::TempDirExt;
 use core_test_support::codex_linux_sandbox_exe_or_skip;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -123,7 +124,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
                 "echo hi".to_string(),
             ]
         },
-        cwd: turn_context.cwd.clone(),
+        cwd: turn_context.cwd.to_path_buf(),
         expiration: expiration_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
@@ -388,12 +389,11 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
     .expect("write policy file");
 
     let mut config = build_test_config(codex_home.path()).await;
-    config.cwd = project_dir.path().to_path_buf();
+    config.cwd = project_dir.abs();
     config.config_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
             ConfigLayerSource::Project {
-                dot_codex_folder: AbsolutePathBuf::from_absolute_path(project_dir.path())
-                    .expect("absolute project path"),
+                dot_codex_folder: project_dir.path().abs(),
             },
             toml::Value::Table(Default::default()),
         )],
@@ -435,7 +435,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         true,
     ));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let file_watcher = Arc::new(FileWatcher::noop());
+    let skills_watcher = Arc::new(SkillsWatcher::noop());
 
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
@@ -444,7 +444,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         skills_manager,
         plugins_manager,
         mcp_manager,
-        file_watcher,
+        skills_watcher,
         conversation_history: InitialHistory::New,
         session_source: SessionSource::SubAgent(SubAgentSource::Other(
             GUARDIAN_REVIEWER_NAME.to_string(),

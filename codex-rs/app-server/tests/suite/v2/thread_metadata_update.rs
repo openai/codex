@@ -20,6 +20,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_core::state_db::reconcile_rollout;
+use codex_git_utils::GitSha;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::GitInfo as RolloutGitInfo;
 use codex_state::StateRuntime;
@@ -378,7 +379,7 @@ async fn thread_metadata_update_can_clear_stored_git_fields() -> Result<()> {
         "Thread preview",
         Some("mock_provider"),
         Some(RolloutGitInfo {
-            commit_hash: Some("abc123".to_string()),
+            commit_hash: Some(GitSha::new("abc123")),
             branch: Some("feature/sidebar-pr".to_string()),
             repository_url: Some("git@example.com:openai/codex.git".to_string()),
         }),

@@ -310,7 +310,7 @@ fn verified_plugin_suggestion_completed(
         .list_marketplaces_for_config(config, &[])
         .ok()
         .into_iter()
-        .flatten()
+        .flat_map(|outcome| outcome.marketplaces)
         .flat_map(|marketplace| marketplace.plugins.into_iter())
         .any(|plugin| plugin.id == tool_id && plugin.installed)
 }
