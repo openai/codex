@@ -397,6 +397,7 @@ fn codex_apps_connectors_support_persistent_approval() {
 
 #[test]
 fn sanitize_mcp_tool_result_for_model_rewrites_image_content() {
+    let temp = tempdir().expect("tempdir");
     let result = Ok(CallToolResult {
         content: vec![
             serde_json::json!({
@@ -414,7 +415,8 @@ fn sanitize_mcp_tool_result_for_model_rewrites_image_content() {
         meta: None,
     });
 
-    let got = sanitize_mcp_tool_result_for_model(false, result).expect("sanitized result");
+    let got = sanitize_mcp_tool_result_for_model(temp.path(), "call-1", false, result)
+        .expect("sanitized result");
 
     assert_eq!(
         got.content,
@@ -432,11 +434,12 @@ fn sanitize_mcp_tool_result_for_model_rewrites_image_content() {
 }
 
 #[test]
-fn sanitize_mcp_tool_result_for_model_preserves_image_when_supported() {
+fn sanitize_mcp_tool_result_for_model_materializes_image_when_supported() {
+    let temp = tempdir().expect("tempdir");
     let original = CallToolResult {
         content: vec![serde_json::json!({
             "type": "image",
-            "data": "Zm9v",
+            "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
             "mimeType": "image/png",
         })],
         structured_content: Some(serde_json::json!({"x": 1})),
@@ -444,10 +447,24 @@ fn sanitize_mcp_tool_result_for_model_preserves_image_when_supported() {
         meta: Some(serde_json::json!({"k": "v"})),
     };
 
-    let got =
-        sanitize_mcp_tool_result_for_model(true, Ok(original.clone())).expect("unsanitized result");
+    let got = sanitize_mcp_tool_result_for_model(temp.path(), "call:1", true, Ok(original))
+        .expect("sanitized result");
 
-    assert_eq!(got, original);
+    assert_eq!(got.structured_content, Some(serde_json::json!({"x": 1})));
+    assert_eq!(got.is_error, Some(false));
+    assert_eq!(got.meta, Some(serde_json::json!({"k": "v"})));
+    let path = got.content[0]
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .expect("local image path");
+    assert_eq!(
+        got.content[0]
+            .get("type")
+            .and_then(serde_json::Value::as_str),
+        Some("local_image")
+    );
+    assert!(path.starts_with(temp.path().to_string_lossy().as_ref()));
+    assert!(std::path::Path::new(path).is_file());
 }
 
 #[tokio::test]
