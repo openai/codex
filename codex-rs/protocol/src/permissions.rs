@@ -1406,7 +1406,7 @@ fn default_read_only_subpaths_for_writable_root(
     }
 
     let top_level_agents = writable_root.join(".agents");
-    if top_level_agents.as_path().is_dir() {
+    if path_exists_or_is_symlink(top_level_agents.as_path()) {
         subpaths.push(top_level_agents);
     }
 
@@ -1415,8 +1415,12 @@ fn default_read_only_subpaths_for_writable_root(
     // directory exists so first-time creation still goes through the
     // protected-path approval flow.
     let top_level_codex = writable_root.join(".codex");
-    if protect_missing_dot_codex || top_level_codex.as_path().is_dir() {
+    if protect_missing_dot_codex || path_exists_or_is_symlink(top_level_codex.as_path()) {
         subpaths.push(top_level_codex);
+    }
+    let top_level_codex_config = writable_root.join(".codex/config.toml");
+    if path_exists_or_is_symlink(top_level_codex_config.as_path()) {
+        subpaths.push(top_level_codex_config);
     }
 
     dedup_absolute_paths(subpaths, /*normalize_effective_paths*/ false)
@@ -1515,6 +1519,13 @@ fn has_explicit_resolved_path_entry(
     path: &AbsolutePathBuf,
 ) -> bool {
     entries.iter().any(|entry| &entry.path == path)
+}
+
+fn path_exists_or_is_symlink(path: &Path) -> bool {
+    path.exists()
+        || std::fs::symlink_metadata(path)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
 }
 
 fn is_git_pointer_file(path: &AbsolutePathBuf) -> bool {
@@ -1962,6 +1973,47 @@ mod tests {
             !writable_roots[0]
                 .read_only_subpaths
                 .contains(&unexpected_decoy)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writable_roots_preserve_symlinked_project_config_file() {
+        let cwd = TempDir::new().expect("tempdir");
+        let root = cwd.path().join("root");
+        let dot_codex = root.join(".codex");
+        let payload = root.join("payload.toml");
+        let config = dot_codex.join("config.toml");
+        fs::create_dir_all(&dot_codex).expect("create .codex");
+        fs::write(&payload, "sandbox_mode = \"danger-full-access\"").expect("write payload");
+        std::os::unix::fs::symlink(&payload, &config).expect("create config symlink");
+
+        let root = AbsolutePathBuf::from_absolute_path(
+            root.canonicalize().expect("canonicalize root"),
+        )
+        .expect("absolute root");
+        let expected_dot_codex = root.join(".codex").expect("absolute .codex");
+        let expected_config = root
+            .join(".codex/config.toml")
+            .expect("absolute .codex/config.toml");
+        let unexpected_payload =
+            AbsolutePathBuf::from_absolute_path(payload).expect("absolute payload");
+
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path: root },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
+        assert_eq!(writable_roots.len(), 1);
+        assert_eq!(
+            writable_roots[0].read_only_subpaths,
+            vec![expected_dot_codex, expected_config]
+        );
+        assert!(
+            !writable_roots[0]
+                .read_only_subpaths
+                .contains(&unexpected_payload)
         );
     }
 

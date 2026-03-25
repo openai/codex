@@ -1426,7 +1426,7 @@ fn default_read_only_subpaths_for_writable_root(
     }
 
     let top_level_agents = writable_root.join(".agents");
-    if top_level_agents.as_path().is_dir() {
+    if path_exists_or_is_symlink(top_level_agents.as_path()) {
         subpaths.push(top_level_agents);
     }
 
@@ -1435,8 +1435,12 @@ fn default_read_only_subpaths_for_writable_root(
     // directory exists so first-time creation still goes through the
     // protected-path approval flow.
     let top_level_codex = writable_root.join(".codex");
-    if protect_missing_dot_codex || top_level_codex.as_path().is_dir() {
+    if protect_missing_dot_codex || path_exists_or_is_symlink(top_level_codex.as_path()) {
         subpaths.push(top_level_codex);
+    }
+    let top_level_codex_config = writable_root.join(".codex/config.toml");
+    if path_exists_or_is_symlink(top_level_codex_config.as_path()) {
+        subpaths.push(top_level_codex_config);
     }
 
     let mut deduped = Vec::with_capacity(subpaths.len());
@@ -1447,6 +1451,13 @@ fn default_read_only_subpaths_for_writable_root(
         }
     }
     deduped
+}
+
+fn path_exists_or_is_symlink(path: &Path) -> bool {
+    path.exists()
+        || std::fs::symlink_metadata(path)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
 }
 
 fn is_git_pointer_file(path: &AbsolutePathBuf) -> bool {
@@ -4511,6 +4522,7 @@ mod tests {
         let cwd = TempDir::new().expect("tempdir");
         std::fs::create_dir_all(cwd.path().join(".agents")).expect("create .agents");
         std::fs::create_dir_all(cwd.path().join(".codex")).expect("create .codex");
+        std::fs::write(cwd.path().join(".codex/config.toml"), "").expect("create config.toml");
         let canonical_cwd = codex_utils_absolute_path::canonicalize_preserving_symlinks(cwd.path())
             .expect("canonicalize cwd");
         let cwd_absolute =
@@ -4522,6 +4534,9 @@ mod tests {
             .expect("canonical .agents");
         let expected_codex = AbsolutePathBuf::from_absolute_path(canonical_cwd.join(".codex"))
             .expect("canonical .codex");
+        let expected_codex_config =
+            AbsolutePathBuf::from_absolute_path(canonical_cwd.join(".codex/config.toml"))
+                .expect("canonical .codex/config.toml");
         let policy = FileSystemSandboxPolicy::restricted(vec![
             FileSystemSandboxEntry {
                 path: FileSystemPath::Special {
@@ -4573,6 +4588,12 @@ mod tests {
                 .read_only_subpaths
                 .iter()
                 .any(|path| path.as_path() == expected_codex.as_path())
+        );
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .iter()
+                .any(|path| path.as_path() == expected_codex_config.as_path())
         );
     }
 

@@ -972,6 +972,32 @@ async fn load_project_layers(
             continue;
         }
         let config_file = dot_codex_abs.join(CONFIG_TOML_FILE);
+        match fs.get_metadata(&config_file, /*sandbox*/ None).await {
+            Ok(metadata) => {
+                if metadata.is_symlink {
+                    let config_file_display = config_file.as_path().display();
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("Project config file {config_file_display} must not be a symlink"),
+                    ));
+                }
+            }
+            Err(err) => {
+                if err.kind() == io::ErrorKind::NotFound {
+                    layers.push(project_layer_entry(
+                        &dot_codex_abs,
+                        TomlValue::Table(toml::map::Map::new()),
+                        disabled_reason,
+                    ));
+                    continue;
+                }
+                let config_file_display = config_file.as_path().display();
+                return Err(io::Error::new(
+                    err.kind(),
+                    format!("Failed to inspect project config file {config_file_display}: {err}"),
+                ));
+            }
+        }
         match fs.read_file_text(&config_file, /*sandbox*/ None).await {
             Ok(contents) => {
                 let config: TomlValue = match toml::from_str(&contents) {
