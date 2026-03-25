@@ -596,6 +596,7 @@ async fn spawn_agent_can_fork_parent_thread_history() {
             })),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id),
+                fork_mode: Some(SpawnAgentForkMode::FullHistory),
             },
         )
         .await
@@ -681,6 +682,7 @@ async fn spawn_agent_fork_injects_output_for_parent_spawn_call() {
             })),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
+                fork_mode: Some(SpawnAgentForkMode::FullHistory),
             },
         )
         .await
@@ -753,6 +755,7 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
             })),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
+                fork_mode: Some(SpawnAgentForkMode::FullHistory),
             },
         )
         .await
@@ -787,6 +790,128 @@ async fn spawn_agent_fork_flushes_parent_rollout_before_loading_history() {
     let injected_output_index = injected_output_index
         .expect("forked child should include synthetic output for the parent spawn_agent call");
     assert!(parent_call_index < injected_output_index);
+
+    let _ = harness
+        .control
+        .shutdown_live_agent(child_thread_id)
+        .await
+        .expect("child shutdown should submit");
+    let _ = parent_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("parent shutdown should submit");
+}
+
+#[tokio::test]
+async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+
+    parent_thread
+        .inject_user_message_without_turn("old parent context".to_string())
+        .await;
+    let queued_communication = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::try_from("/root/worker").expect("agent path"),
+        Vec::new(),
+        "queued message".to_string(),
+        false,
+    );
+    let queued_turn_context = parent_thread.codex.session.new_default_turn().await;
+    parent_thread
+        .codex
+        .session
+        .record_conversation_items(
+            queued_turn_context.as_ref(),
+            &[queued_communication.to_response_input_item().into()],
+        )
+        .await;
+
+    let triggered_communication = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::try_from("/root/worker").expect("agent path"),
+        Vec::new(),
+        "triggered context".to_string(),
+        true,
+    );
+    let triggered_turn_context = parent_thread.codex.session.new_default_turn().await;
+    parent_thread
+        .codex
+        .session
+        .record_conversation_items(
+            triggered_turn_context.as_ref(),
+            &[triggered_communication.to_response_input_item().into()],
+        )
+        .await;
+
+    parent_thread
+        .inject_user_message_without_turn("current parent task".to_string())
+        .await;
+    let spawn_turn_context = parent_thread.codex.session.new_default_turn().await;
+    let parent_spawn_call_id = "spawn-call-last-n".to_string();
+    let parent_spawn_call = ResponseItem::FunctionCall {
+        id: None,
+        name: "spawn_agent".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: parent_spawn_call_id.clone(),
+    };
+    parent_thread
+        .codex
+        .session
+        .record_conversation_items(spawn_turn_context.as_ref(), &[parent_spawn_call])
+        .await;
+    parent_thread
+        .codex
+        .session
+        .ensure_rollout_materialized()
+        .await;
+    parent_thread.codex.session.flush_rollout().await;
+
+    let child_thread_id = harness
+        .control
+        .spawn_agent_with_metadata(
+            harness.config.clone(),
+            text_input("child task"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            SpawnAgentOptions {
+                fork_parent_spawn_call_id: Some(parent_spawn_call_id),
+                fork_mode: Some(SpawnAgentForkMode::LastNTurns(2)),
+            },
+        )
+        .await
+        .expect("forked spawn should keep only the last two turns")
+        .thread_id;
+
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should be registered");
+    let history = child_thread.codex.session.clone_history().await;
+
+    assert!(!history_contains_text(
+        history.raw_items(),
+        "old parent context"
+    ));
+    assert!(!history_contains_text(
+        history.raw_items(),
+        "queued message"
+    ));
+    assert!(history_contains_text(
+        history.raw_items(),
+        "triggered context"
+    ));
+    assert!(history_contains_text(
+        history.raw_items(),
+        "current parent task"
+    ));
 
     let _ = harness
         .control
