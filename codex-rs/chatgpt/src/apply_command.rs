@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use codex_core::config::Config;
+use codex_git_utils::ApplyGitRequest;
+use codex_git_utils::apply_git_patch;
 use codex_utils_cli::CliConfigOverrides;
 
 use crate::chatgpt_token::init_chatgpt_token_from_auth;
@@ -57,13 +59,13 @@ pub async fn apply_diff_from_task(
 
 async fn apply_diff(diff: &str, cwd: Option<PathBuf>) -> anyhow::Result<()> {
     let cwd = cwd.unwrap_or(std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir()));
-    let req = codex_git::ApplyGitRequest {
+    let req = ApplyGitRequest {
         cwd,
         diff: diff.to_string(),
         revert: false,
         preflight: false,
     };
-    let res = codex_git::apply_git_patch(&req)?;
+    let res = apply_git_patch(&req)?;
     if res.exit_code != 0 {
         anyhow::bail!(
             "Git apply failed (applied={}, skipped={}, conflicts={})\nstdout:\n{}\nstderr:\n{}",

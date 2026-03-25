@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "enablement": {
+      "additionalProperties": {
+        "type": "boolean"
+      },
+      "description": "Feature enablement entries updated by this request.",
+      "type": "object"
+    }
+  },
+  "required": [
+    "enablement"
+  ],
+  "title": "ExperimentalFeatureEnablementSetResponse",
+  "type": "object"
+}

@@ -390,6 +390,7 @@ async fn read_response<T: serde::de::DeserializeOwned>(
         let crate::outgoing_message::OutgoingEnvelope::ToConnection {
             connection_id,
             message,
+            ..
         } = envelope
         else {
             continue;
@@ -420,6 +421,7 @@ async fn read_thread_started_notification(
             crate::outgoing_message::OutgoingEnvelope::ToConnection {
                 connection_id,
                 message,
+                ..
             } => {
                 if connection_id != TEST_CONNECTION_ID {
                     continue;

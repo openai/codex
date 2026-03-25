@@ -3584,41 +3584,8 @@ impl ChatComposer {
 
     fn mention_items(&self) -> Vec<MentionItem> {
         let mut mentions = Vec::new();
-        let plugin_namespaces: HashSet<String> =
-            self.plugins.as_ref().map_or_else(HashSet::new, |plugins| {
-                plugins
-                    .iter()
-                    .filter_map(|plugin| {
-                        let (plugin_name, _) = plugin
-                            .config_name
-                            .split_once('@')
-                            .unwrap_or((plugin.config_name.as_str(), ""));
-                        let plugin_name = plugin_name.trim();
-                        if plugin_name.is_empty() {
-                            None
-                        } else {
-                            Some(plugin_name.to_ascii_lowercase())
-                        }
-                    })
-                    .collect()
-            });
-        let plugin_display_names: HashSet<String> =
-            self.plugins.as_ref().map_or_else(HashSet::new, |plugins| {
-                plugins
-                    .iter()
-                    .map(|plugin| plugin.display_name.to_ascii_lowercase())
-                    .collect()
-            });
-
         if let Some(skills) = self.skills.as_ref() {
             for skill in skills {
-                let is_plugin_namespaced_skill =
-                    skill.name.split_once(':').is_some_and(|(namespace, _)| {
-                        plugin_namespaces.contains(&namespace.to_ascii_lowercase())
-                    });
-                if is_plugin_namespaced_skill {
-                    continue;
-                }
                 let display_name = skill_display_name(skill).to_string();
                 let description = skill_description(skill);
                 let skill_name = skill.name.clone();
@@ -3698,30 +3665,18 @@ impl ChatComposer {
                 if !connector.is_accessible || !connector.is_enabled {
                     continue;
                 }
-                let plugin_backed_connector = connector
-                    .plugin_display_names
-                    .iter()
-                    .any(|name| plugin_display_names.contains(&name.to_ascii_lowercase()));
-                if plugin_backed_connector {
-                    continue;
-                }
                 let display_name = connectors::connector_display_label(connector);
                 let description = Some(Self::connector_brief_description(connector));
                 let slug = codex_core::connectors::connector_mention_slug(connector);
                 let search_terms = vec![display_name.clone(), connector.id.clone(), slug.clone()];
                 let connector_id = connector.id.as_str();
-                let category_tag = if connector.plugin_display_names.is_empty() {
-                    "[App]".to_string()
-                } else {
-                    "[Plugin]".to_string()
-                };
                 mentions.push(MentionItem {
                     display_name: display_name.clone(),
                     description,
                     insert_text: format!("${slug}"),
                     search_terms,
                     path: Some(format!("app://{connector_id}")),
-                    category_tag: Some(category_tag),
+                    category_tag: Some("[App]".to_string()),
                     sort_rank: 1,
                 });
             }
@@ -3787,7 +3742,7 @@ impl ChatComposer {
 
     #[cfg(not(target_os = "linux"))]
     fn schedule_space_hold_timer(flag: Arc<AtomicBool>, frame: Option<FrameRequester>) {
-        const HOLD_DELAY_MILLIS: u64 = 500;
+        const HOLD_DELAY_MILLIS: u64 = 1_000;
         if let Ok(handle) = Handle::try_current() {
             let flag_clone = flag;
             let frame_clone = frame;
@@ -3875,7 +3830,7 @@ impl ChatComposer {
         }
     }
 
-    /// Called when the 500ms space hold timeout elapses.
+    /// Called when the 1s space hold timeout elapses.
     ///
     /// On terminals without key-release reporting, this only transitions into voice capture if we
     /// observed repeated Space events while pending; otherwise the keypress is treated as a typed
@@ -5428,7 +5383,7 @@ mod tests {
     }
 
     #[test]
-    fn mention_items_hide_plugin_owned_skill_and_app_duplicates() {
+    fn mention_items_show_plugin_owned_skill_and_app_duplicates() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer = ChatComposer::new(
@@ -5491,13 +5446,20 @@ mod tests {
         }));
 
         let mentions = composer.mention_items();
-        assert_eq!(mentions.len(), 1);
-        assert_eq!(mentions[0].display_name, "Google Calendar".to_string());
-        assert_eq!(mentions[0].category_tag, Some("[Plugin]".to_string()));
+        assert_eq!(mentions.len(), 3);
+        assert_eq!(mentions[0].category_tag, Some("[Skill]".to_string()));
         assert_eq!(
             mentions[0].path,
+            Some("/tmp/repo/google-calendar/SKILL.md".to_string())
+        );
+        assert_eq!(mentions[0].display_name, "Google Calendar".to_string());
+        assert_eq!(mentions[1].category_tag, Some("[Plugin]".to_string()));
+        assert_eq!(
+            mentions[1].path,
             Some("plugin://google-calendar@debug".to_string())
         );
+        assert_eq!(mentions[2].category_tag, Some("[App]".to_string()));
+        assert_eq!(mentions[2].path, Some("app://google_calendar".to_string()));
     }
 
     #[test]

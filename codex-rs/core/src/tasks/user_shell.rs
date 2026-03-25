@@ -25,7 +25,6 @@ use crate::protocol::ExecCommandStatus;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::TurnStartedEvent;
 use crate::sandboxing::ExecRequest;
-use crate::sandboxing::SandboxPermissions;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
@@ -146,7 +145,7 @@ pub(crate) async fn execute_user_shell_command(
                 process_id: None,
                 turn_id: turn_context.sub_id.clone(),
                 command: display_command.clone(),
-                cwd: cwd.clone(),
+                cwd: cwd.to_path_buf(),
                 parsed_cmd: parsed_cmd.clone(),
                 source: ExecCommandSource::UserShell,
                 interaction_input: None,
@@ -157,7 +156,7 @@ pub(crate) async fn execute_user_shell_command(
     let sandbox_policy = SandboxPolicy::DangerFullAccess;
     let exec_env = ExecRequest {
         command: exec_command.clone(),
-        cwd: cwd.clone(),
+        cwd: cwd.to_path_buf(),
         env: create_env(
             &turn_context.shell_environment_policy,
             Some(session.conversation_id),
@@ -173,11 +172,10 @@ pub(crate) async fn execute_user_shell_command(
             .config
             .permissions
             .windows_sandbox_private_desktop,
-        sandbox_permissions: SandboxPermissions::UseDefault,
         sandbox_policy: sandbox_policy.clone(),
         file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
         network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
-        justification: None,
+        windows_restricted_token_filesystem_overlay: None,
         arg0: None,
     };
 
@@ -223,7 +221,7 @@ pub(crate) async fn execute_user_shell_command(
                         process_id: None,
                         turn_id: turn_context.sub_id.clone(),
                         command: display_command.clone(),
-                        cwd: cwd.clone(),
+                        cwd: cwd.to_path_buf(),
                         parsed_cmd: parsed_cmd.clone(),
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,
@@ -247,7 +245,7 @@ pub(crate) async fn execute_user_shell_command(
                         process_id: None,
                         turn_id: turn_context.sub_id.clone(),
                         command: display_command.clone(),
-                        cwd: cwd.clone(),
+                        cwd: cwd.to_path_buf(),
                         parsed_cmd: parsed_cmd.clone(),
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,
@@ -291,7 +289,7 @@ pub(crate) async fn execute_user_shell_command(
                         process_id: None,
                         turn_id: turn_context.sub_id.clone(),
                         command: display_command,
-                        cwd,
+                        cwd: cwd.to_path_buf(),
                         parsed_cmd,
                         source: ExecCommandSource::UserShell,
                         interaction_input: None,

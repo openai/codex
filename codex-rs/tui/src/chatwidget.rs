@@ -69,9 +69,6 @@ use codex_core::config::types::Notifications;
 use codex_core::config::types::WindowsSandboxModeToml;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::find_thread_name_by_id;
-use codex_core::git_info::current_branch_name;
-use codex_core::git_info::get_git_repo_root;
-use codex_core::git_info::local_git_branches;
 use codex_core::mcp::McpManager;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::plugins::PluginsManager;
@@ -81,6 +78,12 @@ use codex_core::skills::model::SkillMetadata;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_features::FEATURES;
 use codex_features::Feature;
+#[cfg(test)]
+use codex_git_utils::CommitLogEntry;
+use codex_git_utils::current_branch_name;
+use codex_git_utils::get_git_repo_root;
+use codex_git_utils::local_git_branches;
+use codex_git_utils::recent_commits;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
@@ -160,6 +163,7 @@ use codex_terminal_detection::Multiplexer;
 use codex_terminal_detection::TerminalInfo;
 use codex_terminal_detection::TerminalName;
 use codex_terminal_detection::terminal_info;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_sleep_inhibitor::SleepInhibitor;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -1413,7 +1417,12 @@ impl ChatWidget {
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = event.rollout_path.clone();
         self.current_cwd = Some(event.cwd.clone());
-        self.config.cwd = event.cwd.clone();
+        match AbsolutePathBuf::try_from(event.cwd.clone()) {
+            Ok(cwd) => self.config.cwd = cwd,
+            Err(err) => {
+                tracing::warn!(path = %event.cwd.display(), %err, "session cwd should be absolute");
+            }
+        }
         if let Err(err) = self
             .config
             .permissions
@@ -3472,13 +3481,13 @@ impl ChatWidget {
             id: ev.call_id,
             reason: ev.reason,
             changes: ev.changes.clone(),
-            cwd: self.config.cwd.clone(),
+            cwd: self.config.cwd.to_path_buf(),
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
         self.request_redraw();
         self.notify(Notification::EditApprovalRequested {
-            cwd: self.config.cwd.clone(),
+            cwd: self.config.cwd.to_path_buf(),
             changes: ev.changes.keys().cloned().collect(),
         });
     }
@@ -3708,7 +3717,7 @@ impl ChatWidget {
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
 
-        let current_cwd = Some(config.cwd.clone());
+        let current_cwd = Some(config.cwd.to_path_buf());
         let queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_info());
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -3911,7 +3920,7 @@ impl ChatWidget {
         };
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
-        let current_cwd = Some(config.cwd.clone());
+        let current_cwd = Some(config.cwd.to_path_buf());
 
         let queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_info());
         let mut widget = Self {
@@ -4534,7 +4543,15 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::ForkCurrentSession);
             }
             SlashCommand::Init => {
-                let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
+                let init_target = match self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME) {
+                    Ok(path) => path,
+                    Err(err) => {
+                        self.add_error_message(format!(
+                            "Failed to prepare {DEFAULT_PROJECT_DOC_FILENAME}: {err}",
+                        ));
+                        return;
+                    }
+                };
                 if init_target.exists() {
                     let message = format!(
                         "{DEFAULT_PROJECT_DOC_FILENAME} already exists here. Skipping /init to avoid overwriting it."
@@ -5265,7 +5282,7 @@ impl ChatWidget {
         let service_tier = self.config.service_tier.map(Some);
         let op = Op::UserTurn {
             items,
-            cwd: self.config.cwd.clone(),
+            cwd: self.config.cwd.to_path_buf(),
             approval_policy: self.config.permissions.approval_policy.value(),
             approvals_reviewer: None,
             sandbox_policy: self.config.permissions.sandbox_policy.get().clone(),
@@ -8406,7 +8423,7 @@ impl ChatWidget {
             placeholder_style,
             /*reasoning_effort*/ None,
             /*show_fast_status*/ false,
-            config.cwd.clone(),
+            config.cwd.to_path_buf(),
             CODEX_CLI_VERSION,
         ))
     }
@@ -8946,6 +8963,10 @@ impl ChatWidget {
 
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
         if self.connectors_enabled() {
+            let plugin_provenance = McpManager::new(Arc::new(PluginsManager::new(
+                self.config.codex_home.clone(),
+            )))
+            .tool_plugin_provenance(&self.config);
             let mut connectors_by_id: HashMap<String, connectors::AppInfo> = HashMap::new();
             for tool in ev.tools.values() {
                 let Some(meta) = tool.meta.as_ref().and_then(serde_json::Value::as_object) else {
@@ -8988,7 +9009,9 @@ impl ChatWidget {
                             install_url: None,
                             is_accessible: true,
                             is_enabled: true,
-                            plugin_display_names: Vec::new(),
+                            plugin_display_names: plugin_provenance
+                                .plugin_display_names_for_connector_id(connector_id)
+                                .to_vec(),
                         }
                     });
             }
@@ -9149,7 +9172,7 @@ impl ChatWidget {
             name: "Review against a base branch".to_string(),
             description: Some("(PR Style)".into()),
             actions: vec![Box::new({
-                let cwd = self.config.cwd.clone();
+                let cwd = self.config.cwd.to_path_buf();
                 move |tx| {
                     tx.send(AppEvent::OpenReviewBranchPicker(cwd.clone()));
                 }
@@ -9176,7 +9199,7 @@ impl ChatWidget {
         items.push(SelectionItem {
             name: "Review a commit".to_string(),
             actions: vec![Box::new({
-                let cwd = self.config.cwd.clone();
+                let cwd = self.config.cwd.to_path_buf();
                 move |tx| {
                     tx.send(AppEvent::OpenReviewCommitPicker(cwd.clone()));
                 }
@@ -9240,7 +9263,7 @@ impl ChatWidget {
     }
 
     pub(crate) async fn show_review_commit_picker(&mut self, cwd: &Path) {
-        let commits = codex_core::git_info::recent_commits(cwd, /*limit*/ 100).await;
+        let commits = recent_commits(cwd, /*limit*/ 100).await;
 
         let mut items: Vec<SelectionItem> = Vec::with_capacity(commits.len());
         for entry in commits {
@@ -9642,7 +9665,7 @@ async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Vec<RateLimitSn
 #[cfg(test)]
 pub(crate) fn show_review_commit_picker_with_entries(
     chat: &mut ChatWidget,
-    entries: Vec<codex_core::git_info::CommitLogEntry>,
+    entries: Vec<CommitLogEntry>,
 ) {
     let mut items: Vec<SelectionItem> = Vec::with_capacity(entries.len());
     for entry in entries {

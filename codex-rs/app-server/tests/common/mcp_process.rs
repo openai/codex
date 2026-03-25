@@ -31,6 +31,8 @@ use codex_app_server_protocol::FsGetMetadataParams;
 use codex_app_server_protocol::FsReadDirectoryParams;
 use codex_app_server_protocol::FsReadFileParams;
 use codex_app_server_protocol::FsRemoveParams;
+use codex_app_server_protocol::FsUnwatchParams;
+use codex_app_server_protocol::FsWatchParams;
 use codex_app_server_protocol::FsWriteFileParams;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAuthStatusParams;
@@ -463,6 +465,16 @@ impl McpProcess {
         self.send_request("experimentalFeature/list", params).await
     }
 
+    /// Send an `experimentalFeature/enablement/set` JSON-RPC request.
+    pub async fn send_experimental_feature_enablement_set_request(
+        &mut self,
+        params: codex_app_server_protocol::ExperimentalFeatureEnablementSetParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("experimentalFeature/enablement/set", params)
+            .await
+    }
+
     /// Send an `app/list` JSON-RPC request.
     pub async fn send_apps_list_request(&mut self, params: AppsListParams) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
@@ -788,6 +800,19 @@ impl McpProcess {
     pub async fn send_fs_copy_request(&mut self, params: FsCopyParams) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("fs/copy", params).await
+    }
+
+    pub async fn send_fs_watch_request(&mut self, params: FsWatchParams) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("fs/watch", params).await
+    }
+
+    pub async fn send_fs_unwatch_request(
+        &mut self,
+        params: FsUnwatchParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("fs/unwatch", params).await
     }
 
     /// Send an `account/logout` JSON-RPC request.

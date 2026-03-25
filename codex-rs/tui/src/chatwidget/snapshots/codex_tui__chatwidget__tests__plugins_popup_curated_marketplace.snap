@@ -9,12 +9,9 @@ expression: popup
   Using cached marketplace data: remote sync timed out
 
   Type to search plugins
-› Alpha Sync · ChatGPT Marketplace       Installed · Disabled. Press Enter to view plugin details.
-  Bravo Search · ChatGPT Marketplace     Can be installed · ChatGPT Marketplace · Search docs and
-                                         tickets.
-  Hidden Repo Plugin · Repo Marketplace  Can be installed · Repo Marketplace · Should not be shown
-                                         in /plugins.
-  Starter · ChatGPT Marketplace          Available by default · ChatGPT Marketplace · Included by
-                                         default.
+› Alpha Sync          Installed · Disabled   Press Enter to view plugin details.
+  Bravo Search        Available            · ChatGPT Marketplace · Search docs and tickets.
+  Hidden Repo Plugin  Available            · Repo Marketplace · Should not be shown in /plugins.
+  Starter             Available by default · ChatGPT Marketplace · Included by default.
 
   Press esc to close.
