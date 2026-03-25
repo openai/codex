@@ -1330,6 +1330,11 @@
           },
           "type": "object"
         },
+        "name": {
+          "default": null,
+          "description": "Legacy display-name field accepted for backward compatibility.",
+          "type": "string"
+        },
         "oauth_resource": {
           "default": null,
           "type": "string"
