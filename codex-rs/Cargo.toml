@@ -25,6 +25,7 @@ members = [
     "skills",
     "core",
     "hooks",
+    "instructions",
     "secrets",
     "exec",
     "exec-server",
@@ -122,6 +123,7 @@ codex-features = { path = "features" }
 codex-file-search = { path = "file-search" }
 codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
+codex-instructions = { path = "instructions" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }

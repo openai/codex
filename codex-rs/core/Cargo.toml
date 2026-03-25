@@ -42,6 +42,7 @@ codex-skills = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-hooks = { workspace = true }
+codex-instructions = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-artifacts = { workspace = true }
