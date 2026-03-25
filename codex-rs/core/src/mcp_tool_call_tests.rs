@@ -7,14 +7,26 @@ use crate::config::types::AppToolConfig;
 use crate::config::types::AppToolsConfig;
 use crate::config::types::AppsConfigToml;
 use codex_config::CONFIG_TOML_FILE;
+use codex_otel::SessionTelemetry;
+use codex_otel::metrics::MetricsClient;
+use codex_otel::metrics::MetricsConfig;
+use codex_protocol::ThreadId;
+use codex_protocol::protocol::SessionSource;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use opentelemetry::KeyValue;
+use opentelemetry_sdk::metrics::InMemoryMetricExporter;
+use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+use opentelemetry_sdk::metrics::data::Metric;
+use opentelemetry_sdk::metrics::data::MetricData;
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -62,6 +74,70 @@ fn prompt_options(
     McpToolApprovalPromptOptions {
         allow_session_remember,
         allow_persistent_approval,
+    }
+}
+
+fn test_session_telemetry() -> SessionTelemetry {
+    let exporter = InMemoryMetricExporter::default();
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory("test", "codex-core", env!("CARGO_PKG_VERSION"), exporter)
+            .with_runtime_reader(),
+    )
+    .expect("in-memory metrics client");
+    SessionTelemetry::new(
+        ThreadId::new(),
+        "gpt-5.1",
+        "gpt-5.1",
+        None,
+        None,
+        None,
+        "test_originator".to_string(),
+        false,
+        "tty".to_string(),
+        SessionSource::Cli,
+    )
+    .with_metrics_without_metadata_tags(metrics)
+}
+
+fn find_metric<'a>(resource_metrics: &'a ResourceMetrics, name: &str) -> &'a Metric {
+    for scope_metrics in resource_metrics.scope_metrics() {
+        for metric in scope_metrics.metrics() {
+            if metric.name() == name {
+                return metric;
+            }
+        }
+    }
+    panic!("metric {name} missing");
+}
+
+fn attributes_to_map<'a>(
+    attributes: impl Iterator<Item = &'a KeyValue>,
+) -> BTreeMap<String, String> {
+    attributes
+        .map(|kv| (kv.key.as_str().to_string(), kv.value.as_str().to_string()))
+        .collect()
+}
+
+fn duration_metric_point(
+    resource_metrics: &ResourceMetrics,
+    name: &str,
+) -> (BTreeMap<String, String>, f64, u64) {
+    let metric = find_metric(resource_metrics, name);
+    match metric.data() {
+        AggregatedMetrics::F64(data) => match data {
+            MetricData::Histogram(histogram) => {
+                let points: Vec<_> = histogram.data_points().collect();
+                assert_eq!(points.len(), 1);
+                let point = points[0];
+                (
+                    attributes_to_map(point.attributes()),
+                    point.sum(),
+                    point.count(),
+                )
+            }
+            _ => panic!("unexpected histogram aggregation"),
+        },
+        _ => panic!("unexpected metric data type"),
     }
 }
 
@@ -120,6 +196,77 @@ fn approval_question_text_prepends_safety_reason() {
             Some("This tool may contact an external system."),
         ),
         "Tool call needs your approval. Reason: This tool may contact an external system."
+    );
+}
+
+#[test]
+fn mcp_call_metric_tags_include_connector_metadata_when_available() {
+    let tags = mcp_call_metric_tags(
+        "ok",
+        "calendar_create_event",
+        Some("connector_calendar"),
+        Some("Google Calendar"),
+    );
+
+    assert_eq!(
+        tags,
+        vec![
+            ("status", "ok".to_string()),
+            ("tool_name", "calendar_create_event".to_string()),
+            ("connector_id", "connector_calendar".to_string()),
+            ("connector_name", "Google_Calendar".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn mcp_call_metric_tags_skip_missing_connector_metadata() {
+    let tags = mcp_call_metric_tags("error", "echo", None, Some(""));
+
+    assert_eq!(
+        tags,
+        vec![
+            ("status", "error".to_string()),
+            ("tool_name", "echo".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn mcp_call_duration_metric_records_connector_metadata_when_available() {
+    let session_telemetry = test_session_telemetry();
+    let tags = mcp_call_metric_tags(
+        "ok",
+        "calendar_create_event",
+        Some("connector_calendar"),
+        Some("Google Calendar"),
+    );
+    let tag_refs: Vec<(&str, &str)> = tags
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect();
+
+    session_telemetry.record_duration(
+        MCP_CALL_DURATION_METRIC,
+        Duration::from_millis(125),
+        &tag_refs,
+    );
+
+    let snapshot = session_telemetry
+        .snapshot_metrics()
+        .expect("runtime metrics snapshot");
+    let (attrs, sum, count) = duration_metric_point(&snapshot, MCP_CALL_DURATION_METRIC);
+
+    assert_eq!(count, 1);
+    assert_eq!(sum, 125.0);
+    assert_eq!(
+        attrs,
+        BTreeMap::from([
+            ("connector_id".to_string(), "connector_calendar".to_string()),
+            ("connector_name".to_string(), "Google_Calendar".to_string()),
+            ("status".to_string(), "ok".to_string()),
+            ("tool_name".to_string(), "calendar_create_event".to_string()),
+        ])
     );
 }
 
