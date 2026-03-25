@@ -39,6 +39,7 @@ pub use file_system::FileMetadata;
 pub use file_system::FileSystemResult;
 pub use file_system::ReadDirectoryEntry;
 pub use file_system::RemoveOptions;
+pub use local_file_system::LocalFileSystem;
 pub use process::ExecProcess;
 pub use process::ExecServerEvent;
 pub use protocol::ExecExitedNotification;
@@ -58,3 +59,5 @@ pub use server::DEFAULT_LISTEN_URL;
 pub use server::ExecServerListenUrlParseError;
 pub use server::run_main;
 pub use server::run_main_with_listen_url;
+
+pub const LOCAL_FS: LocalFileSystem = LocalFileSystem;

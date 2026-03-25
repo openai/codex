@@ -39,6 +39,11 @@ pub type FileSystemResult<T> = io::Result<T>;
 pub trait ExecutorFileSystem: Send + Sync {
     async fn read_file(&self, path: &AbsolutePathBuf) -> FileSystemResult<Vec<u8>>;
 
+    async fn read_to_string(&self, path: &AbsolutePathBuf) -> FileSystemResult<String> {
+        let bytes = self.read_file(path).await?;
+        String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+    }
+
     async fn write_file(&self, path: &AbsolutePathBuf, contents: Vec<u8>) -> FileSystemResult<()>;
 
     async fn create_directory(

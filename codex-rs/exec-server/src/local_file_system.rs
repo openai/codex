@@ -18,7 +18,7 @@ use crate::RemoveOptions;
 const MAX_READ_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Clone, Default)]
-pub(crate) struct LocalFileSystem;
+pub struct LocalFileSystem;
 
 #[async_trait]
 impl ExecutorFileSystem for LocalFileSystem {

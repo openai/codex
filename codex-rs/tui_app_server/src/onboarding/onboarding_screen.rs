@@ -4,6 +4,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_core::config::Config;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_git_utils::resolve_root_git_project_for_trust;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use crossterm::event::KeyCode;
@@ -77,7 +78,7 @@ pub(crate) struct OnboardingResult {
 }
 
 impl OnboardingScreen {
-    pub(crate) fn new(tui: &mut Tui, args: OnboardingScreenArgs) -> Self {
+    pub(crate) async fn new(tui: &mut Tui, args: OnboardingScreenArgs) -> Self {
         let OnboardingScreenArgs {
             show_trust_screen,
             show_login_screen,
@@ -124,15 +125,18 @@ impl OnboardingScreen {
             WindowsSandboxLevel::from_config(&config) == WindowsSandboxLevel::Disabled;
         #[cfg(not(target_os = "windows"))]
         let show_windows_create_sandbox_hint = false;
-        let highlighted = TrustDirectorySelection::Trust;
         if show_trust_screen {
+            let trust_target = resolve_root_git_project_for_trust(&cwd)
+                .await
+                .unwrap_or_else(|| cwd.clone());
             steps.push(Step::TrustDirectory(TrustDirectoryWidget {
-                cwd,
                 codex_home,
+                cwd,
+                trust_target,
                 show_windows_create_sandbox_hint,
                 should_quit: false,
                 selection: None,
-                highlighted,
+                highlighted: TrustDirectorySelection::Trust,
                 error: None,
             }))
         }
@@ -438,7 +442,7 @@ pub(crate) async fn run_onboarding_app(
 ) -> Result<OnboardingResult> {
     use tokio_stream::StreamExt;
 
-    let mut onboarding_screen = OnboardingScreen::new(tui, args);
+    let mut onboarding_screen = OnboardingScreen::new(tui, args).await;
     // One-time guard to fully clear the screen after ChatGPT login success message is shown
     let mut did_full_clear_after_success = false;
 

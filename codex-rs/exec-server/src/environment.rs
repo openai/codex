@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use crate::ExecServerClient;
 use crate::ExecServerError;
+use crate::LOCAL_FS;
 use crate::RemoteExecServerConnectArgs;
 use crate::file_system::ExecutorFileSystem;
-use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
 use crate::process::ExecProcess;
 use crate::remote_file_system::RemoteFileSystem;
@@ -101,7 +101,7 @@ impl Environment {
         if let Some(client) = self.remote_exec_server_client.clone() {
             Arc::new(RemoteFileSystem::new(client))
         } else {
-            Arc::new(LocalFileSystem)
+            Arc::new(LOCAL_FS)
         }
     }
 }

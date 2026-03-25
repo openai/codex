@@ -143,9 +143,9 @@ fn codex_apps_mcp_url_for_base_url_keeps_existing_paths() {
     );
 }
 
-#[test]
-fn codex_apps_mcp_url_uses_legacy_codex_apps_path() {
-    let mut config = crate::config::test_config();
+#[tokio::test]
+async fn codex_apps_mcp_url_uses_legacy_codex_apps_path() {
+    let mut config = crate::config::test_config().await;
     config.chatgpt_base_url = "https://chatgpt.com".to_string();
 
     assert_eq!(
@@ -154,9 +154,9 @@ fn codex_apps_mcp_url_uses_legacy_codex_apps_path() {
     );
 }
 
-#[test]
-fn codex_apps_server_config_uses_legacy_codex_apps_path() {
-    let mut config = crate::config::test_config();
+#[tokio::test]
+async fn codex_apps_server_config_uses_legacy_codex_apps_path() {
+    let mut config = crate::config::test_config().await;
     config.chatgpt_base_url = "https://chatgpt.com".to_string();
 
     let mut servers = with_codex_apps_mcp(HashMap::new(), false, None, &config);

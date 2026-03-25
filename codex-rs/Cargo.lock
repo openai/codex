@@ -2451,8 +2451,6 @@ version = "0.0.0"
 dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-plugins",
- "serde",
- "serde_json",
  "thiserror 2.0.18",
 ]
 

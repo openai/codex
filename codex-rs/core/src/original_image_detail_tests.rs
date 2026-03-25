@@ -5,9 +5,9 @@ use crate::models_manager::manager::ModelsManager;
 use codex_features::Features;
 use pretty_assertions::assert_eq;
 
-#[test]
-fn image_detail_original_feature_enables_explicit_original_without_force() {
-    let config = test_config();
+#[tokio::test]
+async fn image_detail_original_feature_enables_explicit_original_without_force() {
+    let config = test_config().await;
     let mut model_info =
         ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
     model_info.supports_image_detail_original = true;
@@ -25,9 +25,9 @@ fn image_detail_original_feature_enables_explicit_original_without_force() {
     );
 }
 
-#[test]
-fn explicit_original_is_dropped_without_feature_or_model_support() {
-    let config = test_config();
+#[tokio::test]
+async fn explicit_original_is_dropped_without_feature_or_model_support() {
+    let config = test_config().await;
     let mut model_info =
         ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
     model_info.supports_image_detail_original = true;
@@ -47,9 +47,9 @@ fn explicit_original_is_dropped_without_feature_or_model_support() {
     );
 }
 
-#[test]
-fn unsupported_non_original_detail_is_dropped() {
-    let config = test_config();
+#[tokio::test]
+async fn unsupported_non_original_detail_is_dropped() {
+    let config = test_config().await;
     let mut model_info =
         ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
     model_info.supports_image_detail_original = true;

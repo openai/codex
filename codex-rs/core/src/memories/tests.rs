@@ -468,7 +468,7 @@ mod phase2 {
     impl DispatchHarness {
         async fn new() -> Self {
             let codex_home = tempfile::tempdir().expect("create temp codex home");
-            let mut config = test_config();
+            let mut config = test_config().await;
             config.codex_home = codex_home.path().to_path_buf();
             config.cwd = config.codex_home.abs();
             let config = Arc::new(config);
@@ -881,7 +881,7 @@ mod phase2 {
     #[tokio::test]
     async fn dispatch_marks_job_for_retry_when_spawn_agent_fails() {
         let codex_home = tempfile::tempdir().expect("create temp codex home");
-        let mut config = test_config();
+        let mut config = test_config().await;
         config.codex_home = codex_home.path().to_path_buf();
         config.cwd = config.codex_home.abs();
         let config = Arc::new(config);
