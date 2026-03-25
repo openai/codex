@@ -2,6 +2,7 @@ use crate::protocol::SandboxPolicy;
 use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
+use codex_arg0::LINUX_SANDBOX_ARG0;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -48,12 +49,18 @@ where
         use_legacy_landlock,
         allow_network_for_proxy(/*enforce_managed_network*/ false),
     );
-    let arg0 = codex_linux_sandbox_exe
-        .as_ref()
-        .to_string_lossy()
-        .into_owned();
+    let codex_linux_sandbox_exe = codex_linux_sandbox_exe.as_ref();
+    let arg0 = if codex_linux_sandbox_exe
+        .file_name()
+        .and_then(|name| name.to_str())
+        == Some(LINUX_SANDBOX_ARG0)
+    {
+        codex_linux_sandbox_exe.to_string_lossy().into_owned()
+    } else {
+        LINUX_SANDBOX_ARG0.to_string()
+    };
     spawn_child_async(SpawnChildRequest {
-        program: codex_linux_sandbox_exe.as_ref().to_path_buf(),
+        program: codex_linux_sandbox_exe.to_path_buf(),
         args,
         arg0: Some(&arg0),
         cwd: command_cwd,
