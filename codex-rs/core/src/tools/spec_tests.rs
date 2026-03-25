@@ -2075,11 +2075,9 @@ fn tool_suggest_requires_apps_and_plugins_features() {
     for disabled_feature in [Feature::Apps, Feature::Plugins] {
         let mut features = Features::with_defaults();
         features.enable(Feature::ToolSuggest);
-        for feature in [Feature::Apps, Feature::Plugins] {
-            if feature != disabled_feature {
-                features.enable(feature);
-            }
-        }
+        features.enable(Feature::Apps);
+        features.enable(Feature::Plugins);
+        features.disable(disabled_feature);
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
