@@ -39,7 +39,6 @@ tokio = { workspace = true, features = [
 ] }
 tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 anyhow = { workspace = true }

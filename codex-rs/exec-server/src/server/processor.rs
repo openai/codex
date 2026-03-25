@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 use tracing::debug;
-use tracing::warn;
 
 use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
@@ -28,7 +27,7 @@ pub(crate) async fn run_connection(connection: JsonRpcConnection) {
             let json_message = match encode_server_message(message) {
                 Ok(json_message) => json_message,
                 Err(err) => {
-                    warn!("failed to serialize exec-server outbound message: {err}");
+                    let _ = err;
                     break;
                 }
             };
@@ -42,7 +41,6 @@ pub(crate) async fn run_connection(connection: JsonRpcConnection) {
     while let Some(event) = incoming_rx.recv().await {
         match event {
             JsonRpcConnectionEvent::MalformedMessage { reason } => {
-                warn!("ignoring malformed exec-server message: {reason}");
                 if outgoing_tx
                     .send(RpcServerOutboundMessage::Error {
                         request_id: codex_app_server_protocol::RequestId::Integer(-1),
@@ -78,29 +76,19 @@ pub(crate) async fn run_connection(connection: JsonRpcConnection) {
                 codex_app_server_protocol::JSONRPCMessage::Notification(notification) => {
                     let Some(route) = router.notification_route(notification.method.as_str())
                     else {
-                        warn!(
-                            "closing exec-server connection after unexpected notification: {}",
-                            notification.method
-                        );
                         break;
                     };
                     if let Err(err) = route(handler.clone(), notification).await {
-                        warn!("closing exec-server connection after protocol error: {err}");
+                        let _ = err;
                         break;
                     }
                 }
                 codex_app_server_protocol::JSONRPCMessage::Response(response) => {
-                    warn!(
-                        "closing exec-server connection after unexpected client response: {:?}",
-                        response.id
-                    );
+                    let _ = response;
                     break;
                 }
                 codex_app_server_protocol::JSONRPCMessage::Error(error) => {
-                    warn!(
-                        "closing exec-server connection after unexpected client error: {:?}",
-                        error.id
-                    );
+                    let _ = error;
                     break;
                 }
             },

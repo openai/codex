@@ -12,7 +12,6 @@ use codex_utils_pty::TerminalSize;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
-use tracing::warn;
 
 use crate::ExecBackend;
 use crate::ExecProcess;
@@ -123,10 +122,6 @@ impl LocalProcess {
                 })
                 .collect::<Vec<_>>()
         };
-        warn!(
-            remaining_processes = remaining.len(),
-            "exec-server shutting down local process handler"
-        );
         for process in remaining {
             process.session.terminate();
         }
@@ -138,7 +133,6 @@ impl LocalProcess {
                 "initialize may only be sent once per connection".to_string(),
             ));
         }
-        warn!("exec-server received initialize request");
         Ok(InitializeResponse {})
     }
 
@@ -147,7 +141,6 @@ impl LocalProcess {
             return Err("received `initialized` notification before `initialize`".into());
         }
         self.inner.initialized.store(true, Ordering::SeqCst);
-        warn!("exec-server received initialized notification");
         Ok(())
     }
 
@@ -174,14 +167,6 @@ impl LocalProcess {
     ) -> Result<(ExecResponse, mpsc::Receiver<ExecSessionEvent>), JSONRPCErrorError> {
         self.require_initialized_for("exec")?;
         let process_id = params.process_id.clone();
-        warn!(
-            process_id = %process_id,
-            tty = params.tty,
-            cwd = %params.cwd.display(),
-            argv = ?params.argv,
-            "exec-server starting process"
-        );
-
         let (program, args) = params
             .argv
             .split_first()
@@ -224,11 +209,6 @@ impl LocalProcess {
                 if matches!(process_map.get(&process_id), Some(ProcessEntry::Starting)) {
                     process_map.remove(&process_id);
                 }
-                warn!(
-                    process_id = %process_id,
-                    error = %err,
-                    "exec-server failed to spawn process"
-                );
                 return Err(internal_error(err.to_string()));
             }
         };
@@ -283,11 +263,6 @@ impl LocalProcess {
             output_notify,
         ));
 
-        warn!(
-            process_id = %process_id,
-            tty = params.tty,
-            "exec-server started process"
-        );
         Ok((ExecResponse { process_id }, session_events_rx))
     }
 
@@ -302,7 +277,7 @@ impl LocalProcess {
         params: ReadParams,
     ) -> Result<ReadResponse, JSONRPCErrorError> {
         self.require_initialized_for("exec")?;
-        let process_id = params.process_id.clone();
+        let _process_id = params.process_id.clone();
         let after_seq = params.after_seq.unwrap_or(0);
         let max_bytes = params.max_bytes.unwrap_or(usize::MAX);
         let wait = Duration::from_millis(params.wait_ms.unwrap_or(0));
@@ -356,23 +331,11 @@ impl LocalProcess {
                 || response.exited
                 || tokio::time::Instant::now() >= deadline
             {
-                let total_bytes: usize = response
+                let _total_bytes: usize = response
                     .chunks
                     .iter()
                     .map(|chunk| chunk.chunk.0.len())
                     .sum();
-                warn!(
-                    process_id = %process_id,
-                    after_seq,
-                    next_seq = response.next_seq,
-                    chunk_count = response.chunks.len(),
-                    total_bytes,
-                    exited = response.exited,
-                    exit_code = ?response.exit_code,
-                    wait_ms = params.wait_ms.unwrap_or(0),
-                    max_bytes,
-                    "exec-server returning process/read response"
-                );
                 return Ok(response);
             }
 
@@ -389,8 +352,8 @@ impl LocalProcess {
         params: WriteParams,
     ) -> Result<WriteResponse, JSONRPCErrorError> {
         self.require_initialized_for("exec")?;
-        let process_id = params.process_id.clone();
-        let input_bytes = params.chunk.0.len();
+        let _process_id = params.process_id.clone();
+        let _input_bytes = params.chunk.0.len();
         let writer_tx = {
             let process_map = self.inner.processes.lock().await;
             let process = process_map.get(&params.process_id).ok_or_else(|| {
@@ -416,11 +379,6 @@ impl LocalProcess {
             .await
             .map_err(|_| internal_error("failed to write to process stdin".to_string()))?;
 
-        warn!(
-            process_id = %process_id,
-            input_bytes,
-            "exec-server wrote stdin to process"
-        );
         Ok(WriteResponse { accepted: true })
     }
 
@@ -429,7 +387,7 @@ impl LocalProcess {
         params: TerminateParams,
     ) -> Result<TerminateResponse, JSONRPCErrorError> {
         self.require_initialized_for("exec")?;
-        let process_id = params.process_id.clone();
+        let _process_id = params.process_id.clone();
         let running = {
             let process_map = self.inner.processes.lock().await;
             match process_map.get(&params.process_id) {
@@ -444,11 +402,6 @@ impl LocalProcess {
             }
         };
 
-        warn!(
-            process_id = %process_id,
-            running,
-            "exec-server processed terminate request"
-        );
         Ok(TerminateResponse { running })
     }
 }
@@ -528,7 +481,7 @@ async fn stream_output(
     output_notify: Arc<Notify>,
 ) {
     while let Some(chunk) = receiver.recv().await {
-        let chunk_len = chunk.len();
+        let _chunk_len = chunk.len();
         let (events_tx, event, notification) = {
             let mut processes = inner.processes.lock().await;
             let Some(entry) = processes.get_mut(&process_id) else {
@@ -550,9 +503,6 @@ async fn stream_output(
                     break;
                 };
                 process.retained_bytes = process.retained_bytes.saturating_sub(evicted.chunk.len());
-                warn!(
-                    "retained output cap exceeded for process {process_id}; dropping oldest output"
-                );
             }
             let event = ExecSessionEvent::Output {
                 seq,
@@ -572,12 +522,6 @@ async fn stream_output(
         };
         output_notify.notify_waiters();
         let _ = events_tx.send(event).await;
-        warn!(
-            process_id = %process_id,
-            ?stream,
-            chunk_bytes = chunk_len,
-            "exec-server emitted output chunk"
-        );
         if inner
             .notifications
             .notify(crate::protocol::EXEC_OUTPUT_DELTA_METHOD, &notification)
@@ -598,11 +542,6 @@ async fn watch_exit(
     output_notify: Arc<Notify>,
 ) {
     let exit_code = exit_rx.await.unwrap_or(-1);
-    warn!(
-        process_id = %process_id,
-        exit_code,
-        "exec-server observed process exit"
-    );
     let notification = {
         let mut processes = inner.processes.lock().await;
         if let Some(ProcessEntry::Running(process)) = processes.get_mut(&process_id) {
@@ -644,11 +583,6 @@ async fn watch_exit(
         Some(ProcessEntry::Running(process)) if process.exit_code == Some(exit_code)
     ) {
         processes.remove(&process_id);
-        warn!(
-            process_id = %process_id,
-            exit_code,
-            "exec-server evicted exited process from retention cache"
-        );
     }
 }
 

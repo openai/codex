@@ -24,7 +24,6 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
 use tracing::debug;
-use tracing::warn;
 
 use crate::client_api::ExecServerClientConnectOptions;
 use crate::client_api::RemoteExecServerConnectArgs;
@@ -361,14 +360,12 @@ impl ExecServerClient {
                                 && let Err(err) =
                                     handle_server_notification(&inner, notification).await
                             {
-                                warn!("exec-server client closing after protocol error: {err}");
+                                let _ = err;
                                 return;
                             }
                         }
                         RpcClientEvent::Disconnected { reason } => {
-                            if let Some(reason) = reason {
-                                warn!("exec-server client transport disconnected: {reason}");
-                            }
+                            let _ = reason;
                             return;
                         }
                     }
