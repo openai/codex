@@ -2614,7 +2614,13 @@ impl App {
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
                 let sandbox_policy = app.config.permissions.sandbox_policy.get().clone();
-                Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
+                Self::spawn_world_writable_scan(
+                    cwd.to_path_buf(),
+                    env_map,
+                    logs_base_dir,
+                    sandbox_policy,
+                    tx,
+                );
             }
         }
 
@@ -3837,7 +3843,7 @@ impl App {
                         let logs_base_dir = self.config.codex_home.clone();
                         let sandbox_policy = self.config.permissions.sandbox_policy.get().clone();
                         Self::spawn_world_writable_scan(
-                            cwd,
+                            cwd.to_path_buf(),
                             env_map,
                             logs_base_dir,
                             sandbox_policy,
