@@ -1,14 +1,9 @@
 use super::*;
-use crate::config::ConfigBuilder;
-use crate::config::ConfigOverrides;
-use crate::config::ConfigToml;
-use crate::config::ProjectConfig;
-use crate::config_loader::ConfigLayerEntry;
-use crate::config_loader::ConfigLayerStack;
-use crate::config_loader::ConfigRequirements;
-use crate::config_loader::ConfigRequirementsToml;
 use codex_config::CONFIG_TOML_FILE;
-use codex_protocol::config_types::TrustLevel;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigRequirements;
+use codex_config::ConfigRequirementsToml;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::MacOsAutomationPermission;
 use codex_protocol::models::MacOsContactsPermission;
@@ -19,53 +14,109 @@ use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
-use std::collections::HashMap;
 use std::path::Path;
 use tempfile::TempDir;
 use toml::Value as TomlValue;
 
 const REPO_ROOT_CONFIG_DIR_NAME: &str = ".codex";
 
-async fn make_config(codex_home: &TempDir) -> Config {
+struct TestConfig {
+    cwd: PathBuf,
+    config_layer_stack: ConfigLayerStack,
+}
+
+async fn make_config(codex_home: &TempDir) -> TestConfig {
     make_config_for_cwd(codex_home, codex_home.path().to_path_buf()).await
 }
 
-async fn make_config_for_cwd(codex_home: &TempDir, cwd: PathBuf) -> Config {
-    let trust_root = cwd
-        .ancestors()
-        .find(|ancestor| ancestor.join(".git").exists())
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| cwd.clone());
-
-    fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        toml::to_string(&ConfigToml {
-            projects: Some(HashMap::from([(
-                trust_root.to_string_lossy().to_string(),
-                ProjectConfig {
-                    trust_level: Some(TrustLevel::Trusted),
-                },
-            )])),
-            ..Default::default()
-        })
-        .expect("serialize config"),
-    )
-    .unwrap();
-
-    let harness_overrides = ConfigOverrides {
-        cwd: Some(cwd),
-        ..Default::default()
-    };
-
-    ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .harness_overrides(harness_overrides)
-        .build()
-        .await
-        .expect("defaults for test should always succeed")
+fn config_file(path: PathBuf) -> AbsolutePathBuf {
+    AbsolutePathBuf::from_absolute_path(path).expect("config file path should be absolute")
 }
 
-fn load_skills_for_test(config: &Config) -> SkillLoadOutcome {
+fn project_layers_for_cwd(cwd: &Path) -> Vec<ConfigLayerEntry> {
+    let cwd_dir = if cwd.is_dir() {
+        cwd.to_path_buf()
+    } else {
+        cwd.parent()
+            .expect("file cwd should have a parent directory")
+            .to_path_buf()
+    };
+    let project_root = cwd_dir
+        .ancestors()
+        .find(|ancestor| ancestor.join(".git").exists())
+        .unwrap_or(cwd_dir.as_path())
+        .to_path_buf();
+
+    let mut layers = cwd_dir
+        .ancestors()
+        .scan(false, |done, dir| {
+            if *done {
+                None
+            } else {
+                if dir == project_root {
+                    *done = true;
+                }
+                Some(dir.to_path_buf())
+            }
+        })
+        .collect::<Vec<_>>();
+    layers.reverse();
+
+    layers
+        .into_iter()
+        .filter_map(|dir| {
+            let dot_codex = dir.join(REPO_ROOT_CONFIG_DIR_NAME);
+            dot_codex.is_dir().then(|| {
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::Project {
+                        dot_codex_folder: AbsolutePathBuf::from_absolute_path(dot_codex)
+                            .expect("project .codex path should be absolute"),
+                    },
+                    TomlValue::Table(toml::map::Map::new()),
+                )
+            })
+        })
+        .collect()
+}
+
+async fn make_config_for_cwd(codex_home: &TempDir, cwd: PathBuf) -> TestConfig {
+    let user_config_path = codex_home.path().join(CONFIG_TOML_FILE);
+    let system_config_path = codex_home.path().join("etc/codex/config.toml");
+    fs::create_dir_all(
+        system_config_path
+            .parent()
+            .expect("system config path should have a parent"),
+    )
+    .expect("create fake system config dir");
+
+    let mut layers = vec![
+        ConfigLayerEntry::new(
+            ConfigLayerSource::System {
+                file: config_file(system_config_path),
+            },
+            TomlValue::Table(toml::map::Map::new()),
+        ),
+        ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: config_file(user_config_path),
+            },
+            TomlValue::Table(toml::map::Map::new()),
+        ),
+    ];
+    layers.extend(project_layers_for_cwd(&cwd));
+
+    TestConfig {
+        cwd,
+        config_layer_stack: ConfigLayerStack::new(
+            layers,
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )
+        .expect("valid config layer stack"),
+    }
+}
+
+fn load_skills_for_test(config: &TestConfig) -> SkillLoadOutcome {
     // Keep unit tests hermetic by never scanning the real `$HOME/.agents/skills`.
     super::load_skills_from_roots(super::skill_roots_with_home_dir(
         &config.config_layer_stack,

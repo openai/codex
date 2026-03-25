@@ -147,11 +147,12 @@ impl ToolHandler for UnifiedExecHandler {
                 let cwd = resolve_workdir_base_path(&arguments, context.turn.cwd.as_path())?;
                 let args: ExecCommandArgs =
                     parse_arguments_with_base_path(&arguments, cwd.as_path())?;
+                let workdir = context.turn.resolve_path(args.workdir.clone());
                 maybe_emit_implicit_skill_invocation(
                     session.as_ref(),
-                    turn.as_ref(),
+                    context.turn.as_ref(),
                     &args.cmd,
-                    args.workdir.as_deref(),
+                    &workdir,
                 )
                 .await;
                 let process_id = manager.allocate_process_id().await;

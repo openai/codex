@@ -1,15 +1,15 @@
 use super::*;
-use crate::config::ConfigBuilder;
-use crate::config::ConfigOverrides;
-use crate::config_loader::ConfigLayerEntry;
-use crate::config_loader::ConfigLayerStack;
-use crate::config_loader::ConfigRequirementsToml;
-use crate::plugins::PluginsManager;
 use crate::skills::SkillMetadata;
 use crate::skills::config_rules::resolve_disabled_skill_paths;
 use crate::skills::config_rules::skill_config_rules_from_stack;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::CONFIG_TOML_FILE;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigRequirementsToml;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -64,6 +64,77 @@ fn test_skill(name: &str, path: PathBuf) -> SkillMetadata {
     }
 }
 
+fn user_config_layer(codex_home: &TempDir, config_toml: &str) -> ConfigLayerEntry {
+    let config_path = AbsolutePathBuf::try_from(codex_home.path().join(CONFIG_TOML_FILE))
+        .expect("user config path should be absolute");
+    ConfigLayerEntry::new(
+        ConfigLayerSource::User { file: config_path },
+        toml::from_str(config_toml).expect("user layer toml"),
+    )
+}
+
+fn config_stack(codex_home: &TempDir, user_config_toml: &str) -> ConfigLayerStack {
+    ConfigLayerStack::new(
+        vec![user_config_layer(codex_home, user_config_toml)],
+        Default::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid config layer stack")
+}
+
+fn config_stack_with_session_flags(
+    codex_home: &TempDir,
+    user_config_toml: &str,
+    session_flags_toml: &str,
+) -> ConfigLayerStack {
+    ConfigLayerStack::new(
+        vec![
+            user_config_layer(codex_home, user_config_toml),
+            ConfigLayerEntry::new(
+                ConfigLayerSource::SessionFlags,
+                toml::from_str(session_flags_toml).expect("session layer toml"),
+            ),
+        ],
+        Default::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid config layer stack")
+}
+
+fn path_toggle_config(path: &std::path::Path, enabled: bool) -> String {
+    format!(
+        r#"[[skills.config]]
+path = "{}"
+enabled = {enabled}
+"#,
+        path.display()
+    )
+}
+
+fn name_toggle_config(name: &str, enabled: bool) -> String {
+    format!(
+        r#"[[skills.config]]
+name = "{name}"
+enabled = {enabled}
+"#
+    )
+}
+
+fn skills_for_config_with_stack(
+    skills_manager: &SkillsManager,
+    cwd: &TempDir,
+    config_layer_stack: &ConfigLayerStack,
+    effective_skill_roots: &[PathBuf],
+) -> SkillLoadOutcome {
+    let skills_input = SkillsLoadInput::new(
+        cwd.path().to_path_buf(),
+        effective_skill_roots.to_vec(),
+        config_layer_stack.clone(),
+        bundled_skills_enabled_from_stack(config_layer_stack),
+    );
+    skills_manager.skills_for_config(&skills_input)
+}
+
 #[test]
 fn new_with_disabled_bundled_skills_removes_stale_cached_system_skills() {
     let codex_home = tempfile::tempdir().expect("tempdir");
@@ -72,9 +143,7 @@ fn new_with_disabled_bundled_skills_removes_stale_cached_system_skills() {
     fs::write(stale_system_skill_dir.join("SKILL.md"), "# stale\n")
         .expect("write stale system skill");
 
-    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
-    let _skills_manager =
-        SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager, false);
+    let _skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), false);
 
     assert!(
         !codex_home.path().join("skills/.system").exists(),
@@ -86,22 +155,11 @@ fn new_with_disabled_bundled_skills_removes_stale_cached_system_skills() {
 async fn skills_for_config_reuses_cache_for_same_effective_config() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");
-
-    let cfg = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .harness_overrides(ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            ..Default::default()
-        })
-        .build()
-        .await
-        .expect("defaults for test should always succeed");
-
-    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
-    let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager, true);
+    let config_layer_stack = config_stack(&codex_home, "");
+    let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), true);
 
     write_user_skill(&codex_home, "a", "skill-a", "from a");
-    let outcome1 = skills_manager.skills_for_config(&cfg);
+    let outcome1 = skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]);
     assert!(
         outcome1.skills.iter().any(|s| s.name == "skill-a"),
         "expected skill-a to be discovered"
@@ -110,7 +168,7 @@ async fn skills_for_config_reuses_cache_for_same_effective_config() {
     // Write a new skill after the first call; the second call should reuse the config-aware cache
     // entry because the effective skill config is unchanged.
     write_user_skill(&codex_home, "b", "skill-b", "from b");
-    let outcome2 = skills_manager.skills_for_config(&cfg);
+    let outcome2 = skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]);
     assert_eq!(outcome2.errors, outcome1.errors);
     assert_eq!(outcome2.skills, outcome1.skills);
 }
@@ -127,39 +185,23 @@ async fn skills_for_config_disables_plugin_skills_by_name() {
         "sample-search",
         "search sample data",
     );
-    fs::write(
-        codex_home.path().join(crate::config::CONFIG_TOML_FILE),
-        r#"[features]
-plugins = true
-
-[[skills.config]]
-name = "sample:sample-search"
-enabled = false
-
-[plugins."sample@test"]
-enabled = true
-"#,
-    )
-    .expect("write config");
-
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .harness_overrides(ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            ..Default::default()
-        })
-        .build()
-        .await
-        .expect("load config");
-
-    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
-    let skills_manager = SkillsManager::new(
-        codex_home.path().to_path_buf(),
-        plugins_manager,
-        config.bundled_skills_enabled(),
+    let config_layer_stack = config_stack(
+        &codex_home,
+        &name_toggle_config("sample:sample-search", false),
     );
+    let plugin_skill_root = skill_path
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("plugin skill should live under a skills root")
+        .to_path_buf();
+    let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), true);
 
-    let outcome = skills_manager.skills_for_config(&config);
+    let outcome = skills_for_config_with_stack(
+        &skills_manager,
+        &cwd,
+        &config_layer_stack,
+        &[plugin_skill_root],
+    );
     let skill = outcome
         .skills
         .iter()
@@ -182,27 +224,21 @@ async fn skills_for_cwd_reuses_cached_entry_even_when_entry_has_extra_roots() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");
     let extra_root = tempfile::tempdir().expect("tempdir");
-
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .harness_overrides(ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            ..Default::default()
-        })
-        .build()
-        .await
-        .expect("defaults for test should always succeed");
-
-    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
-    let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager, true);
-    let _ = skills_manager.skills_for_config(&config);
+    let config_layer_stack = config_stack(&codex_home, "");
+    let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), true);
+    let _ = skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]);
 
     write_user_skill(&extra_root, "x", "extra-skill", "from extra root");
     let extra_root_path = extra_root.path().to_path_buf();
+    let base_input = SkillsLoadInput::new(
+        cwd.path().to_path_buf(),
+        Vec::new(),
+        config_layer_stack.clone(),
+        bundled_skills_enabled_from_stack(&config_layer_stack),
+    );
     let outcome_with_extra = skills_manager
         .skills_for_cwd_with_extra_user_roots(
-            cwd.path(),
-            &config,
+            &base_input,
             true,
             std::slice::from_ref(&extra_root_path),
         )
@@ -222,9 +258,13 @@ async fn skills_for_cwd_reuses_cached_entry_even_when_entry_has_extra_roots() {
 
     // The cwd-only API returns the current cached entry for this cwd, even when that entry
     // was produced with extra roots.
-    let outcome_without_extra = skills_manager
-        .skills_for_cwd(cwd.path(), &config, false)
-        .await;
+    let base_input = SkillsLoadInput::new(
+        cwd.path().to_path_buf(),
+        Vec::new(),
+        config_layer_stack.clone(),
+        bundled_skills_enabled_from_stack(&config_layer_stack),
+    );
+    let outcome_without_extra = skills_manager.skills_for_cwd(&base_input, false).await;
     assert_eq!(outcome_without_extra.skills, outcome_with_extra.skills);
     assert_eq!(outcome_without_extra.errors, outcome_with_extra.errors);
 }
@@ -240,29 +280,8 @@ async fn skills_for_config_excludes_bundled_skills_when_disabled_in_config() {
         "---\nname: bundled-skill\ndescription: from bundled root\n---\n\n# Body\n",
     )
     .expect("write bundled skill");
-
-    fs::write(
-        codex_home.path().join(crate::config::CONFIG_TOML_FILE),
-        "[skills.bundled]\nenabled = false\n",
-    )
-    .expect("write config");
-
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .harness_overrides(ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            ..Default::default()
-        })
-        .build()
-        .await
-        .expect("load config");
-
-    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
-    let skills_manager = SkillsManager::new(
-        codex_home.path().to_path_buf(),
-        plugins_manager,
-        config.bundled_skills_enabled(),
-    );
+    let config_layer_stack = config_stack(&codex_home, "[skills.bundled]\nenabled = false\n");
+    let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), false);
 
     // Recreate the cached bundled skill after startup cleanup so this assertion exercises
     // root selection rather than relying on directory removal succeeding.
@@ -273,7 +292,7 @@ async fn skills_for_config_excludes_bundled_skills_when_disabled_in_config() {
     )
     .expect("rewrite bundled skill");
 
-    let outcome = skills_manager.skills_for_config(&config);
+    let outcome = skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]);
     assert!(
         outcome
             .skills
@@ -294,29 +313,23 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
     let cwd = tempfile::tempdir().expect("tempdir");
     let extra_root_a = tempfile::tempdir().expect("tempdir");
     let extra_root_b = tempfile::tempdir().expect("tempdir");
-
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .harness_overrides(ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            ..Default::default()
-        })
-        .build()
-        .await
-        .expect("defaults for test should always succeed");
-
-    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
-    let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager, true);
-    let _ = skills_manager.skills_for_config(&config);
+    let config_layer_stack = config_stack(&codex_home, "");
+    let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), true);
+    let _ = skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]);
 
     write_user_skill(&extra_root_a, "x", "extra-skill-a", "from extra root a");
     write_user_skill(&extra_root_b, "x", "extra-skill-b", "from extra root b");
 
     let extra_root_a_path = extra_root_a.path().to_path_buf();
+    let base_input = SkillsLoadInput::new(
+        cwd.path().to_path_buf(),
+        Vec::new(),
+        config_layer_stack.clone(),
+        bundled_skills_enabled_from_stack(&config_layer_stack),
+    );
     let outcome_a = skills_manager
         .skills_for_cwd_with_extra_user_roots(
-            cwd.path(),
-            &config,
+            &base_input,
             true,
             std::slice::from_ref(&extra_root_a_path),
         )
@@ -337,8 +350,7 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
     let extra_root_b_path = extra_root_b.path().to_path_buf();
     let outcome_b = skills_manager
         .skills_for_cwd_with_extra_user_roots(
-            cwd.path(),
-            &config,
+            &base_input,
             false,
             std::slice::from_ref(&extra_root_b_path),
         )
@@ -358,8 +370,7 @@ async fn skills_for_cwd_with_extra_roots_only_refreshes_on_force_reload() {
 
     let outcome_reloaded = skills_manager
         .skills_for_cwd_with_extra_user_roots(
-            cwd.path(),
-            &config,
+            &base_input,
             true,
             std::slice::from_ref(&extra_root_b_path),
         )
@@ -399,25 +410,11 @@ fn disabled_paths_for_skills_allows_session_flags_to_override_user_layer() {
         .expect("user config path should be absolute");
     let user_layer = ConfigLayerEntry::new(
         ConfigLayerSource::User { file: user_file },
-        toml::from_str(&format!(
-            r#"[[skills.config]]
-path = "{}"
-enabled = false
-"#,
-            skill_path.display()
-        ))
-        .expect("user layer toml"),
+        toml::from_str(&path_toggle_config(&skill_path, false)).expect("user layer toml"),
     );
     let session_layer = ConfigLayerEntry::new(
         ConfigLayerSource::SessionFlags,
-        toml::from_str(&format!(
-            r#"[[skills.config]]
-path = "{}"
-enabled = true
-"#,
-            skill_path.display()
-        ))
-        .expect("session layer toml"),
+        toml::from_str(&path_toggle_config(&skill_path, true)).expect("session layer toml"),
     );
     let stack = ConfigLayerStack::new(
         vec![user_layer, session_layer],
@@ -443,25 +440,11 @@ fn disabled_paths_for_skills_allows_session_flags_to_disable_user_enabled_skill(
         .expect("user config path should be absolute");
     let user_layer = ConfigLayerEntry::new(
         ConfigLayerSource::User { file: user_file },
-        toml::from_str(&format!(
-            r#"[[skills.config]]
-path = "{}"
-enabled = true
-"#,
-            skill_path.display()
-        ))
-        .expect("user layer toml"),
+        toml::from_str(&path_toggle_config(&skill_path, true)).expect("user layer toml"),
     );
     let session_layer = ConfigLayerEntry::new(
         ConfigLayerSource::SessionFlags,
-        toml::from_str(&format!(
-            r#"[[skills.config]]
-path = "{}"
-enabled = false
-"#,
-            skill_path.display()
-        ))
-        .expect("session layer toml"),
+        toml::from_str(&path_toggle_config(&skill_path, false)).expect("session layer toml"),
     );
     let stack = ConfigLayerStack::new(
         vec![user_layer, session_layer],
@@ -487,13 +470,7 @@ fn disabled_paths_for_skills_disables_matching_name_selectors() {
         .expect("user config path should be absolute");
     let user_layer = ConfigLayerEntry::new(
         ConfigLayerSource::User { file: user_file },
-        toml::from_str(
-            r#"[[skills.config]]
-name = "github:yeet"
-enabled = false
-"#,
-        )
-        .expect("user layer toml"),
+        toml::from_str(&name_toggle_config("github:yeet", false)).expect("user layer toml"),
     );
     let stack = ConfigLayerStack::new(
         vec![user_layer],
@@ -519,24 +496,11 @@ fn disabled_paths_for_skills_allows_name_selector_to_override_path_selector() {
         .expect("user config path should be absolute");
     let user_layer = ConfigLayerEntry::new(
         ConfigLayerSource::User { file: user_file },
-        toml::from_str(&format!(
-            r#"[[skills.config]]
-path = "{}"
-enabled = false
-"#,
-            skill_path.display()
-        ))
-        .expect("user layer toml"),
+        toml::from_str(&path_toggle_config(&skill_path, false)).expect("user layer toml"),
     );
     let session_layer = ConfigLayerEntry::new(
         ConfigLayerSource::SessionFlags,
-        toml::from_str(
-            r#"[[skills.config]]
-name = "github:yeet"
-enabled = true
-"#,
-        )
-        .expect("session layer toml"),
+        toml::from_str(&name_toggle_config("github:yeet", true)).expect("session layer toml"),
     );
     let stack = ConfigLayerStack::new(
         vec![user_layer, session_layer],
@@ -565,58 +529,20 @@ async fn skills_for_config_ignores_cwd_cache_when_session_flags_reenable_skill()
         "---\nname: demo-skill\ndescription: demo description\n---\n\n# Body\n",
     )
     .expect("write skill");
-    fs::write(
-        codex_home.path().join(crate::config::CONFIG_TOML_FILE),
-        format!(
-            r#"[[skills.config]]
-path = "{}"
-enabled = false
-"#,
-            skill_path.display()
-        ),
-    )
-    .expect("write config");
-
-    let parent_config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .harness_overrides(ConfigOverrides {
-            cwd: Some(cwd.path().to_path_buf()),
-            ..Default::default()
-        })
-        .build()
-        .await
-        .expect("load parent config");
-    let role_path = codex_home.path().join("enable-role.toml");
-    fs::write(
-        &role_path,
-        format!(
-            r#"[[skills.config]]
-path = "{}"
-enabled = true
-"#,
-            skill_path.display()
-        ),
-    )
-    .expect("write role config");
-    let mut child_config = parent_config.clone();
-    child_config.agent_roles.insert(
-        "custom".to_string(),
-        crate::config::AgentRoleConfig {
-            description: None,
-            config_file: Some(role_path),
-            nickname_candidates: None,
-        },
+    let disabled_skill_config = path_toggle_config(&skill_path, false);
+    let enabled_skill_config = path_toggle_config(&skill_path, true);
+    let parent_stack = config_stack(&codex_home, &disabled_skill_config);
+    let child_stack =
+        config_stack_with_session_flags(&codex_home, &disabled_skill_config, &enabled_skill_config);
+    let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), true);
+    let parent_input = SkillsLoadInput::new(
+        cwd.path().to_path_buf(),
+        Vec::new(),
+        parent_stack.clone(),
+        bundled_skills_enabled_from_stack(&parent_stack),
     );
-    crate::agent::role::apply_role_to_config(&mut child_config, Some("custom"))
-        .await
-        .expect("custom role should apply");
 
-    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
-    let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager, true);
-
-    let parent_outcome = skills_manager
-        .skills_for_cwd(cwd.path(), &parent_config, true)
-        .await;
+    let parent_outcome = skills_manager.skills_for_cwd(&parent_input, true).await;
     let parent_skill = parent_outcome
         .skills
         .iter()
@@ -624,7 +550,7 @@ enabled = true
         .expect("demo skill should be discovered");
     assert_eq!(parent_outcome.is_skill_enabled(parent_skill), false);
 
-    let child_outcome = skills_manager.skills_for_config(&child_config);
+    let child_outcome = skills_for_config_with_stack(&skills_manager, &cwd, &child_stack, &[]);
     let child_skill = child_outcome
         .skills
         .iter()

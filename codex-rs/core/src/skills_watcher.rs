@@ -15,7 +15,9 @@ use crate::file_watcher::Receiver;
 use crate::file_watcher::ThrottledWatchReceiver;
 use crate::file_watcher::WatchPath;
 use crate::file_watcher::WatchRegistration;
+use crate::plugins::PluginsManager;
 use crate::skills::SkillsManager;
+use crate::skills::skills_load_input_from_config;
 
 #[cfg(not(test))]
 const WATCHER_THROTTLE_INTERVAL: Duration = Duration::from_secs(10);
@@ -56,9 +58,13 @@ impl SkillsWatcher {
         &self,
         config: &Config,
         skills_manager: &SkillsManager,
+        plugins_manager: &PluginsManager,
     ) -> WatchRegistration {
+        let plugin_outcome = plugins_manager.plugins_for_config(config);
+        let effective_skill_roots = plugin_outcome.effective_skill_roots();
+        let skills_input = skills_load_input_from_config(config, effective_skill_roots);
         let roots = skills_manager
-            .skill_roots_for_config(config)
+            .skill_roots_for_config(&skills_input)
             .into_iter()
             .map(|root| WatchPath {
                 path: root.path,

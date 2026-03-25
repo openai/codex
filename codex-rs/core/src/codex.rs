@@ -37,6 +37,7 @@ use crate::realtime_conversation::handle_start as handle_realtime_conversation_s
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use crate::rollout::session_index;
 use crate::skills::render_skills_section;
+use crate::skills::skills_load_input_from_config;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -49,6 +50,10 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use chrono::Local;
 use chrono::Utc;
+use codex_analytics::AnalyticsEventsClient;
+use codex_analytics::AppInvocation;
+use codex_analytics::InvocationType;
+use codex_analytics::build_track_events_context;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_exec_server::Environment;
@@ -345,10 +350,6 @@ use crate::turn_timing::record_turn_ttft_metric;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
-use codex_analytics::AnalyticsEventsClient;
-use codex_analytics::AppInvocation;
-use codex_analytics::InvocationType;
-use codex_analytics::build_track_events_context;
 use codex_async_utils::OrCancelExt;
 use codex_git_utils::get_git_repo_root;
 use codex_otel::SessionTelemetry;
@@ -472,7 +473,10 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let loaded_skills = skills_manager.skills_for_config(&config);
+        let plugin_outcome = plugins_manager.plugins_for_config(&config);
+        let effective_skill_roots = plugin_outcome.effective_skill_roots();
+        let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
+        let loaded_skills = skills_manager.skills_for_config(&skills_input);
 
         for err in &loaded_skills.errors {
             error!(
@@ -2434,10 +2438,16 @@ impl Session {
                 &per_turn_config,
             )
             .await;
+        let plugin_outcome = self
+            .services
+            .plugins_manager
+            .plugins_for_config(&per_turn_config);
+        let effective_skill_roots = plugin_outcome.effective_skill_roots();
+        let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
         let skills_outcome = Arc::new(
             self.services
                 .skills_manager
-                .skills_for_config(&per_turn_config),
+                .skills_for_config(&skills_input),
         );
         let mut turn_context: TurnContext = Self::make_turn_context(
             self.conversation_id,
@@ -4494,6 +4504,12 @@ mod handlers {
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
+    use crate::config_loader::CloudRequirementsLoader;
+    use crate::config_loader::LoaderOverrides;
+    use crate::config_loader::load_config_layers_state;
+    use crate::skills::SkillError;
+    use codex_features::Feature;
+    use codex_utils_absolute_path::AbsolutePathBuf;
 
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
@@ -4929,11 +4945,64 @@ mod handlers {
         };
 
         let skills_manager = &sess.services.skills_manager;
+        let plugins_manager = &sess.services.plugins_manager;
         let config = sess.get_config().await;
+        let codex_home = sess.codex_home().await;
         let mut skills = Vec::new();
+        let empty_cli_overrides: &[(String, toml::Value)] = &[];
         for cwd in cwds {
+            let cwd_abs = match AbsolutePathBuf::try_from(cwd.as_path()) {
+                Ok(path) => path,
+                Err(err) => {
+                    let message = err.to_string();
+                    let cwd_for_entry = cwd.clone();
+                    skills.push(SkillsListEntry {
+                        cwd: cwd_for_entry.clone(),
+                        skills: Vec::new(),
+                        errors: super::errors_to_info(&[SkillError {
+                            path: cwd_for_entry,
+                            message,
+                        }]),
+                    });
+                    continue;
+                }
+            };
+            let config_layer_stack = match load_config_layers_state(
+                &codex_home,
+                Some(cwd_abs),
+                empty_cli_overrides,
+                LoaderOverrides::default(),
+                CloudRequirementsLoader::default(),
+            )
+            .await
+            {
+                Ok(config_layer_stack) => config_layer_stack,
+                Err(err) => {
+                    let message = err.to_string();
+                    let cwd_for_entry = cwd.clone();
+                    skills.push(SkillsListEntry {
+                        cwd: cwd_for_entry.clone(),
+                        skills: Vec::new(),
+                        errors: super::errors_to_info(&[SkillError {
+                            path: cwd_for_entry,
+                            message,
+                        }]),
+                    });
+                    continue;
+                }
+            };
+            let effective_skill_roots = plugins_manager.effective_skill_roots_for_layer_stack(
+                &config_layer_stack,
+                config.features.enabled(Feature::Plugins),
+            );
+            let skills_input = crate::skills::SkillsLoadInput::new(
+                cwd.clone(),
+                effective_skill_roots,
+                config_layer_stack,
+                config.bundled_skills_enabled(),
+            );
             let outcome = skills_manager
-                .skills_for_cwd(&cwd, config.as_ref(), force_reload)
+                .skills_for_cwd(&skills_input, force_reload)
                 .await;
             let errors = super::errors_to_info(&outcome.errors);
             let skills_metadata = super::skills_to_info(&outcome.skills, &outcome.disabled_paths);

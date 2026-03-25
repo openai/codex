@@ -288,11 +288,12 @@ impl ToolHandler for ShellCommandHandler {
         let cwd = resolve_workdir_base_path(&arguments, turn.cwd.as_path())?;
         let params: ShellCommandToolCallParams =
             parse_arguments_with_base_path(&arguments, cwd.as_path())?;
+        let workdir = turn.resolve_path(params.workdir.clone());
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
             turn.as_ref(),
             &params.command,
-            params.workdir.as_deref(),
+            &workdir,
         )
         .await;
         let prefix_rule = params.prefix_rule.clone();

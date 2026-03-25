@@ -1,9 +1,3 @@
-use crate::config_loader::ConfigLayerStack;
-use crate::config_loader::ConfigLayerStackOrdering;
-use crate::config_loader::default_project_root_markers;
-use crate::config_loader::merge_toml_values;
-use crate::config_loader::project_root_markers_from_config;
-use crate::plugins::plugin_namespace_for_skill_path;
 use crate::skills::model::SkillDependencies;
 use crate::skills::model::SkillError;
 use crate::skills::model::SkillInterface;
@@ -14,6 +8,11 @@ use crate::skills::model::SkillPolicy;
 use crate::skills::model::SkillToolDependency;
 use crate::skills::system::system_cache_root_dir;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigLayerStackOrdering;
+use codex_config::default_project_root_markers;
+use codex_config::merge_toml_values;
+use codex_config::project_root_markers_from_config;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::NetworkPermissions;
@@ -21,6 +20,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
+use codex_utils_plugins::plugin_namespace_for_skill_path;
 use dirs::home_dir;
 use dunce::canonicalize as canonicalize_path;
 use serde::Deserialize;
@@ -34,9 +34,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use toml::Value as TomlValue;
 use tracing::error;
-
-#[cfg(test)]
-use crate::config::Config;
 
 #[derive(Debug, Deserialize)]
 struct SkillFrontmatter {
@@ -176,12 +173,12 @@ impl fmt::Display for SkillParseError {
 
 impl Error for SkillParseError {}
 
-pub(crate) struct SkillRoot {
-    pub(crate) path: PathBuf,
-    pub(crate) scope: SkillScope,
+pub struct SkillRoot {
+    pub path: PathBuf,
+    pub scope: SkillScope,
 }
 
-pub(crate) fn load_skills_from_roots<I>(roots: I) -> SkillLoadOutcome
+pub fn load_skills_from_roots<I>(roots: I) -> SkillLoadOutcome
 where
     I: IntoIterator<Item = SkillRoot>,
 {

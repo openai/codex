@@ -5,6 +5,7 @@ mod injection;
 mod manager;
 mod manifest;
 mod marketplace;
+mod mentions;
 mod remote;
 mod render;
 mod startup_sync;
@@ -23,7 +24,6 @@ pub use codex_plugin::PluginTelemetryMetadata;
 pub type LoadedPlugin = codex_plugin::LoadedPlugin<McpServerConfig>;
 pub type PluginLoadOutcome = codex_plugin::PluginLoadOutcome<McpServerConfig>;
 
-pub(crate) use codex_plugin::plugin_namespace_for_skill_path;
 pub(crate) use discoverable::list_tool_suggest_discoverable_plugins;
 pub(crate) use injection::build_plugin_injections;
 pub use manager::ConfiguredMarketplace;
@@ -61,3 +61,9 @@ pub(crate) use startup_sync::curated_plugins_repo_path;
 pub(crate) use startup_sync::read_curated_plugins_sha;
 pub(crate) use startup_sync::sync_openai_plugins_repo;
 pub use toggles::collect_plugin_enabled_candidates;
+
+pub(crate) use mentions::build_connector_slug_counts;
+pub(crate) use mentions::build_skill_name_counts;
+pub(crate) use mentions::collect_explicit_app_ids;
+pub(crate) use mentions::collect_explicit_plugin_mentions;
+pub(crate) use mentions::collect_tool_mentions_from_messages;

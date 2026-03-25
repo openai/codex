@@ -42,6 +42,7 @@ use crate::skills::config_rules::resolve_disabled_skill_paths;
 use crate::skills::config_rules::skill_config_rules_from_stack;
 use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
+use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::MergeStrategy;
 use codex_features::Feature;
@@ -72,8 +73,6 @@ use tokio::sync::Mutex;
 use toml_edit::value;
 use tracing::info;
 use tracing::warn;
-
-use crate::AnalyticsEventsClient;
 
 const DEFAULT_SKILLS_DIR_NAME: &str = "skills";
 const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";

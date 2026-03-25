@@ -3,34 +3,32 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::ConfigLayerStack;
+use codex_config::ConfigLayerStackOrdering;
+use codex_config::SkillConfig;
+use codex_config::SkillsConfig;
 use tracing::warn;
 
-use crate::config::types::SkillConfig;
-use crate::config::types::SkillsConfig;
-use crate::config_loader::ConfigLayerStack;
-use crate::config_loader::ConfigLayerStackOrdering;
 use crate::skills::SkillMetadata;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) enum SkillConfigRuleSelector {
+pub enum SkillConfigRuleSelector {
     Name(String),
     Path(PathBuf),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct SkillConfigRule {
+pub struct SkillConfigRule {
     pub selector: SkillConfigRuleSelector,
     pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
-pub(crate) struct SkillConfigRules {
+pub struct SkillConfigRules {
     pub entries: Vec<SkillConfigRule>,
 }
 
-pub(crate) fn skill_config_rules_from_stack(
-    config_layer_stack: &ConfigLayerStack,
-) -> SkillConfigRules {
+pub fn skill_config_rules_from_stack(config_layer_stack: &ConfigLayerStack) -> SkillConfigRules {
     let mut entries = Vec::new();
     for layer in config_layer_stack.get_layers(
         ConfigLayerStackOrdering::LowestPrecedenceFirst,
@@ -71,7 +69,7 @@ pub(crate) fn skill_config_rules_from_stack(
     SkillConfigRules { entries }
 }
 
-pub(crate) fn resolve_disabled_skill_paths(
+pub fn resolve_disabled_skill_paths(
     skills: &[SkillMetadata],
     rules: &SkillConfigRules,
 ) -> HashSet<PathBuf> {

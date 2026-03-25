@@ -4,6 +4,7 @@ use crate::config::ConfigBuilder;
 use crate::config_loader::ConfigLayerStackOrdering;
 use crate::plugins::PluginsManager;
 use crate::skills::SkillsManager;
+use crate::skills::skills_load_input_from_config;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -629,8 +630,11 @@ enabled = false
         .expect("custom role should apply");
 
     let plugins_manager = Arc::new(PluginsManager::new(home.path().to_path_buf()));
-    let skills_manager = SkillsManager::new(home.path().to_path_buf(), plugins_manager, true);
-    let outcome = skills_manager.skills_for_config(&config);
+    let skills_manager = SkillsManager::new(home.path().to_path_buf(), true);
+    let plugin_outcome = plugins_manager.plugins_for_config(&config);
+    let effective_skill_roots = plugin_outcome.effective_skill_roots();
+    let skills_input = skills_load_input_from_config(&config, effective_skill_roots);
+    let outcome = skills_manager.skills_for_config(&skills_input);
     let skill = outcome
         .skills
         .iter()
