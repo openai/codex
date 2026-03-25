@@ -2183,6 +2183,10 @@ impl App {
                     .await?;
                 Ok(true)
             }
+            AppCommandView::ReloadUserConfig => {
+                app_server.reload_user_config().await?;
+                Ok(true)
+            }
             AppCommandView::OverrideTurnContext { .. } => Ok(true),
             _ => Ok(false),
         }
