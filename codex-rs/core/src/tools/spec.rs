@@ -388,7 +388,8 @@ impl ToolsConfig {
         let include_request_user_input = !matches!(session_source, SessionSource::SubAgent(_));
         let include_default_mode_request_user_input =
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
-        let include_search_tool = model_info.supports_search_tool;
+        let include_search_tool =
+            model_info.supports_search_tool && features.enabled(Feature::ToolSearch);
         let include_tool_suggest = include_search_tool
             && features.enabled(Feature::ToolSuggest)
             && features.enabled(Feature::Apps)
