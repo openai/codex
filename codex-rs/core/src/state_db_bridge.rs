@@ -16,10 +16,6 @@ pub use codex_state::LogEntry;
 
 use crate::config::Config;
 
-pub(crate) async fn init(config: &Config) -> Option<StateDbHandle> {
-    rollout_state_db::init(config).await
-}
-
 pub async fn get_state_db(config: &Config) -> Option<StateDbHandle> {
     rollout_state_db::get_state_db(config).await
 }
