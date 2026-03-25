@@ -20,6 +20,7 @@ use crate::ExecServerError;
 use crate::ExecSessionEvent;
 use crate::ProcessId;
 use crate::StartedExecProcess;
+use crate::process::SESSION_EVENT_CHANNEL_CAPACITY;
 use crate::protocol::EXEC_CLOSED_METHOD;
 use crate::protocol::ExecClosedNotification;
 use crate::protocol::ExecExitedNotification;
@@ -63,7 +64,7 @@ struct RunningProcess {
     next_seq: u64,
     exit_code: Option<i32>,
     output_notify: Arc<Notify>,
-    session_events_tx: mpsc::UnboundedSender<ExecSessionEvent>,
+    session_events_tx: mpsc::Sender<ExecSessionEvent>,
     open_streams: usize,
     closed: bool,
 }
@@ -170,7 +171,7 @@ impl LocalProcess {
     async fn start_process(
         &self,
         params: ExecParams,
-    ) -> Result<(ExecResponse, mpsc::UnboundedReceiver<ExecSessionEvent>), JSONRPCErrorError> {
+    ) -> Result<(ExecResponse, mpsc::Receiver<ExecSessionEvent>), JSONRPCErrorError> {
         self.require_initialized_for("exec")?;
         let process_id = params.process_id.clone();
         warn!(
@@ -233,7 +234,7 @@ impl LocalProcess {
         };
 
         let output_notify = Arc::new(Notify::new());
-        let (session_events_tx, session_events_rx) = mpsc::unbounded_channel();
+        let (session_events_tx, session_events_rx) = mpsc::channel(SESSION_EVENT_CHANNEL_CAPACITY);
         {
             let mut process_map = self.inner.processes.lock().await;
             process_map.insert(
@@ -528,7 +529,7 @@ async fn stream_output(
 ) {
     while let Some(chunk) = receiver.recv().await {
         let chunk_len = chunk.len();
-        let notification = {
+        let (events_tx, event, notification) = {
             let mut processes = inner.processes.lock().await;
             let Some(entry) = processes.get_mut(&process_id) else {
                 break;
@@ -558,21 +559,25 @@ async fn stream_output(
                 stream,
                 chunk: chunk.clone(),
             };
-            let _ = process.session_events_tx.send(event);
-            ExecOutputDeltaNotification {
-                process_id: process_id.clone(),
-                seq,
-                stream,
-                chunk: chunk.into(),
-            }
+            (
+                process.session_events_tx.clone(),
+                event,
+                ExecOutputDeltaNotification {
+                    process_id: process_id.clone(),
+                    seq,
+                    stream,
+                    chunk: chunk.into(),
+                },
+            )
         };
+        output_notify.notify_waiters();
+        let _ = events_tx.send(event).await;
         warn!(
             process_id = %process_id,
             ?stream,
             chunk_bytes = chunk_len,
             "exec-server emitted output chunk"
         );
-        output_notify.notify_waiters();
         if inner
             .notifications
             .notify(crate::protocol::EXEC_OUTPUT_DELTA_METHOD, &notification)
@@ -604,27 +609,30 @@ async fn watch_exit(
             let seq = process.next_seq;
             process.next_seq += 1;
             process.exit_code = Some(exit_code);
-            let _ = process
-                .session_events_tx
-                .send(ExecSessionEvent::Exited { seq, exit_code });
-            Some(ExecExitedNotification {
-                process_id: process_id.clone(),
-                seq,
-                exit_code,
-            })
+            Some((
+                process.session_events_tx.clone(),
+                ExecSessionEvent::Exited { seq, exit_code },
+                ExecExitedNotification {
+                    process_id: process_id.clone(),
+                    seq,
+                    exit_code,
+                },
+            ))
         } else {
             None
         }
     };
     output_notify.notify_waiters();
-    if let Some(notification) = notification
-        && inner
+    if let Some((events_tx, event, notification)) = notification {
+        let _ = events_tx.send(event).await;
+        if inner
             .notifications
             .notify(crate::protocol::EXEC_EXITED_METHOD, &notification)
             .await
             .is_err()
-    {
-        return;
+        {
+            return;
+        }
     }
 
     maybe_emit_closed(process_id.clone(), Arc::clone(&inner)).await;
@@ -673,18 +681,21 @@ async fn maybe_emit_closed(process_id: String, inner: Arc<Inner>) {
         process.closed = true;
         let seq = process.next_seq;
         process.next_seq += 1;
-        let _ = process
-            .session_events_tx
-            .send(ExecSessionEvent::Closed { seq });
-        Some(ExecClosedNotification {
-            process_id: process_id.clone(),
-            seq,
-        })
+        Some((
+            process.session_events_tx.clone(),
+            ExecSessionEvent::Closed { seq },
+            ExecClosedNotification {
+                process_id: process_id.clone(),
+                seq,
+            },
+        ))
     };
 
-    let Some(notification) = notification else {
+    let Some((events_tx, event, notification)) = notification else {
         return;
     };
+
+    let _ = events_tx.send(event).await;
 
     if inner
         .notifications

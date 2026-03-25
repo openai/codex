@@ -78,7 +78,7 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
 
 async fn collect_process_output_from_events(
     session: Arc<dyn ExecProcess>,
-    mut events: mpsc::UnboundedReceiver<ExecSessionEvent>,
+    mut events: mpsc::Receiver<ExecSessionEvent>,
 ) -> Result<(String, i32, bool)> {
     let mut output = String::new();
     let mut exit_code = None;

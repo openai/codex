@@ -9,6 +9,8 @@ use crate::ExecServerError;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::ExecParams;
 
+pub(crate) const SESSION_EVENT_CHANNEL_CAPACITY: usize = 2048;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecSessionEvent {
     Output {
@@ -30,7 +32,7 @@ pub struct ProcessId(String);
 
 pub struct StartedExecProcess {
     pub process: Arc<dyn ExecProcess>,
-    pub events: mpsc::UnboundedReceiver<ExecSessionEvent>,
+    pub events: mpsc::Receiver<ExecSessionEvent>,
 }
 
 impl ProcessId {
