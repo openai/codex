@@ -35,9 +35,9 @@ use crate::realtime_conversation::handle_audio as handle_realtime_conversation_a
 use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
 use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
+use crate::render_skills_section;
 use crate::rollout::session_index;
-use crate::skills::render_skills_section;
-use crate::skills::skills_load_input_from_config;
+use crate::skills_load_input_from_config;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
@@ -235,6 +235,14 @@ pub(crate) struct PreviousTurnSettings {
     pub(crate) realtime_active: Option<bool>,
 }
 
+use crate::SkillError;
+use crate::SkillInjections;
+use crate::SkillLoadOutcome;
+use crate::SkillMetadata;
+use crate::SkillsManager;
+use crate::build_skill_injections;
+use crate::collect_env_var_dependencies;
+use crate::collect_explicit_skill_mentions;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
 use crate::guardian::GuardianReviewSessionManager;
@@ -244,6 +252,9 @@ use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_user_prompt_submit_hooks;
+use crate::injection::ToolMentionKind;
+use crate::injection::app_id_from_path;
+use crate::injection::tool_kind_for_path;
 use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpManager;
@@ -301,6 +312,7 @@ use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WarningEvent;
+use crate::resolve_skill_dependencies_for_turn;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
@@ -309,18 +321,6 @@ use crate::rollout::policy::EventPersistenceMode;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
-use crate::skills::SkillError;
-use crate::skills::SkillInjections;
-use crate::skills::SkillLoadOutcome;
-use crate::skills::SkillMetadata;
-use crate::skills::SkillsManager;
-use crate::skills::build_skill_injections;
-use crate::skills::collect_env_var_dependencies;
-use crate::skills::collect_explicit_skill_mentions;
-use crate::skills::injection::ToolMentionKind;
-use crate::skills::injection::app_id_from_path;
-use crate::skills::injection::tool_kind_for_path;
-use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::skills_watcher::SkillsWatcher;
 use crate::skills_watcher::SkillsWatcherEvent;
 use crate::state::ActiveTurn;
@@ -4502,12 +4502,12 @@ mod handlers {
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::SteerInputError;
 
+    use crate::SkillError;
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
     use crate::config_loader::CloudRequirementsLoader;
     use crate::config_loader::LoaderOverrides;
     use crate::config_loader::load_config_layers_state;
-    use crate::skills::SkillError;
     use codex_features::Feature;
     use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -4995,7 +4995,7 @@ mod handlers {
                 &config_layer_stack,
                 config.features.enabled(Feature::Plugins),
             );
-            let skills_input = crate::skills::SkillsLoadInput::new(
+            let skills_input = crate::SkillsLoadInput::new(
                 cwd.clone(),
                 effective_skill_roots,
                 config_layer_stack,

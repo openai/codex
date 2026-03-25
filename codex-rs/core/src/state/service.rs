@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::AuthManager;
 use crate::RolloutRecorder;
+use crate::SkillsManager;
 use crate::agent::AgentControl;
 use crate::client::ModelClient;
 use crate::config::StartedNetworkProxy;
@@ -11,7 +12,6 @@ use crate::mcp::McpManager;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
 use crate::plugins::PluginsManager;
-use crate::skills::SkillsManager;
 use crate::skills_watcher::SkillsWatcher;
 use crate::state_db::StateDbHandle;
 use crate::tools::code_mode::CodeModeService;

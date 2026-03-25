@@ -4,13 +4,13 @@ use std::collections::HashSet;
 use codex_protocol::user_input::UserInput;
 
 use crate::connectors;
+use crate::injection::ToolMentionKind;
+use crate::injection::app_id_from_path;
+use crate::injection::extract_tool_mentions_with_sigil;
+use crate::injection::plugin_config_name_from_path;
+use crate::injection::tool_kind_for_path;
 use crate::mention_syntax::PLUGIN_TEXT_MENTION_SIGIL;
 use crate::mention_syntax::TOOL_MENTION_SIGIL;
-use crate::skills::injection::ToolMentionKind;
-use crate::skills::injection::app_id_from_path;
-use crate::skills::injection::extract_tool_mentions_with_sigil;
-use crate::skills::injection::plugin_config_name_from_path;
-use crate::skills::injection::tool_kind_for_path;
 
 use super::PluginCapabilitySummary;
 
@@ -101,7 +101,7 @@ pub(crate) fn collect_explicit_plugin_mentions(
         .collect()
 }
 
-pub(crate) use crate::skills::build_skill_name_counts;
+pub(crate) use crate::build_skill_name_counts;
 
 pub(crate) fn build_connector_slug_counts(
     connectors: &[connectors::AppInfo],

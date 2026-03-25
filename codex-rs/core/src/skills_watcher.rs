@@ -8,6 +8,7 @@ use tokio::runtime::Handle;
 use tokio::sync::broadcast;
 use tracing::warn;
 
+use crate::SkillsManager;
 use crate::config::Config;
 use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherSubscriber;
@@ -16,8 +17,7 @@ use crate::file_watcher::ThrottledWatchReceiver;
 use crate::file_watcher::WatchPath;
 use crate::file_watcher::WatchRegistration;
 use crate::plugins::PluginsManager;
-use crate::skills::SkillsManager;
-use crate::skills::skills_load_input_from_config;
+use crate::skills_load_input_from_config;
 
 #[cfg(not(test))]
 const WATCHER_THROTTLE_INTERVAL: Duration = Duration::from_secs(10);

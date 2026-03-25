@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use crate::skills::SkillMetadata;
-use crate::skills::build_skill_name_counts;
+use crate::SkillMetadata;
+use crate::build_skill_name_counts;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::InvocationType;
 use codex_analytics::SkillInvocation;

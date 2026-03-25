@@ -9,7 +9,7 @@ use codex_config::SkillConfig;
 use codex_config::SkillsConfig;
 use tracing::warn;
 
-use crate::skills::SkillMetadata;
+use crate::SkillMetadata;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SkillConfigRuleSelector {

@@ -1,4 +1,5 @@
 use super::ShellRequest;
+use crate::SkillMetadata;
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecCapturePolicy;
@@ -12,8 +13,7 @@ use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
-use crate::skills::SkillMetadata;
-use crate::skills::skills_load_input_from_config;
+use crate::skills_load_input_from_config;
 use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::sandboxing::SandboxAttempt;

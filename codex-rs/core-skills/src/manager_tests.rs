@@ -1,7 +1,7 @@
 use super::*;
-use crate::skills::SkillMetadata;
-use crate::skills::config_rules::resolve_disabled_skill_paths;
-use crate::skills::config_rules::skill_config_rules_from_stack;
+use crate::SkillMetadata;
+use crate::config_rules::resolve_disabled_skill_paths;
+use crate::config_rules::skill_config_rules_from_stack;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;

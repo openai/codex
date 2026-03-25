@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::skills::SkillLoadOutcome;
-use crate::skills::SkillMetadata;
+use crate::SkillLoadOutcome;
+use crate::SkillMetadata;
 
 pub(crate) fn build_implicit_skill_path_indexes(
     skills: Vec<SkillMetadata>,

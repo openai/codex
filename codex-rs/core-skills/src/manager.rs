@@ -11,16 +11,16 @@ use codex_protocol::protocol::SkillScope;
 use tracing::info;
 use tracing::warn;
 
-use crate::skills::SkillLoadOutcome;
-use crate::skills::build_implicit_skill_path_indexes;
-use crate::skills::config_rules::SkillConfigRules;
-use crate::skills::config_rules::resolve_disabled_skill_paths;
-use crate::skills::config_rules::skill_config_rules_from_stack;
-use crate::skills::loader::SkillRoot;
-use crate::skills::loader::load_skills_from_roots;
-use crate::skills::loader::skill_roots;
-use crate::skills::system::install_system_skills;
-use crate::skills::system::uninstall_system_skills;
+use crate::SkillLoadOutcome;
+use crate::build_implicit_skill_path_indexes;
+use crate::config_rules::SkillConfigRules;
+use crate::config_rules::resolve_disabled_skill_paths;
+use crate::config_rules::skill_config_rules_from_stack;
+use crate::loader::SkillRoot;
+use crate::loader::load_skills_from_roots;
+use crate::loader::skill_roots;
+use crate::system::install_system_skills;
+use crate::system::uninstall_system_skills;
 use codex_config::SkillsConfig;
 
 #[derive(Debug, Clone)]
@@ -171,7 +171,7 @@ impl SkillsManager {
         roots: Vec<SkillRoot>,
         skill_config_rules: &SkillConfigRules,
     ) -> SkillLoadOutcome {
-        let outcome = crate::skills::filter_skill_load_outcome_for_product(
+        let outcome = crate::filter_skill_load_outcome_for_product(
             load_skills_from_roots(roots),
             self.restriction_product,
         );

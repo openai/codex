@@ -1,4 +1,4 @@
-use crate::skills::SkillMetadata;
+use crate::SkillMetadata;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillDependencyInfo {
