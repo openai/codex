@@ -420,13 +420,6 @@ impl ChatWidget {
         } else {
             "Not installed yet."
         };
-        let description = app
-            .description
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
-
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Plugins".bold()));
         header.push(Line::from(
@@ -437,12 +430,7 @@ impl ChatWidget {
         ));
         header.push(Line::from(status_label.dim()));
 
-        let mut items = vec![SelectionItem {
-            name: app.name.clone(),
-            description,
-            is_disabled: true,
-            ..Default::default()
-        }];
+        let mut items = Vec::new();
 
         if let Some(install_url) = app.install_url.clone() {
             let install_label = if is_installed {
