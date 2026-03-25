@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
+use tokio::sync::Mutex as AsyncMutex;
 
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -1038,6 +1039,7 @@ pub struct AuthManager {
     enable_codex_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     forced_chatgpt_workspace_id: RwLock<Option<String>>,
+    refresh_lock: AsyncMutex<()>,
 }
 
 impl AuthManager {
@@ -1067,6 +1069,7 @@ impl AuthManager {
             enable_codex_api_key_env,
             auth_credentials_store_mode,
             forced_chatgpt_workspace_id: RwLock::new(None),
+            refresh_lock: AsyncMutex::new(()),
         }
     }
 
@@ -1084,6 +1087,7 @@ impl AuthManager {
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
+            refresh_lock: AsyncMutex::new(()),
         })
     }
 
@@ -1100,6 +1104,7 @@ impl AuthManager {
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
+            refresh_lock: AsyncMutex::new(()),
         })
     }
 
@@ -1307,6 +1312,11 @@ impl AuthManager {
     /// can assume that some other instance already refreshed it. If the persisted
     /// token is the same as the cached, then ask the token authority to refresh.
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
+        let _refresh_guard = self.refresh_lock.lock().await;
+        self.refresh_token_locked().await
+    }
+
+    async fn refresh_token_locked(&self) -> Result<(), RefreshTokenError> {
         let auth_before_reload = self.auth_cached();
         if auth_before_reload
             .as_ref()
@@ -1323,7 +1333,7 @@ impl AuthManager {
                 tracing::info!("Skipping token refresh because auth changed after guarded reload.");
                 Ok(())
             }
-            ReloadOutcome::ReloadedNoChange => self.refresh_token_from_authority().await,
+            ReloadOutcome::ReloadedNoChange => self.refresh_token_from_authority_locked().await,
             ReloadOutcome::Skipped => {
                 Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
                     RefreshTokenFailedReason::Other,
@@ -1338,6 +1348,11 @@ impl AuthManager {
     /// observe refreshed token. If the token refresh fails, returns the error to
     /// the caller.
     pub async fn refresh_token_from_authority(&self) -> Result<(), RefreshTokenError> {
+        let _refresh_guard = self.refresh_lock.lock().await;
+        self.refresh_token_from_authority_locked().await
+    }
+
+    async fn refresh_token_from_authority_locked(&self) -> Result<(), RefreshTokenError> {
         tracing::info!("Refreshing token");
 
         let auth = match self.auth_cached() {
