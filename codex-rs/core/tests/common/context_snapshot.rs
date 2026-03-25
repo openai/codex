@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 
 use crate::responses::ResponsesRequest;
 use codex_protocol::protocol::APPS_INSTRUCTIONS_OPEN_TAG;
+use codex_protocol::protocol::PLUGIN_MENTION_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 
@@ -280,6 +281,9 @@ fn canonicalize_snapshot_text(text: &str) -> String {
     }
     if text.starts_with(PLUGINS_INSTRUCTIONS_OPEN_TAG) {
         return "<PLUGINS_INSTRUCTIONS>".to_string();
+    }
+    if text.starts_with(PLUGIN_MENTION_INSTRUCTIONS_OPEN_TAG) {
+        return "<PLUGIN_MENTION_INSTRUCTIONS>".to_string();
     }
     if text.starts_with("# AGENTS.md instructions for ") {
         return "<AGENTS_MD>".to_string();

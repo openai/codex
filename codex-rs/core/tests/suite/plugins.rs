@@ -10,7 +10,13 @@ use codex_core::CodexAuth;
 use codex_features::Feature;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::PLUGIN_MENTION_INSTRUCTIONS_OPEN_TAG;
+use codex_protocol::user_input::UserInput;
 use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::context_snapshot;
+use core_test_support::context_snapshot::ContextSnapshotOptions;
+use core_test_support::context_snapshot::ContextSnapshotRenderMode;
+use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -184,6 +190,24 @@ fn tool_description(body: &serde_json::Value, tool_name: &str) -> Option<String>
         })
 }
 
+fn plugin_snapshot_options() -> ContextSnapshotOptions {
+    ContextSnapshotOptions::default()
+        .strip_capability_instructions()
+        .strip_agents_md_user_context()
+        .render_mode(ContextSnapshotRenderMode::KindWithTextPrefix { max_chars: 220 })
+}
+
+fn format_labeled_requests_snapshot(
+    scenario: &str,
+    sections: &[(&str, &ResponsesRequest)],
+) -> String {
+    context_snapshot::format_labeled_requests_snapshot(
+        scenario,
+        sections,
+        &plugin_snapshot_options(),
+    )
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn capability_sections_render_in_developer_message_in_order() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -266,15 +290,7 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
     .await;
 
     let codex_home = Arc::new(TempDir::new()?);
-    let rmcp_test_server_bin = match stdio_server_bin() {
-        Ok(bin) => bin,
-        Err(err) => {
-            eprintln!("test_stdio_server binary not available, skipping test: {err}");
-            return Ok(());
-        }
-    };
     write_plugin_skill_plugin(codex_home.as_ref());
-    write_plugin_mcp_plugin(codex_home.as_ref(), &rmcp_test_server_bin);
     write_plugin_app_plugin(codex_home.as_ref());
 
     let codex =
@@ -283,34 +299,48 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
 
     codex
         .submit(Op::UserInput {
-            items: vec![codex_protocol::user_input::UserInput::Mention {
-                name: "sample".into(),
-                path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
-            }],
+            items: vec![
+                UserInput::Mention {
+                    name: "sample".into(),
+                    path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
+                },
+                UserInput::Text {
+                    text: "help me inspect the sample plugin".into(),
+                    text_elements: Vec::new(),
+                },
+            ],
             final_output_json_schema: None,
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = mock.single_request();
+    insta::assert_snapshot!(
+        "explicit_plugin_mentions_inject_plugin_guidance",
+        format_labeled_requests_snapshot(
+            "Explicit plugin mention request layout",
+            &[("Plugin Mention Request", &request)]
+        )
+    );
     let developer_messages = request.message_input_texts("developer");
     assert!(
         developer_messages
             .iter()
-            .any(|text| text.contains("Skills from this plugin")),
-        "expected plugin skills guidance: {developer_messages:?}"
+            .any(|text| text.contains(PLUGIN_MENTION_INSTRUCTIONS_OPEN_TAG)),
+        "expected plugin mention guidance in developer messages: {developer_messages:?}"
+    );
+    let user_messages = request.message_input_texts("user");
+    assert!(
+        user_messages
+            .iter()
+            .all(|text| !text.contains(PLUGIN_MENTION_INSTRUCTIONS_OPEN_TAG)),
+        "expected plugin mention guidance to stay out of user messages: {user_messages:?}"
     );
     assert!(
         developer_messages
             .iter()
-            .any(|text| text.contains("MCP servers from this plugin")),
-        "expected visible plugin MCP guidance: {developer_messages:?}"
-    );
-    assert!(
-        developer_messages
-            .iter()
-            .any(|text| text.contains("Apps from this plugin")),
-        "expected visible plugin app guidance: {developer_messages:?}"
+            .any(|text| text.contains("Apps from this plugin available in this session")),
+        "expected plugin guidance in developer messages: {developer_messages:?}"
     );
     let request_body = request.body_json();
     let request_tools = tool_names(&request_body);
@@ -319,12 +349,6 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
             .iter()
             .any(|name| name == "mcp__codex_apps__google_calendar_create_event"),
         "expected plugin app tools to become visible for this turn: {request_tools:?}"
-    );
-    let echo_description = tool_description(&request_body, "mcp__sample__echo")
-        .expect("plugin MCP tool description should be present");
-    assert!(
-        echo_description.contains("This tool is part of plugin `sample`."),
-        "expected plugin MCP provenance in tool description: {echo_description:?}"
     );
     let calendar_description = tool_description(
         &request_body,

@@ -1,4 +1,6 @@
 use crate::plugins::PluginCapabilitySummary;
+use codex_protocol::protocol::PLUGIN_MENTION_INSTRUCTIONS_CLOSE_TAG;
+use codex_protocol::protocol::PLUGIN_MENTION_INSTRUCTIONS_OPEN_TAG;
 use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::PLUGINS_INSTRUCTIONS_OPEN_TAG;
 
@@ -39,7 +41,7 @@ pub(crate) fn render_plugins_section(plugins: &[PluginCapabilitySummary]) -> Opt
     ))
 }
 
-pub(crate) fn render_explicit_plugin_instructions(
+pub(crate) fn render_plugin_mention_instructions(
     plugin: &PluginCapabilitySummary,
     available_mcp_servers: &[String],
     available_apps: &[String],
@@ -84,7 +86,10 @@ pub(crate) fn render_explicit_plugin_instructions(
 
     lines.push("Use these plugin-associated capabilities to help solve the task.".to_string());
 
-    Some(lines.join("\n"))
+    let body = lines.join("\n");
+    Some(format!(
+        "{PLUGIN_MENTION_INSTRUCTIONS_OPEN_TAG}\n{body}\n{PLUGIN_MENTION_INSTRUCTIONS_CLOSE_TAG}"
+    ))
 }
 
 #[cfg(test)]

@@ -195,7 +195,9 @@ fn out_of_range_truncation_drops_pre_user_active_turn_prefix() {
 #[tokio::test]
 async fn ignores_session_prefix_messages_when_truncating() {
     let (session, turn_context) = make_session_and_context().await;
-    let mut items = session.build_initial_context(&turn_context).await;
+    let mut items = session
+        .build_initial_context(&turn_context, /*plugin_mention_instructions*/ None)
+        .await;
     items.push(user_msg("feature request"));
     items.push(assistant_msg("ack"));
     items.push(user_msg("second question"));

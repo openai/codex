@@ -955,6 +955,44 @@ fn drop_last_n_user_turns_trims_context_updates_above_rolled_back_turn() {
 }
 
 #[test]
+fn drop_last_n_user_turns_trims_explicit_plugin_guidance_above_rolled_back_turn() {
+    let items = vec![
+        assistant_msg("session prefix item"),
+        user_input_text_msg("turn 1 user"),
+        assistant_msg("turn 1 assistant"),
+        developer_msg(
+            "<plugin_mention_instructions>\nCapabilities from the `sample` plugin:\n- Apps from this plugin available in this session: `Google Calendar`.\nUse these plugin-associated capabilities to help solve the task.\n</plugin_mention_instructions>",
+        ),
+        user_input_text_msg(
+            "<environment_context><cwd>PRETURN_CONTEXT_DIFF_CWD</cwd></environment_context>",
+        ),
+        user_input_text_msg("turn 2 user"),
+        assistant_msg("turn 2 assistant"),
+    ];
+
+    let modalities = default_input_modalities();
+    let mut history = create_history_with_items(items);
+    let reference_context_item = reference_context_item();
+    history.set_reference_context_item(Some(reference_context_item.clone()));
+    history.drop_last_n_user_turns(1);
+
+    assert_eq!(
+        history.clone().for_prompt(&modalities),
+        vec![
+            assistant_msg("session prefix item"),
+            user_input_text_msg("turn 1 user"),
+            assistant_msg("turn 1 assistant"),
+        ]
+    );
+    assert_eq!(
+        serde_json::to_value(history.reference_context_item())
+            .expect("serialize retained reference context item"),
+        serde_json::to_value(Some(reference_context_item))
+            .expect("serialize expected reference context item")
+    );
+}
+
+#[test]
 fn drop_last_n_user_turns_clears_reference_context_for_mixed_developer_context_bundles() {
     let items = vec![
         user_input_text_msg("turn 1 user"),

@@ -200,7 +200,12 @@ async fn run_compact_task_inner(
         initial_context_injection,
         InitialContextInjection::BeforeLastUserMessage
     ) {
-        let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
+        let initial_context = sess
+            .build_initial_context(
+                turn_context.as_ref(),
+                /*plugin_mention_instructions*/ None,
+            )
+            .await;
         new_history =
             insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);
     }
