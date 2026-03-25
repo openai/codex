@@ -1,4 +1,4 @@
-use crate::skills::model::SkillMetadata;
+use crate::model::SkillMetadata;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::SKILLS_INSTRUCTIONS_OPEN_TAG;
 

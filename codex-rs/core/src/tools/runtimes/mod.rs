@@ -4,9 +4,9 @@ Module: runtimes
 Concrete ToolRuntime implementations for specific tools. Each runtime stays
 small and focused and reuses the orchestrator for approvals + sandbox + retry.
 */
+use crate::SkillMetadata;
 use crate::path_utils;
 use crate::shell::Shell;
-use crate::skills::SkillMetadata;
 use crate::tools::sandboxing::ToolError;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::SandboxCommand;

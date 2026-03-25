@@ -2,26 +2,26 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use crate::instructions::SkillInstructions;
-use crate::mention_syntax::TOOL_MENTION_SIGIL;
-use crate::mentions::build_skill_name_counts;
-use crate::skills::SkillMetadata;
+use crate::SkillMetadata;
+use crate::build_skill_name_counts;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::InvocationType;
 use codex_analytics::SkillInvocation;
 use codex_analytics::TrackEventsContext;
+use codex_instructions::SkillInstructions;
 use codex_otel::SessionTelemetry;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
+use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
 use tokio::fs;
 
 #[derive(Debug, Default)]
-pub(crate) struct SkillInjections {
-    pub(crate) items: Vec<ResponseItem>,
-    pub(crate) warnings: Vec<String>,
+pub struct SkillInjections {
+    pub items: Vec<ResponseItem>,
+    pub warnings: Vec<String>,
 }
 
-pub(crate) async fn build_skill_injections(
+pub async fn build_skill_injections(
     mentioned_skills: &[SkillMetadata],
     otel: Option<&SessionTelemetry>,
     analytics_client: &AnalyticsEventsClient,
@@ -97,7 +97,7 @@ fn emit_skill_injected_metric(
 /// Complexity: `O(T + (N_s + N_t) * S)` time, `O(S + M)` space, where:
 /// `S` = number of skills, `T` = total text length, `N_s` = number of structured skill inputs,
 /// `N_t` = number of text inputs, `M` = max mentions parsed from a single text input.
-pub(crate) fn collect_explicit_skill_mentions(
+pub fn collect_explicit_skill_mentions(
     inputs: &[UserInput],
     skills: &[SkillMetadata],
     disabled_paths: &HashSet<PathBuf>,
@@ -159,7 +159,7 @@ struct SkillSelectionContext<'a> {
     connector_slug_counts: &'a HashMap<String, usize>,
 }
 
-pub(crate) struct ToolMentions<'a> {
+pub struct ToolMentions<'a> {
     names: HashSet<&'a str>,
     paths: HashSet<&'a str>,
     plain_names: HashSet<&'a str>,
@@ -170,17 +170,17 @@ impl<'a> ToolMentions<'a> {
         self.names.is_empty() && self.paths.is_empty()
     }
 
-    pub(crate) fn plain_names(&self) -> impl Iterator<Item = &'a str> + '_ {
+    pub fn plain_names(&self) -> impl Iterator<Item = &'a str> + '_ {
         self.plain_names.iter().copied()
     }
 
-    pub(crate) fn paths(&self) -> impl Iterator<Item = &'a str> + '_ {
+    pub fn paths(&self) -> impl Iterator<Item = &'a str> + '_ {
         self.paths.iter().copied()
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ToolMentionKind {
+pub enum ToolMentionKind {
     App,
     Mcp,
     Plugin,
@@ -194,7 +194,7 @@ const PLUGIN_PATH_PREFIX: &str = "plugin://";
 const SKILL_PATH_PREFIX: &str = "skill://";
 const SKILL_FILENAME: &str = "SKILL.md";
 
-pub(crate) fn tool_kind_for_path(path: &str) -> ToolMentionKind {
+pub fn tool_kind_for_path(path: &str) -> ToolMentionKind {
     if path.starts_with(APP_PATH_PREFIX) {
         ToolMentionKind::App
     } else if path.starts_with(MCP_PATH_PREFIX) {
@@ -213,12 +213,12 @@ fn is_skill_filename(path: &str) -> bool {
     file_name.eq_ignore_ascii_case(SKILL_FILENAME)
 }
 
-pub(crate) fn app_id_from_path(path: &str) -> Option<&str> {
+pub fn app_id_from_path(path: &str) -> Option<&str> {
     path.strip_prefix(APP_PATH_PREFIX)
         .filter(|value| !value.is_empty())
 }
 
-pub(crate) fn plugin_config_name_from_path(path: &str) -> Option<&str> {
+pub fn plugin_config_name_from_path(path: &str) -> Option<&str> {
     path.strip_prefix(PLUGIN_PATH_PREFIX)
         .filter(|value| !value.is_empty())
 }
@@ -232,11 +232,11 @@ pub(crate) fn normalize_skill_path(path: &str) -> &str {
 /// Supports explicit resource links in the form `[$tool-name](resource path)`. When a
 /// resource path is present, it is captured for exact path matching while also tracking
 /// the name for fallback matching.
-pub(crate) fn extract_tool_mentions(text: &str) -> ToolMentions<'_> {
+pub fn extract_tool_mentions(text: &str) -> ToolMentions<'_> {
     extract_tool_mentions_with_sigil(text, TOOL_MENTION_SIGIL)
 }
 
-pub(crate) fn extract_tool_mentions_with_sigil(text: &str, sigil: char) -> ToolMentions<'_> {
+pub fn extract_tool_mentions_with_sigil(text: &str, sigil: char) -> ToolMentions<'_> {
     let text_bytes = text.as_bytes();
     let mut mentioned_names: HashSet<&str> = HashSet::new();
     let mut mentioned_paths: HashSet<&str> = HashSet::new();

@@ -801,46 +801,15 @@ impl Notice {
     pub(crate) const TABLE_KEY: &'static str = "notice";
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct SkillConfig {
-    /// Path-based selector.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<AbsolutePathBuf>,
-    /// Name-based selector.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    pub enabled: bool,
-}
+pub use codex_config::BundledSkillsConfig;
+pub use codex_config::SkillConfig;
+pub use codex_config::SkillsConfig;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct PluginConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct SkillsConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bundled: Option<BundledSkillsConfig>,
-
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub config: Vec<SkillConfig>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct BundledSkillsConfig {
-    #[serde(default = "default_enabled")]
-    pub enabled: bool,
-}
-
-impl Default for BundledSkillsConfig {
-    fn default() -> Self {
-        Self { enabled: true }
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]

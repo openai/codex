@@ -2,6 +2,7 @@ use crate::AuthManager;
 use crate::CodexAuth;
 use crate::ModelProviderInfo;
 use crate::OPENAI_PROVIDER_ID;
+use crate::SkillsManager;
 use crate::agent::AgentControl;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnArgs;
@@ -22,7 +23,6 @@ use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::shell_snapshot::ShellSnapshot;
-use crate::skills::SkillsManager;
 use crate::skills_watcher::SkillsWatcher;
 use crate::skills_watcher::SkillsWatcherEvent;
 use crate::tasks::interrupted_turn_history_marker;
@@ -231,7 +231,6 @@ impl ThreadManager {
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_manager = Arc::new(SkillsManager::new_with_restriction_product(
             codex_home.clone(),
-            Arc::clone(&plugins_manager),
             config.bundled_skills_enabled(),
             restriction_product,
         ));
@@ -297,7 +296,6 @@ impl ThreadManager {
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_manager = Arc::new(SkillsManager::new_with_restriction_product(
             codex_home.clone(),
-            Arc::clone(&plugins_manager),
             /*bundled_skills_enabled*/ true,
             restriction_product,
         ));
@@ -835,9 +833,11 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
-        let watch_registration = self
-            .skills_watcher
-            .register_config(&config, self.skills_manager.as_ref());
+        let watch_registration = self.skills_watcher.register_config(
+            &config,
+            self.skills_manager.as_ref(),
+            self.plugins_manager.as_ref(),
+        );
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {

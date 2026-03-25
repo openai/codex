@@ -252,43 +252,88 @@ async fn verify_tool_suggestion_completed(
     auth: Option<&crate::CodexAuth>,
 ) -> bool {
     match tool {
-        DiscoverableTool::Connector(connector) => {
-            let manager = session.services.mcp_connection_manager.read().await;
-            match manager.hard_refresh_codex_apps_tools_cache().await {
-                Ok(mcp_tools) => {
-                    let accessible_connectors = connectors::with_app_enabled_state(
-                        connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
-                        &turn.config,
-                    );
-                    connectors::refresh_accessible_connectors_cache_from_mcp_tools(
-                        &turn.config,
-                        auth,
-                        &mcp_tools,
-                    );
-                    verified_connector_suggestion_completed(
-                        connector.id.as_str(),
-                        &accessible_connectors,
-                    )
-                }
-                Err(err) => {
-                    warn!(
-                        "failed to refresh codex apps tools cache after tool suggestion for {}: {err:#}",
-                        connector.id
-                    );
-                    false
-                }
-            }
-        }
+        DiscoverableTool::Connector(connector) => refresh_missing_suggested_connectors(
+            session,
+            turn,
+            auth,
+            std::slice::from_ref(&connector.id),
+            connector.id.as_str(),
+        )
+        .await
+        .is_some_and(|accessible_connectors| {
+            verified_connector_suggestion_completed(connector.id.as_str(), &accessible_connectors)
+        }),
         DiscoverableTool::Plugin(plugin) => {
             session.reload_user_config_layer().await;
             let config = session.get_config().await;
-            verified_plugin_suggestion_completed(
+            let completed = verified_plugin_suggestion_completed(
                 plugin.id.as_str(),
                 config.as_ref(),
                 session.services.plugins_manager.as_ref(),
+            );
+            let _ = refresh_missing_suggested_connectors(
+                session,
+                turn,
+                auth,
+                &plugin.app_connector_ids,
+                plugin.id.as_str(),
             )
+            .await;
+            completed
         }
     }
+}
+
+async fn refresh_missing_suggested_connectors(
+    session: &crate::codex::Session,
+    turn: &crate::codex::TurnContext,
+    auth: Option<&crate::CodexAuth>,
+    expected_connector_ids: &[String],
+    tool_id: &str,
+) -> Option<Vec<AppInfo>> {
+    if expected_connector_ids.is_empty() {
+        return Some(Vec::new());
+    }
+
+    let manager = session.services.mcp_connection_manager.read().await;
+    let mcp_tools = manager.list_all_tools().await;
+    let accessible_connectors = connectors::with_app_enabled_state(
+        connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+        &turn.config,
+    );
+    if all_suggested_connectors_picked_up(expected_connector_ids, &accessible_connectors) {
+        return Some(accessible_connectors);
+    }
+
+    match manager.hard_refresh_codex_apps_tools_cache().await {
+        Ok(mcp_tools) => {
+            let accessible_connectors = connectors::with_app_enabled_state(
+                connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+                &turn.config,
+            );
+            connectors::refresh_accessible_connectors_cache_from_mcp_tools(
+                &turn.config,
+                auth,
+                &mcp_tools,
+            );
+            Some(accessible_connectors)
+        }
+        Err(err) => {
+            warn!(
+                "failed to refresh codex apps tools cache after tool suggestion for {tool_id}: {err:#}"
+            );
+            None
+        }
+    }
+}
+
+fn all_suggested_connectors_picked_up(
+    expected_connector_ids: &[String],
+    accessible_connectors: &[AppInfo],
+) -> bool {
+    expected_connector_ids.iter().all(|connector_id| {
+        verified_connector_suggestion_completed(connector_id, accessible_connectors)
+    })
 }
 
 fn verified_connector_suggestion_completed(

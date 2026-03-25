@@ -6,9 +6,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::auth::CodexAuth;
-use crate::config::Config;
-use crate::default_client::build_reqwest_client;
+use codex_login::CodexAuth;
+use codex_login::default_client::build_reqwest_client;
 
 const REMOTE_SKILLS_API_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -88,13 +87,13 @@ struct RemoteSkill {
 }
 
 pub async fn list_remote_skills(
-    config: &Config,
+    chatgpt_base_url: String,
     auth: Option<&CodexAuth>,
     scope: RemoteSkillScope,
     product_surface: RemoteSkillProductSurface,
     enabled: Option<bool>,
 ) -> Result<Vec<RemoteSkillSummary>> {
-    let base_url = config.chatgpt_base_url.trim_end_matches('/');
+    let base_url = chatgpt_base_url.trim_end_matches('/');
     let auth = ensure_chatgpt_auth(auth)?;
 
     let url = format!("{base_url}/hazelnuts");
@@ -146,14 +145,15 @@ pub async fn list_remote_skills(
 }
 
 pub async fn export_remote_skill(
-    config: &Config,
+    chatgpt_base_url: String,
+    codex_home: PathBuf,
     auth: Option<&CodexAuth>,
     skill_id: &str,
 ) -> Result<RemoteSkillDownloadResult> {
     let auth = ensure_chatgpt_auth(auth)?;
 
     let client = build_reqwest_client();
-    let base_url = config.chatgpt_base_url.trim_end_matches('/');
+    let base_url = chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/hazelnuts/{skill_id}/export");
     let mut request = client.get(&url).timeout(REMOTE_SKILLS_API_TIMEOUT);
 
@@ -181,7 +181,7 @@ pub async fn export_remote_skill(
         anyhow::bail!("Downloaded remote skill payload is not a zip archive");
     }
 
-    let output_dir = config.codex_home.join("skills").join(skill_id);
+    let output_dir = codex_home.join("skills").join(skill_id);
     tokio::fs::create_dir_all(&output_dir)
         .await
         .context("Failed to create downloaded skills directory")?;

@@ -25,6 +25,7 @@ members = [
     "shell-escalation",
     "skills",
     "core",
+    "core-skills",
     "hooks",
     "instructions",
     "secrets",
@@ -119,6 +120,7 @@ codex-cloud-requirements = { path = "cloud-requirements" }
 codex-connectors = { path = "connectors" }
 codex-config = { path = "config" }
 codex-core = { path = "core" }
+codex-core-skills = { path = "core-skills" }
 codex-exec = { path = "exec" }
 codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
@@ -202,6 +204,7 @@ chrono = "0.4.43"
 clap = "4"
 clap_complete = "4"
 color-eyre = "0.6.3"
+constant_time_eq = "0.3.1"
 crossbeam-channel = "0.5.15"
 crossterm = "0.28.1"
 csv = "1.3.1"
@@ -220,6 +223,7 @@ flate2 = "1.1.4"
 futures = { version = "0.3", default-features = false }
 gethostname = "1.1.0"
 globset = "0.4"
+hmac = "0.12.1"
 http = "1.3.1"
 icu_decimal = "2.1"
 icu_locale_core = "2.1"
@@ -232,6 +236,7 @@ indexmap = "2.12.0"
 insta = "1.46.3"
 inventory = "0.3.19"
 itertools = "0.14.0"
+jsonwebtoken = "9.3.1"
 keyring = { version = "3.6", default-features = false }
 landlock = "0.4.4"
 lazy_static = "1"

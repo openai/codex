@@ -21,6 +21,7 @@ use crate::RequestResult;
 use crate::SHUTDOWN_TIMEOUT;
 use crate::TypedRequestError;
 use crate::request_method_name;
+use crate::server_notification_requires_delivery;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
@@ -854,11 +855,11 @@ async fn reject_if_server_request_dropped(
 
 fn event_requires_delivery(event: &AppServerEvent) -> bool {
     match event {
-        AppServerEvent::ServerNotification(ServerNotification::TurnCompleted(_)) => true,
+        AppServerEvent::ServerNotification(notification) => {
+            server_notification_requires_delivery(notification)
+        }
         AppServerEvent::Disconnected { .. } => true,
-        AppServerEvent::Lagged { .. }
-        | AppServerEvent::ServerNotification(_)
-        | AppServerEvent::ServerRequest(_) => false,
+        AppServerEvent::Lagged { .. } | AppServerEvent::ServerRequest(_) => false,
     }
 }
 
@@ -904,4 +905,41 @@ async fn write_jsonrpc_message(
                 "failed to write websocket message to `{websocket_url}`: {err}"
             ))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_requires_delivery_marks_transcript_and_disconnect_events() {
+        assert!(event_requires_delivery(
+            &AppServerEvent::ServerNotification(ServerNotification::AgentMessageDelta(
+                codex_app_server_protocol::AgentMessageDeltaNotification {
+                    thread_id: "thread".to_string(),
+                    turn_id: "turn".to_string(),
+                    item_id: "item".to_string(),
+                    delta: "hello".to_string(),
+                },
+            ),)
+        ));
+        assert!(event_requires_delivery(
+            &AppServerEvent::ServerNotification(ServerNotification::ItemCompleted(
+                codex_app_server_protocol::ItemCompletedNotification {
+                    thread_id: "thread".to_string(),
+                    turn_id: "turn".to_string(),
+                    item: codex_app_server_protocol::ThreadItem::Plan {
+                        id: "item".to_string(),
+                        text: "step".to_string(),
+                    },
+                }
+            ),)
+        ));
+        assert!(event_requires_delivery(&AppServerEvent::Disconnected {
+            message: "closed".to_string(),
+        }));
+        assert!(!event_requires_delivery(&AppServerEvent::Lagged {
+            skipped: 1
+        }));
+    }
 }

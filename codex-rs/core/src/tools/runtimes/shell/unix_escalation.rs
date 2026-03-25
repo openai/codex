@@ -1,4 +1,5 @@
 use super::ShellRequest;
+use crate::SkillMetadata;
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecCapturePolicy;
@@ -12,7 +13,7 @@ use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
-use crate::skills::SkillMetadata;
+use crate::skills_load_input_from_config;
 use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::sandboxing::SandboxAttempt;
@@ -487,11 +488,19 @@ impl CoreShellActionProvider {
     /// any skills.
     async fn find_skill(&self, program: &AbsolutePathBuf) -> Option<SkillMetadata> {
         let force_reload = false;
+        let turn_config = self.turn.config.as_ref();
+        let plugin_outcome = self
+            .session
+            .services
+            .plugins_manager
+            .plugins_for_config(turn_config);
+        let effective_skill_roots = plugin_outcome.effective_skill_roots();
+        let skills_input = skills_load_input_from_config(turn_config, effective_skill_roots);
         let skills_outcome = self
             .session
             .services
             .skills_manager
-            .skills_for_cwd(&self.turn.cwd, self.turn.config.as_ref(), force_reload)
+            .skills_for_cwd(&skills_input, force_reload)
             .await;
 
         let program_path = program.as_path();
