@@ -232,10 +232,6 @@ enum ResolveSandboxPoliciesError {
     PartialSplitPolicies,
     SplitPoliciesRequireDirectRuntimeEnforcement(String),
     FailedToDeriveLegacyPolicy(String),
-    MismatchedLegacyPolicy {
-        provided: SandboxPolicy,
-        derived: SandboxPolicy,
-    },
     MissingConfiguration,
 }
 
@@ -258,12 +254,6 @@ impl fmt::Display for ResolveSandboxPoliciesError {
                 write!(
                     f,
                     "failed to derive legacy sandbox policy from split policies: {err}"
-                )
-            }
-            Self::MismatchedLegacyPolicy { provided, derived } => {
-                write!(
-                    f,
-                    "legacy sandbox policy must match split sandbox policies: provided={provided:?}, derived={derived:?}"
                 )
             }
             Self::MissingConfiguration => write!(f, "missing sandbox policy configuration"),
@@ -311,9 +301,10 @@ fn resolve_sandbox_policies(
                 &derived_legacy_policy,
                 sandbox_policy_cwd,
             ) {
-                return Err(ResolveSandboxPoliciesError::MismatchedLegacyPolicy {
-                    provided: sandbox_policy,
-                    derived: derived_legacy_policy,
+                return Ok(EffectiveSandboxPolicies {
+                    sandbox_policy: derived_legacy_policy,
+                    file_system_sandbox_policy,
+                    network_sandbox_policy,
                 });
             }
             Ok(EffectiveSandboxPolicies {
@@ -488,14 +479,6 @@ fn apply_inner_command_argv0_for_launcher(
     supports_argv0: bool,
     argv0_fallback_command: String,
 ) {
-    if !supports_argv0 && let Ok(current_exe) = std::env::current_exe() {
-        let current_exe = current_exe.to_string_lossy();
-        if let Some(command) = argv.iter_mut().find(|arg| arg.as_str() == current_exe) {
-            *command = argv0_fallback_command;
-            return;
-        }
-    }
-
     let command_separator_index = argv
         .iter()
         .position(|arg| arg == "--")

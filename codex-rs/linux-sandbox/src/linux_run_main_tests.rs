@@ -107,6 +107,46 @@ fn rewrites_inner_command_path_when_bwrap_lacks_argv0() {
 }
 
 #[test]
+fn rewrites_bwrap_helper_command_not_nested_user_command_when_current_exe_appears_later() {
+    let nested_current_exe = std::env::current_exe()
+        .expect("current exe")
+        .to_string_lossy()
+        .into_owned();
+    let mut argv = vec![
+        "bwrap".to_string(),
+        "--".to_string(),
+        "/tmp/helper-symlink".to_string(),
+        "--sandbox-policy-cwd".to_string(),
+        "/tmp/cwd".to_string(),
+        "--".to_string(),
+        nested_current_exe.clone(),
+        "--codex-run-as-apply-patch".to_string(),
+        "patch".to_string(),
+    ];
+
+    apply_inner_command_argv0_for_launcher(
+        &mut argv,
+        false,
+        "/tmp/argv0-fallback-helper".to_string(),
+    );
+
+    assert_eq!(
+        argv,
+        vec![
+            "bwrap".to_string(),
+            "--".to_string(),
+            "/tmp/argv0-fallback-helper".to_string(),
+            "--sandbox-policy-cwd".to_string(),
+            "/tmp/cwd".to_string(),
+            "--".to_string(),
+            nested_current_exe,
+            "--codex-run-as-apply-patch".to_string(),
+            "patch".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn inserts_unshare_net_when_network_isolation_requested() {
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let argv = build_bwrap_argv(
@@ -337,21 +377,17 @@ fn resolve_sandbox_policies_rejects_partial_split_policies() {
 }
 
 #[test]
-fn resolve_sandbox_policies_rejects_mismatched_legacy_and_split_inputs() {
-    let err = resolve_sandbox_policies(
+fn resolve_sandbox_policies_uses_split_derived_legacy_policy_for_mismatched_legacy_and_split_inputs()
+ {
+    let resolved = resolve_sandbox_policies(
         Path::new("/tmp"),
         Some(SandboxPolicy::new_read_only_policy()),
         Some(FileSystemSandboxPolicy::unrestricted()),
         Some(NetworkSandboxPolicy::Enabled),
     )
-    .expect_err("mismatched legacy and split policies should fail");
-    assert!(
-        matches!(
-            err,
-            ResolveSandboxPoliciesError::MismatchedLegacyPolicy { .. }
-        ),
-        "{err}"
-    );
+    .expect("mismatched legacy and split policies should resolve from split policy");
+
+    assert_eq!(resolved.sandbox_policy, SandboxPolicy::DangerFullAccess);
 }
 
 #[test]
@@ -418,6 +454,49 @@ fn resolve_sandbox_policies_accepts_semantically_equivalent_workspace_write_inpu
     .expect("semantically equivalent legacy workspace-write policy should resolve");
 
     assert_eq!(resolved.sandbox_policy, sandbox_policy);
+    assert_eq!(
+        resolved.file_system_sandbox_policy,
+        file_system_sandbox_policy
+    );
+    assert_eq!(
+        resolved.network_sandbox_policy,
+        NetworkSandboxPolicy::Restricted
+    );
+}
+
+#[test]
+fn resolve_sandbox_policies_uses_split_derived_legacy_policy_when_provided_legacy_is_stale() {
+    let temp_dir = tempfile::TempDir::new().expect("tempdir");
+    let workspace = temp_dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let workspace = AbsolutePathBuf::from_absolute_path(&workspace).expect("absolute workspace");
+
+    let provided_legacy_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![workspace.clone()],
+        read_only_access: ReadOnlyAccess::FullAccess,
+        network_access: false,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: false,
+    };
+    let derived_legacy_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        read_only_access: ReadOnlyAccess::FullAccess,
+        network_access: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let file_system_sandbox_policy =
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy(&derived_legacy_policy, &workspace);
+
+    let resolved = resolve_sandbox_policies(
+        &workspace,
+        Some(provided_legacy_policy),
+        Some(file_system_sandbox_policy.clone()),
+        Some(NetworkSandboxPolicy::Restricted),
+    )
+    .expect("stale provided legacy policy should resolve from split policy");
+
+    assert_eq!(resolved.sandbox_policy, derived_legacy_policy);
     assert_eq!(
         resolved.file_system_sandbox_policy,
         file_system_sandbox_policy
