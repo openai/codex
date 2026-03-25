@@ -1,0 +1,17 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-utils-path"
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-utils-absolute-path = { workspace = true }
+dunce = { workspace = true }
+tempfile = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

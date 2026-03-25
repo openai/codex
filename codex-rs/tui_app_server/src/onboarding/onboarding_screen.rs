@@ -206,6 +206,14 @@ impl OnboardingScreen {
         self.should_exit
     }
 
+    fn cancel_auth_if_active(&self) {
+        for step in &self.steps {
+            if let Step::Auth(widget) = step {
+                widget.cancel_active_attempt();
+            }
+        }
+    }
+
     fn auth_widget_mut(&mut self) -> Option<&mut AuthModeWidget> {
         self.steps.iter_mut().find_map(|step| match step {
             Step::Auth(widget) => Some(widget),
@@ -270,6 +278,7 @@ impl KeyboardHandler for OnboardingScreen {
         };
         if should_quit {
             if self.is_auth_in_progress() {
+                self.cancel_auth_if_active();
                 // If the user cancels the auth menu, exit the app rather than
                 // leave the user at a prompt in an unauthed state.
                 self.should_exit = true;

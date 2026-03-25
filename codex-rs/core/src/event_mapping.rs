@@ -14,6 +14,8 @@ use codex_protocol::models::is_image_close_tag_text;
 use codex_protocol::models::is_image_open_tag_text;
 use codex_protocol::models::is_local_image_close_tag_text;
 use codex_protocol::models::is_local_image_open_tag_text;
+use codex_protocol::protocol::COLLABORATION_MODE_OPEN_TAG;
+use codex_protocol::protocol::REALTIME_CONVERSATION_OPEN_TAG;
 use codex_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
@@ -22,8 +24,46 @@ use crate::contextual_user_message::is_contextual_user_fragment;
 use crate::contextual_user_message::parse_visible_hook_prompt_message;
 use crate::web_search::web_search_action_detail;
 
+const CONTEXTUAL_DEVELOPER_PREFIXES: &[&str] = &[
+    "<permissions instructions>",
+    "<model_switch>",
+    COLLABORATION_MODE_OPEN_TAG,
+    REALTIME_CONVERSATION_OPEN_TAG,
+    "<personality_spec>",
+];
+
 pub(crate) fn is_contextual_user_message_content(message: &[ContentItem]) -> bool {
     message.iter().any(is_contextual_user_fragment)
+}
+
+/// Returns true when a developer message contains any rollback-trimmable contextual fragment.
+///
+/// `build_initial_context` can bundle these fragments together with persistent developer text in a
+/// single developer message, so callers that care about invalidating a stored reference baseline
+/// should pair this with `has_non_contextual_dev_message_content`.
+pub(crate) fn is_contextual_dev_message_content(message: &[ContentItem]) -> bool {
+    message.iter().any(is_contextual_dev_fragment)
+}
+
+/// Returns true when a developer message contains any fragment that is not part of the
+/// rollback-trimmable contextual prefix set.
+pub(crate) fn has_non_contextual_dev_message_content(message: &[ContentItem]) -> bool {
+    message
+        .iter()
+        .any(|content_item| !is_contextual_dev_fragment(content_item))
+}
+
+fn is_contextual_dev_fragment(content_item: &ContentItem) -> bool {
+    let ContentItem::InputText { text } = content_item else {
+        return false;
+    };
+
+    let trimmed = text.trim_start();
+    CONTEXTUAL_DEVELOPER_PREFIXES.iter().any(|prefix| {
+        trimmed
+            .get(..prefix.len())
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix))
+    })
 }
 
 fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {

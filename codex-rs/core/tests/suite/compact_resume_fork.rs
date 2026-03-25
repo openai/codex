@@ -530,8 +530,9 @@ async fn snapshot_rollback_past_compaction_replays_append_only_history() -> Resu
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 /// Scenario: rolling back a turn that introduced persistent pre-turn context
-/// diffs currently duplicates those context updates on the next request.
-async fn snapshot_rollback_followup_turn_duplicates_context_updates() -> Result<()> {
+/// diffs should trim those context updates so the next request includes them
+/// only once.
+async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
     if network_disabled() {
         println!("Skipping test because network is disabled in this sandbox");
         return Ok(());
@@ -610,14 +611,12 @@ async fn snapshot_rollback_followup_turn_duplicates_context_updates() -> Result<
     let requests = request_log.requests();
     assert_eq!(requests.len(), 3);
 
-    assert_eq!(
-        requests[1]
-            .message_input_texts("developer")
-            .iter()
-            .filter(|text| text.contains(ROLLED_BACK_DEV_INSTRUCTIONS))
-            .count(),
-        1
-    );
+    let before_rollback_developer_count = requests[1]
+        .message_input_texts("developer")
+        .iter()
+        .filter(|text| text.contains(ROLLED_BACK_DEV_INSTRUCTIONS))
+        .count();
+    assert_eq!(before_rollback_developer_count, 1);
     assert_eq!(
         requests[1]
             .message_input_texts("user")
@@ -626,14 +625,13 @@ async fn snapshot_rollback_followup_turn_duplicates_context_updates() -> Result<
             .count(),
         1
     );
-    assert_eq!(
-        requests[2]
-            .message_input_texts("developer")
-            .iter()
-            .filter(|text| text.contains(ROLLED_BACK_DEV_INSTRUCTIONS))
-            .count(),
-        2
-    );
+
+    let after_rollback_developer_count = requests[2]
+        .message_input_texts("developer")
+        .iter()
+        .filter(|text| text.contains(ROLLED_BACK_DEV_INSTRUCTIONS))
+        .count();
+    assert_eq!(after_rollback_developer_count, 1);
 
     let after_rollback_user_texts = requests[2].message_input_texts("user");
     assert_eq!(
@@ -641,7 +639,7 @@ async fn snapshot_rollback_followup_turn_duplicates_context_updates() -> Result<
             .iter()
             .filter(|text| text.contains(PRETURN_CONTEXT_DIFF_CWD))
             .count(),
-        2
+        1
     );
     assert_eq!(
         after_rollback_user_texts.last().map(String::as_str),
@@ -649,9 +647,9 @@ async fn snapshot_rollback_followup_turn_duplicates_context_updates() -> Result<
     );
 
     insta::assert_snapshot!(
-        "rollback_followup_turn_duplicates_context_updates",
+        "rollback_followup_turn_trims_context_updates",
         context_snapshot::format_labeled_requests_snapshot(
-            "rollback currently duplicates pre-turn override context updates on the follow-up request",
+            "rollback trims pre-turn override context updates before the follow-up request",
             &[
                 ("rolled-back turn request", &requests[1]),
                 ("follow-up request after rollback", &requests[2]),

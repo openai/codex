@@ -46,7 +46,6 @@ use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item;
-use crate::truncate::TruncationPolicy;
 use crate::turn_metadata::TurnMetadataState;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
@@ -117,6 +116,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_terminal_detection::user_agent;
+use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
 use codex_utils_stream_parser::ProposedPlanSegment;
@@ -235,7 +235,6 @@ pub(crate) struct PreviousTurnSettings {
 
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
-use crate::git_info::get_git_repo_root;
 use crate::guardian::GuardianReviewSessionManager;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
@@ -350,6 +349,7 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_async_utils::OrCancelExt;
+use codex_git_utils::get_git_repo_root;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_otel::metrics::names::THREAD_STARTED_METRIC;
@@ -1007,7 +1007,7 @@ impl TurnContext {
             user_instructions: self.user_instructions.clone(),
             developer_instructions: self.developer_instructions.clone(),
             final_output_json_schema: self.final_output_json_schema.clone(),
-            truncation_policy: Some(self.truncation_policy.into()),
+            truncation_policy: Some(self.truncation_policy),
         }
     }
 
@@ -1570,7 +1570,7 @@ impl Session {
         })?;
         let rollout_path = rollout_recorder
             .as_ref()
-            .map(|rec| rec.rollout_path.clone());
+            .map(|rec| rec.rollout_path().to_path_buf());
 
         let mut post_session_configured_events = Vec::<Event>::new();
 
@@ -2213,15 +2213,6 @@ impl Session {
                 // If persisting, persist all rollout items as-is (recorder filters)
                 if !rollout_items.is_empty() {
                     self.persist_rollout_items(&rollout_items).await;
-                }
-
-                // Append the current session's initial context after the reconstructed history.
-                let initial_context = self.build_initial_context(&turn_context).await;
-                self.record_conversation_items(&turn_context, &initial_context)
-                    .await;
-                {
-                    let mut state = self.state.lock().await;
-                    state.set_reference_context_item(Some(turn_context.to_turn_context_item()));
                 }
 
                 // Forked threads should remain file-backed immediately after startup.
@@ -3537,7 +3528,16 @@ impl Session {
             }
         }
         if turn_context.apps_enabled() {
-            developer_sections.push(render_apps_section());
+            let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
+            let accessible_and_enabled_connectors =
+                connectors::list_accessible_and_enabled_connectors_from_manager(
+                    &mcp_connection_manager,
+                    &turn_context.config,
+                )
+                .await;
+            if let Some(apps_section) = render_apps_section(&accessible_and_enabled_connectors) {
+                developer_sections.push(apps_section);
+            }
         }
         let implicit_skills = turn_context
             .turn_skills

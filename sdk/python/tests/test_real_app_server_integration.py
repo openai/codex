@@ -505,7 +505,7 @@ def test_real_examples_run_and_assert(
     out = result.stdout
 
     if folder == "01_quickstart_constructor":
-        assert "Status:" in out and "Text:" in out
+        assert "Server:" in out and "Items:" in out and "Text:" in out
         assert "Server: unknown" not in out
     elif folder == "02_turn_run":
         assert "thread_id:" in out and "turn_id:" in out and "status:" in out

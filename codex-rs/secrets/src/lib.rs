@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
+use codex_git_utils::get_git_repo_root;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
 use schemars::JsonSchema;
@@ -159,22 +160,6 @@ pub fn environment_id_from_cwd(cwd: &Path) -> String {
     let hex = format!("{digest:x}");
     let short = hex.get(..12).unwrap_or(hex.as_str());
     format!("cwd-{short}")
-}
-
-fn get_git_repo_root(base_dir: &Path) -> Option<PathBuf> {
-    let mut dir = base_dir.to_path_buf();
-
-    loop {
-        if dir.join(".git").exists() {
-            return Some(dir);
-        }
-
-        if !dir.pop() {
-            break;
-        }
-    }
-
-    None
 }
 
 pub(crate) fn compute_keyring_account(codex_home: &Path) -> String {
