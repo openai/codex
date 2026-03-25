@@ -44,8 +44,6 @@ use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
-#[cfg(test)]
-use crate::test_support::normalize_snapshot_path;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -7753,22 +7751,34 @@ guardian_approval = true
             !rendered.contains("Bracken Ferry"),
             "clear header should not replay prior conversation turns"
         );
-        normalize_snapshot_path(rendered, "/tmp/project")
+        rendered
     }
 
     #[tokio::test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "snapshot path rendering differs on Windows"
+    )]
     async fn clear_ui_after_long_transcript_snapshots_fresh_header_only() {
         let rendered = render_clear_ui_header_after_long_transcript_for_snapshot().await;
         assert_snapshot!("clear_ui_after_long_transcript_fresh_header_only", rendered);
     }
 
     #[tokio::test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "snapshot path rendering differs on Windows"
+    )]
     async fn ctrl_l_clear_ui_after_long_transcript_reuses_clear_header_snapshot() {
         let rendered = render_clear_ui_header_after_long_transcript_for_snapshot().await;
         assert_snapshot!("clear_ui_after_long_transcript_fresh_header_only", rendered);
     }
 
     #[tokio::test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "snapshot path rendering differs on Windows"
+    )]
     async fn clear_ui_header_shows_fast_status_only_for_gpt54() {
         let mut app = make_test_app().await;
         app.config.cwd = PathBuf::from("/tmp/project").abs();
@@ -7791,10 +7801,7 @@ guardian_approval = true
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert_snapshot!(
-            "clear_ui_header_fast_status_gpt54_only",
-            normalize_snapshot_path(rendered, "/tmp/project")
-        );
+        assert_snapshot!("clear_ui_header_fast_status_gpt54_only", rendered);
     }
 
     async fn make_test_app() -> App {

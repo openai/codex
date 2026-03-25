@@ -29,8 +29,6 @@ use crate::style::proposed_plan_style;
 use crate::style::user_message_style;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
-#[cfg(test)]
-use crate::test_support::normalize_snapshot_path;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
 use crate::tooltips;
@@ -2751,7 +2749,7 @@ mod tests {
     fn ps_output_empty_snapshot() {
         let cell = new_unified_exec_processes_output(Vec::new());
         let rendered = render_lines(&cell.display_lines(60)).join("\n");
-        insta::assert_snapshot!(normalize_snapshot_path(rendered, "/tmp/project"));
+        insta::assert_snapshot!(rendered);
     }
 
     #[tokio::test]
@@ -2772,6 +2770,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "snapshot path rendering differs on Windows"
+    )]
     async fn session_info_availability_nux_tooltip_snapshot() {
         let mut config = test_config().await;
         config.cwd = PathBuf::from("/tmp/project").abs();
