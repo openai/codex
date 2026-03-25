@@ -621,6 +621,10 @@ impl ThreadEventStore {
     fn active_turn_id(&self) -> Option<&str> {
         self.active_turn_id.as_deref()
     }
+
+    fn clear_active_turn_id(&mut self) {
+        self.active_turn_id = None;
+    }
 }
 
 #[derive(Debug)]
@@ -984,6 +988,13 @@ fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<App
         Some(AppServerCodexErrorInfo::ActiveTurnNotSteerable { .. })
     )
     .then_some(turn_error)
+}
+
+fn active_turn_missing_steer_error(error: &TypedRequestError) -> bool {
+    let TypedRequestError::Server { source, .. } = error else {
+        return false;
+    };
+    source.message == "no active turn to steer"
 }
 
 impl App {
@@ -2021,23 +2032,32 @@ impl App {
                 collaboration_mode,
                 personality,
             } => {
+                let mut should_start_turn = true;
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
                     match app_server
                         .turn_steer(thread_id, turn_id, items.to_vec())
                         .await
                     {
-                        Ok(_) => {}
+                        Ok(_) => return Ok(true),
                         Err(error) => {
                             if let Some(turn_error) = active_turn_not_steerable_turn_error(&error) {
                                 if !self.chat_widget.enqueue_rejected_steer() {
                                     self.chat_widget.add_error_message(turn_error.message);
                                 }
+                                return Ok(true);
+                            } else if active_turn_missing_steer_error(&error) {
+                                if let Some(channel) = self.thread_event_channels.get(&thread_id) {
+                                    let mut store = channel.store.lock().await;
+                                    store.clear_active_turn_id();
+                                }
+                                should_start_turn = true;
                             } else {
                                 return Err(error.into());
                             }
                         }
                     }
-                } else {
+                }
+                if should_start_turn {
                     app_server
                         .turn_start(
                             thread_id,
@@ -8044,6 +8064,17 @@ guardian_approval = true
     }
 
     #[test]
+    fn thread_event_store_clear_active_turn_id_resets_cached_turn() {
+        let mut store = ThreadEventStore::new(8);
+        let thread_id = ThreadId::new();
+        store.push_notification(turn_started_notification(thread_id, "turn-1"));
+
+        store.clear_active_turn_id();
+
+        assert_eq!(store.active_turn_id(), None);
+    }
+
+    #[test]
     fn thread_event_store_rebase_preserves_resolved_request_state() {
         let thread_id = ThreadId::new();
         let mut store = ThreadEventStore::new(8);
@@ -8271,6 +8302,21 @@ guardian_approval = true
             active_turn_not_steerable_turn_error(&error),
             Some(turn_error)
         );
+    }
+
+    #[test]
+    fn active_turn_missing_steer_error_detects_stale_turn_race() {
+        let error = TypedRequestError::Server {
+            method: "turn/steer".to_string(),
+            source: JSONRPCErrorError {
+                code: -32602,
+                message: "no active turn to steer".to_string(),
+                data: None,
+            },
+        };
+
+        assert!(active_turn_missing_steer_error(&error));
+        assert_eq!(active_turn_not_steerable_turn_error(&error), None);
     }
 
     #[test]
