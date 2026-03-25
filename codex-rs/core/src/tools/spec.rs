@@ -2151,54 +2151,6 @@ fn create_read_file_tool() -> ToolSpec {
     })
 }
 
-fn create_list_dir_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "dir_path".to_string(),
-            JsonSchema::String {
-                description: Some("Absolute path to the directory to list.".to_string()),
-            },
-        ),
-        (
-            "offset".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "The entry number to start listing from. Must be 1 or greater.".to_string(),
-                ),
-            },
-        ),
-        (
-            "limit".to_string(),
-            JsonSchema::Number {
-                description: Some("The maximum number of entries to return.".to_string()),
-            },
-        ),
-        (
-            "depth".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "The maximum directory depth to traverse. Must be 1 or greater.".to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "list_dir".to_string(),
-        description:
-            "Lists entries in a local directory with 1-indexed entry numbers and simple type labels."
-                .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["dir_path".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
 fn create_js_repl_tool() -> ToolSpec {
     // Keep JS input freeform, but block the most common malformed payload shapes
     // (JSON wrappers, quoted strings, and markdown fences) before they reach the
@@ -2700,7 +2652,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::JsReplHandler;
     use crate::tools::handlers::JsReplResetHandler;
-    use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
@@ -2987,21 +2938,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             config.code_mode_enabled,
         );
         builder.register_handler("read_file", read_file_handler);
-    }
-
-    if config
-        .experimental_supported_tools
-        .iter()
-        .any(|tool| tool == "list_dir")
-    {
-        let list_dir_handler = Arc::new(ListDirHandler);
-        push_tool_spec(
-            &mut builder,
-            create_list_dir_tool(),
-            /*supports_parallel_tool_calls*/ true,
-            config.code_mode_enabled,
-        );
-        builder.register_handler("list_dir", list_dir_handler);
     }
 
     if config
