@@ -174,13 +174,13 @@ where
 }
 
 fn linux_sandbox_exe_path(
-    path_entry: Option<&Arg0PathEntryGuard>,
+    path_entry_guard: Option<&Arg0PathEntryGuard>,
     current_exe: Option<PathBuf>,
 ) -> Option<PathBuf> {
     // Prefer the `codex-linux-sandbox` alias when available so callers can
     // re-exec through a path whose basename still triggers arg0 dispatch on
     // bubblewrap builds that do not support `--argv0`.
-    path_entry
+    path_entry_guard
         .and_then(|path_entry| path_entry.paths().codex_linux_sandbox_exe.clone())
         .or(current_exe)
 }
