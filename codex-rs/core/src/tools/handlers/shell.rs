@@ -17,6 +17,7 @@ use crate::shell::Shell;
 use crate::skills::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
@@ -24,10 +25,10 @@ use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
+use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
 use crate::tools::orchestrator::ToolOrchestrator;
-use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
@@ -53,12 +54,12 @@ pub struct ShellCommandHandler {
 }
 
 fn build_post_tool_use_payload(
-    result: &AnyToolResult,
+    call_id: &str,
+    payload: &ToolPayload,
+    result: &dyn ToolOutput,
     command: Option<String>,
 ) -> Option<PostToolUsePayload> {
-    let tool_response = result
-        .result
-        .post_tool_use_response(&result.call_id, &result.payload)?;
+    let tool_response = result.post_tool_use_response(call_id, payload)?;
     Some(PostToolUsePayload {
         command: command?,
         tool_response,
@@ -67,11 +68,9 @@ fn build_post_tool_use_payload(
 
 fn shell_payload_command(payload: &ToolPayload) -> Option<String> {
     match payload {
-        ToolPayload::Function { arguments } => {
-            serde_json::from_str::<ShellToolCallParams>(arguments)
-                .ok()
-                .map(|params| codex_shell_command::parse_command::shlex_join(&params.command))
-        }
+        ToolPayload::Function { arguments } => parse_arguments::<ShellToolCallParams>(arguments)
+            .ok()
+            .map(|params| codex_shell_command::parse_command::shlex_join(&params.command)),
         ToolPayload::LocalShell { params } => Some(codex_shell_command::parse_command::shlex_join(
             &params.command,
         )),
@@ -88,7 +87,7 @@ fn shell_command_payload_command(payload: &ToolPayload) -> Option<String> {
         return None;
     };
 
-    serde_json::from_str::<ShellCommandToolCallParams>(arguments)
+    parse_arguments::<ShellCommandToolCallParams>(arguments)
         .ok()
         .map(|params| params.command)
 }
@@ -231,8 +230,13 @@ impl ToolHandler for ShellHandler {
         shell_pre_tool_use_payload(&invocation.payload)
     }
 
-    fn post_tool_use_payload(&self, result: &AnyToolResult) -> Option<PostToolUsePayload> {
-        build_post_tool_use_payload(result, shell_payload_command(&result.payload))
+    fn post_tool_use_payload(
+        &self,
+        call_id: &str,
+        payload: &ToolPayload,
+        result: &dyn ToolOutput,
+    ) -> Option<PostToolUsePayload> {
+        build_post_tool_use_payload(call_id, payload, result, shell_payload_command(payload))
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -329,8 +333,18 @@ impl ToolHandler for ShellCommandHandler {
         shell_command_pre_tool_use_payload(&invocation.payload)
     }
 
-    fn post_tool_use_payload(&self, result: &AnyToolResult) -> Option<PostToolUsePayload> {
-        build_post_tool_use_payload(result, shell_command_payload_command(&result.payload))
+    fn post_tool_use_payload(
+        &self,
+        call_id: &str,
+        payload: &ToolPayload,
+        result: &dyn ToolOutput,
+    ) -> Option<PostToolUsePayload> {
+        build_post_tool_use_payload(
+            call_id,
+            payload,
+            result,
+            shell_command_payload_command(payload),
+        )
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -557,18 +571,12 @@ impl ShellHandler {
             &call_id,
             /*turn_diff_tracker*/ None,
         );
-        let (content, post_tool_use_response) = match out {
-            Ok(output) => {
-                let post_tool_use_response =
-                    crate::tools::format_exec_output_str(&output, turn.truncation_policy);
-                let content = emitter.finish(event_ctx, Ok(output)).await?;
-                (content, Some(JsonValue::String(post_tool_use_response)))
-            }
-            Err(error) => {
-                let content = emitter.finish(event_ctx, Err(error)).await?;
-                (content, None)
-            }
-        };
+        let post_tool_use_response = out
+            .as_ref()
+            .ok()
+            .map(|output| crate::tools::format_exec_output_str(output, turn.truncation_policy))
+            .map(JsonValue::String);
+        let content = emitter.finish(event_ctx, out).await?;
         Ok(FunctionToolOutput {
             body: vec![
                 codex_protocol::models::FunctionCallOutputContentItem::InputText { text: content },

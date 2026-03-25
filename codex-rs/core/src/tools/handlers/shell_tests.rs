@@ -16,7 +16,6 @@ use crate::shell_snapshot::ShellSnapshot;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::ShellCommandHandler;
-use crate::tools::registry::AnyToolResult;
 use serde_json::json;
 use tokio::sync::watch;
 
@@ -232,18 +231,19 @@ fn build_post_tool_use_payload_uses_tool_output_wire_value() {
     let payload = ToolPayload::Function {
         arguments: json!({ "command": "printf shell command" }).to_string(),
     };
-    let result = AnyToolResult {
-        call_id: "call-42".to_string(),
-        payload,
-        result: Box::new(FunctionToolOutput {
-            body: vec![],
-            success: Some(true),
-            post_tool_use_response: Some(json!("shell output")),
-        }),
+    let output = FunctionToolOutput {
+        body: vec![],
+        success: Some(true),
+        post_tool_use_response: Some(json!("shell output")),
     };
 
     assert_eq!(
-        build_post_tool_use_payload(&result, Some("printf shell command".to_string()),),
+        build_post_tool_use_payload(
+            "call-42",
+            &payload,
+            &output,
+            Some("printf shell command".to_string()),
+        ),
         Some(crate::tools::registry::PostToolUsePayload {
             command: "printf shell command".to_string(),
             tool_response: json!("shell output"),

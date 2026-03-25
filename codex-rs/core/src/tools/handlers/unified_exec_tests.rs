@@ -13,7 +13,6 @@ use tempfile::tempdir;
 
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::context::ToolPayload;
-use crate::tools::registry::AnyToolResult;
 
 #[test]
 fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> {
@@ -218,28 +217,24 @@ fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_shot_co
     let payload = ToolPayload::Function {
         arguments: serde_json::json!({ "cmd": "echo three", "tty": false }).to_string(),
     };
-    let result = AnyToolResult {
-        call_id: "call-43".to_string(),
-        payload,
-        result: Box::new(ExecCommandToolOutput {
-            event_call_id: "event-43".to_string(),
-            chunk_id: "chunk-1".to_string(),
-            wall_time: std::time::Duration::from_millis(498),
-            raw_output: b"three".to_vec(),
-            max_output_tokens: None,
-            process_id: None,
-            exit_code: Some(0),
-            original_token_count: None,
-            session_command: Some(vec![
-                "/bin/zsh".to_string(),
-                "-lc".to_string(),
-                "echo three".to_string(),
-            ]),
-        }),
+    let output = ExecCommandToolOutput {
+        event_call_id: "event-43".to_string(),
+        chunk_id: "chunk-1".to_string(),
+        wall_time: std::time::Duration::from_millis(498),
+        raw_output: b"three".to_vec(),
+        max_output_tokens: None,
+        process_id: None,
+        exit_code: Some(0),
+        original_token_count: None,
+        session_command: Some(vec![
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            "echo three".to_string(),
+        ]),
     };
 
     assert_eq!(
-        super::exec_command_post_tool_use_payload(&result),
+        super::exec_command_post_tool_use_payload("call-43", &payload, &output),
         Some(crate::tools::registry::PostToolUsePayload {
             command: "echo three".to_string(),
             tool_response: serde_json::json!("three"),
@@ -252,27 +247,26 @@ fn exec_command_post_tool_use_payload_skips_interactive_exec() {
     let payload = ToolPayload::Function {
         arguments: serde_json::json!({ "cmd": "echo three", "tty": true }).to_string(),
     };
-    let result = AnyToolResult {
-        call_id: "call-44".to_string(),
-        payload,
-        result: Box::new(ExecCommandToolOutput {
-            event_call_id: "event-44".to_string(),
-            chunk_id: "chunk-1".to_string(),
-            wall_time: std::time::Duration::from_millis(498),
-            raw_output: b"three".to_vec(),
-            max_output_tokens: None,
-            process_id: None,
-            exit_code: Some(0),
-            original_token_count: None,
-            session_command: Some(vec![
-                "/bin/zsh".to_string(),
-                "-lc".to_string(),
-                "echo three".to_string(),
-            ]),
-        }),
+    let output = ExecCommandToolOutput {
+        event_call_id: "event-44".to_string(),
+        chunk_id: "chunk-1".to_string(),
+        wall_time: std::time::Duration::from_millis(498),
+        raw_output: b"three".to_vec(),
+        max_output_tokens: None,
+        process_id: None,
+        exit_code: Some(0),
+        original_token_count: None,
+        session_command: Some(vec![
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            "echo three".to_string(),
+        ]),
     };
 
-    assert_eq!(super::exec_command_post_tool_use_payload(&result), None);
+    assert_eq!(
+        super::exec_command_post_tool_use_payload("call-44", &payload, &output),
+        None
+    );
 }
 
 #[test]
@@ -280,25 +274,24 @@ fn exec_command_post_tool_use_payload_skips_running_sessions() {
     let payload = ToolPayload::Function {
         arguments: serde_json::json!({ "cmd": "echo three", "tty": false }).to_string(),
     };
-    let result = AnyToolResult {
-        call_id: "call-45".to_string(),
-        payload,
-        result: Box::new(ExecCommandToolOutput {
-            event_call_id: "event-45".to_string(),
-            chunk_id: "chunk-1".to_string(),
-            wall_time: std::time::Duration::from_millis(498),
-            raw_output: b"three".to_vec(),
-            max_output_tokens: None,
-            process_id: Some(45),
-            exit_code: None,
-            original_token_count: None,
-            session_command: Some(vec![
-                "/bin/zsh".to_string(),
-                "-lc".to_string(),
-                "echo three".to_string(),
-            ]),
-        }),
+    let output = ExecCommandToolOutput {
+        event_call_id: "event-45".to_string(),
+        chunk_id: "chunk-1".to_string(),
+        wall_time: std::time::Duration::from_millis(498),
+        raw_output: b"three".to_vec(),
+        max_output_tokens: None,
+        process_id: Some(45),
+        exit_code: None,
+        original_token_count: None,
+        session_command: Some(vec![
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            "echo three".to_string(),
+        ]),
     };
 
-    assert_eq!(super::exec_command_post_tool_use_payload(&result), None);
+    assert_eq!(
+        super::exec_command_post_tool_use_payload("call-45", &payload, &output),
+        None
+    );
 }

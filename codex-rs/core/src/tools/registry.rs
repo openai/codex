@@ -61,7 +61,12 @@ pub trait ToolHandler: Send + Sync {
         None
     }
 
-    fn post_tool_use_payload(&self, _result: &AnyToolResult) -> Option<PostToolUsePayload> {
+    fn post_tool_use_payload(
+        &self,
+        _call_id: &str,
+        _payload: &ToolPayload,
+        _result: &dyn ToolOutput,
+    ) -> Option<PostToolUsePayload> {
         None
     }
 
@@ -114,7 +119,12 @@ trait AnyToolHandler: Send + Sync {
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload>;
 
-    fn post_tool_use_payload(&self, result: &AnyToolResult) -> Option<PostToolUsePayload>;
+    fn post_tool_use_payload(
+        &self,
+        call_id: &str,
+        payload: &ToolPayload,
+        result: &dyn ToolOutput,
+    ) -> Option<PostToolUsePayload>;
 
     async fn handle_any(
         &self,
@@ -139,8 +149,13 @@ where
         ToolHandler::pre_tool_use_payload(self, invocation)
     }
 
-    fn post_tool_use_payload(&self, result: &AnyToolResult) -> Option<PostToolUsePayload> {
-        ToolHandler::post_tool_use_payload(self, result)
+    fn post_tool_use_payload(
+        &self,
+        call_id: &str,
+        payload: &ToolPayload,
+        result: &dyn ToolOutput,
+    ) -> Option<PostToolUsePayload> {
+        ToolHandler::post_tool_use_payload(self, call_id, payload, result)
     }
 
     async fn handle_any(
@@ -339,9 +354,13 @@ impl ToolRegistry {
         emit_metric_for_tool_read(&invocation, success).await;
         let post_tool_use_payload = if success {
             let guard = response_cell.lock().await;
-            guard
-                .as_ref()
-                .and_then(|result| handler.post_tool_use_payload(result))
+            guard.as_ref().and_then(|result| {
+                handler.post_tool_use_payload(
+                    &result.call_id,
+                    &result.payload,
+                    result.result.as_ref(),
+                )
+            })
         } else {
             None
         };
@@ -359,6 +378,7 @@ impl ToolRegistry {
         } else {
             None
         };
+        // Deprecated: this is the legacy AfterToolUse hook. Prefer the new PostToolUse
         let hook_abort_error = dispatch_after_tool_use_hook(AfterToolUseHookDispatch {
             invocation: &invocation,
             output_preview,
@@ -381,26 +401,21 @@ impl ToolRegistry {
             )
             .await;
 
-            if outcome.should_stop {
-                let replacement_text = outcome
-                    .feedback_message
-                    .clone()
-                    .or_else(|| outcome.stop_reason.clone())
-                    .unwrap_or_else(|| "PostToolUse hook stopped execution".to_string());
+            let replacement_text = if outcome.should_stop {
+                Some(
+                    outcome
+                        .feedback_message
+                        .clone()
+                        .or_else(|| outcome.stop_reason.clone())
+                        .unwrap_or_else(|| "PostToolUse hook stopped execution".to_string()),
+                )
+            } else {
+                outcome.feedback_message.clone()
+            };
+            if let Some(replacement_text) = replacement_text {
                 let mut guard = response_cell.lock().await;
                 if let Some(result) = guard.as_mut() {
-                    result.result = Box::new(FunctionToolOutput::from_text(
-                        replacement_text,
-                        /*success*/ None,
-                    ));
-                }
-            } else if let Some(feedback_message) = &outcome.feedback_message {
-                let mut guard = response_cell.lock().await;
-                if let Some(result) = guard.as_mut() {
-                    result.result = Box::new(FunctionToolOutput::from_text(
-                        feedback_message.clone(),
-                        /*success*/ None,
-                    ));
+                    replace_result_with_feedback(result, replacement_text);
                 }
             }
         }
@@ -517,6 +532,10 @@ fn sandbox_policy_tag(policy: &SandboxPolicy) -> &'static str {
         SandboxPolicy::DangerFullAccess => "danger-full-access",
         SandboxPolicy::ExternalSandbox { .. } => "external-sandbox",
     }
+}
+
+fn replace_result_with_feedback(result: &mut AnyToolResult, text: String) {
+    result.result = Box::new(FunctionToolOutput::from_text(text, /*success*/ None));
 }
 
 // Hooks use a separate wire-facing input type so hook payload JSON stays stable
