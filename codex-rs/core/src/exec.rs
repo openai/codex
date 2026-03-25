@@ -973,11 +973,11 @@ pub(crate) fn resolve_windows_restricted_token_filesystem_overlay(
         file_system_sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
     let legacy_root_paths: BTreeSet<PathBuf> = legacy_writable_roots
         .iter()
-        .map(|root| root.root.to_path_buf())
+        .map(|root| normalize_windows_overlay_path(root.root.as_path()))
         .collect();
     let split_root_paths: BTreeSet<PathBuf> = split_writable_roots
         .iter()
-        .map(|root| root.root.to_path_buf())
+        .map(|root| normalize_windows_overlay_path(root.root.as_path()))
         .collect();
 
     if legacy_root_paths != split_root_paths {
@@ -1006,10 +1006,10 @@ pub(crate) fn resolve_windows_restricted_token_filesystem_overlay(
 
     let mut additional_deny_write_paths = BTreeSet::new();
     for split_root in &split_writable_roots {
-        let Some(legacy_root) = legacy_writable_roots
-            .iter()
-            .find(|candidate| candidate.root == split_root.root)
-        else {
+        let Some(legacy_root) = legacy_writable_roots.iter().find(|candidate| {
+            normalize_windows_overlay_path(candidate.root.as_path())
+                == normalize_windows_overlay_path(split_root.root.as_path())
+        }) else {
             return Err(
                 "windows unelevated restricted-token sandbox cannot enforce split writable root sets directly; refusing to run unsandboxed"
                     .to_string(),
@@ -1034,6 +1034,10 @@ pub(crate) fn resolve_windows_restricted_token_filesystem_overlay(
     Ok(Some(WindowsRestrictedTokenFilesystemOverlay {
         additional_deny_write_paths: additional_deny_write_paths.into_iter().collect(),
     }))
+}
+
+fn normalize_windows_overlay_path(path: &Path) -> PathBuf {
+    dunce::simplified(path).to_path_buf()
 }
 
 /// Consumes the output of a child process according to the configured capture
