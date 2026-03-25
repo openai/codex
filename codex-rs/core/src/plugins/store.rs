@@ -110,10 +110,15 @@ impl PluginStore {
             .filter(|version| validate_plugin_segment(version, "plugin version").is_ok())
             .collect::<Vec<_>>();
         discovered_versions.sort_unstable();
-        if discovered_versions.len() == 1 {
-            discovered_versions.pop()
-        } else {
+        if discovered_versions.is_empty() {
             None
+        } else if discovered_versions
+            .iter()
+            .any(|version| version == DEFAULT_PLUGIN_VERSION)
+        {
+            Some(DEFAULT_PLUGIN_VERSION.to_string())
+        } else {
+            discovered_versions.pop()
         }
     }
 

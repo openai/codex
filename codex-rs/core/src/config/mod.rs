@@ -39,11 +39,6 @@ use crate::config_loader::McpServerRequirement;
 use crate::config_loader::ResidencyRequirement;
 use crate::config_loader::Sourced;
 use crate::config_loader::load_config_layers_state;
-use crate::features::Feature;
-use crate::features::FeatureOverrides;
-use crate::features::Features;
-use crate::features::FeaturesToml;
-use crate::git_info::resolve_root_git_project_for_trust;
 use crate::memories::memory_root;
 use crate::model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
@@ -65,6 +60,12 @@ use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
+use codex_features::Feature;
+use codex_features::FeatureConfigSource;
+use codex_features::FeatureOverrides;
+use codex_features::Features;
+use codex_features::FeaturesToml;
+use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
@@ -95,14 +96,16 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(target_os = "linux")]
+use std::process::Command;
 
 use crate::config::permissions::compile_permission_profile;
+use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
 use crate::config::permissions::network_proxy_config_from_profile_network;
 use crate::config::profile::ConfigProfile;
 use codex_network_proxy::NetworkProxyConfig;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
-use toml_edit::value;
 
 pub(crate) mod agent_roles;
 pub mod edit;
@@ -131,7 +134,7 @@ pub use service::ConfigService;
 pub use service::ConfigServiceError;
 pub use types::ApprovalsReviewer;
 
-pub use codex_git::GhostSnapshotConfig;
+pub use codex_git_utils::GhostSnapshotConfig;
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -152,19 +155,44 @@ const RESERVED_MODEL_PROVIDER_IDS: [&str; 3] = [
 ];
 
 #[cfg(target_os = "linux")]
-pub fn missing_system_bwrap_warning() -> Option<String> {
-    if Path::new(SYSTEM_BWRAP_PATH).is_file() {
-        None
-    } else {
-        Some(format!(
-            "Codex could not find system bubblewrap at {SYSTEM_BWRAP_PATH}. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime."
-        ))
-    }
+pub fn system_bwrap_warning() -> Option<String> {
+    system_bwrap_warning_for_path(Path::new(SYSTEM_BWRAP_PATH))
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn missing_system_bwrap_warning() -> Option<String> {
+pub fn system_bwrap_warning() -> Option<String> {
     None
+}
+
+#[cfg(target_os = "linux")]
+fn system_bwrap_warning_for_path(system_bwrap_path: &Path) -> Option<String> {
+    if !system_bwrap_path.is_file() {
+        return Some(format!(
+            "Codex could not find system bubblewrap at {}. Please install bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime.",
+            system_bwrap_path.display()
+        ));
+    }
+    if system_bwrap_supports_argv0(system_bwrap_path) {
+        return None;
+    }
+
+    Some(format!(
+        "Codex found system bubblewrap at {}, but it is too old to support `--argv0`. Please upgrade bubblewrap with your package manager. Codex will use the vendored bubblewrap in the meantime.",
+        system_bwrap_path.display()
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn system_bwrap_supports_argv0(system_bwrap_path: &Path) -> bool {
+    // bubblewrap added `--argv0` in v0.9.0:
+    // https://github.com/containers/bubblewrap/releases/tag/v0.9.0
+    let output = match Command::new(system_bwrap_path).arg("--help").output() {
+        Ok(output) => output,
+        Err(_) => return false,
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    stdout.contains("--argv0") || stderr.contains("--argv0")
 }
 
 fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
@@ -367,10 +395,10 @@ pub struct Config {
     /// Syntax highlighting theme override (kebab-case name).
     pub tui_theme: Option<String>,
 
-    /// The directory that should be treated as the current working directory
-    /// for the session. All relative paths inside the business-logic layer are
-    /// resolved against this path.
-    pub cwd: PathBuf,
+    /// The absolute directory that should be treated as the current working
+    /// directory for the session. All relative paths inside the business-logic
+    /// layer are resolved against this path.
+    pub cwd: AbsolutePathBuf,
 
     /// Preferred store for CLI auth credentials.
     /// file (default): Use a file in the Codex home directory.
@@ -449,7 +477,7 @@ pub struct Config {
     pub file_opener: UriBasedFileOpener,
 
     /// Path to the `codex-linux-sandbox` executable. This must be set if
-    /// [`crate::exec::SandboxType::LinuxSeccomp`] is used. Note that this
+    /// [`codex_sandboxing::SandboxType::LinuxSeccomp`] is used. Note that this
     /// cannot be set in the config file: it must be set in code via
     /// [`ConfigOverrides`].
     ///
@@ -650,15 +678,12 @@ impl ConfigBuilder {
             fallback_cwd,
         } = self;
         let codex_home = codex_home.map_or_else(find_codex_home, std::io::Result::Ok)?;
-        if let Err(err) = maybe_migrate_smart_approvals_alias(&codex_home).await {
-            tracing::warn!(error = %err, "failed to migrate smart_approvals feature alias");
-        }
         let cli_overrides = cli_overrides.unwrap_or_default();
         let mut harness_overrides = harness_overrides.unwrap_or_default();
         let loader_overrides = loader_overrides.unwrap_or_default();
         let cwd_override = harness_overrides.cwd.as_deref().or(fallback_cwd.as_deref());
         let cwd = match cwd_override {
-            Some(path) => AbsolutePathBuf::try_from(path)?,
+            Some(path) => AbsolutePathBuf::relative_to_current_dir(path)?,
             None => AbsolutePathBuf::current_dir()?,
         };
         harness_overrides.cwd = Some(cwd.to_path_buf());
@@ -698,111 +723,6 @@ impl ConfigBuilder {
             config_layer_stack,
         )
     }
-}
-
-fn config_scope_segments(scope: &[String], key: &str) -> Vec<String> {
-    let mut segments = scope.to_vec();
-    segments.push(key.to_string());
-    segments
-}
-
-fn feature_scope_segments(scope: &[String], feature_key: &str) -> Vec<String> {
-    let mut segments = scope.to_vec();
-    segments.push("features".to_string());
-    segments.push(feature_key.to_string());
-    segments
-}
-
-fn push_smart_approvals_alias_migration_edits(
-    edits: &mut Vec<ConfigEdit>,
-    scope: &[String],
-    features: &FeaturesToml,
-    approvals_reviewer_missing: bool,
-) {
-    let Some(alias_enabled) = features.entries.get("smart_approvals").copied() else {
-        return;
-    };
-    let canonical_enabled = features
-        .entries
-        .get("guardian_approval")
-        .copied()
-        .unwrap_or(alias_enabled);
-
-    if !features.entries.contains_key("guardian_approval") {
-        edits.push(ConfigEdit::SetPath {
-            segments: feature_scope_segments(scope, "guardian_approval"),
-            value: value(alias_enabled),
-        });
-    }
-    if canonical_enabled && approvals_reviewer_missing {
-        edits.push(ConfigEdit::SetPath {
-            segments: config_scope_segments(scope, "approvals_reviewer"),
-            value: value(ApprovalsReviewer::GuardianSubagent.to_string()),
-        });
-    }
-    edits.push(ConfigEdit::ClearPath {
-        segments: feature_scope_segments(scope, "smart_approvals"),
-    });
-}
-
-/// Rewrites the legacy `smart_approvals` feature flag to
-/// `guardian_approval` in `config.toml` before normal config loading.
-///
-/// If the old key is present, this preserves its value by setting
-/// `guardian_approval = <alias value>` when the new key is not already present.
-/// Because the deprecated flag historically meant "turn guardian review on",
-/// this migration also backfills `approvals_reviewer = "guardian_subagent"`
-/// in the same scope when that reviewer is not already configured there and the
-/// migrated feature value is `true`.
-/// In all cases it removes the deprecated `smart_approvals` entry so future
-/// loads only see the canonical feature flag name.
-async fn maybe_migrate_smart_approvals_alias(codex_home: &Path) -> std::io::Result<bool> {
-    let config_path = codex_home.join(CONFIG_TOML_FILE);
-    if !tokio::fs::try_exists(&config_path).await? {
-        return Ok(false);
-    }
-
-    let config_contents = tokio::fs::read_to_string(&config_path).await?;
-    let Ok(config_toml) = toml::from_str::<ConfigToml>(&config_contents) else {
-        return Ok(false);
-    };
-
-    let mut edits = Vec::new();
-
-    let root_scope = Vec::new();
-    if let Some(features) = config_toml.features.as_ref() {
-        push_smart_approvals_alias_migration_edits(
-            &mut edits,
-            &root_scope,
-            features,
-            config_toml.approvals_reviewer.is_none(),
-        );
-    }
-
-    for (profile_name, profile) in &config_toml.profiles {
-        if let Some(features) = profile.features.as_ref() {
-            let scope = vec!["profiles".to_string(), profile_name.clone()];
-            push_smart_approvals_alias_migration_edits(
-                &mut edits,
-                &scope,
-                features,
-                profile.approvals_reviewer.is_none(),
-            );
-        }
-    }
-
-    if edits.is_empty() {
-        return Ok(false);
-    }
-
-    ConfigEditsBuilder::new(codex_home)
-        .with_edits(edits)
-        .apply()
-        .await
-        .map_err(|err| {
-            std::io::Error::other(format!("failed to migrate guardian_approval alias: {err}"))
-        })?;
-    Ok(true)
 }
 
 impl Config {
@@ -866,9 +786,6 @@ pub async fn load_config_as_toml_with_cli_overrides(
     cwd: &AbsolutePathBuf,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
-    if let Err(err) = maybe_migrate_smart_approvals_alias(codex_home).await {
-        tracing::warn!(error = %err, "failed to migrate smart_approvals feature alias");
-    }
     let config_layer_stack = load_config_layers_state(
         codex_home,
         Some(cwd.clone()),
@@ -1917,29 +1834,6 @@ fn resolve_permission_config_syntax(
     })
 }
 
-fn add_additional_file_system_writes(
-    file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
-    additional_writable_roots: &[AbsolutePathBuf],
-) {
-    for path in additional_writable_roots {
-        let exists = file_system_sandbox_policy.entries.iter().any(|entry| {
-            matches!(
-                &entry.path,
-                codex_protocol::permissions::FileSystemPath::Path { path: existing }
-                    if existing == path && entry.access == codex_protocol::permissions::FileSystemAccessMode::Write
-            )
-        });
-        if !exists {
-            file_system_sandbox_policy.entries.push(
-                codex_protocol::permissions::FileSystemSandboxEntry {
-                    path: codex_protocol::permissions::FileSystemPath::Path { path: path.clone() },
-                    access: codex_protocol::permissions::FileSystemAccessMode::Write,
-                },
-            );
-        }
-    }
-}
-
 /// Optional overrides for user configuration (e.g., from CLI flags).
 #[derive(Default, Debug, Clone)]
 pub struct ConfigOverrides {
@@ -2189,12 +2083,28 @@ impl Config {
             web_search_request: override_tools_web_search_request,
         };
 
-        let configured_features = Features::from_config(&cfg, &config_profile, feature_overrides);
+        let configured_features = Features::from_sources(
+            FeatureConfigSource {
+                features: cfg.features.as_ref(),
+                include_apply_patch_tool: None,
+                experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
+                experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
+            },
+            FeatureConfigSource {
+                features: config_profile.features.as_ref(),
+                include_apply_patch_tool: config_profile.include_apply_patch_tool,
+                experimental_use_freeform_apply_patch: config_profile
+                    .experimental_use_freeform_apply_patch,
+                experimental_use_unified_exec_tool: config_profile
+                    .experimental_use_unified_exec_tool,
+            },
+            feature_overrides,
+        );
         let features = ManagedFeatures::from_configured(configured_features, feature_requirements)?;
         let windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
         let windows_sandbox_private_desktop =
             resolve_windows_sandbox_private_desktop(&cfg, &config_profile);
-        let resolved_cwd = normalize_for_native_workdir({
+        let resolved_cwd = AbsolutePathBuf::try_from(normalize_for_native_workdir({
             use std::env;
 
             match cwd {
@@ -2211,13 +2121,13 @@ impl Config {
                     current
                 }
             }
-        });
+        }))?;
         let mut additional_writable_roots: Vec<AbsolutePathBuf> = additional_writable_roots
             .into_iter()
-            .map(|path| AbsolutePathBuf::resolve_path_against_base(path, &resolved_cwd))
+            .map(|path| AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path()))
             .collect::<Result<Vec<_>, _>>()?;
         let active_project = cfg
-            .get_active_project(&resolved_cwd)
+            .get_active_project(resolved_cwd.as_path())
             .unwrap_or(ProjectConfig { trust_level: None });
         let permission_config_syntax = resolve_permission_config_syntax(
             &config_layer_stack,
@@ -2290,14 +2200,15 @@ impl Config {
                     &mut startup_warnings,
                 )?;
             let mut sandbox_policy = file_system_sandbox_policy
-                .to_legacy_sandbox_policy(network_sandbox_policy, &resolved_cwd)?;
+                .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
             if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
-                add_additional_file_system_writes(
-                    &mut file_system_sandbox_policy,
-                    &additional_writable_roots,
-                );
+                file_system_sandbox_policy = file_system_sandbox_policy
+                    .with_additional_writable_roots(
+                        resolved_cwd.as_path(),
+                        &additional_writable_roots,
+                    );
                 sandbox_policy = file_system_sandbox_policy
-                    .to_legacy_sandbox_policy(network_sandbox_policy, &resolved_cwd)?;
+                    .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
             }
             (
                 configured_network_proxy_config,
@@ -2311,7 +2222,7 @@ impl Config {
                 sandbox_mode,
                 config_profile.sandbox_mode,
                 windows_sandbox_level,
-                &resolved_cwd,
+                resolved_cwd.as_path(),
                 Some(&constrained_sandbox_policy),
             );
             if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
@@ -2321,8 +2232,10 @@ impl Config {
                     }
                 }
             }
-            let file_system_sandbox_policy =
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy(&sandbox_policy, &resolved_cwd);
+            let file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                &sandbox_policy,
+                resolved_cwd.as_path(),
+            );
             let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
             (
                 configured_network_proxy_config,
@@ -2646,6 +2559,11 @@ impl Config {
         } else {
             network.enabled().then_some(network)
         };
+        let helper_readable_roots = get_readable_roots_required_for_codex_runtime(
+            &codex_home,
+            zsh_path.as_ref(),
+            main_execve_wrapper_exe.as_ref(),
+        );
         let effective_sandbox_policy = constrained_sandbox_policy.value.get().clone();
         let effective_file_system_sandbox_policy =
             if effective_sandbox_policy == original_sandbox_policy {
@@ -2653,9 +2571,11 @@ impl Config {
             } else {
                 FileSystemSandboxPolicy::from_legacy_sandbox_policy(
                     &effective_sandbox_policy,
-                    &resolved_cwd,
+                    resolved_cwd.as_path(),
                 )
             };
+        let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
+            .with_additional_readable_roots(resolved_cwd.as_path(), &helper_readable_roots);
         let effective_network_sandbox_policy =
             if effective_sandbox_policy == original_sandbox_policy {
                 network_sandbox_policy

@@ -11,14 +11,14 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::NetworkProxyAuditMetadata;
 use codex_core::exec_env::create_env;
-use codex_core::landlock::create_linux_sandbox_command_args_for_policies;
-#[cfg(target_os = "macos")]
-use codex_core::seatbelt::create_seatbelt_command_args_for_policies_with_extensions;
 #[cfg(target_os = "macos")]
 use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_policies;
+#[cfg(target_os = "macos")]
+use codex_sandboxing::seatbelt::create_seatbelt_command_args_for_policies_with_extensions;
 use codex_utils_cli::CliConfigOverrides;
 use tokio::process::Child;
 use tokio::process::Command as TokioCommand;
@@ -170,7 +170,7 @@ async fn run_command_under_sandbox(
                         command_vec,
                         &cwd_clone,
                         env_map,
-                        None,
+                        /*timeout_ms*/ None,
                         config.permissions.windows_sandbox_private_desktop,
                     )
                 } else {
@@ -181,7 +181,7 @@ async fn run_command_under_sandbox(
                         command_vec,
                         &cwd_clone,
                         env_map,
-                        None,
+                        /*timeout_ms*/ None,
                         config.permissions.windows_sandbox_private_desktop,
                     )
                 }
@@ -251,16 +251,16 @@ async fn run_command_under_sandbox(
                 &config.permissions.file_system_sandbox_policy,
                 config.permissions.network_sandbox_policy,
                 sandbox_policy_cwd.as_path(),
-                false,
+                /*enforce_managed_network*/ false,
                 network.as_ref(),
-                None,
+                /*extensions*/ None,
             );
             let network_policy = config.permissions.network_sandbox_policy;
             spawn_debug_sandbox_child(
                 PathBuf::from("/usr/bin/sandbox-exec"),
                 args,
-                None,
-                cwd,
+                /*arg0*/ None,
+                cwd.to_path_buf(),
                 network_policy,
                 env,
                 |env_map| {
@@ -293,7 +293,7 @@ async fn run_command_under_sandbox(
                 codex_linux_sandbox_exe,
                 args,
                 Some("codex-linux-sandbox"),
-                cwd,
+                cwd.to_path_buf(),
                 network_policy,
                 env,
                 |env_map| {

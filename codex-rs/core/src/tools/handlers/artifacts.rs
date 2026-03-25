@@ -13,7 +13,6 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::StreamOutput;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::packages::versions;
 use crate::protocol::ExecCommandSource;
@@ -26,6 +25,7 @@ use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_features::Feature;
 
 const ARTIFACTS_TOOL_NAME: &str = "artifacts";
 const ARTIFACT_TOOL_PRAGMA_PREFIX: &str = "// codex-artifact-tool:";
@@ -89,7 +89,7 @@ impl ToolHandler for ArtifactsHandler {
         let result = client
             .execute_build(ArtifactBuildRequest {
                 source: args.source,
-                cwd: turn.cwd.clone(),
+                cwd: turn.cwd.to_path_buf(),
                 timeout: Some(Duration::from_millis(
                     args.timeout_ms
                         .unwrap_or(DEFAULT_EXECUTION_TIMEOUT.as_millis() as u64),
@@ -221,7 +221,7 @@ fn default_runtime_manager(codex_home: std::path::PathBuf) -> ArtifactRuntimeMan
 async fn emit_exec_begin(session: &Session, turn: &TurnContext, call_id: &str) {
     let emitter = ToolEmitter::shell(
         vec![ARTIFACTS_TOOL_NAME.to_string()],
-        turn.cwd.clone(),
+        turn.cwd.to_path_buf(),
         ExecCommandSource::Agent,
         /*freeform*/ true,
     );
@@ -247,7 +247,7 @@ async fn emit_exec_end(
     };
     let emitter = ToolEmitter::shell(
         vec![ARTIFACTS_TOOL_NAME.to_string()],
-        turn.cwd.clone(),
+        turn.cwd.to_path_buf(),
         ExecCommandSource::Agent,
         /*freeform*/ true,
     );

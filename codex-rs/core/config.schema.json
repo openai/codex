@@ -422,13 +422,13 @@
             "multi_agent": {
               "type": "boolean"
             },
+            "multi_agent_v2": {
+              "type": "boolean"
+            },
             "personality": {
               "type": "boolean"
             },
             "plugins": {
-              "type": "boolean"
-            },
-            "powershell_utf8": {
               "type": "boolean"
             },
             "prevent_idle_sleep": {
@@ -483,6 +483,9 @@
               "type": "boolean"
             },
             "tool_call_mcp_elicitation": {
+              "type": "boolean"
+            },
+            "tool_search": {
               "type": "boolean"
             },
             "tool_suggest": {
@@ -1524,13 +1527,21 @@
         "enabled": {
           "type": "boolean"
         },
+        "name": {
+          "description": "Name-based selector.",
+          "type": "string"
+        },
         "path": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Path-based selector."
         }
       },
       "required": [
-        "enabled",
-        "path"
+        "enabled"
       ],
       "type": "object"
     },
@@ -2028,13 +2039,13 @@
         "multi_agent": {
           "type": "boolean"
         },
+        "multi_agent_v2": {
+          "type": "boolean"
+        },
         "personality": {
           "type": "boolean"
         },
         "plugins": {
-          "type": "boolean"
-        },
-        "powershell_utf8": {
           "type": "boolean"
         },
         "prevent_idle_sleep": {
@@ -2089,6 +2100,9 @@
           "type": "boolean"
         },
         "tool_call_mcp_elicitation": {
+          "type": "boolean"
+        },
+        "tool_search": {
           "type": "boolean"
         },
         "tool_suggest": {

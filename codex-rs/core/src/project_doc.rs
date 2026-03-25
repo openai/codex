@@ -20,8 +20,8 @@ use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::default_project_root_markers;
 use crate::config_loader::merge_toml_values;
 use crate::config_loader::project_root_markers_from_config;
-use crate::features::Feature;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_features::Feature;
 use dunce::canonicalize as normalize_path;
 use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
@@ -184,7 +184,7 @@ pub async fn read_project_docs(config: &Config) -> std::io::Result<Option<String
 /// directory (inclusive). Symlinks are allowed. When `project_doc_max_bytes`
 /// is zero, returns an empty list.
 pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBuf>> {
-    let mut dir = config.cwd.clone();
+    let mut dir = config.cwd.to_path_buf();
     if let Ok(canon) = normalize_path(&dir) {
         dir = canon;
     }

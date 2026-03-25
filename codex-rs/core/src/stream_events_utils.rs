@@ -372,11 +372,13 @@ pub(crate) async fn handle_non_tool_response_item(
                             image_output_path.display(),
                         ))
                         .into();
-                        sess.record_conversation_items(
-                            turn_context,
-                            std::slice::from_ref(&message),
+                        let copy_message: ResponseItem = DeveloperInstructions::new(
+                            "If you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it."
+                                .to_string(),
                         )
-                        .await;
+                        .into();
+                        sess.record_conversation_items(turn_context, &[message, copy_message])
+                            .await;
                     }
                     Err(err) => {
                         let output_path = image_generation_artifact_path(

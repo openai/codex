@@ -22,7 +22,6 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -80,7 +79,7 @@ pub(crate) async fn run_codex_thread_interactive(
         skills_manager: Arc::clone(&parent_session.services.skills_manager),
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
-        file_watcher: Arc::clone(&parent_session.services.file_watcher),
+        skills_watcher: Arc::clone(&parent_session.services.skills_watcher),
         conversation_history: initial_history.unwrap_or(InitialHistory::New),
         session_source: SessionSource::SubAgent(subagent_source),
         agent_control: parent_session.services.agent_control.clone(),
@@ -518,7 +517,7 @@ async fn handle_patch_approval(
         let change_count = changes.len();
         let maybe_files = changes
             .keys()
-            .map(|path| AbsolutePathBuf::from_absolute_path(parent_ctx.cwd.join(path)).ok())
+            .map(|path| parent_ctx.cwd.join(path).ok())
             .collect::<Option<Vec<_>>>();
         if let Some(files) = maybe_files {
             let review_cancel = cancel_token.child_token();
@@ -554,7 +553,7 @@ async fn handle_patch_approval(
                 Arc::clone(parent_ctx),
                 GuardianApprovalRequest::ApplyPatch {
                     id: approval_id.clone(),
-                    cwd: parent_ctx.cwd.clone(),
+                    cwd: parent_ctx.cwd.to_path_buf(),
                     files,
                     change_count,
                     patch,

@@ -4,7 +4,6 @@ use crate::codex::TurnContext;
 use crate::function_tool::FunctionCallError;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::sandboxing::SandboxPermissions;
-use crate::tools::code_mode::is_code_mode_nested_tool;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -67,7 +66,7 @@ impl ToolRouter {
             specs
                 .iter()
                 .filter_map(|configured_tool| {
-                    if !is_code_mode_nested_tool(configured_tool.spec.name()) {
+                    if !codex_code_mode::is_code_mode_nested_tool(configured_tool.spec.name()) {
                         Some(configured_tool.spec.clone())
                     } else {
                         None

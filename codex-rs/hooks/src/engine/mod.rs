@@ -10,6 +10,8 @@ use std::path::PathBuf;
 use codex_config::ConfigLayerStack;
 use codex_protocol::protocol::HookRunSummary;
 
+use crate::events::pre_tool_use::PreToolUseOutcome;
+use crate::events::pre_tool_use::PreToolUseRequest;
 use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
 use crate::events::stop::StopOutcome;
@@ -46,6 +48,7 @@ impl ConfiguredHandler {
 
     fn event_name_label(&self) -> &'static str {
         match self.event_name {
+            codex_protocol::protocol::HookEventName::PreToolUse => "pre-tool-use",
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
             codex_protocol::protocol::HookEventName::UserPromptSubmit => "user-prompt-submit",
             codex_protocol::protocol::HookEventName::Stop => "stop",
@@ -74,6 +77,17 @@ impl ClaudeHooksEngine {
             };
         }
 
+        if cfg!(windows) {
+            return Self {
+                handlers: Vec::new(),
+                warnings: vec![
+                    "Disabled `codex_hooks` for this session because `hooks.json` lifecycle hooks are not supported on Windows yet."
+                        .to_string(),
+                ],
+                shell,
+            };
+        }
+
         let _ = schema_loader::generated_hook_schemas();
         let discovered = discovery::discover_handlers(config_layer_stack);
         Self {
@@ -94,12 +108,20 @@ impl ClaudeHooksEngine {
         crate::events::session_start::preview(&self.handlers, request)
     }
 
+    pub(crate) fn preview_pre_tool_use(&self, request: &PreToolUseRequest) -> Vec<HookRunSummary> {
+        crate::events::pre_tool_use::preview(&self.handlers, request)
+    }
+
     pub(crate) async fn run_session_start(
         &self,
         request: SessionStartRequest,
         turn_id: Option<String>,
     ) -> SessionStartOutcome {
         crate::events::session_start::run(&self.handlers, &self.shell, request, turn_id).await
+    }
+
+    pub(crate) async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {
+        crate::events::pre_tool_use::run(&self.handlers, &self.shell, request).await
     }
 
     pub(crate) fn preview_user_prompt_submit(

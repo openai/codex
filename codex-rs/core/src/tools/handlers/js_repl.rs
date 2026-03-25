@@ -6,7 +6,6 @@ use std::time::Instant;
 
 use crate::exec::ExecToolCallOutput;
 use crate::exec::StreamOutput;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::ExecCommandSource;
 use crate::tools::context::FunctionToolOutput;
@@ -21,6 +20,7 @@ use crate::tools::js_repl::JS_REPL_PRAGMA_PREFIX;
 use crate::tools::js_repl::JsReplArgs;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_features::Feature;
 use codex_protocol::models::FunctionCallOutputContentItem;
 
 pub struct JsReplHandler;
@@ -61,7 +61,7 @@ async fn emit_js_repl_exec_begin(
 ) {
     let emitter = ToolEmitter::shell(
         vec!["js_repl".to_string()],
-        turn.cwd.clone(),
+        turn.cwd.to_path_buf(),
         ExecCommandSource::Agent,
         /*freeform*/ false,
     );
@@ -80,7 +80,7 @@ async fn emit_js_repl_exec_end(
     let exec_output = build_js_repl_exec_output(output, error, duration);
     let emitter = ToolEmitter::shell(
         vec!["js_repl".to_string()],
-        turn.cwd.clone(),
+        turn.cwd.to_path_buf(),
         ExecCommandSource::Agent,
         /*freeform*/ false,
     );

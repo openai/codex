@@ -4,19 +4,18 @@
 //! decision to avoid re-prompting, builds the self-invocation command for
 //! `codex --codex-run-as-apply-patch`, and runs under the current
 //! `SandboxAttempt` with a minimal environment.
+use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecToolCallOutput;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
-use crate::sandboxing::CommandSpec;
-use crate::sandboxing::SandboxPermissions;
+use crate::sandboxing::ExecOptions;
 use crate::sandboxing::execute_env;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::Sandboxable;
-use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
@@ -27,6 +26,8 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
+use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
@@ -38,7 +39,6 @@ pub struct ApplyPatchRequest {
     pub file_paths: Vec<AbsolutePathBuf>,
     pub changes: std::collections::HashMap<PathBuf, FileChange>,
     pub exec_approval_requirement: ExecApprovalRequirement,
-    pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<PermissionProfile>,
     pub permissions_preapproved: bool,
     pub timeout_ms: Option<u64>,
@@ -66,10 +66,10 @@ impl ApplyPatchRuntime {
         }
     }
 
-    fn build_command_spec(
+    fn build_sandbox_command(
         req: &ApplyPatchRequest,
         _codex_home: &std::path::Path,
-    ) -> Result<CommandSpec, ToolError> {
+    ) -> Result<SandboxCommand, ToolError> {
         let exe = if let Some(path) = &req.codex_exe {
             path.clone()
         } else {
@@ -84,20 +84,16 @@ impl ApplyPatchRuntime {
                 })?
             }
         };
-        let program = exe.to_string_lossy().to_string();
-        Ok(CommandSpec {
-            program,
+        Ok(SandboxCommand {
+            program: exe.to_string_lossy().to_string(),
             args: vec![
                 CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
                 req.action.patch.clone(),
             ],
             cwd: req.action.cwd.clone(),
-            expiration: req.timeout_ms.into(),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
-            sandbox_permissions: req.sandbox_permissions,
             additional_permissions: req.additional_permissions.clone(),
-            justification: None,
         })
     }
 
@@ -204,9 +200,13 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        let spec = Self::build_command_spec(req, &ctx.turn.config.codex_home)?;
+        let command = Self::build_sandbox_command(req, &ctx.turn.config.codex_home)?;
+        let options = ExecOptions {
+            expiration: req.timeout_ms.into(),
+            capture_policy: ExecCapturePolicy::ShellTool,
+        };
         let env = attempt
-            .env_for(spec, /*network*/ None)
+            .env_for(command, options, /*network*/ None)
             .map_err(|err| ToolError::Codex(err.into()))?;
         let out = execute_env(env, Self::stdout_stream(ctx))
             .await

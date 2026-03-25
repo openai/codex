@@ -5,6 +5,7 @@ use codex_core::built_in_model_providers;
 use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::compact::SUMMARY_PREFIX;
 use codex_core::config::Config;
+use codex_features::Feature;
 use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
@@ -1657,6 +1658,7 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
             final_output_json_schema: None,
             cwd: resumed.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: resumed.session_configured.model.clone(),
             effort: None,
@@ -1747,6 +1749,7 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
             final_output_json_schema: None,
             cwd: test.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: previous_model.to_string(),
             effort: None,
@@ -1771,6 +1774,7 @@ async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
             final_output_json_schema: None,
             cwd: test.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: next_model.to_string(),
             effort: None,
@@ -1881,6 +1885,7 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
             final_output_json_schema: None,
             cwd: initial.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: previous_model.to_string(),
             effort: None,
@@ -1929,6 +1934,7 @@ async fn pre_sampling_compact_runs_after_resume_and_switch_to_smaller_model() {
             final_output_json_schema: None,
             cwd: resumed.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: next_model.to_string(),
             effort: None,
@@ -3115,9 +3121,7 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
         .with_config(move |config| {
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
-            let _ = config
-                .features
-                .enable(codex_core::features::Feature::RemoteModels);
+            let _ = config.features.enable(Feature::RemoteModels);
             config.model_auto_compact_token_limit = Some(200);
         })
         .build(&server)
@@ -3133,6 +3137,7 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
             final_output_json_schema: None,
             cwd: test.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: previous_model.to_string(),
             effort: None,
@@ -3157,6 +3162,7 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
             final_output_json_schema: None,
             cwd: test.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: next_model.to_string(),
             effort: None,

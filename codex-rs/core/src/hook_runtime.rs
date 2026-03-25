@@ -1,6 +1,8 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use codex_hooks::PreToolUseOutcome;
+use codex_hooks::PreToolUseRequest;
 use codex_hooks::SessionStartOutcome;
 use codex_hooks::UserPromptSubmitOutcome;
 use codex_hooks::UserPromptSubmitRequest;
@@ -90,7 +92,7 @@ pub(crate) async fn run_pending_session_start_hooks(
 
     let request = codex_hooks::SessionStartRequest {
         session_id: sess.conversation_id,
-        cwd: turn_context.cwd.clone(),
+        cwd: turn_context.cwd.to_path_buf(),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
@@ -109,6 +111,36 @@ pub(crate) async fn run_pending_session_start_hooks(
     .await
 }
 
+pub(crate) async fn run_pre_tool_use_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    tool_use_id: String,
+    command: String,
+) -> Option<String> {
+    let request = PreToolUseRequest {
+        session_id: sess.conversation_id,
+        turn_id: turn_context.sub_id.clone(),
+        cwd: turn_context.cwd.to_path_buf(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info.slug.clone(),
+        permission_mode: hook_permission_mode(turn_context),
+        tool_name: "Bash".to_string(),
+        tool_use_id,
+        command,
+    };
+    let preview_runs = sess.hooks().preview_pre_tool_use(&request);
+    emit_hook_started_events(sess, turn_context, preview_runs).await;
+
+    let PreToolUseOutcome {
+        hook_events,
+        should_block,
+        block_reason,
+    } = sess.hooks().run_pre_tool_use(request).await;
+    emit_hook_completed_events(sess, turn_context, hook_events).await;
+
+    if should_block { block_reason } else { None }
+}
+
 pub(crate) async fn run_user_prompt_submit_hooks(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
@@ -117,7 +149,7 @@ pub(crate) async fn run_user_prompt_submit_hooks(
     let request = UserPromptSubmitRequest {
         session_id: sess.conversation_id,
         turn_id: turn_context.sub_id.clone(),
-        cwd: turn_context.cwd.clone(),
+        cwd: turn_context.cwd.to_path_buf(),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),

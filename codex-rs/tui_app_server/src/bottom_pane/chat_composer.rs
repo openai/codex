@@ -403,6 +403,7 @@ pub(crate) struct ChatComposer {
     config: ChatComposerConfig,
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     connectors_enabled: bool,
+    plugins_command_enabled: bool,
     fast_command_enabled: bool,
     personality_command_enabled: bool,
     realtime_conversation_enabled: bool,
@@ -441,6 +442,7 @@ impl ChatComposer {
         BuiltinCommandFlags {
             collaboration_modes_enabled: self.collaboration_modes_enabled,
             connectors_enabled: self.connectors_enabled,
+            plugins_command_enabled: self.plugins_command_enabled,
             fast_command_enabled: self.fast_command_enabled,
             personality_command_enabled: self.personality_command_enabled,
             realtime_conversation_enabled: self.realtime_conversation_enabled,
@@ -525,6 +527,7 @@ impl ChatComposer {
             config,
             collaboration_mode_indicator: None,
             connectors_enabled: false,
+            plugins_command_enabled: false,
             fast_command_enabled: false,
             personality_command_enabled: false,
             realtime_conversation_enabled: false,
@@ -557,6 +560,10 @@ impl ChatComposer {
     pub fn set_plugin_mentions(&mut self, plugins: Option<Vec<PluginCapabilitySummary>>) {
         self.plugins = plugins;
         self.sync_popups();
+    }
+
+    pub fn set_plugins_command_enabled(&mut self, enabled: bool) {
+        self.plugins_command_enabled = enabled;
     }
 
     /// Toggle composer-side image paste handling.
@@ -3491,6 +3498,7 @@ impl ChatComposer {
                 if is_editing_slash_command_name {
                     let collaboration_modes_enabled = self.collaboration_modes_enabled;
                     let connectors_enabled = self.connectors_enabled;
+                    let plugins_command_enabled = self.plugins_command_enabled;
                     let fast_command_enabled = self.fast_command_enabled;
                     let personality_command_enabled = self.personality_command_enabled;
                     let realtime_conversation_enabled = self.realtime_conversation_enabled;
@@ -3500,6 +3508,7 @@ impl ChatComposer {
                         CommandPopupFlags {
                             collaboration_modes_enabled,
                             connectors_enabled,
+                            plugins_command_enabled,
                             fast_command_enabled,
                             personality_command_enabled,
                             realtime_conversation_enabled,
@@ -3590,7 +3599,6 @@ impl ChatComposer {
 
     fn mention_items(&self) -> Vec<MentionItem> {
         let mut mentions = Vec::new();
-
         if let Some(skills) = self.skills.as_ref() {
             for skill in skills {
                 let display_name = skill_display_name(skill).to_string();
@@ -3749,7 +3757,7 @@ impl ChatComposer {
 
     #[cfg(not(target_os = "linux"))]
     fn schedule_space_hold_timer(flag: Arc<AtomicBool>, frame: Option<FrameRequester>) {
-        const HOLD_DELAY_MILLIS: u64 = 500;
+        const HOLD_DELAY_MILLIS: u64 = 1_000;
         if let Ok(handle) = Handle::try_current() {
             let flag_clone = flag;
             let frame_clone = frame;
@@ -3837,7 +3845,7 @@ impl ChatComposer {
         }
     }
 
-    /// Called when the 500ms space hold timeout elapses.
+    /// Called when the 1s space hold timeout elapses.
     ///
     /// On terminals without key-release reporting, this only transitions into voice capture if we
     /// observed repeated Space events while pending; otherwise the keypress is treated as a typed
@@ -5387,6 +5395,86 @@ mod tests {
             .expect("expected plugin mention to be selected");
         assert_eq!(mention.insert_text, "$sample".to_string());
         assert_eq!(mention.path, Some("plugin://sample@test".to_string()));
+    }
+
+    #[test]
+    fn mention_items_show_plugin_owned_skill_and_app_duplicates() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        composer.set_connectors_enabled(true);
+        composer.set_text_content("$goog".to_string(), Vec::new(), Vec::new());
+        composer.set_skill_mentions(Some(vec![SkillMetadata {
+            name: "google-calendar:availability".to_string(),
+            description: "Find availability and plan event changes".to_string(),
+            short_description: None,
+            interface: Some(codex_core::skills::model::SkillInterface {
+                display_name: Some("Google Calendar".to_string()),
+                short_description: None,
+                icon_small: None,
+                icon_large: None,
+                brand_color: None,
+                default_prompt: None,
+            }),
+            dependencies: None,
+            policy: None,
+            permission_profile: None,
+            managed_network_override: None,
+            path_to_skills_md: PathBuf::from("/tmp/repo/google-calendar/SKILL.md"),
+            scope: codex_protocol::protocol::SkillScope::Repo,
+        }]));
+        composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
+            config_name: "google-calendar@debug".to_string(),
+            display_name: "Google Calendar".to_string(),
+            description: Some(
+                "Connect Google Calendar for scheduling, availability, and event management."
+                    .to_string(),
+            ),
+            has_skills: true,
+            mcp_server_names: vec!["google-calendar".to_string()],
+            app_connector_ids: vec![codex_core::plugins::AppConnectorId(
+                "google_calendar".to_string(),
+            )],
+        }]));
+        composer.set_connector_mentions(Some(ConnectorsSnapshot {
+            connectors: vec![AppInfo {
+                id: "google_calendar".to_string(),
+                name: "Google Calendar".to_string(),
+                description: Some("Look up events and availability".to_string()),
+                logo_url: None,
+                logo_url_dark: None,
+                distribution_channel: None,
+                branding: None,
+                app_metadata: None,
+                labels: None,
+                install_url: Some("https://example.test/google-calendar".to_string()),
+                is_accessible: true,
+                is_enabled: true,
+                plugin_display_names: vec!["Google Calendar".to_string()],
+            }],
+        }));
+
+        let mentions = composer.mention_items();
+        assert_eq!(mentions.len(), 3);
+        assert_eq!(mentions[0].category_tag, Some("[Skill]".to_string()));
+        assert_eq!(
+            mentions[0].path,
+            Some("/tmp/repo/google-calendar/SKILL.md".to_string())
+        );
+        assert_eq!(mentions[0].display_name, "Google Calendar".to_string());
+        assert_eq!(mentions[1].category_tag, Some("[Plugin]".to_string()));
+        assert_eq!(
+            mentions[1].path,
+            Some("plugin://google-calendar@debug".to_string())
+        );
+        assert_eq!(mentions[2].category_tag, Some("[App]".to_string()));
+        assert_eq!(mentions[2].path, Some("app://google_calendar".to_string()));
     }
 
     #[test]

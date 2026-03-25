@@ -33,7 +33,6 @@ use crate::config_loader::AppsRequirementsToml;
 use crate::default_client::create_client;
 use crate::default_client::is_first_party_chat_originator;
 use crate::default_client::originator;
-use crate::features::Feature;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpManager;
 use crate::mcp::ToolPluginProvenance;
@@ -47,6 +46,7 @@ use crate::plugins::list_tool_suggest_discoverable_plugins;
 use crate::token_data::TokenData;
 use crate::tools::discoverable::DiscoverablePluginInfo;
 use crate::tools::discoverable::DiscoverableTool;
+use codex_features::Feature;
 
 pub use codex_connectors::CONNECTORS_CACHE_TTL;
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
@@ -101,6 +101,19 @@ pub async fn list_accessible_connectors_from_mcp_tools(
         .await?
         .connectors,
     )
+}
+
+pub(crate) async fn list_accessible_and_enabled_connectors_from_manager(
+    mcp_connection_manager: &McpConnectionManager,
+    config: &Config,
+) -> Vec<AppInfo> {
+    with_app_enabled_state(
+        accessible_connectors_from_mcp_tools(&mcp_connection_manager.list_all_tools().await),
+        config,
+    )
+    .into_iter()
+    .filter(|connector| connector.is_accessible && connector.is_enabled)
+    .collect()
 }
 
 pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(

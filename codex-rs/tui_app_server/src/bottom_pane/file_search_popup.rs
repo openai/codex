@@ -70,7 +70,7 @@ impl FileSearchPopup {
         }
 
         self.display_query = query.to_string();
-        self.matches = matches;
+        self.matches = matches.into_iter().take(MAX_POPUP_ROWS).collect();
         self.waiting = false;
         let len = self.matches.len();
         self.state.clamp_selection(len);
@@ -150,5 +150,35 @@ impl WidgetRef for &FileSearchPopup {
             MAX_POPUP_ROWS,
             empty_message,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_file_search::MatchType;
+    use pretty_assertions::assert_eq;
+
+    fn file_match(index: usize) -> FileMatch {
+        FileMatch {
+            score: index as u32,
+            path: PathBuf::from(format!("src/file_{index:02}.rs")),
+            match_type: MatchType::File,
+            root: PathBuf::from("/tmp/repo"),
+            indices: None,
+        }
+    }
+
+    #[test]
+    fn set_matches_keeps_only_the_first_page_of_results() {
+        let mut popup = FileSearchPopup::new();
+        popup.set_query("file");
+        popup.set_matches("file", (0..(MAX_POPUP_ROWS + 2)).map(file_match).collect());
+
+        assert_eq!(
+            popup.matches,
+            (0..MAX_POPUP_ROWS).map(file_match).collect::<Vec<_>>()
+        );
+        assert_eq!(popup.calculate_required_height(), MAX_POPUP_ROWS as u16);
     }
 }

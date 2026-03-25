@@ -1,9 +1,9 @@
 use super::*;
-use crate::truncate;
-use crate::truncate::TruncationPolicy;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use codex_git::GhostCommit;
+use codex_git_utils::GhostCommit;
+use codex_protocol::AgentPath;
+use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -17,11 +17,18 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::default_input_modalities;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::TurnContextItem;
+use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::truncate_text;
 use image::ImageBuffer;
 use image::ImageFormat;
 use image::Rgba;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
+use std::path::PathBuf;
 
 const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
@@ -32,6 +39,25 @@ fn assistant_msg(text: &str) -> ResponseItem {
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
             text: text.to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }
+}
+
+fn inter_agent_assistant_msg(text: &str) -> ResponseItem {
+    let communication = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::root().join("worker").unwrap(),
+        Vec::new(),
+        text.to_string(),
+        true,
+    );
+    ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: serde_json::to_string(&communication).unwrap(),
         }],
         end_turn: None,
         phase: None,
@@ -70,6 +96,56 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
     }
 }
 
+fn developer_msg(text: &str) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: vec![ContentItem::InputText {
+            text: text.to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }
+}
+
+fn developer_msg_with_fragments(texts: &[&str]) -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "developer".to_string(),
+        content: texts
+            .iter()
+            .map(|text| ContentItem::InputText {
+                text: (*text).to_string(),
+            })
+            .collect(),
+        end_turn: None,
+        phase: None,
+    }
+}
+
+fn reference_context_item() -> TurnContextItem {
+    TurnContextItem {
+        turn_id: Some("reference-turn".to_string()),
+        trace_id: None,
+        cwd: PathBuf::from("/tmp/reference-cwd"),
+        current_date: Some("2026-03-23".to_string()),
+        timezone: Some("America/Los_Angeles".to_string()),
+        approval_policy: AskForApproval::OnRequest,
+        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        network: None,
+        model: "gpt-test".to_string(),
+        personality: None,
+        collaboration_mode: None,
+        realtime_active: Some(false),
+        effort: None,
+        summary: ReasoningSummary::Auto,
+        user_instructions: None,
+        developer_instructions: None,
+        final_output_json_schema: None,
+        truncation_policy: Some(codex_protocol::protocol::TruncationPolicy::Tokens(10_000)),
+    }
+}
+
 fn custom_tool_call_output(call_id: &str, output: &str) -> ResponseItem {
     ResponseItem::CustomToolCallOutput {
         call_id: call_id.to_string(),
@@ -103,7 +179,7 @@ fn reasoning_with_encrypted_content(len: usize) -> ResponseItem {
 }
 
 fn truncate_exec_output(content: &str) -> String {
-    truncate::truncate_text(content, TruncationPolicy::Tokens(EXEC_FORMAT_MAX_TOKENS))
+    truncate_text(content, TruncationPolicy::Tokens(EXEC_FORMAT_MAX_TOKENS))
 }
 
 fn approx_token_count_for_text(text: &str) -> i64 {
@@ -223,6 +299,49 @@ fn items_after_last_model_generated_tokens_are_zero_without_model_generated_item
             .fold(0i64, i64::saturating_add),
         0
     );
+}
+
+#[test]
+fn inter_agent_assistant_messages_are_turn_boundaries() {
+    let item = inter_agent_assistant_msg("continue");
+
+    assert!(is_user_turn_boundary(&item));
+}
+
+#[test]
+fn for_prompt_preserves_inter_agent_assistant_messages() {
+    let item = inter_agent_assistant_msg("continue");
+    let history = create_history_with_items(vec![item.clone()]);
+
+    assert_eq!(history.raw_items(), std::slice::from_ref(&item));
+    assert_eq!(history.for_prompt(&default_input_modalities()), vec![item]);
+}
+
+#[test]
+fn drop_last_n_user_turns_treats_inter_agent_assistant_messages_as_instruction_turns() {
+    let first_turn = user_input_text_msg("first");
+    let first_reply = assistant_msg("done");
+    let inter_agent_turn = inter_agent_assistant_msg("continue");
+    let inter_agent_reply = assistant_msg("worker reply");
+    let mut history = create_history_with_items(vec![
+        first_turn.clone(),
+        first_reply.clone(),
+        inter_agent_turn,
+        inter_agent_reply,
+    ]);
+
+    history.drop_last_n_user_turns(1);
+
+    assert_eq!(history.raw_items(), &vec![first_turn, first_reply]);
+}
+
+#[test]
+fn legacy_inter_agent_assistant_messages_are_not_turn_boundaries() {
+    let item = assistant_msg(
+        "author: /root\nrecipient: /root/worker\nother_recipients: []\nContent: continue",
+    );
+
+    assert!(!is_user_turn_boundary(&item));
 }
 
 #[test]
@@ -795,6 +914,75 @@ fn drop_last_n_user_turns_ignores_session_prefix_user_messages() {
     ]);
     history.drop_last_n_user_turns(3);
     assert_eq!(history.for_prompt(&modalities), expected_prefix_only);
+}
+
+#[test]
+fn drop_last_n_user_turns_trims_context_updates_above_rolled_back_turn() {
+    let items = vec![
+        assistant_msg("session prefix item"),
+        user_input_text_msg("turn 1 user"),
+        assistant_msg("turn 1 assistant"),
+        developer_msg("Generated images are saved to /tmp as /tmp/image-1.png by default."),
+        developer_msg("<collaboration_mode>ROLLED_BACK_DEV_INSTRUCTIONS</collaboration_mode>"),
+        user_input_text_msg(
+            "<environment_context><cwd>PRETURN_CONTEXT_DIFF_CWD</cwd></environment_context>",
+        ),
+        user_input_text_msg("turn 2 user"),
+        assistant_msg("turn 2 assistant"),
+    ];
+
+    let modalities = default_input_modalities();
+    let mut history = create_history_with_items(items);
+    let reference_context_item = reference_context_item();
+    history.set_reference_context_item(Some(reference_context_item.clone()));
+    history.drop_last_n_user_turns(1);
+
+    assert_eq!(
+        history.clone().for_prompt(&modalities),
+        vec![
+            assistant_msg("session prefix item"),
+            user_input_text_msg("turn 1 user"),
+            assistant_msg("turn 1 assistant"),
+            developer_msg("Generated images are saved to /tmp as /tmp/image-1.png by default."),
+        ]
+    );
+    assert_eq!(
+        serde_json::to_value(history.reference_context_item())
+            .expect("serialize retained reference context item"),
+        serde_json::to_value(Some(reference_context_item))
+            .expect("serialize expected reference context item")
+    );
+}
+
+#[test]
+fn drop_last_n_user_turns_clears_reference_context_for_mixed_developer_context_bundles() {
+    let items = vec![
+        user_input_text_msg("turn 1 user"),
+        assistant_msg("turn 1 assistant"),
+        developer_msg_with_fragments(&[
+            "<permissions instructions>contextual permissions</permissions instructions>",
+            "persistent plugin instructions",
+        ]),
+        user_input_text_msg(
+            "<environment_context><cwd>PRETURN_CONTEXT_DIFF_CWD</cwd></environment_context>",
+        ),
+        user_input_text_msg("turn 2 user"),
+        assistant_msg("turn 2 assistant"),
+    ];
+
+    let modalities = default_input_modalities();
+    let mut history = create_history_with_items(items);
+    history.set_reference_context_item(Some(reference_context_item()));
+    history.drop_last_n_user_turns(1);
+
+    assert_eq!(
+        history.clone().for_prompt(&modalities),
+        vec![
+            user_input_text_msg("turn 1 user"),
+            assistant_msg("turn 1 assistant"),
+        ]
+    );
+    assert!(history.reference_context_item().is_none());
 }
 
 #[test]

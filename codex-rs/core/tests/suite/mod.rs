@@ -75,7 +75,6 @@ mod deprecation_notice;
 mod exec;
 mod exec_policy;
 mod fork_thread;
-mod grep_files;
 mod hierarchical_agents;
 #[cfg(not(target_os = "windows"))]
 mod hooks;
@@ -83,7 +82,6 @@ mod image_rollout;
 mod items;
 mod js_repl;
 mod json_result;
-mod list_dir;
 mod live_cli;
 mod live_reload;
 mod memories;
@@ -101,8 +99,8 @@ mod personality_migration;
 mod plugins;
 mod prompt_caching;
 mod quota_exceeded;
-mod read_file;
 mod realtime_conversation;
+mod remote_env;
 mod remote_models;
 mod request_compression;
 #[cfg(not(target_os = "windows"))]

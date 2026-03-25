@@ -99,6 +99,7 @@ pub(crate) async fn monitor_action(
     sess: &Session,
     turn_context: &TurnContext,
     action: serde_json::Value,
+    protection_client_callsite: &'static str,
 ) -> ArcMonitorOutcome {
     let auth = match turn_context.auth_manager.as_ref() {
         Some(auth_manager) => match auth_manager.auth().await {
@@ -138,7 +139,8 @@ pub(crate) async fn monitor_action(
             return ArcMonitorOutcome::Ok;
         }
     };
-    let body = build_arc_monitor_request(sess, turn_context, action).await;
+    let body =
+        build_arc_monitor_request(sess, turn_context, action, protection_client_callsite).await;
     let client = build_reqwest_client();
     let mut request = client
         .post(&url)
@@ -236,6 +238,7 @@ async fn build_arc_monitor_request(
     sess: &Session,
     turn_context: &TurnContext,
     action: serde_json::Map<String, serde_json::Value>,
+    protection_client_callsite: &'static str,
 ) -> ArcMonitorRequest {
     let history = sess.clone_history().await;
     let mut messages = build_arc_monitor_messages(history.raw_items());
@@ -254,7 +257,7 @@ async fn build_arc_monitor_request(
             codex_thread_id: conversation_id.clone(),
             codex_turn_id: turn_context.sub_id.clone(),
             conversation_id: Some(conversation_id),
-            protection_client_callsite: None,
+            protection_client_callsite: Some(protection_client_callsite.to_string()),
         },
         messages: Some(messages),
         input: None,

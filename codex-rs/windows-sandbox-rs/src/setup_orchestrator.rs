@@ -91,8 +91,8 @@ pub fn run_setup_refresh(
         command_cwd,
         env_map,
         codex_home,
-        None,
-        None,
+        /*read_roots_override*/ None,
+        /*write_roots_override*/ None,
     )
 }
 

@@ -10,8 +10,8 @@ use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::openai_models::default_input_modalities;
 
 use crate::config::Config;
-use crate::features::Feature;
-use crate::truncate::approx_bytes_for_tokens;
+use codex_features::Feature;
+use codex_utils_output_truncation::approx_bytes_for_tokens;
 use tracing::warn;
 
 pub const BASE_INSTRUCTIONS: &str = include_str!("../../prompt.md");

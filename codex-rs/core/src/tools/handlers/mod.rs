@@ -2,14 +2,14 @@ pub(crate) mod agent_jobs;
 pub mod apply_patch;
 mod artifacts;
 mod dynamic;
-mod grep_files;
 mod js_repl;
 mod list_dir;
 mod mcp;
 mod mcp_resource;
 pub(crate) mod multi_agents;
+pub(crate) mod multi_agents_common;
+pub(crate) mod multi_agents_v2;
 mod plan;
-mod read_file;
 mod request_permissions;
 mod request_user_input;
 mod shell;
@@ -19,6 +19,9 @@ mod tool_suggest;
 pub(crate) mod unified_exec;
 mod view_image;
 
+use codex_sandboxing::policy_transforms::intersect_permission_profiles;
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
+use codex_sandboxing::policy_transforms::normalize_additional_permissions;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 pub use plan::PLAN_TOOL;
 use serde::Deserialize;
@@ -29,8 +32,6 @@ use std::path::PathBuf;
 use crate::codex::Session;
 use crate::function_tool::FunctionCallError;
 use crate::sandboxing::SandboxPermissions;
-use crate::sandboxing::merge_permission_profiles;
-use crate::sandboxing::normalize_additional_permissions;
 pub(crate) use crate::tools::code_mode::CodeModeExecuteHandler;
 pub(crate) use crate::tools::code_mode::CodeModeWaitHandler;
 pub use apply_patch::ApplyPatchHandler;
@@ -38,14 +39,12 @@ pub use artifacts::ArtifactsHandler;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 pub use dynamic::DynamicToolHandler;
-pub use grep_files::GrepFilesHandler;
 pub use js_repl::JsReplHandler;
 pub use js_repl::JsReplResetHandler;
 pub use list_dir::ListDirHandler;
 pub use mcp::McpHandler;
 pub use mcp_resource::McpResourceHandler;
 pub use plan::PlanHandler;
-pub use read_file::ReadFileHandler;
 pub use request_permissions::RequestPermissionsHandler;
 pub(crate) use request_permissions::request_permissions_tool_description;
 pub use request_user_input::RequestUserInputHandler;
@@ -206,10 +205,8 @@ pub(super) async fn apply_granted_turn_permissions(
     );
     let permissions_preapproved = match (effective_permissions.as_ref(), granted_permissions) {
         (Some(effective_permissions), Some(granted_permissions)) => {
-            crate::sandboxing::intersect_permission_profiles(
-                effective_permissions.clone(),
-                granted_permissions,
-            ) == *effective_permissions
+            intersect_permission_profiles(effective_permissions.clone(), granted_permissions)
+                == *effective_permissions
         }
         _ => false,
     };

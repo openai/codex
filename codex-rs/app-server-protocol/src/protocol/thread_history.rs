@@ -74,6 +74,8 @@ pub struct ThreadHistoryBuilder {
     turns: Vec<Turn>,
     current_turn: Option<PendingTurn>,
     next_item_index: i64,
+    current_rollout_index: usize,
+    next_rollout_index: usize,
 }
 
 impl Default for ThreadHistoryBuilder {
@@ -88,6 +90,8 @@ impl ThreadHistoryBuilder {
             turns: Vec::new(),
             current_turn: None,
             next_item_index: 1,
+            current_rollout_index: 0,
+            next_rollout_index: 0,
         }
     }
 
@@ -109,6 +113,19 @@ impl ThreadHistoryBuilder {
 
     pub fn has_active_turn(&self) -> bool {
         self.current_turn.is_some()
+    }
+
+    pub fn active_turn_id_if_explicit(&self) -> Option<String> {
+        self.current_turn
+            .as_ref()
+            .filter(|turn| turn.opened_explicitly)
+            .map(|turn| turn.id.clone())
+    }
+
+    pub fn active_turn_start_index(&self) -> Option<usize> {
+        self.current_turn
+            .as_ref()
+            .map(|turn| turn.rollout_start_index)
     }
 
     /// Shared reducer for persisted rollout replay and in-memory current-turn
@@ -182,6 +199,8 @@ impl ThreadHistoryBuilder {
     }
 
     pub fn handle_rollout_item(&mut self, item: &RolloutItem) {
+        self.current_rollout_index = self.next_rollout_index;
+        self.next_rollout_index += 1;
         match item {
             RolloutItem::EventMsg(event) => self.handle_event(event),
             RolloutItem::Compacted(payload) => self.handle_compacted(payload),
@@ -569,6 +588,7 @@ impl ThreadHistoryBuilder {
             status: String::new(),
             revised_prompt: None,
             result: String::new(),
+            saved_path: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -579,6 +599,7 @@ impl ThreadHistoryBuilder {
             status: payload.status.clone(),
             revised_prompt: payload.revised_prompt.clone(),
             result: payload.result.clone(),
+            saved_path: payload.saved_path.clone(),
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -972,6 +993,7 @@ impl ThreadHistoryBuilder {
             status: TurnStatus::Completed,
             opened_explicitly: false,
             saw_compaction: false,
+            rollout_start_index: self.current_rollout_index,
         }
     }
 
@@ -1135,6 +1157,8 @@ struct PendingTurn {
     /// True when this turn includes a persisted `RolloutItem::Compacted`, which
     /// should keep the turn from being dropped even without normal items.
     saw_compaction: bool,
+    /// Index of the rollout item that opened this turn during replay.
+    rollout_start_index: usize,
 }
 
 impl PendingTurn {
@@ -1381,6 +1405,61 @@ mod tests {
                 text: "Final reply".into(),
                 phase: Some(MessagePhase::FinalAnswer),
                 memory_citation: None,
+            }
+        );
+    }
+
+    #[test]
+    fn replays_image_generation_end_events_into_turn_history() {
+        let items = vec![
+            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-image".into(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            })),
+            RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                message: "generate an image".into(),
+                images: None,
+                text_elements: Vec::new(),
+                local_images: Vec::new(),
+            })),
+            RolloutItem::EventMsg(EventMsg::ImageGenerationEnd(ImageGenerationEndEvent {
+                call_id: "ig_123".into(),
+                status: "completed".into(),
+                revised_prompt: Some("final prompt".into()),
+                result: "Zm9v".into(),
+                saved_path: Some("/tmp/ig_123.png".into()),
+            })),
+            RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-image".into(),
+                last_agent_message: None,
+            })),
+        ];
+
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(
+            turns[0],
+            Turn {
+                id: "turn-image".into(),
+                status: TurnStatus::Completed,
+                error: None,
+                items: vec![
+                    ThreadItem::UserMessage {
+                        id: "item-1".into(),
+                        content: vec![UserInput::Text {
+                            text: "generate an image".into(),
+                            text_elements: Vec::new(),
+                        }],
+                    },
+                    ThreadItem::ImageGeneration {
+                        id: "ig_123".into(),
+                        status: "completed".into(),
+                        revised_prompt: Some("final prompt".into()),
+                        result: "Zm9v".into(),
+                        saved_path: Some("/tmp/ig_123.png".into()),
+                    },
+                ],
             }
         );
     }

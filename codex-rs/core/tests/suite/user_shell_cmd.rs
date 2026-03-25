@@ -1,5 +1,5 @@
 use anyhow::Context;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -10,6 +10,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::user_input::UserInput;
+use core_test_support::PathBufExt;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -46,7 +47,7 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
     let server = start_mock_server().await;
     let cwd_path = cwd.path().to_path_buf();
     let mut builder = test_codex().with_config(move |config| {
-        config.cwd = cwd_path;
+        config.cwd = cwd_path.abs();
     });
     let codex = builder
         .build(&server)
@@ -176,6 +177,7 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
             final_output_json_schema: None,
             cwd: fixture.cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: fixture.session_configured.model.clone(),
             effort: None,

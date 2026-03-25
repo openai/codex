@@ -2,7 +2,6 @@ use crate::agent::AgentStatus;
 use crate::agent::status::is_final as is_final_agent_status;
 use crate::codex::Session;
 use crate::config::Config;
-use crate::features::Feature;
 use crate::memories::memory_root;
 use crate::memories::metrics;
 use crate::memories::phase_two;
@@ -11,6 +10,7 @@ use crate::memories::storage::rebuild_raw_memories_file_from_memories;
 use crate::memories::storage::rollout_summary_file_stem;
 use crate::memories::storage::sync_rollout_summaries_from_memories;
 use codex_config::Constrained;
+use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
@@ -266,7 +266,16 @@ mod agent {
         let root = memory_root(&config.codex_home);
         let mut agent_config = config.as_ref().clone();
 
-        agent_config.cwd = root;
+        match AbsolutePathBuf::from_absolute_path(root) {
+            Ok(root) => agent_config.cwd = root,
+            Err(err) => {
+                warn!(
+                    "memory phase-2 consolidation could not set cwd from codex_home {}: {err}",
+                    agent_config.codex_home.display()
+                );
+                return None;
+            }
+        }
         // Consolidation threads must never feed back into phase-1 memory generation.
         agent_config.memories.generate_memories = false;
         // Approval policy

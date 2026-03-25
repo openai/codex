@@ -86,6 +86,7 @@ use codex_app_server_protocol::ThreadRealtimeErrorNotification;
 use codex_app_server_protocol::ThreadRealtimeItemAddedNotification;
 use codex_app_server_protocol::ThreadRealtimeOutputAudioDeltaNotification;
 use codex_app_server_protocol::ThreadRealtimeStartedNotification;
+use codex_app_server_protocol::ThreadRealtimeTranscriptUpdatedNotification;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
@@ -109,7 +110,6 @@ use codex_core::ThreadManager;
 use codex_core::find_thread_name_by_id;
 use codex_core::review_format::format_review_findings_block;
 use codex_core::review_prompts;
-use codex_core::sandboxing::intersect_permission_profiles;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse as CoreDynamicToolResponse;
@@ -135,6 +135,7 @@ use codex_protocol::request_permissions::RequestPermissionProfile as CoreRequest
 use codex_protocol::request_permissions::RequestPermissionsResponse as CoreRequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputAnswer as CoreRequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse as CoreRequestUserInputResponse;
+use codex_sandboxing::policy_transforms::intersect_permission_profiles;
 use codex_shell_command::parse_command::shlex_join;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -397,8 +398,30 @@ pub(crate) async fn apply_bespoke_event_handling(
                             ))
                             .await;
                     }
-                    RealtimeEvent::InputTranscriptDelta(_) => {}
-                    RealtimeEvent::OutputTranscriptDelta(_) => {}
+                    RealtimeEvent::InputTranscriptDelta(event) => {
+                        let notification = ThreadRealtimeTranscriptUpdatedNotification {
+                            thread_id: conversation_id.to_string(),
+                            role: "user".to_string(),
+                            text: event.delta,
+                        };
+                        outgoing
+                            .send_server_notification(
+                                ServerNotification::ThreadRealtimeTranscriptUpdated(notification),
+                            )
+                            .await;
+                    }
+                    RealtimeEvent::OutputTranscriptDelta(event) => {
+                        let notification = ThreadRealtimeTranscriptUpdatedNotification {
+                            thread_id: conversation_id.to_string(),
+                            role: "assistant".to_string(),
+                            text: event.delta,
+                        };
+                        outgoing
+                            .send_server_notification(
+                                ServerNotification::ThreadRealtimeTranscriptUpdated(notification),
+                            )
+                            .await;
+                    }
                     RealtimeEvent::AudioOut(audio) => {
                         let notification = ThreadRealtimeOutputAudioDeltaNotification {
                             thread_id: conversation_id.to_string(),

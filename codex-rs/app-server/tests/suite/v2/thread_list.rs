@@ -23,6 +23,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
+use codex_git_utils::GitSha;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
 use codex_protocol::protocol::RolloutItem;
@@ -661,6 +662,7 @@ async fn thread_list_filters_by_source_kind_subagent_thread_spawn() -> Result<()
         CoreSessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id,
             depth: 1,
+            agent_path: None,
             agent_nickname: None,
             agent_role: None,
         }),
@@ -724,6 +726,7 @@ async fn thread_list_filters_by_subagent_variant() -> Result<()> {
         CoreSessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id,
             depth: 1,
+            agent_path: None,
             agent_nickname: None,
             agent_role: None,
         }),
@@ -957,7 +960,7 @@ async fn thread_list_includes_git_info() -> Result<()> {
     create_minimal_config(codex_home.path())?;
 
     let git_info = CoreGitInfo {
-        commit_hash: Some("abc123".to_string()),
+        commit_hash: Some(GitSha::new("abc123")),
         branch: Some("main".to_string()),
         repository_url: Some("https://example.com/repo.git".to_string()),
     };

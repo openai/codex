@@ -42,23 +42,36 @@ use crate::read_session_model;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
+#[cfg(test)]
+use crate::test_support::PathBufExt;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::AppServerRequestHandle;
+use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::PluginInstallParams;
+use codex_app_server_protocol::PluginInstallResponse;
+use codex_app_server_protocol::PluginListParams;
+use codex_app_server_protocol::PluginListResponse;
+use codex_app_server_protocol::PluginReadParams;
+use codex_app_server_protocol::PluginReadResponse;
+use codex_app_server_protocol::PluginUninstallParams;
+use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::Turn;
+use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -68,13 +81,13 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::ApprovalsReviewer;
 use codex_core::config::types::ModelAvailabilityNuxConfig;
 use codex_core::config_loader::ConfigLayerStackOrdering;
-use codex_core::features::Feature;
 use codex_core::message_history;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecApprovalRequestEvent;
@@ -431,8 +444,8 @@ fn emit_project_config_warnings(app_event_tx: &AppEventSender, config: &Config) 
     )));
 }
 
-fn emit_missing_system_bwrap_warning(app_event_tx: &AppEventSender) {
-    let Some(message) = codex_core::config::missing_system_bwrap_warning() else {
+fn emit_system_bwrap_warning(app_event_tx: &AppEventSender) {
+    let Some(message) = codex_core::config::system_bwrap_warning() else {
         return;
     };
 
@@ -460,8 +473,6 @@ enum ThreadBufferedEvent {
     Notification(ServerNotification),
     Request(ServerRequest),
     HistoryEntryResponse(GetHistoryEntryResponseEvent),
-    LegacyWarning(String),
-    LegacyRollback { num_turns: u32 },
 }
 
 #[derive(Debug)]
@@ -470,7 +481,6 @@ struct ThreadEventStore {
     turns: Vec<Turn>,
     buffer: VecDeque<ThreadBufferedEvent>,
     pending_interactive_replay: PendingInteractiveReplayState,
-    pending_local_legacy_rollbacks: VecDeque<u32>,
     active_turn_id: Option<String>,
     input_state: Option<ThreadInputState>,
     capacity: usize,
@@ -479,10 +489,7 @@ struct ThreadEventStore {
 
 impl ThreadEventStore {
     fn event_survives_session_refresh(event: &ThreadBufferedEvent) -> bool {
-        matches!(
-            event,
-            ThreadBufferedEvent::Request(_) | ThreadBufferedEvent::LegacyWarning(_)
-        )
+        matches!(event, ThreadBufferedEvent::Request(_))
     }
 
     fn new(capacity: usize) -> Self {
@@ -491,7 +498,6 @@ impl ThreadEventStore {
             turns: Vec::new(),
             buffer: VecDeque::new(),
             pending_interactive_replay: PendingInteractiveReplayState::default(),
-            pending_local_legacy_rollbacks: VecDeque::new(),
             active_turn_id: None,
             input_state: None,
             capacity,
@@ -517,7 +523,6 @@ impl ThreadEventStore {
     }
 
     fn set_turns(&mut self, turns: Vec<Turn>) {
-        self.pending_local_legacy_rollbacks.clear();
         self.active_turn_id = turns
             .iter()
             .rev()
@@ -574,37 +579,6 @@ impl ThreadEventStore {
         self.active_turn_id = None;
     }
 
-    fn note_local_thread_rollback(&mut self, num_turns: u32) {
-        self.pending_local_legacy_rollbacks.push_back(num_turns);
-        while self.pending_local_legacy_rollbacks.len() > self.capacity {
-            self.pending_local_legacy_rollbacks.pop_front();
-        }
-    }
-
-    fn consume_pending_local_legacy_rollback(&mut self, num_turns: u32) -> bool {
-        match self.pending_local_legacy_rollbacks.front() {
-            Some(pending_num_turns) if *pending_num_turns == num_turns => {
-                self.pending_local_legacy_rollbacks.pop_front();
-                true
-            }
-            _ => false,
-        }
-    }
-
-    fn apply_legacy_thread_rollback(&mut self, num_turns: u32) {
-        let num_turns = usize::try_from(num_turns).unwrap_or(usize::MAX);
-        if num_turns >= self.turns.len() {
-            self.turns.clear();
-        } else {
-            self.turns
-                .truncate(self.turns.len().saturating_sub(num_turns));
-        }
-        self.buffer.clear();
-        self.pending_interactive_replay = PendingInteractiveReplayState::default();
-        self.pending_local_legacy_rollbacks.clear();
-        self.active_turn_id = None;
-    }
-
     fn snapshot(&self) -> ThreadEventSnapshot {
         ThreadEventSnapshot {
             session: self.session.clone(),
@@ -619,9 +593,7 @@ impl ThreadEventStore {
                         .pending_interactive_replay
                         .should_replay_snapshot_request(request),
                     ThreadBufferedEvent::Notification(_)
-                    | ThreadBufferedEvent::HistoryEntryResponse(_)
-                    | ThreadBufferedEvent::LegacyWarning(_)
-                    | ThreadBufferedEvent::LegacyRollback { .. } => true,
+                    | ThreadBufferedEvent::HistoryEntryResponse(_) => true,
                 })
                 .cloned()
                 .collect(),
@@ -650,6 +622,10 @@ impl ThreadEventStore {
 
     fn active_turn_id(&self) -> Option<&str> {
         self.active_turn_id.as_deref()
+    }
+
+    fn clear_active_turn_id(&mut self) {
+        self.active_turn_id = None;
     }
 }
 
@@ -1004,6 +980,25 @@ fn normalize_harness_overrides_for_cwd(
     Ok(overrides)
 }
 
+fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<AppServerTurnError> {
+    let TypedRequestError::Server { source, .. } = error else {
+        return None;
+    };
+    let turn_error: AppServerTurnError = serde_json::from_value(source.data.clone()?).ok()?;
+    matches!(
+        turn_error.codex_error_info,
+        Some(AppServerCodexErrorInfo::ActiveTurnNotSteerable { .. })
+    )
+    .then_some(turn_error)
+}
+
+fn active_turn_missing_steer_error(error: &TypedRequestError) -> bool {
+    let TypedRequestError::Server { source, .. } = error else {
+        return false;
+    };
+    source.message == "no active turn to steer"
+}
+
 impl App {
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
@@ -1046,10 +1041,11 @@ impl App {
 
     async fn refresh_in_memory_config_from_disk(&mut self) -> Result<()> {
         let mut config = self
-            .rebuild_config_for_cwd(self.chat_widget.config_ref().cwd.clone())
+            .rebuild_config_for_cwd(self.chat_widget.config_ref().cwd.to_path_buf())
             .await?;
         self.apply_runtime_policy_overrides(&mut config);
         self.config = config;
+        self.chat_widget.sync_plugin_mentions_config(&self.config);
         Ok(())
     }
 
@@ -1363,18 +1359,18 @@ impl App {
                 let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
                 self.app_event_tx.send(AppEvent::CodexOp(
                     AppCommand::override_turn_context(
-                        None,
-                        None,
-                        None,
-                        None,
+                        /*cwd*/ None,
+                        /*approval_policy*/ None,
+                        /*approvals_reviewer*/ None,
+                        /*sandbox_policy*/ None,
                         #[cfg(target_os = "windows")]
                         Some(windows_sandbox_level),
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
+                        /*model*/ None,
+                        /*effort*/ None,
+                        /*summary*/ None,
+                        /*service_tier*/ None,
+                        /*collaboration_mode*/ None,
+                        /*personality*/ None,
                     )
                     .into_core(),
                 ));
@@ -1412,7 +1408,7 @@ impl App {
                 self.chat_widget.current_model(),
                 self.chat_widget.current_service_tier(),
             ),
-            self.config.cwd.clone(),
+            self.config.cwd.to_path_buf(),
             version,
         )
         .display_lines(width)
@@ -1708,7 +1704,7 @@ impl App {
                     cwd: self
                         .thread_cwd(thread_id)
                         .await
-                        .unwrap_or_else(|| self.config.cwd.clone()),
+                        .unwrap_or_else(|| self.config.cwd.to_path_buf()),
                     changes: HashMap::new(),
                 }),
             ),
@@ -1823,6 +1819,84 @@ impl App {
                 .await
                 .map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::McpInventoryLoaded { result });
+        });
+    }
+
+    fn fetch_plugins_list(&mut self, app_server: &AppServerSession, cwd: PathBuf) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = fetch_plugins_list(request_handle, cwd.clone())
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::PluginsLoaded { cwd, result });
+        });
+    }
+
+    fn fetch_plugin_detail(
+        &mut self,
+        app_server: &AppServerSession,
+        cwd: PathBuf,
+        params: PluginReadParams,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = fetch_plugin_detail(request_handle, params)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::PluginDetailLoaded { cwd, result });
+        });
+    }
+
+    fn fetch_plugin_install(
+        &mut self,
+        app_server: &AppServerSession,
+        cwd: PathBuf,
+        marketplace_path: AbsolutePathBuf,
+        plugin_name: String,
+        plugin_display_name: String,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let cwd_for_event = cwd.clone();
+            let marketplace_path_for_event = marketplace_path.clone();
+            let plugin_name_for_event = plugin_name.clone();
+            let result = fetch_plugin_install(request_handle, marketplace_path, plugin_name)
+                .await
+                .map_err(|err| format!("Failed to install plugin: {err}"));
+            app_event_tx.send(AppEvent::PluginInstallLoaded {
+                cwd: cwd_for_event,
+                marketplace_path: marketplace_path_for_event,
+                plugin_name: plugin_name_for_event,
+                plugin_display_name,
+                result,
+            });
+        });
+    }
+
+    fn fetch_plugin_uninstall(
+        &mut self,
+        app_server: &AppServerSession,
+        cwd: PathBuf,
+        plugin_id: String,
+        plugin_display_name: String,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let cwd_for_event = cwd.clone();
+            let plugin_id_for_event = plugin_id.clone();
+            let result = fetch_plugin_uninstall(request_handle, plugin_id)
+                .await
+                .map_err(|err| format!("Failed to uninstall plugin: {err}"));
+            app_event_tx.send(AppEvent::PluginUninstallLoaded {
+                cwd: cwd_for_event,
+                plugin_id: plugin_id_for_event,
+                plugin_display_name,
+                result,
+            });
         });
     }
 
@@ -1950,6 +2024,7 @@ impl App {
                 items,
                 cwd,
                 approval_policy,
+                approvals_reviewer,
                 sandbox_policy,
                 model,
                 effort,
@@ -1959,18 +2034,40 @@ impl App {
                 collaboration_mode,
                 personality,
             } => {
+                let mut should_start_turn = true;
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
-                    app_server
+                    match app_server
                         .turn_steer(thread_id, turn_id, items.to_vec())
-                        .await?;
-                } else {
+                        .await
+                    {
+                        Ok(_) => return Ok(true),
+                        Err(error) => {
+                            if let Some(turn_error) = active_turn_not_steerable_turn_error(&error) {
+                                if !self.chat_widget.enqueue_rejected_steer() {
+                                    self.chat_widget.add_error_message(turn_error.message);
+                                }
+                                return Ok(true);
+                            } else if active_turn_missing_steer_error(&error) {
+                                if let Some(channel) = self.thread_event_channels.get(&thread_id) {
+                                    let mut store = channel.store.lock().await;
+                                    store.clear_active_turn_id();
+                                }
+                                should_start_turn = true;
+                            } else {
+                                return Err(error.into());
+                            }
+                        }
+                    }
+                }
+                if should_start_turn {
                     app_server
                         .turn_start(
                             thread_id,
                             items.to_vec(),
                             cwd.clone(),
                             approval_policy,
-                            self.chat_widget.config_ref().approvals_reviewer,
+                            approvals_reviewer
+                                .unwrap_or(self.chat_widget.config_ref().approvals_reviewer),
                             sandbox_policy.clone(),
                             model.to_string(),
                             effort,
@@ -2252,50 +2349,6 @@ impl App {
         Ok(())
     }
 
-    async fn enqueue_thread_legacy_warning(
-        &mut self,
-        thread_id: ThreadId,
-        message: String,
-    ) -> Result<()> {
-        let (sender, store) = {
-            let channel = self.ensure_thread_channel(thread_id);
-            (channel.sender.clone(), Arc::clone(&channel.store))
-        };
-
-        let should_send = {
-            let mut guard = store.lock().await;
-            guard
-                .buffer
-                .push_back(ThreadBufferedEvent::LegacyWarning(message.clone()));
-            if guard.buffer.len() > guard.capacity
-                && let Some(removed) = guard.buffer.pop_front()
-                && let ThreadBufferedEvent::Request(request) = &removed
-            {
-                guard
-                    .pending_interactive_replay
-                    .note_evicted_server_request(request);
-            }
-            guard.active
-        };
-
-        if should_send {
-            match sender.try_send(ThreadBufferedEvent::LegacyWarning(message)) {
-                Ok(()) => {}
-                Err(TrySendError::Full(event)) => {
-                    tokio::spawn(async move {
-                        if let Err(err) = sender.send(event).await {
-                            tracing::warn!("thread {thread_id} event channel closed: {err}");
-                        }
-                    });
-                }
-                Err(TrySendError::Closed(_)) => {
-                    tracing::warn!("thread {thread_id} event channel closed");
-                }
-            }
-        }
-        Ok(())
-    }
-
     async fn enqueue_thread_history_entry_response(
         &mut self,
         thread_id: ThreadId,
@@ -2340,64 +2393,6 @@ impl App {
         Ok(())
     }
 
-    async fn enqueue_thread_legacy_rollback(
-        &mut self,
-        thread_id: ThreadId,
-        num_turns: u32,
-    ) -> Result<()> {
-        let (sender, store) = {
-            let channel = self.ensure_thread_channel(thread_id);
-            (channel.sender.clone(), Arc::clone(&channel.store))
-        };
-
-        let should_send = {
-            let mut guard = store.lock().await;
-            if guard.consume_pending_local_legacy_rollback(num_turns) {
-                false
-            } else {
-                guard.apply_legacy_thread_rollback(num_turns);
-                guard.active
-            }
-        };
-
-        if should_send {
-            match sender.try_send(ThreadBufferedEvent::LegacyRollback { num_turns }) {
-                Ok(()) => {}
-                Err(TrySendError::Full(event)) => {
-                    tokio::spawn(async move {
-                        if let Err(err) = sender.send(event).await {
-                            tracing::warn!("thread {thread_id} event channel closed: {err}");
-                        }
-                    });
-                }
-                Err(TrySendError::Closed(_)) => {
-                    tracing::warn!("thread {thread_id} event channel closed");
-                }
-            }
-        }
-        Ok(())
-    }
-
-    async fn enqueue_primary_thread_legacy_warning(&mut self, message: String) -> Result<()> {
-        if let Some(thread_id) = self.primary_thread_id {
-            return self.enqueue_thread_legacy_warning(thread_id, message).await;
-        }
-        self.pending_primary_events
-            .push_back(ThreadBufferedEvent::LegacyWarning(message));
-        Ok(())
-    }
-
-    async fn enqueue_primary_thread_legacy_rollback(&mut self, num_turns: u32) -> Result<()> {
-        if let Some(thread_id) = self.primary_thread_id {
-            return self
-                .enqueue_thread_legacy_rollback(thread_id, num_turns)
-                .await;
-        }
-        self.pending_primary_events
-            .push_back(ThreadBufferedEvent::LegacyRollback { num_turns });
-        Ok(())
-    }
-
     async fn enqueue_primary_thread_session(
         &mut self,
         session: ThreadSessionState,
@@ -2433,14 +2428,6 @@ impl App {
                 }
                 ThreadBufferedEvent::HistoryEntryResponse(event) => {
                     self.enqueue_thread_history_entry_response(thread_id, event)
-                        .await?;
-                }
-                ThreadBufferedEvent::LegacyWarning(message) => {
-                    self.enqueue_thread_legacy_warning(thread_id, message)
-                        .await?;
-                }
-                ThreadBufferedEvent::LegacyRollback { num_turns } => {
-                    self.enqueue_thread_legacy_rollback(thread_id, num_turns)
                         .await?;
                 }
             }
@@ -2914,7 +2901,7 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         emit_project_config_warnings(&app_event_tx, &config);
-        emit_missing_system_bwrap_warning(&app_event_tx);
+        emit_system_bwrap_warning(&app_event_tx);
         tui.set_notification_method(config.tui_notification_method);
 
         let harness_overrides =
@@ -3092,7 +3079,7 @@ impl App {
         chat_widget
             .maybe_prompt_windows_sandbox_enable(should_prompt_windows_sandbox_nux_at_startup);
 
-        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
@@ -3159,7 +3146,13 @@ impl App {
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
                 let sandbox_policy = app.config.permissions.sandbox_policy.get().clone();
-                Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
+                Self::spawn_world_writable_scan(
+                    cwd.to_path_buf(),
+                    env_map,
+                    logs_base_dir,
+                    sandbox_policy,
+                    tx,
+                );
             }
         }
 
@@ -3384,7 +3377,7 @@ impl App {
                 .await?
                 {
                     SessionSelection::Resume(target_session) => {
-                        let current_cwd = self.config.cwd.clone();
+                        let current_cwd = self.config.cwd.to_path_buf();
                         let resume_cwd = if self.remote_app_server_url.is_some() {
                             current_cwd.clone()
                         } else {
@@ -3432,7 +3425,8 @@ impl App {
                                 self.shutdown_current_thread(app_server).await;
                                 self.config = resume_config;
                                 tui.set_notification_method(self.config.tui_notification_method);
-                                self.file_search.update_search_dir(self.config.cwd.clone());
+                                self.file_search
+                                    .update_search_dir(self.config.cwd.to_path_buf());
                                 match self
                                     .replace_chat_widget_with_app_server_thread(tui, resumed)
                                     .await
@@ -3648,6 +3642,103 @@ impl App {
             AppEvent::RefreshConnectors { force_refetch } => {
                 self.chat_widget.refresh_connectors(force_refetch);
             }
+            AppEvent::PluginInstallAuthAdvance { refresh_connectors } => {
+                if refresh_connectors {
+                    self.chat_widget.refresh_connectors(/*force_refetch*/ true);
+                }
+                self.chat_widget.advance_plugin_install_auth_flow();
+            }
+            AppEvent::PluginInstallAuthAbandon => {
+                self.chat_widget.abandon_plugin_install_auth_flow();
+            }
+            AppEvent::FetchPluginsList { cwd } => {
+                self.fetch_plugins_list(app_server, cwd);
+            }
+            AppEvent::OpenPluginDetailLoading {
+                plugin_display_name,
+            } => {
+                self.chat_widget
+                    .open_plugin_detail_loading_popup(&plugin_display_name);
+            }
+            AppEvent::OpenPluginInstallLoading {
+                plugin_display_name,
+            } => {
+                self.chat_widget
+                    .open_plugin_install_loading_popup(&plugin_display_name);
+            }
+            AppEvent::OpenPluginUninstallLoading {
+                plugin_display_name,
+            } => {
+                self.chat_widget
+                    .open_plugin_uninstall_loading_popup(&plugin_display_name);
+            }
+            AppEvent::PluginsLoaded { cwd, result } => {
+                self.chat_widget.on_plugins_loaded(cwd, result);
+            }
+            AppEvent::FetchPluginDetail { cwd, params } => {
+                self.fetch_plugin_detail(app_server, cwd, params);
+            }
+            AppEvent::PluginDetailLoaded { cwd, result } => {
+                self.chat_widget.on_plugin_detail_loaded(cwd, result);
+            }
+            AppEvent::FetchPluginInstall {
+                cwd,
+                marketplace_path,
+                plugin_name,
+                plugin_display_name,
+            } => {
+                self.fetch_plugin_install(
+                    app_server,
+                    cwd,
+                    marketplace_path,
+                    plugin_name,
+                    plugin_display_name,
+                );
+            }
+            AppEvent::FetchPluginUninstall {
+                cwd,
+                plugin_id,
+                plugin_display_name,
+            } => {
+                self.fetch_plugin_uninstall(app_server, cwd, plugin_id, plugin_display_name);
+            }
+            AppEvent::PluginInstallLoaded {
+                cwd,
+                marketplace_path,
+                plugin_name,
+                plugin_display_name,
+                result,
+            } => {
+                let install_succeeded = result.is_ok();
+                if install_succeeded {
+                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                        tracing::warn!(error = %err, "failed to refresh config after plugin install");
+                    }
+                    self.chat_widget.refresh_plugin_mentions();
+                    self.chat_widget.submit_op(AppCommand::reload_user_config());
+                }
+                let should_refresh_plugin_detail = self.chat_widget.on_plugin_install_loaded(
+                    cwd.clone(),
+                    marketplace_path.clone(),
+                    plugin_name.clone(),
+                    plugin_display_name,
+                    result,
+                );
+                if install_succeeded && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path()
+                {
+                    self.fetch_plugins_list(app_server, cwd.clone());
+                    if should_refresh_plugin_detail {
+                        self.fetch_plugin_detail(
+                            app_server,
+                            cwd,
+                            PluginReadParams {
+                                marketplace_path,
+                                plugin_name,
+                            },
+                        );
+                    }
+                }
+            }
             AppEvent::FetchMcpInventory => {
                 self.fetch_mcp_inventory(app_server);
             }
@@ -3785,7 +3876,7 @@ impl App {
                             Ok(()) => {
                                 session_telemetry.counter(
                                     "codex.windows_sandbox.elevated_setup_success",
-                                    1,
+                                    /*inc*/ 1,
                                     &[],
                                 );
                                 AppEvent::EnableWindowsSandboxForAgentMode {
@@ -3815,7 +3906,7 @@ impl App {
                                     codex_core::windows_sandbox::elevated_setup_failure_metric_name(
                                         &err,
                                     ),
-                                    1,
+                                    /*inc*/ 1,
                                     &tags,
                                 );
                                 tracing::error!(
@@ -3856,7 +3947,7 @@ impl App {
                         ) {
                             session_telemetry.counter(
                                 "codex.windows_sandbox.legacy_setup_preflight_failed",
-                                1,
+                                /*inc*/ 1,
                                 &[],
                             );
                             tracing::warn!(
@@ -3881,7 +3972,7 @@ impl App {
                     self.chat_widget
                         .add_to_history(history_cell::new_info_event(
                             format!("Granting sandbox read access to {path} ..."),
-                            None,
+                            /*hint*/ None,
                         ));
 
                     let policy = self.config.permissions.sandbox_policy.get().clone();
@@ -3956,11 +4047,13 @@ impl App {
                     match builder.apply().await {
                         Ok(()) => {
                             if elevated_enabled {
-                                self.config.set_windows_sandbox_enabled(false);
-                                self.config.set_windows_elevated_sandbox_enabled(true);
+                                self.config.set_windows_sandbox_enabled(/*value*/ false);
+                                self.config
+                                    .set_windows_elevated_sandbox_enabled(/*value*/ true);
                             } else {
-                                self.config.set_windows_sandbox_enabled(true);
-                                self.config.set_windows_elevated_sandbox_enabled(false);
+                                self.config.set_windows_sandbox_enabled(/*value*/ true);
+                                self.config
+                                    .set_windows_elevated_sandbox_enabled(/*value*/ false);
                             }
                             self.chat_widget.set_windows_sandbox_mode(
                                 self.config.permissions.windows_sandbox_mode,
@@ -3972,18 +4065,18 @@ impl App {
                             {
                                 self.app_event_tx.send(AppEvent::CodexOp(
                                     AppCommand::override_turn_context(
-                                        None,
-                                        None,
-                                        None,
-                                        None,
+                                        /*cwd*/ None,
+                                        /*approval_policy*/ None,
+                                        /*approvals_reviewer*/ None,
+                                        /*sandbox_policy*/ None,
                                         #[cfg(target_os = "windows")]
                                         Some(windows_sandbox_level),
-                                        None,
-                                        None,
-                                        None,
-                                        None,
-                                        None,
-                                        None,
+                                        /*model*/ None,
+                                        /*effort*/ None,
+                                        /*summary*/ None,
+                                        /*service_tier*/ None,
+                                        /*collaboration_mode*/ None,
+                                        /*personality*/ None,
                                     )
                                     .into(),
                                 ));
@@ -3998,18 +4091,18 @@ impl App {
                             } else {
                                 self.app_event_tx.send(AppEvent::CodexOp(
                                     AppCommand::override_turn_context(
-                                        None,
+                                        /*cwd*/ None,
                                         Some(preset.approval),
                                         Some(self.config.approvals_reviewer),
                                         Some(preset.sandbox.clone()),
                                         #[cfg(target_os = "windows")]
                                         Some(windows_sandbox_level),
-                                        None,
-                                        None,
-                                        None,
-                                        None,
-                                        None,
-                                        None,
+                                        /*model*/ None,
+                                        /*effort*/ None,
+                                        /*summary*/ None,
+                                        /*service_tier*/ None,
+                                        /*collaboration_mode*/ None,
+                                        /*personality*/ None,
                                     )
                                     .into(),
                                 ));
@@ -4083,6 +4176,34 @@ impl App {
                                 .add_error_message(format!("Failed to save default model: {err}"));
                         }
                     }
+                }
+            }
+            AppEvent::PluginUninstallLoaded {
+                cwd,
+                plugin_id: _plugin_id,
+                plugin_display_name,
+                result,
+            } => {
+                let uninstall_succeeded = result.is_ok();
+                if uninstall_succeeded {
+                    if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                        tracing::warn!(
+                            error = %err,
+                            "failed to refresh config after plugin uninstall"
+                        );
+                    }
+                    self.chat_widget.refresh_plugin_mentions();
+                    self.chat_widget.submit_op(AppCommand::reload_user_config());
+                }
+                self.chat_widget.on_plugin_uninstall_loaded(
+                    cwd.clone(),
+                    plugin_display_name,
+                    result,
+                );
+                if uninstall_succeeded
+                    && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path()
+                {
+                    self.fetch_plugins_list(app_server, cwd);
                 }
             }
             AppEvent::PersistPersonalitySelection { personality } => {
@@ -4268,7 +4389,7 @@ impl App {
                         let logs_base_dir = self.config.codex_home.clone();
                         let sandbox_policy = self.config.permissions.sandbox_policy.get().clone();
                         Self::spawn_world_writable_scan(
-                            cwd,
+                            cwd.to_path_buf(),
                             env_map,
                             logs_base_dir,
                             sandbox_policy,
@@ -4615,7 +4736,11 @@ impl App {
             AppEvent::UpdateRecordingMeter { id, text } => {
                 // Update in place to preserve the element id for subsequent frames.
                 let updated = self.chat_widget.update_transcription_in_place(&id, &text);
-                if updated {
+                if updated
+                    || self
+                        .chat_widget
+                        .stop_realtime_conversation_for_deleted_meter(&id)
+                {
                     tui.frame_requester().schedule_frame();
                 }
             }
@@ -4718,7 +4843,6 @@ impl App {
         if let Some(channel) = self.thread_event_channels.get(&thread_id) {
             let mut store = channel.store.lock().await;
             store.apply_thread_rollback(response);
-            store.note_local_thread_rollback(num_turns);
         }
         if self.active_thread_id == Some(thread_id)
             && let Some(mut rx) = self.active_thread_rx.take()
@@ -4763,13 +4887,6 @@ impl App {
             ThreadBufferedEvent::HistoryEntryResponse(event) => {
                 self.chat_widget.handle_history_entry_response(event);
             }
-            ThreadBufferedEvent::LegacyWarning(message) => {
-                self.chat_widget.add_warning_message(message);
-            }
-            ThreadBufferedEvent::LegacyRollback { num_turns } => {
-                self.handle_backtrack_rollback_succeeded(num_turns);
-                self.chat_widget.handle_thread_rolled_back();
-            }
         }
         if needs_refresh {
             self.refresh_status_line();
@@ -4786,13 +4903,6 @@ impl App {
                 .handle_server_request(request, Some(ReplayKind::ThreadSnapshot)),
             ThreadBufferedEvent::HistoryEntryResponse(event) => {
                 self.chat_widget.handle_history_entry_response(event)
-            }
-            ThreadBufferedEvent::LegacyWarning(message) => {
-                self.chat_widget.add_warning_message(message);
-            }
-            ThreadBufferedEvent::LegacyRollback { num_turns } => {
-                self.handle_backtrack_rollback_succeeded(num_turns);
-                self.chat_widget.handle_thread_rolled_back();
             }
         }
     }
@@ -5192,6 +5302,71 @@ async fn fetch_all_mcp_server_statuses(
     Ok(statuses)
 }
 
+async fn fetch_plugins_list(
+    request_handle: AppServerRequestHandle,
+    cwd: PathBuf,
+) -> Result<PluginListResponse> {
+    let cwd = AbsolutePathBuf::try_from(cwd).wrap_err("plugin list cwd must be absolute")?;
+    let request_id = RequestId::String(format!("plugin-list-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::PluginList {
+            request_id,
+            params: PluginListParams {
+                cwds: Some(vec![cwd]),
+                force_remote_sync: false,
+            },
+        })
+        .await
+        .wrap_err("plugin/list failed in app-server TUI")
+}
+
+async fn fetch_plugin_detail(
+    request_handle: AppServerRequestHandle,
+    params: PluginReadParams,
+) -> Result<PluginReadResponse> {
+    let request_id = RequestId::String(format!("plugin-read-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::PluginRead { request_id, params })
+        .await
+        .wrap_err("plugin/read failed in app-server TUI")
+}
+
+async fn fetch_plugin_install(
+    request_handle: AppServerRequestHandle,
+    marketplace_path: AbsolutePathBuf,
+    plugin_name: String,
+) -> Result<PluginInstallResponse> {
+    let request_id = RequestId::String(format!("plugin-install-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::PluginInstall {
+            request_id,
+            params: PluginInstallParams {
+                marketplace_path,
+                plugin_name,
+                force_remote_sync: false,
+            },
+        })
+        .await
+        .wrap_err("plugin/install failed in app-server TUI")
+}
+
+async fn fetch_plugin_uninstall(
+    request_handle: AppServerRequestHandle,
+    plugin_id: String,
+) -> Result<PluginUninstallResponse> {
+    let request_id = RequestId::String(format!("plugin-uninstall-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::PluginUninstall {
+            request_id,
+            params: PluginUninstallParams {
+                plugin_id,
+                force_remote_sync: false,
+            },
+        })
+        .await
+        .wrap_err("plugin/uninstall failed in app-server TUI")
+}
+
 /// Convert flat `McpServerStatus` responses into the per-server maps used by the
 /// in-process MCP subsystem (tools keyed as `mcp__{server}__{tool}`, plus
 /// per-server resource/template/auth maps). Test-only because the app-server TUI
@@ -5255,10 +5430,13 @@ mod tests {
     use codex_app_server_protocol::AdditionalPermissionProfile;
     use codex_app_server_protocol::AgentMessageDeltaNotification;
     use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
+    use codex_app_server_protocol::ConfigWarningNotification;
+    use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::NetworkApprovalContext as AppServerNetworkApprovalContext;
     use codex_app_server_protocol::NetworkApprovalProtocol as AppServerNetworkApprovalProtocol;
     use codex_app_server_protocol::NetworkPolicyAmendment as AppServerNetworkPolicyAmendment;
     use codex_app_server_protocol::NetworkPolicyRuleAction as AppServerNetworkPolicyRuleAction;
+    use codex_app_server_protocol::NonSteerableTurnKind as AppServerNonSteerableTurnKind;
     use codex_app_server_protocol::RequestId as AppServerRequestId;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::ServerRequest;
@@ -5271,6 +5449,7 @@ mod tests {
     use codex_app_server_protocol::TokenUsageBreakdown;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
+    use codex_app_server_protocol::TurnError as AppServerTurnError;
     use codex_app_server_protocol::TurnStartedNotification;
     use codex_app_server_protocol::TurnStatus;
     use codex_app_server_protocol::UserInput as AppServerUserInput;
@@ -5820,7 +5999,7 @@ mod tests {
         app.chat_widget
             .apply_external_edit("queued follow-up".to_string());
         app.chat_widget
-            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         let input_state = app
             .chat_widget
             .capture_thread_input_state()
@@ -5856,33 +6035,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn replay_thread_snapshot_replays_legacy_warning_history() {
-        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-
-        app.replay_thread_snapshot(
-            ThreadEventSnapshot {
-                session: None,
-                turns: Vec::new(),
-                events: vec![ThreadBufferedEvent::LegacyWarning(
-                    "legacy warning message".to_string(),
-                )],
-                input_state: None,
-            },
-            false,
-        );
-
-        let mut saw_warning = false;
-        while let Ok(event) = app_event_rx.try_recv() {
-            if let AppEvent::InsertHistoryCell(cell) = event {
-                let transcript = lines_to_single_string(&cell.transcript_lines(80));
-                saw_warning |= transcript.contains("legacy warning message");
-            }
-        }
-
-        assert!(saw_warning, "expected replayed legacy warning history cell");
-    }
-
-    #[tokio::test]
     async fn replay_only_thread_keeps_restored_queue_visible() {
         let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
@@ -5897,7 +6049,7 @@ mod tests {
         app.chat_widget
             .apply_external_edit("queued follow-up".to_string());
         app.chat_widget
-            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         let input_state = app
             .chat_widget
             .capture_thread_input_state()
@@ -5946,7 +6098,7 @@ mod tests {
         app.chat_widget
             .apply_external_edit("queued follow-up".to_string());
         app.chat_widget
-            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         let input_state = app
             .chat_widget
             .capture_thread_input_state()
@@ -5993,7 +6145,7 @@ mod tests {
         app.chat_widget
             .apply_external_edit("queued follow-up".to_string());
         app.chat_widget
-            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         let input_state = app
             .chat_widget
             .capture_thread_input_state()
@@ -6063,7 +6215,7 @@ mod tests {
         app.chat_widget
             .apply_external_edit("queued follow-up".to_string());
         app.chat_widget
-            .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+            .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         let input_state = app
             .chat_widget
             .capture_thread_input_state()
@@ -6553,7 +6705,7 @@ mod tests {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
-        let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
+        let config_toml_path = codex_home.path().join("config.toml").abs();
         let config_toml = "approvals_reviewer = \"guardian_subagent\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
@@ -6645,7 +6797,7 @@ mod tests {
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
         let guardian_approvals = guardian_approvals_mode();
-        let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
+        let config_toml_path = codex_home.path().join("config.toml").abs();
         let config_toml = "approvals_reviewer = \"user\"\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
@@ -6712,7 +6864,7 @@ mod tests {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
-        let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
+        let config_toml_path = codex_home.path().join("config.toml").abs();
         let config_toml = "approvals_reviewer = \"user\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
@@ -6773,7 +6925,7 @@ mod tests {
         app.config.codex_home = codex_home.path().to_path_buf();
         let guardian_approvals = guardian_approvals_mode();
         app.active_profile = Some("guardian".to_string());
-        let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
+        let config_toml_path = codex_home.path().join("config.toml").abs();
         let config_toml = "profile = \"guardian\"\napprovals_reviewer = \"user\"\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
@@ -6843,7 +6995,7 @@ mod tests {
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
         app.active_profile = Some("guardian".to_string());
-        let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
+        let config_toml_path = codex_home.path().join("config.toml").abs();
         let config_toml = r#"
 profile = "guardian"
 approvals_reviewer = "user"
@@ -6931,7 +7083,7 @@ guardian_approval = true
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
         app.active_profile = Some("guardian".to_string());
-        let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
+        let config_toml_path = codex_home.path().join("config.toml").abs();
         let config_toml = "profile = \"guardian\"\napprovals_reviewer = \"guardian_subagent\"\n\n[features]\nguardian_approval = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
@@ -7229,87 +7381,6 @@ guardian_approval = true
     }
 
     #[tokio::test]
-    async fn legacy_warning_eviction_clears_pending_interactive_replay_state() -> Result<()> {
-        let mut app = make_test_app().await;
-        let thread_id = ThreadId::new();
-        let channel = ThreadEventChannel::new(1);
-        {
-            let mut store = channel.store.lock().await;
-            store.push_request(exec_approval_request(
-                thread_id,
-                "turn-approval",
-                "call-approval",
-                None,
-            ));
-            assert_eq!(store.has_pending_thread_approvals(), true);
-        }
-        app.thread_event_channels.insert(thread_id, channel);
-
-        app.enqueue_thread_legacy_warning(thread_id, "legacy warning".to_string())
-            .await?;
-
-        let store = app
-            .thread_event_channels
-            .get(&thread_id)
-            .expect("thread store should exist")
-            .store
-            .lock()
-            .await;
-        assert_eq!(store.has_pending_thread_approvals(), false);
-        let snapshot = store.snapshot();
-        assert_eq!(snapshot.events.len(), 1);
-        assert!(matches!(
-            snapshot.events.first(),
-            Some(ThreadBufferedEvent::LegacyWarning(message)) if message == "legacy warning"
-        ));
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn legacy_thread_rollback_trims_inactive_thread_snapshot_state() -> Result<()> {
-        let mut app = make_test_app().await;
-        let thread_id = ThreadId::new();
-        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
-        let turns = vec![
-            test_turn("turn-1", TurnStatus::Completed, Vec::new()),
-            test_turn("turn-2", TurnStatus::Completed, Vec::new()),
-        ];
-        let channel = ThreadEventChannel::new_with_session(4, session, turns);
-        {
-            let mut store = channel.store.lock().await;
-            store.push_request(exec_approval_request(
-                thread_id,
-                "turn-approval",
-                "call-approval",
-                None,
-            ));
-            assert_eq!(store.has_pending_thread_approvals(), true);
-        }
-        app.thread_event_channels.insert(thread_id, channel);
-
-        app.enqueue_thread_legacy_rollback(thread_id, 1).await?;
-
-        let store = app
-            .thread_event_channels
-            .get(&thread_id)
-            .expect("thread store should exist")
-            .store
-            .lock()
-            .await;
-        assert_eq!(
-            store.turns,
-            vec![test_turn("turn-1", TurnStatus::Completed, Vec::new())]
-        );
-        assert_eq!(store.has_pending_thread_approvals(), false);
-        let snapshot = store.snapshot();
-        assert_eq!(snapshot.turns, store.turns);
-        assert!(snapshot.events.is_empty());
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn inactive_thread_started_notification_initializes_replay_session() -> Result<()> {
         let mut app = make_test_app().await;
         let temp_dir = tempdir()?;
@@ -7593,7 +7664,7 @@ guardian_approval = true
 
     async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
         let mut app = make_test_app().await;
-        app.config.cwd = PathBuf::from("/tmp/project");
+        app.config.cwd = PathBuf::from("/tmp/project").abs();
         app.chat_widget.set_model("gpt-test");
         app.chat_widget
             .set_reasoning_effort(Some(ReasoningEffortConfig::High));
@@ -7646,7 +7717,7 @@ guardian_approval = true
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/tmp/project"),
+                cwd: PathBuf::from("/tmp/project").abs().to_path_buf(),
                 reasoning_effort: Some(ReasoningEffortConfig::High),
                 history_log_id: 0,
                 history_entry_count: 0,
@@ -7704,21 +7775,33 @@ guardian_approval = true
     }
 
     #[tokio::test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "snapshot path rendering differs on Windows"
+    )]
     async fn clear_ui_after_long_transcript_snapshots_fresh_header_only() {
         let rendered = render_clear_ui_header_after_long_transcript_for_snapshot().await;
         assert_snapshot!("clear_ui_after_long_transcript_fresh_header_only", rendered);
     }
 
     #[tokio::test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "snapshot path rendering differs on Windows"
+    )]
     async fn ctrl_l_clear_ui_after_long_transcript_reuses_clear_header_snapshot() {
         let rendered = render_clear_ui_header_after_long_transcript_for_snapshot().await;
         assert_snapshot!("clear_ui_after_long_transcript_fresh_header_only", rendered);
     }
 
     #[tokio::test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "snapshot path rendering differs on Windows"
+    )]
     async fn clear_ui_header_shows_fast_status_only_for_gpt54() {
         let mut app = make_test_app().await;
-        app.config.cwd = PathBuf::from("/tmp/project");
+        app.config.cwd = PathBuf::from("/tmp/project").abs();
         app.chat_widget.set_model("gpt-5.4");
         app.chat_widget
             .set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
@@ -7744,7 +7827,7 @@ guardian_approval = true
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
 
@@ -7794,7 +7877,7 @@ guardian_approval = true
     ) {
         let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
 
@@ -8005,6 +8088,17 @@ guardian_approval = true
     }
 
     #[test]
+    fn thread_event_store_clear_active_turn_id_resets_cached_turn() {
+        let mut store = ThreadEventStore::new(8);
+        let thread_id = ThreadId::new();
+        store.push_notification(turn_started_notification(thread_id, "turn-1"));
+
+        store.clear_active_turn_id();
+
+        assert_eq!(store.active_turn_id(), None);
+    }
+
+    #[test]
     fn thread_event_store_rebase_preserves_resolved_request_state() {
         let thread_id = ThreadId::new();
         let mut store = ThreadEventStore::new(8);
@@ -8026,16 +8120,6 @@ guardian_approval = true
         let snapshot = store.snapshot();
         assert!(snapshot.events.is_empty());
         assert_eq!(store.has_pending_thread_approvals(), false);
-    }
-
-    #[test]
-    fn thread_event_store_consumes_matching_local_legacy_rollback_once() {
-        let mut store = ThreadEventStore::new(8);
-        store.note_local_thread_rollback(2);
-
-        assert!(store.consume_pending_local_legacy_rollback(2));
-        assert!(!store.consume_pending_local_legacy_rollback(2));
-        assert!(!store.consume_pending_local_legacy_rollback(1));
     }
 
     fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
@@ -8218,6 +8302,45 @@ guardian_approval = true
                 message: "gpt-5.2 is available".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn active_turn_not_steerable_turn_error_extracts_structured_server_error() {
+        let turn_error = AppServerTurnError {
+            message: "cannot steer a review turn".to_string(),
+            codex_error_info: Some(AppServerCodexErrorInfo::ActiveTurnNotSteerable {
+                turn_kind: AppServerNonSteerableTurnKind::Review,
+            }),
+            additional_details: None,
+        };
+        let error = TypedRequestError::Server {
+            method: "turn/steer".to_string(),
+            source: JSONRPCErrorError {
+                code: -32602,
+                message: turn_error.message.clone(),
+                data: Some(serde_json::to_value(&turn_error).expect("turn error should serialize")),
+            },
+        };
+
+        assert_eq!(
+            active_turn_not_steerable_turn_error(&error),
+            Some(turn_error)
+        );
+    }
+
+    #[test]
+    fn active_turn_missing_steer_error_detects_stale_turn_race() {
+        let error = TypedRequestError::Server {
+            method: "turn/steer".to_string(),
+            source: JSONRPCErrorError {
+                code: -32602,
+                message: "no active turn to steer".to_string(),
+                data: None,
+            },
+        };
+
+        assert!(active_turn_missing_steer_error(&error));
+        assert_eq!(active_turn_not_steerable_turn_error(&error), None);
     }
 
     #[test]
@@ -8499,7 +8622,7 @@ guardian_approval = true
             }),
         });
 
-        assert_eq!(app.chat_widget.config_ref().cwd, next_cwd);
+        assert_eq!(app.chat_widget.config_ref().cwd.to_path_buf(), next_cwd);
         assert_eq!(app.config.cwd, original_cwd);
 
         app.refresh_in_memory_config_from_disk().await?;
@@ -8519,7 +8642,7 @@ guardian_approval = true
         let current_cwd = current_config.cwd.clone();
 
         let resume_config = app
-            .rebuild_config_for_resume_or_fallback(&current_cwd, current_cwd.clone())
+            .rebuild_config_for_resume_or_fallback(&current_cwd, current_cwd.to_path_buf())
             .await?;
 
         assert_eq!(resume_config, current_config);
@@ -8996,8 +9119,13 @@ guardian_approval = true
         let (tx, rx) = mpsc::channel(8);
         app.active_thread_id = Some(thread_id);
         app.active_thread_rx = Some(rx);
-        tx.send(ThreadBufferedEvent::LegacyWarning(
-            "stale warning".to_string(),
+        tx.send(ThreadBufferedEvent::Notification(
+            ServerNotification::ConfigWarning(ConfigWarningNotification {
+                summary: "stale warning".to_string(),
+                details: None,
+                path: None,
+                range: None,
+            }),
         ))
         .await
         .expect("event should queue");
@@ -9033,62 +9161,6 @@ guardian_approval = true
             .as_mut()
             .expect("active receiver should remain attached");
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
-    }
-
-    #[tokio::test]
-    async fn local_rollback_response_suppresses_matching_legacy_rollback() {
-        let mut app = make_test_app().await;
-        let thread_id = ThreadId::new();
-        let session = test_thread_session(thread_id, PathBuf::from("/tmp/project"));
-        let initial_turns = vec![
-            test_turn("turn-1", TurnStatus::Completed, Vec::new()),
-            test_turn("turn-2", TurnStatus::Completed, Vec::new()),
-        ];
-        app.thread_event_channels.insert(
-            thread_id,
-            ThreadEventChannel::new_with_session(8, session, initial_turns),
-        );
-
-        app.handle_thread_rollback_response(
-            thread_id,
-            1,
-            &ThreadRollbackResponse {
-                thread: Thread {
-                    id: thread_id.to_string(),
-                    preview: String::new(),
-                    ephemeral: false,
-                    model_provider: "openai".to_string(),
-                    created_at: 0,
-                    updated_at: 0,
-                    status: codex_app_server_protocol::ThreadStatus::Idle,
-                    path: None,
-                    cwd: PathBuf::from("/tmp/project"),
-                    cli_version: "0.0.0".to_string(),
-                    source: SessionSource::Cli.into(),
-                    agent_nickname: None,
-                    agent_role: None,
-                    git_info: None,
-                    name: None,
-                    turns: vec![test_turn("turn-1", TurnStatus::Completed, Vec::new())],
-                },
-            },
-        )
-        .await;
-
-        app.enqueue_thread_legacy_rollback(thread_id, 1)
-            .await
-            .expect("legacy rollback should not fail");
-
-        let store = app
-            .thread_event_channels
-            .get(&thread_id)
-            .expect("thread channel")
-            .store
-            .lock()
-            .await;
-        let snapshot = store.snapshot();
-        assert_eq!(snapshot.turns.len(), 1);
-        assert!(snapshot.events.is_empty());
     }
 
     #[tokio::test]

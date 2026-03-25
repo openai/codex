@@ -13,6 +13,7 @@ base64 = { workspace = true }
 chrono = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-core = { workspace = true }
+codex-features = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 serde = { workspace = true }

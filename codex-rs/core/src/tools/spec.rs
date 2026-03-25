@@ -3,8 +3,6 @@ use crate::client_common::tools::FreeformToolFormat;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::config::AgentRoleConfig;
-use crate::features::Feature;
-use crate::features::Features;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -13,9 +11,6 @@ use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::code_mode::PUBLIC_TOOL_NAME;
 use crate::tools::code_mode::WAIT_TOOL_NAME;
-use crate::tools::code_mode::is_code_mode_nested_tool;
-use crate::tools::code_mode::tool_description as code_mode_tool_description;
-use crate::tools::code_mode::wait_tool_description as code_mode_wait_tool_description;
 use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
 use crate::tools::discoverable::DiscoverablePluginInfo;
 use crate::tools::discoverable::DiscoverableTool;
@@ -28,13 +23,15 @@ use crate::tools::handlers::TOOL_SUGGEST_TOOL_NAME;
 use crate::tools::handlers::agent_jobs::BatchJobHandler;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
-use crate::tools::handlers::multi_agents::DEFAULT_WAIT_TIMEOUT_MS;
-use crate::tools::handlers::multi_agents::MAX_WAIT_TIMEOUT_MS;
-use crate::tools::handlers::multi_agents::MIN_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::request_permissions_tool_description;
 use crate::tools::handlers::request_user_input_tool_description;
 use crate::tools::registry::ToolRegistryBuilder;
 use crate::tools::registry::tool_handler_key;
+use codex_features::Feature;
+use codex_features::Features;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -129,20 +126,29 @@ fn agent_status_output_schema() -> JsonValue {
     })
 }
 
-fn spawn_agent_output_schema() -> JsonValue {
+fn spawn_agent_output_schema(multi_agent_v2: bool) -> JsonValue {
+    let task_name_description = if multi_agent_v2 {
+        "Canonical task name for the spawned agent."
+    } else {
+        "Canonical task name for the spawned agent when one was assigned."
+    };
     json!({
         "type": "object",
         "properties": {
             "agent_id": {
-                "type": "string",
-                "description": "Thread identifier for the spawned agent."
+                "type": ["string", "null"],
+                "description": "Thread identifier for the spawned agent when no task name was assigned."
+            },
+            "task_name": {
+                "type": ["string", "null"],
+                "description": task_name_description
             },
             "nickname": {
                 "type": ["string", "null"],
                 "description": "User-facing nickname for the spawned agent when available."
             }
         },
-        "required": ["agent_id", "nickname"],
+        "required": ["agent_id", "task_name", "nickname"],
         "additionalProperties": false
     })
 }
@@ -161,6 +167,39 @@ fn send_input_output_schema() -> JsonValue {
     })
 }
 
+fn list_agents_output_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "agents": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "agent_name": {
+                            "type": "string",
+                            "description": "Canonical task name for the agent when available, otherwise the agent id."
+                        },
+                        "agent_status": {
+                            "description": "Last known status of the agent.",
+                            "allOf": [agent_status_output_schema()]
+                        },
+                        "last_task_message": {
+                            "type": ["string", "null"],
+                            "description": "Most recent user or inter-agent instruction received by the agent, when available."
+                        }
+                    },
+                    "required": ["agent_name", "agent_status", "last_task_message"],
+                    "additionalProperties": false
+                },
+                "description": "Live agents visible in the current root thread tree."
+            }
+        },
+        "required": ["agents"],
+        "additionalProperties": false
+    })
+}
+
 fn resume_agent_output_schema() -> JsonValue {
     json!({
         "type": "object",
@@ -172,13 +211,13 @@ fn resume_agent_output_schema() -> JsonValue {
     })
 }
 
-fn wait_output_schema() -> JsonValue {
+fn wait_output_schema_v1() -> JsonValue {
     json!({
         "type": "object",
         "properties": {
             "status": {
                 "type": "object",
-                "description": "Final statuses keyed by agent id for agents that finished before the timeout.",
+                "description": "Final statuses keyed by canonical task name when available, otherwise by agent id.",
                 "additionalProperties": agent_status_output_schema()
             },
             "timed_out": {
@@ -187,6 +226,24 @@ fn wait_output_schema() -> JsonValue {
             }
         },
         "required": ["status", "timed_out"],
+        "additionalProperties": false
+    })
+}
+
+fn wait_output_schema_v2() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "message": {
+                "type": "string",
+                "description": "Brief wait summary without the agent's final content."
+            },
+            "timed_out": {
+                "type": "boolean",
+                "description": "Whether the wait call returned due to timeout before any agent reached a final status."
+            }
+        },
+        "required": ["message", "timed_out"],
         "additionalProperties": false
     })
 }
@@ -276,6 +333,7 @@ pub(crate) struct ToolsConfig {
     pub js_repl_tools_only: bool,
     pub can_request_original_image_detail: bool,
     pub collab_tools: bool,
+    pub multi_agent_v2: bool,
     pub artifact_tools: bool,
     pub request_user_input: bool,
     pub default_mode_request_user_input: bool,
@@ -325,12 +383,16 @@ impl ToolsConfig {
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
         let include_collab_tools = features.enabled(Feature::Collab);
+        let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
         let include_request_user_input = !matches!(session_source, SessionSource::SubAgent(_));
         let include_default_mode_request_user_input =
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
-        let include_search_tool = model_info.supports_search_tool;
-        let include_tool_suggest = features.enabled(Feature::ToolSuggest);
+        let include_search_tool =
+            model_info.supports_search_tool && features.enabled(Feature::ToolSearch);
+        let include_tool_suggest = features.enabled(Feature::ToolSuggest)
+            && features.enabled(Feature::Apps)
+            && features.enabled(Feature::Plugins);
         let include_original_image_detail = can_request_original_image_detail(features, model_info);
         let include_artifact_tools =
             features.enabled(Feature::Artifact) && codex_artifacts::can_manage_artifact_runtime();
@@ -408,6 +470,7 @@ impl ToolsConfig {
             js_repl_tools_only: include_js_repl_tools_only,
             can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
+            multi_agent_v2: include_multi_agent_v2,
             artifact_tools: include_artifact_tools,
             request_user_input: include_request_user_input,
             default_mode_request_user_input: include_default_mode_request_user_input,
@@ -821,7 +884,7 @@ fn create_wait_tool() -> ToolSpec {
         name: WAIT_TOOL_NAME.to_string(),
         description: format!(
             "Waits on a yielded `{PUBLIC_TOOL_NAME}` cell and returns new output or completion.\n{}",
-            code_mode_wait_tool_description().trim()
+            codex_code_mode::build_wait_tool_description().trim()
         ),
         strict: false,
         parameters: JsonSchema::Object {
@@ -1076,7 +1139,8 @@ fn create_collab_input_items_schema() -> JsonSchema {
 
 fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
     let available_models_description = spawn_agent_models_description(&config.available_models);
-    let properties = BTreeMap::from([
+    let return_value_description = "Returns the canonical task name when the spawned agent was named, otherwise the agent id, plus the user-facing nickname when available.";
+    let mut properties = BTreeMap::from([
         (
             "message".to_string(),
             JsonSchema::String {
@@ -1123,6 +1187,15 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
             },
         ),
     ]);
+    properties.insert(
+        "task_name".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional task name for the new agent. Use lowercase letters, digits, and underscores."
+                    .to_string(),
+            ),
+        },
+    );
 
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
@@ -1131,7 +1204,7 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
         Only use `spawn_agent` if and only if the user explicitly asks for sub-agents, delegation, or parallel agent work.
         Requests for depth, thoroughness, research, investigation, or detailed codebase analysis do not count as permission to spawn.
         Agent-role guidance below only helps choose which agent to use after spawning is already authorized; it never authorizes spawning by itself.
-        Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent. This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
+        Spawn a sub-agent for a well-scoped task. {return_value_description} This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
 
 {available_models_description}
 ### When to delegate vs. do the subtask yourself
@@ -1170,7 +1243,7 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
             required: None,
             additional_properties: Some(false.into()),
         },
-        output_schema: Some(spawn_agent_output_schema()),
+        output_schema: Some(spawn_agent_output_schema(config.multi_agent_v2)),
     })
 }
 
@@ -1335,9 +1408,11 @@ fn create_report_agent_job_result_tool() -> ToolSpec {
 fn create_send_input_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
-            "id".to_string(),
+            "target".to_string(),
             JsonSchema::String {
-                description: Some("Agent id to message (from spawn_agent).".to_string()),
+                description: Some(
+                    "Agent id or canonical task name to message (from spawn_agent).".to_string(),
+                ),
             },
         ),
         (
@@ -1369,7 +1444,81 @@ fn create_send_input_tool() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["id".to_string()]),
+            required: Some(vec!["target".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: Some(send_input_output_schema()),
+    })
+}
+
+fn create_send_message_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "target".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Agent id or canonical task name to message (from spawn_agent).".to_string(),
+                ),
+            },
+        ),
+        ("items".to_string(), create_collab_input_items_schema()),
+        (
+            "interrupt".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "send_message".to_string(),
+        description: "Add a message to an existing agent without triggering a new turn. Use interrupt=true to stop the current task first. In MultiAgentV2, this tool currently supports text content only."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["target".to_string(), "items".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: Some(send_input_output_schema()),
+    })
+}
+
+fn create_assign_task_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "target".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Agent id or canonical task name to message (from spawn_agent).".to_string(),
+                ),
+            },
+        ),
+        ("items".to_string(), create_collab_input_items_schema()),
+        (
+            "interrupt".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true, stop the agent's current task and handle this immediately. When false (default), queue this message."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "assign_task".to_string(),
+        description: "Add a message to an existing agent and trigger a turn in the target. Use interrupt=true to redirect work immediately. In MultiAgentV2, this tool currently supports text content only."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["target".to_string(), "items".to_string()]),
             additional_properties: Some(false.into()),
         },
         output_schema: Some(send_input_output_schema()),
@@ -1401,14 +1550,14 @@ fn create_resume_agent_tool() -> ToolSpec {
     })
 }
 
-fn create_wait_agent_tool() -> ToolSpec {
+fn wait_agent_tool_parameters() -> JsonSchema {
     let mut properties = BTreeMap::new();
     properties.insert(
-        "ids".to_string(),
+        "targets".to_string(),
         JsonSchema::Array {
             items: Box::new(JsonSchema::String { description: None }),
             description: Some(
-                "Agent ids to wait on. Pass multiple ids to wait for whichever finishes first."
+                "Agent ids or canonical task names to wait on. Pass multiple targets to wait for whichever finishes first."
                     .to_string(),
             ),
         },
@@ -1422,18 +1571,60 @@ fn create_wait_agent_tool() -> ToolSpec {
         },
     );
 
+    JsonSchema::Object {
+        properties,
+        required: Some(vec!["targets".to_string()]),
+        additional_properties: Some(false.into()),
+    }
+}
+
+fn create_wait_agent_tool_v1() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "wait_agent".to_string(),
         description: "Wait for agents to reach a final status. Completed statuses may include the agent's final message. Returns empty status when timed out. Once the agent reaches a final status, a notification message will be received containing the same completed status."
             .to_string(),
         strict: false,
         defer_loading: None,
+        parameters: wait_agent_tool_parameters(),
+        output_schema: Some(wait_output_schema_v1()),
+    })
+}
+
+fn create_wait_agent_tool_v2() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: "wait_agent".to_string(),
+        description: "Wait for agents to reach a final status. Returns a brief wait summary instead of the agent's final content. Returns a timeout summary when no agent reaches a final status before the deadline."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: wait_agent_tool_parameters(),
+        output_schema: Some(wait_output_schema_v2()),
+    })
+}
+
+fn create_list_agents_tool() -> ToolSpec {
+    let properties = BTreeMap::from([(
+        "path_prefix".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional task-path prefix. Accepts the same relative or absolute task-path syntax as other MultiAgentV2 agent targets."
+                    .to_string(),
+            ),
+        },
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "list_agents".to_string(),
+        description: "List live agents in the current root thread tree. Optionally filter by task-path prefix."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["ids".to_string()]),
+            required: None,
             additional_properties: Some(false.into()),
         },
-        output_schema: Some(wait_output_schema()),
+        output_schema: Some(list_agents_output_schema()),
     })
 }
 
@@ -1556,9 +1747,11 @@ fn create_request_permissions_tool() -> ToolSpec {
 fn create_close_agent_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
-        "id".to_string(),
+        "target".to_string(),
         JsonSchema::String {
-            description: Some("Agent id to close (from spawn_agent).".to_string()),
+            description: Some(
+                "Agent id or canonical task name to close (from spawn_agent).".to_string(),
+            ),
         },
     );
 
@@ -1569,7 +1762,7 @@ fn create_close_agent_tool() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["id".to_string()]),
+            required: Some(vec!["target".to_string()]),
             additional_properties: Some(false.into()),
         },
         output_schema: Some(close_agent_output_schema()),
@@ -1639,59 +1832,6 @@ fn create_test_sync_tool() -> ToolSpec {
         parameters: JsonSchema::Object {
             properties,
             required: None,
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
-fn create_grep_files_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "pattern".to_string(),
-            JsonSchema::String {
-                description: Some("Regular expression pattern to search for.".to_string()),
-            },
-        ),
-        (
-            "include".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional glob that limits which files are searched (e.g. \"*.rs\" or \
-                     \"*.{ts,tsx}\")."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "path".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Directory or file path to search. Defaults to the session's working directory."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "limit".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "Maximum number of file paths to return (defaults to 100).".to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "grep_files".to_string(),
-        description: "Finds files whose contents match the pattern and lists them by modification \
-                      time."
-            .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["pattern".to_string()]),
             additional_properties: Some(false.into()),
         },
         output_schema: None,
@@ -1905,111 +2045,6 @@ fn format_plugin_summary(plugin: &DiscoverablePluginInfo) -> String {
     }
 }
 
-fn create_read_file_tool() -> ToolSpec {
-    let indentation_properties = BTreeMap::from([
-        (
-            "anchor_line".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "Anchor line to center the indentation lookup on (defaults to offset)."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "max_levels".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "How many parent indentation levels (smaller indents) to include.".to_string(),
-                ),
-            },
-        ),
-        (
-            "include_siblings".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "When true, include additional blocks that share the anchor indentation."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "include_header".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "Include doc comments or attributes directly above the selected block."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "max_lines".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "Hard cap on the number of lines returned when using indentation mode."
-                        .to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    let properties = BTreeMap::from([
-        (
-            "file_path".to_string(),
-            JsonSchema::String {
-                description: Some("Absolute path to the file".to_string()),
-            },
-        ),
-        (
-            "offset".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "The line number to start reading from. Must be 1 or greater.".to_string(),
-                ),
-            },
-        ),
-        (
-            "limit".to_string(),
-            JsonSchema::Number {
-                description: Some("The maximum number of lines to return.".to_string()),
-            },
-        ),
-        (
-            "mode".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional mode selector: \"slice\" for simple ranges (default) or \"indentation\" \
-                     to expand around an anchor line."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "indentation".to_string(),
-            JsonSchema::Object {
-                properties: indentation_properties,
-                required: None,
-                additional_properties: Some(false.into()),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "read_file".to_string(),
-        description:
-            "Reads a local file with 1-indexed line numbers, supporting slice and indentation-aware block modes."
-                .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["file_path".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
 fn create_list_dir_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -2150,7 +2185,10 @@ SOURCE: /[\s\S]+/
 
     ToolSpec::Freeform(FreeformTool {
         name: PUBLIC_TOOL_NAME.to_string(),
-        description: code_mode_tool_description(enabled_tools, code_mode_only_enabled),
+        description: codex_code_mode::build_exec_tool_description(
+            enabled_tools,
+            code_mode_only_enabled,
+        ),
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),
             syntax: "lark".to_string(),
@@ -2554,14 +2592,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::CodeModeExecuteHandler;
     use crate::tools::handlers::CodeModeWaitHandler;
     use crate::tools::handlers::DynamicToolHandler;
-    use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
     use crate::tools::handlers::JsReplResetHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
-    use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::RequestPermissionsHandler;
     use crate::tools::handlers::RequestUserInputHandler;
     use crate::tools::handlers::ShellCommandHandler;
@@ -2576,6 +2612,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents::SendInputHandler;
     use crate::tools::handlers::multi_agents::SpawnAgentHandler;
     use crate::tools::handlers::multi_agents::WaitAgentHandler;
+    use crate::tools::handlers::multi_agents_v2::AssignTaskHandler as AssignTaskHandlerV2;
+    use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
+    use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
+    use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
+    use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
     use std::sync::Arc;
 
     let mut builder = ToolRegistryBuilder::new();
@@ -2621,7 +2662,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                     ToolSpec::Freeform(tool) => (tool.name, tool.description),
                     _ => return None,
                 };
-                is_code_mode_nested_tool(&name).then_some((name, description))
+                codex_code_mode::is_code_mode_nested_tool(&name).then_some((name, description))
             })
             .collect::<Vec<_>>();
         enabled_tools.sort_by(|left, right| left.0.cmp(&right.0));
@@ -2829,34 +2870,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
 
     if config
         .experimental_supported_tools
-        .contains(&"grep_files".to_string())
-    {
-        let grep_files_handler = Arc::new(GrepFilesHandler);
-        push_tool_spec(
-            &mut builder,
-            create_grep_files_tool(),
-            /*supports_parallel_tool_calls*/ true,
-            config.code_mode_enabled,
-        );
-        builder.register_handler("grep_files", grep_files_handler);
-    }
-
-    if config
-        .experimental_supported_tools
-        .contains(&"read_file".to_string())
-    {
-        let read_file_handler = Arc::new(ReadFileHandler);
-        push_tool_spec(
-            &mut builder,
-            create_read_file_tool(),
-            /*supports_parallel_tool_calls*/ true,
-            config.code_mode_enabled,
-        );
-        builder.register_handler("read_file", read_file_handler);
-    }
-
-    if config
-        .experimental_supported_tools
         .iter()
         .any(|tool| tool == "list_dir")
     {
@@ -2962,19 +2975,38 @@ pub(crate) fn build_specs_with_discoverable_tools(
         );
         push_tool_spec(
             &mut builder,
-            create_send_input_tool(),
+            if config.multi_agent_v2 {
+                create_send_message_tool()
+            } else {
+                create_send_input_tool()
+            },
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
+        if config.multi_agent_v2 {
+            push_tool_spec(
+                &mut builder,
+                create_assign_task_tool(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+        }
+        if !config.multi_agent_v2 {
+            push_tool_spec(
+                &mut builder,
+                create_resume_agent_tool(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            builder.register_handler("resume_agent", Arc::new(ResumeAgentHandler));
+        }
         push_tool_spec(
             &mut builder,
-            create_resume_agent_tool(),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        push_tool_spec(
-            &mut builder,
-            create_wait_agent_tool(),
+            if config.multi_agent_v2 {
+                create_wait_agent_tool_v2()
+            } else {
+                create_wait_agent_tool_v1()
+            },
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
@@ -2984,10 +3016,23 @@ pub(crate) fn build_specs_with_discoverable_tools(
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
-        builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandler));
-        builder.register_handler("send_input", Arc::new(SendInputHandler));
-        builder.register_handler("resume_agent", Arc::new(ResumeAgentHandler));
-        builder.register_handler("wait_agent", Arc::new(WaitAgentHandler));
+        if config.multi_agent_v2 {
+            push_tool_spec(
+                &mut builder,
+                create_list_agents_tool(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandlerV2));
+            builder.register_handler("send_message", Arc::new(SendMessageHandlerV2));
+            builder.register_handler("assign_task", Arc::new(AssignTaskHandlerV2));
+            builder.register_handler("wait_agent", Arc::new(WaitAgentHandlerV2));
+            builder.register_handler("list_agents", Arc::new(ListAgentsHandlerV2));
+        } else {
+            builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandler));
+            builder.register_handler("send_input", Arc::new(SendInputHandler));
+            builder.register_handler("wait_agent", Arc::new(WaitAgentHandler));
+        }
         builder.register_handler("close_agent", Arc::new(CloseAgentHandler));
     }
 

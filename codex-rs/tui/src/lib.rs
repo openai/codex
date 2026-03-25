@@ -13,6 +13,7 @@ use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use codex_core::ThreadSortKey;
+use codex_core::auth::AuthConfig;
 use codex_core::auth::AuthMode;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::check_execpolicy_for_warnings;
@@ -250,6 +251,8 @@ mod wrapping;
 
 #[cfg(test)]
 pub mod test_backend;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
@@ -265,7 +268,7 @@ pub use public_widgets::composer_input::ComposerInput;
 pub async fn run_main(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
-    _loader_overrides: LoaderOverrides,
+    loader_overrides: LoaderOverrides,
 ) -> std::io::Result<AppExitInfo> {
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
@@ -454,7 +457,12 @@ pub async fn run_main(
     }
 
     #[allow(clippy::print_stderr)]
-    if let Err(err) = enforce_login_restrictions(&config) {
+    if let Err(err) = enforce_login_restrictions(&AuthConfig {
+        codex_home: config.codex_home.clone(),
+        auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
+        forced_login_method: config.forced_login_method,
+        forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
+    }) {
         eprintln!("{err}");
         std::process::exit(1);
     }
@@ -563,9 +571,11 @@ pub async fn run_main(
 
     run_ratatui_app(
         cli,
+        arg0_paths,
         config,
         overrides,
         cli_kv_overrides,
+        loader_overrides,
         cloud_requirements,
         feedback,
     )
@@ -576,9 +586,11 @@ pub async fn run_main(
 #[allow(clippy::too_many_arguments)]
 async fn run_ratatui_app(
     cli: Cli,
+    arg0_paths: Arg0DispatchPaths,
     initial_config: Config,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
+    loader_overrides: LoaderOverrides,
     mut cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
 ) -> color_eyre::Result<AppExitInfo> {
@@ -599,6 +611,7 @@ async fn run_ratatui_app(
     terminal.clear()?;
 
     let mut tui = Tui::new(terminal);
+    let mut terminal_restore_guard = TerminalRestoreGuard::new();
 
     #[cfg(not(debug_assertions))]
     {
@@ -609,7 +622,7 @@ async fn run_ratatui_app(
             match update_prompt::run_update_prompt_if_needed(&mut tui, &initial_config).await? {
                 UpdatePromptOutcome::Continue => {}
                 UpdatePromptOutcome::RunUpdate(action) => {
-                    crate::tui::restore()?;
+                    terminal_restore_guard.restore()?;
                     return Ok(AppExitInfo {
                         token_usage: codex_protocol::protocol::TokenUsage::default(),
                         thread_id: None,
@@ -650,7 +663,7 @@ async fn run_ratatui_app(
         )
         .await?;
         if onboarding_result.should_exit {
-            restore();
+            terminal_restore_guard.restore_silently();
             session_log::log_session_end();
             let _ = tui.terminal.clear();
             return Ok(AppExitInfo {
@@ -691,7 +704,7 @@ async fn run_ratatui_app(
 
     let mut missing_session_exit = |id_str: &str, action: &str| {
         error!("Error finding conversation path: {id_str}");
-        restore();
+        terminal_restore_guard.restore_silently();
         session_log::log_session_end();
         let _ = tui.terminal.clear();
         Ok(AppExitInfo {
@@ -763,7 +776,7 @@ async fn run_ratatui_app(
                                 error!(
                                     "Error reading session metadata from latest rollout: {rollout_path}"
                                 );
-                                restore();
+                                terminal_restore_guard.restore_silently();
                                 session_log::log_session_end();
                                 let _ = tui.terminal.clear();
                                 return Ok(AppExitInfo {
@@ -785,7 +798,7 @@ async fn run_ratatui_app(
         } else if cli.fork_picker {
             match resume_picker::run_fork_picker(&mut tui, &config, cli.fork_show_all).await? {
                 resume_picker::SessionSelection::Exit => {
-                    restore();
+                    terminal_restore_guard.restore_silently();
                     session_log::log_session_end();
                     return Ok(AppExitInfo {
                         token_usage: codex_protocol::protocol::TokenUsage::default(),
@@ -857,7 +870,7 @@ async fn run_ratatui_app(
                         error!(
                             "Error reading session metadata from latest rollout: {rollout_path}"
                         );
-                        restore();
+                        terminal_restore_guard.restore_silently();
                         session_log::log_session_end();
                         let _ = tui.terminal.clear();
                         return Ok(AppExitInfo {
@@ -877,7 +890,7 @@ async fn run_ratatui_app(
     } else if cli.resume_picker {
         match resume_picker::run_resume_picker(&mut tui, &config, cli.resume_show_all).await? {
             resume_picker::SessionSelection::Exit => {
-                restore();
+                terminal_restore_guard.restore_silently();
                 session_log::log_session_end();
                 return Ok(AppExitInfo {
                     token_usage: codex_protocol::protocol::TokenUsage::default(),
@@ -919,7 +932,7 @@ async fn run_ratatui_app(
             {
                 ResolveCwdOutcome::Continue(cwd) => cwd,
                 ResolveCwdOutcome::Exit => {
-                    restore();
+                    terminal_restore_guard.restore_silently();
                     session_log::log_session_end();
                     return Ok(AppExitInfo {
                         token_usage: codex_protocol::protocol::TokenUsage::default(),
@@ -979,6 +992,9 @@ async fn run_ratatui_app(
         auth_manager,
         config,
         cli_kv_overrides.clone(),
+        arg0_paths,
+        loader_overrides,
+        cloud_requirements,
         overrides.clone(),
         active_profile,
         prompt,
@@ -990,7 +1006,7 @@ async fn run_ratatui_app(
     )
     .await;
 
-    restore();
+    terminal_restore_guard.restore_silently();
     // Mark the end of the recorded session.
     session_log::log_session_end();
     // ignore error when collecting usage – report underlying error instead
@@ -1112,6 +1128,38 @@ fn restore() {
         eprintln!(
             "failed to restore terminal. Run `reset` or restart your terminal to recover: {err}"
         );
+    }
+}
+
+struct TerminalRestoreGuard {
+    active: bool,
+}
+
+impl TerminalRestoreGuard {
+    fn new() -> Self {
+        Self { active: true }
+    }
+
+    #[cfg_attr(debug_assertions, allow(dead_code))]
+    fn restore(&mut self) -> color_eyre::Result<()> {
+        if self.active {
+            crate::tui::restore()?;
+            self.active = false;
+        }
+        Ok(())
+    }
+
+    fn restore_silently(&mut self) {
+        if self.active {
+            restore();
+            self.active = false;
+        }
+    }
+}
+
+impl Drop for TerminalRestoreGuard {
+    fn drop(&mut self) {
+        self.restore_silently();
     }
 }
 
@@ -1240,7 +1288,7 @@ mod tests {
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ProjectConfig;
-    use codex_core::features::Feature;
+    use codex_features::Feature;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::RolloutItem;
     use codex_protocol::protocol::RolloutLine;
@@ -1265,7 +1313,7 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
         config.active_project = ProjectConfig { trust_level: None };
-        config.set_windows_sandbox_enabled(false);
+        config.set_windows_sandbox_enabled(/*value*/ false);
 
         let should_show = should_show_trust_screen(&config);
         assert!(
@@ -1281,7 +1329,7 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let mut config = build_config(&temp_dir).await?;
         config.active_project = ProjectConfig { trust_level: None };
-        config.set_windows_sandbox_enabled(true);
+        config.set_windows_sandbox_enabled(/*value*/ true);
 
         let should_show = should_show_trust_screen(&config);
         if cfg!(target_os = "windows") {

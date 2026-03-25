@@ -91,17 +91,13 @@ jobs:
       - name: cargo shear
         run: cargo shear
 
-  argument_comment_lint:
-    name: Argument comment lint
+  argument_comment_lint_package:
+    name: Argument comment lint package
     runs-on: ubuntu-24.04
     needs: changed
-    if: ${{ needs.changed.outputs.argument_comment_lint == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    if: ${{ needs.changed.outputs.argument_comment_lint_package == 'true' || github.event_name == 'push' }}
     steps:
       - uses: actions/checkout@v6
-      - name: Install Linux sandbox build dependencies
-        run: |
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
       - uses: dtolnay/rust-toolchain@1.93.0
         with:
           toolchain: nightly-2025-09-18
@@ -120,14 +116,46 @@ jobs:
       - name: Install cargo-dylint tooling
         if: ${{ steps.cargo_dylint_cache.outputs.cache-hit != 'true' }}
         run: cargo install --locked cargo-dylint dylint-link
+      - name: Check source wrapper syntax
+        run: bash -n tools/argument-comment-lint/run.sh
       - name: Test argument comment lint package
-        if: ${{ needs.changed.outputs.argument_comment_lint_package == 'true' || github.event_name == 'push' }}
         working-directory: tools/argument-comment-lint
         run: cargo test
-      - name: Run argument comment lint on codex-rs
+
+  argument_comment_lint_prebuilt:
+    name: Argument comment lint - ${{ matrix.name }}
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
+    needs: changed
+    if: ${{ needs.changed.outputs.argument_comment_lint == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            runner: ubuntu-24.04
+          - name: macOS
+            runner: macos-15-xlarge
+          - name: Windows
+            runner: windows-x64
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-x64
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Linux sandbox build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
         run: |
-          bash -n tools/argument-comment-lint/run.sh
-          ./tools/argument-comment-lint/run.sh
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+      - uses: dtolnay/rust-toolchain@1.93.0
+        with:
+          toolchain: nightly-2025-09-18
+          components: llvm-tools-preview, rustc-dev, rust-src
+      - uses: facebook/install-dotslash@v2
+      - name: Run argument comment lint on codex-rs
+        shell: bash
+        run: ./tools/argument-comment-lint/run-prebuilt-linter.sh
 
   # --- CI to validate on different os/targets --------------------------------
   lint_build:
@@ -419,6 +447,24 @@ jobs:
           echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
           echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
 
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        name: Configure musl rusty_v8 artifact overrides
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(python3 "${GITHUB_WORKSPACE}/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
+          release_tag="rusty-v8-v${version}"
+          base_url="https://github.com/openai/codex/releases/download/${release_tag}"
+          archive="https://github.com/openai/codex/releases/download/rusty-v8-v${version}/librusty_v8_release_${TARGET}.a.gz"
+          binding_dir="${RUNNER_TEMP}/rusty_v8"
+          binding_path="${binding_dir}/src_binding_release_${TARGET}.rs"
+          mkdir -p "${binding_dir}"
+          curl -fsSL "${base_url}/src_binding_release_${TARGET}.rs" -o "${binding_path}"
+          echo "RUSTY_V8_ARCHIVE=${archive}" >> "$GITHUB_ENV"
+          echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
+
       - name: Install cargo-chef
         if: ${{ matrix.profile == 'release' }}
         uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
@@ -499,9 +545,9 @@ jobs:
           key: apt-${{ matrix.runner }}-${{ matrix.target }}-v1
 
   tests:
-    name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}
+    name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.remote_env == 'true' && ' (remote)' || '' }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.runner == 'windows-arm64' && 35 || 30 }}
     needs: changed
     if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
     defaults:
@@ -525,6 +571,7 @@ jobs:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             profile: dev
+            remote_env: "true"
             runs_on:
               group: codex-runners
               labels: codex-linux-x64
@@ -562,6 +609,7 @@ jobs:
             sudo apt-get update -y
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
           fi
+
       # Some integration tests rely on DotSlash being installed.
       # See https://github.com/openai/codex/pull/7617.
       - name: Install DotSlash
@@ -646,6 +694,15 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
 
+      - name: Set up remote test env (Docker)
+        if: ${{ runner.os == 'Linux' && matrix.remote_env == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CODEX_TEST_REMOTE_ENV_CONTAINER_NAME=codex-remote-test-env
+          source "${GITHUB_WORKSPACE}/scripts/test-remote-env.sh"
+          echo "CODEX_TEST_REMOTE_ENV=${CODEX_TEST_REMOTE_ENV}" >> "$GITHUB_ENV"
+
       - name: tests
         id: test
         run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings
@@ -698,6 +755,16 @@ jobs:
             echo '```';
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Tear down remote test env
+        if: ${{ always() && runner.os == 'Linux' && matrix.remote_env == 'true' }}
+        shell: bash
+        run: |
+          set +e
+          if [[ "${{ steps.test.outcome }}" != "success" ]]; then
+            docker logs codex-remote-test-env || true
+          fi
+          docker rm -f codex-remote-test-env >/dev/null 2>&1 || true
+
       - name: verify tests passed
         if: steps.test.outcome == 'failure'
         run: |
@@ -708,14 +775,23 @@ jobs:
   results:
     name: CI results (required)
     needs:
-      [changed, general, cargo_shear, argument_comment_lint, lint_build, tests]
+      [
+        changed,
+        general,
+        cargo_shear,
+        argument_comment_lint_package,
+        argument_comment_lint_prebuilt,
+        lint_build,
+        tests,
+      ]
     if: always()
     runs-on: ubuntu-24.04
     steps:
       - name: Summarize
         shell: bash
         run: |
-          echo "arglint: ${{ needs.argument_comment_lint.result }}"
+          echo "argpkg : ${{ needs.argument_comment_lint_package.result }}"
+          echo "arglint: ${{ needs.argument_comment_lint_prebuilt.result }}"
           echo "general: ${{ needs.general.result }}"
           echo "shear  : ${{ needs.cargo_shear.result }}"
           echo "lint   : ${{ needs.lint_build.result }}"
@@ -728,8 +804,12 @@ jobs:
             exit 0
           fi
 
+          if [[ '${{ needs.changed.outputs.argument_comment_lint_package }}' == 'true' || '${{ github.event_name }}' == 'push' ]]; then
+            [[ '${{ needs.argument_comment_lint_package.result }}' == 'success' ]] || { echo 'argument_comment_lint_package failed'; exit 1; }
+          fi
+
           if [[ '${{ needs.changed.outputs.argument_comment_lint }}' == 'true' || '${{ needs.changed.outputs.workflows }}' == 'true' || '${{ github.event_name }}' == 'push' ]]; then
-            [[ '${{ needs.argument_comment_lint.result }}' == 'success' ]] || { echo 'argument_comment_lint failed'; exit 1; }
+            [[ '${{ needs.argument_comment_lint_prebuilt.result }}' == 'success' ]] || { echo 'argument_comment_lint_prebuilt failed'; exit 1; }
           fi
 
           if [[ '${{ needs.changed.outputs.codex }}' == 'true' || '${{ needs.changed.outputs.workflows }}' == 'true' || '${{ github.event_name }}' == 'push' ]]; then

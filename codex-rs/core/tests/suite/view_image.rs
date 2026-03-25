@@ -3,7 +3,8 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_core::CodexAuth;
-use codex_core::features::Feature;
+use codex_exec_server::CreateDirectoryOptions;
+use codex_features::Feature;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -32,12 +33,15 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
+use image::DynamicImage;
 use image::GenericImageView;
 use image::ImageBuffer;
 use image::Rgba;
 use image::load_from_memory;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use std::io::Cursor;
+use std::path::PathBuf;
 use tokio::time::Duration;
 use wiremock::BodyPrintLimit;
 use wiremock::MockServer;
@@ -73,26 +77,65 @@ fn find_image_message(body: &Value) -> Option<&Value> {
     image_messages(body).into_iter().next()
 }
 
+fn png_bytes(width: u32, height: u32, rgba: [u8; 4]) -> anyhow::Result<Vec<u8>> {
+    let image = ImageBuffer::from_pixel(width, height, Rgba(rgba));
+    let mut cursor = Cursor::new(Vec::new());
+    DynamicImage::ImageRgba8(image).write_to(&mut cursor, image::ImageFormat::Png)?;
+    Ok(cursor.into_inner())
+}
+
+async fn create_workspace_directory(test: &TestCodex, rel_path: &str) -> anyhow::Result<PathBuf> {
+    let abs_path = test.config.cwd.join(rel_path)?;
+    test.fs()
+        .create_directory(&abs_path, CreateDirectoryOptions { recursive: true })
+        .await?;
+    Ok(abs_path.into_path_buf())
+}
+
+async fn write_workspace_file(
+    test: &TestCodex,
+    rel_path: &str,
+    contents: Vec<u8>,
+) -> anyhow::Result<PathBuf> {
+    let abs_path = test.config.cwd.join(rel_path)?;
+    if let Some(parent) = abs_path.parent() {
+        test.fs()
+            .create_directory(&parent, CreateDirectoryOptions { recursive: true })
+            .await?;
+    }
+    test.fs().write_file(&abs_path, contents).await?;
+    Ok(abs_path.into_path_buf())
+}
+
+async fn write_workspace_png(
+    test: &TestCodex,
+    rel_path: &str,
+    width: u32,
+    height: u32,
+    rgba: [u8; 4],
+) -> anyhow::Result<PathBuf> {
+    write_workspace_file(test, rel_path, png_bytes(width, height, rgba)?).await
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
 
+    let mut builder = test_codex();
+    let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        cwd,
+        config,
         session_configured,
         ..
-    } = test_codex().build(&server).await?;
+    } = &test;
 
-    let rel_path = "user-turn/example.png";
-    let abs_path = cwd.path().join(rel_path);
-    if let Some(parent) = abs_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let original_width = 2304;
     let original_height = 864;
+    let local_image_dir = tempfile::tempdir()?;
+    let abs_path = local_image_dir.path().join("example.png");
     let image = ImageBuffer::from_pixel(original_width, original_height, Rgba([20u8, 40, 60, 255]));
     image.save(&abs_path)?;
 
@@ -111,8 +154,9 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
                 path: abs_path.clone(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: config.cwd.to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
@@ -124,7 +168,7 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
         .await?;
 
     wait_for_event_with_timeout(
-        &codex,
+        codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
         // Empirically, image attachment can be slow under Bazel/RBE.
         Duration::from_secs(10),
@@ -171,23 +215,28 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-
+    let mut builder = test_codex();
+    let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        cwd,
         session_configured,
+        config,
         ..
-    } = test_codex().build(&server).await?;
+    } = &test;
+    let cwd = config.cwd.clone();
 
     let rel_path = "assets/example.png";
-    let abs_path = cwd.path().join(rel_path);
-    if let Some(parent) = abs_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    let abs_path = cwd.join(rel_path)?;
     let original_width = 2304;
     let original_height = 864;
-    let image = ImageBuffer::from_pixel(original_width, original_height, Rgba([255u8, 0, 0, 255]));
-    image.save(&abs_path)?;
+    write_workspace_png(
+        &test,
+        rel_path,
+        original_width,
+        original_height,
+        [255u8, 0, 0, 255],
+    )
+    .await?;
 
     let call_id = "view-image-call";
     let arguments = serde_json::json!({ "path": rel_path }).to_string();
@@ -214,8 +263,9 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: cwd.to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
@@ -228,7 +278,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
 
     let mut tool_event = None;
     wait_for_event_with_timeout(
-        &codex,
+        codex,
         |event| match event {
             EventMsg::ViewImageToolCall(_) => {
                 tool_event = Some(event.clone());
@@ -248,7 +298,7 @@ async fn view_image_tool_attaches_local_image() -> anyhow::Result<()> {
         _ => unreachable!("stored event must be ViewImageToolCall"),
     };
     assert_eq!(tool_event.call_id, call_id);
-    assert_eq!(tool_event.path, abs_path);
+    assert_eq!(tool_event.path, abs_path.to_path_buf());
 
     let req = mock.single_request();
     let body = req.body_json();
@@ -309,22 +359,25 @@ async fn view_image_tool_can_preserve_original_resolution_when_requested_on_gpt5
                 .enable(Feature::ImageDetailOriginal)
                 .expect("test config should allow feature update");
         });
+    let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        cwd,
+        config,
         session_configured,
         ..
-    } = builder.build(&server).await?;
+    } = &test;
 
     let rel_path = "assets/original-example.png";
-    let abs_path = cwd.path().join(rel_path);
-    if let Some(parent) = abs_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let original_width = 2304;
     let original_height = 864;
-    let image = ImageBuffer::from_pixel(original_width, original_height, Rgba([0u8, 80, 255, 255]));
-    image.save(&abs_path)?;
+    write_workspace_png(
+        &test,
+        rel_path,
+        original_width,
+        original_height,
+        [0u8, 80, 255, 255],
+    )
+    .await?;
 
     let call_id = "view-image-original";
     let arguments = serde_json::json!({ "path": rel_path, "detail": "original" }).to_string();
@@ -351,8 +404,9 @@ async fn view_image_tool_can_preserve_original_resolution_when_requested_on_gpt5
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: config.cwd.to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
@@ -364,7 +418,7 @@ async fn view_image_tool_can_preserve_original_resolution_when_requested_on_gpt5
         .await?;
 
     wait_for_event_with_timeout(
-        &codex,
+        codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
         Duration::from_secs(10),
     )
@@ -413,20 +467,16 @@ async fn view_image_tool_errors_clearly_for_unsupported_detail_values() -> anyho
                 .enable(Feature::ImageDetailOriginal)
                 .expect("test config should allow feature update");
         });
+    let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        cwd,
+        config,
         session_configured,
         ..
-    } = builder.build(&server).await?;
+    } = &test;
 
     let rel_path = "assets/unsupported-detail.png";
-    let abs_path = cwd.path().join(rel_path);
-    if let Some(parent) = abs_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let image = ImageBuffer::from_pixel(256, 128, Rgba([0u8, 80, 255, 255]));
-    image.save(&abs_path)?;
+    write_workspace_png(&test, rel_path, 256, 128, [0u8, 80, 255, 255]).await?;
 
     let call_id = "view-image-unsupported-detail";
     let arguments = serde_json::json!({ "path": rel_path, "detail": "low" }).to_string();
@@ -453,8 +503,9 @@ async fn view_image_tool_errors_clearly_for_unsupported_detail_values() -> anyho
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: config.cwd.to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
@@ -465,7 +516,7 @@ async fn view_image_tool_errors_clearly_for_unsupported_detail_values() -> anyho
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let req = mock.single_request();
     let body_with_tool_output = req.body_json();
@@ -499,22 +550,25 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
                 .enable(Feature::ImageDetailOriginal)
                 .expect("test config should allow feature update");
         });
+    let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        cwd,
+        config,
         session_configured,
         ..
-    } = builder.build(&server).await?;
+    } = &test;
 
     let rel_path = "assets/null-detail.png";
-    let abs_path = cwd.path().join(rel_path);
-    if let Some(parent) = abs_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let original_width = 2304;
     let original_height = 864;
-    let image = ImageBuffer::from_pixel(original_width, original_height, Rgba([0u8, 80, 255, 255]));
-    image.save(&abs_path)?;
+    write_workspace_png(
+        &test,
+        rel_path,
+        original_width,
+        original_height,
+        [0u8, 80, 255, 255],
+    )
+    .await?;
 
     let call_id = "view-image-null-detail";
     let arguments = serde_json::json!({ "path": rel_path, "detail": null }).to_string();
@@ -541,8 +595,9 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: config.cwd.to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
@@ -553,7 +608,7 @@ async fn view_image_tool_treats_null_detail_as_omitted() -> anyhow::Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let req = mock.single_request();
     let function_output = req.function_call_output(call_id);
@@ -595,22 +650,25 @@ async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> a
             .enable(Feature::ImageDetailOriginal)
             .expect("test config should allow feature update");
     });
+    let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        cwd,
+        config,
         session_configured,
         ..
-    } = builder.build(&server).await?;
+    } = &test;
 
     let rel_path = "assets/original-example-lower-model.png";
-    let abs_path = cwd.path().join(rel_path);
-    if let Some(parent) = abs_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let original_width = 2304;
     let original_height = 864;
-    let image = ImageBuffer::from_pixel(original_width, original_height, Rgba([0u8, 80, 255, 255]));
-    image.save(&abs_path)?;
+    write_workspace_png(
+        &test,
+        rel_path,
+        original_width,
+        original_height,
+        [0u8, 80, 255, 255],
+    )
+    .await?;
 
     let call_id = "view-image-original-lower-model";
     let arguments = serde_json::json!({ "path": rel_path }).to_string();
@@ -637,8 +695,9 @@ async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> a
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: config.cwd.to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
@@ -650,7 +709,7 @@ async fn view_image_tool_resizes_when_model_lacks_original_detail_support() -> a
         .await?;
 
     wait_for_event_with_timeout(
-        &codex,
+        codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
         Duration::from_secs(10),
     )
@@ -702,22 +761,25 @@ async fn view_image_tool_does_not_force_original_resolution_with_capability_feat
                 .enable(Feature::ImageDetailOriginal)
                 .expect("test config should allow feature update");
         });
+    let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        cwd,
+        config,
         session_configured,
         ..
-    } = builder.build(&server).await?;
+    } = &test;
 
     let rel_path = "assets/original-example-capability-only.png";
-    let abs_path = cwd.path().join(rel_path);
-    if let Some(parent) = abs_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let original_width = 2304;
     let original_height = 864;
-    let image = ImageBuffer::from_pixel(original_width, original_height, Rgba([0u8, 80, 255, 255]));
-    image.save(&abs_path)?;
+    write_workspace_png(
+        &test,
+        rel_path,
+        original_width,
+        original_height,
+        [0u8, 80, 255, 255],
+    )
+    .await?;
 
     let call_id = "view-image-capability-only";
     let arguments = serde_json::json!({ "path": rel_path }).to_string();
@@ -744,8 +806,9 @@ async fn view_image_tool_does_not_force_original_resolution_with_capability_feat
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: config.cwd.to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
@@ -757,7 +820,7 @@ async fn view_image_tool_does_not_force_original_resolution_with_capability_feat
         .await?;
 
     wait_for_event_with_timeout(
-        &codex,
+        codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
         Duration::from_secs(10),
     )
@@ -847,6 +910,7 @@ await codex.emitImage(out);
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
@@ -966,6 +1030,7 @@ console.log(out.type);
             final_output_json_schema: None,
             cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
@@ -1019,16 +1084,17 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
 
+    let mut builder = test_codex();
+    let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        cwd,
+        config,
         session_configured,
         ..
-    } = test_codex().build(&server).await?;
+    } = &test;
 
     let rel_path = "assets";
-    let abs_path = cwd.path().join(rel_path);
-    std::fs::create_dir_all(&abs_path)?;
+    let abs_path = create_workspace_directory(&test, rel_path).await?;
 
     let call_id = "view-image-directory";
     let arguments = serde_json::json!({ "path": rel_path }).to_string();
@@ -1055,8 +1121,9 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: config.cwd.to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
@@ -1067,7 +1134,7 @@ async fn view_image_tool_errors_when_path_is_directory() -> anyhow::Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let req = mock.single_request();
     let body_with_tool_output = req.body_json();
@@ -1092,19 +1159,18 @@ async fn view_image_tool_errors_for_non_image_files() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
 
+    let mut builder = test_codex();
+    let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        cwd,
+        config,
         session_configured,
         ..
-    } = test_codex().build(&server).await?;
+    } = &test;
 
     let rel_path = "assets/example.json";
-    let abs_path = cwd.path().join(rel_path);
-    if let Some(parent) = abs_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&abs_path, br#"{ "message": "hello" }"#)?;
+    let abs_path =
+        write_workspace_file(&test, rel_path, br#"{ "message": "hello" }"#.to_vec()).await?;
 
     let call_id = "view-image-non-image";
     let arguments = serde_json::json!({ "path": rel_path }).to_string();
@@ -1131,8 +1197,9 @@ async fn view_image_tool_errors_for_non_image_files() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: config.cwd.to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
@@ -1143,7 +1210,7 @@ async fn view_image_tool_errors_for_non_image_files() -> anyhow::Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let request = mock.single_request();
     assert!(
@@ -1174,15 +1241,17 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
 
+    let mut builder = test_codex();
+    let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        cwd,
+        config,
         session_configured,
         ..
-    } = test_codex().build(&server).await?;
+    } = &test;
 
     let rel_path = "missing/example.png";
-    let abs_path = cwd.path().join(rel_path);
+    let abs_path = config.cwd.join(rel_path)?;
 
     let call_id = "view-image-missing";
     let arguments = serde_json::json!({ "path": rel_path }).to_string();
@@ -1209,8 +1278,9 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: config.cwd.to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,
@@ -1221,7 +1291,7 @@ async fn view_image_tool_errors_when_file_missing() -> anyhow::Result<()> {
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let req = mock.single_request();
     let body_with_tool_output = req.body_json();
@@ -1298,21 +1368,16 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
     )
     .await;
 
-    let TestCodex { codex, cwd, .. } = test_codex()
+    let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
             config.model = Some(model_slug.to_string());
-        })
-        .build(&server)
-        .await?;
+        });
+    let test = builder.build_remote_aware(&server).await?;
+    let TestCodex { codex, config, .. } = &test;
 
     let rel_path = "assets/example.png";
-    let abs_path = cwd.path().join(rel_path);
-    if let Some(parent) = abs_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let image = ImageBuffer::from_pixel(20, 20, Rgba([255u8, 0, 0, 255]));
-    image.save(&abs_path)?;
+    write_workspace_png(&test, rel_path, 20, 20, [255u8, 0, 0, 255]).await?;
 
     let call_id = "view-image-unsupported-model";
     let arguments = serde_json::json!({ "path": rel_path }).to_string();
@@ -1336,8 +1401,9 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: config.cwd.to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: model_slug.to_string(),
             effort: None,
@@ -1348,7 +1414,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         })
         .await?;
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    wait_for_event(codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
 
     let output_text = mock
         .single_request()
@@ -1390,20 +1456,17 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
 
     let completion_mock = responses::mount_sse_once(&server, success_response).await;
 
+    let mut builder = test_codex();
+    let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        cwd,
+        config,
         session_configured,
         ..
-    } = test_codex().build(&server).await?;
+    } = &test;
 
     let rel_path = "assets/poisoned.png";
-    let abs_path = cwd.path().join(rel_path);
-    if let Some(parent) = abs_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let image = ImageBuffer::from_pixel(1024, 512, Rgba([10u8, 20, 30, 255]));
-    image.save(&abs_path)?;
+    let abs_path = write_workspace_png(&test, rel_path, 1024, 512, [10u8, 20, 30, 255]).await?;
 
     let session_model = session_configured.model.clone();
 
@@ -1413,8 +1476,9 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
                 path: abs_path.clone(),
             }],
             final_output_json_schema: None,
-            cwd: cwd.path().to_path_buf(),
+            cwd: config.cwd.to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
             effort: None,

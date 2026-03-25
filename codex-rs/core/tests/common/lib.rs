@@ -2,8 +2,10 @@
 
 use anyhow::Context as _;
 use anyhow::ensure;
+use codex_arg0::Arg0PathEntryGuard;
 use codex_utils_cargo_bin::CargoBinError;
 use ctor::ctor;
+use std::sync::OnceLock;
 use tempfile::TempDir;
 
 use codex_core::CodexThread;
@@ -12,6 +14,7 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use regex_lite::Regex;
+use std::path::Path;
 use std::path::PathBuf;
 
 pub mod apps_test_server;
@@ -24,10 +27,17 @@ pub mod test_codex_exec;
 pub mod tracing;
 pub mod zsh_fork;
 
+static TEST_ARG0_PATH_ENTRY: OnceLock<Option<Arg0PathEntryGuard>> = OnceLock::new();
+
 #[ctor]
 fn enable_deterministic_unified_exec_process_ids_for_tests() {
     codex_core::test_support::set_thread_manager_test_mode(/*enabled*/ true);
     codex_core::test_support::set_deterministic_process_ids(/*enabled*/ true);
+}
+
+#[ctor]
+fn configure_arg0_dispatch_for_test_binaries() {
+    let _ = TEST_ARG0_PATH_ENTRY.get_or_init(codex_arg0::arg0_dispatch);
 }
 
 #[ctor]
@@ -95,6 +105,36 @@ pub fn test_absolute_path(unix_path: &str) -> AbsolutePathBuf {
     test_absolute_path_with_windows(unix_path, /*windows_path*/ None)
 }
 
+pub trait PathExt {
+    fn abs(&self) -> AbsolutePathBuf;
+}
+
+impl PathExt for Path {
+    fn abs(&self) -> AbsolutePathBuf {
+        AbsolutePathBuf::try_from(self.to_path_buf()).expect("path should already be absolute")
+    }
+}
+
+pub trait PathBufExt {
+    fn abs(&self) -> AbsolutePathBuf;
+}
+
+impl PathBufExt for PathBuf {
+    fn abs(&self) -> AbsolutePathBuf {
+        self.as_path().abs()
+    }
+}
+
+pub trait TempDirExt {
+    fn abs(&self) -> AbsolutePathBuf;
+}
+
+impl TempDirExt for TempDir {
+    fn abs(&self) -> AbsolutePathBuf {
+        self.path().abs()
+    }
+}
+
 pub fn test_tmp_path() -> AbsolutePathBuf {
     test_absolute_path_with_windows("/tmp", Some(r"C:\Users\codex\AppData\Local\Temp"))
 }
@@ -155,8 +195,7 @@ pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
 fn default_test_overrides() -> ConfigOverrides {
     ConfigOverrides {
         codex_linux_sandbox_exe: Some(
-            codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")
-                .expect("should find binary for codex-linux-sandbox"),
+            find_codex_linux_sandbox_exe().expect("should find binary for codex-linux-sandbox"),
         ),
         ..ConfigOverrides::default()
     }
@@ -165,6 +204,23 @@ fn default_test_overrides() -> ConfigOverrides {
 #[cfg(not(target_os = "linux"))]
 fn default_test_overrides() -> ConfigOverrides {
     ConfigOverrides::default()
+}
+
+#[cfg(target_os = "linux")]
+pub fn find_codex_linux_sandbox_exe() -> Result<PathBuf, CargoBinError> {
+    if let Ok(path) = std::env::current_exe() {
+        return Ok(path);
+    }
+
+    if let Some(path) = TEST_ARG0_PATH_ENTRY
+        .get()
+        .and_then(Option::as_ref)
+        .and_then(|path_entry| path_entry.paths().codex_linux_sandbox_exe.clone())
+    {
+        return Ok(path);
+    }
+
+    codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")
 }
 
 /// Builds an SSE stream body from a JSON fixture.
@@ -262,6 +318,29 @@ pub fn sandbox_env_var() -> &'static str {
 
 pub fn sandbox_network_env_var() -> &'static str {
     codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
+}
+
+const REMOTE_ENV_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemoteEnvConfig {
+    pub container_name: String,
+}
+
+pub fn get_remote_test_env() -> Option<RemoteEnvConfig> {
+    if std::env::var_os(REMOTE_ENV_ENV_VAR).is_none() {
+        eprintln!("Skipping test because {REMOTE_ENV_ENV_VAR} is not set.");
+        return None;
+    }
+
+    let container_name = std::env::var(REMOTE_ENV_ENV_VAR)
+        .unwrap_or_else(|_| panic!("{REMOTE_ENV_ENV_VAR} must be set"));
+    assert!(
+        !container_name.trim().is_empty(),
+        "{REMOTE_ENV_ENV_VAR} must not be empty"
+    );
+
+    Some(RemoteEnvConfig { container_name })
 }
 
 pub fn format_with_current_shell(command: &str) -> Vec<String> {
@@ -482,7 +561,7 @@ macro_rules! codex_linux_sandbox_exe_or_skip {
     () => {{
         #[cfg(target_os = "linux")]
         {
-            match codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox") {
+            match $crate::find_codex_linux_sandbox_exe() {
                 Ok(path) => Some(path),
                 Err(err) => {
                     eprintln!("codex-linux-sandbox binary not available, skipping test: {err}");
@@ -498,7 +577,7 @@ macro_rules! codex_linux_sandbox_exe_or_skip {
     ($return_value:expr $(,)?) => {{
         #[cfg(target_os = "linux")]
         {
-            match codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox") {
+            match $crate::find_codex_linux_sandbox_exe() {
                 Ok(path) => Some(path),
                 Err(err) => {
                     eprintln!("codex-linux-sandbox binary not available, skipping test: {err}");

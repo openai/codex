@@ -1,8 +1,8 @@
 use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::config::types::Personality;
-use codex_core::features::Feature;
 use codex_core::models_manager::manager::RefreshStrategy;
+use codex_features::Feature;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ConfigShellToolType;
@@ -126,6 +126,7 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
@@ -162,6 +163,7 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: next_model.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -221,6 +223,7 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: test.session_configured.model.clone(),
             effort: test.config.model_reasoning_effort,
@@ -257,6 +260,7 @@ async fn model_and_personality_change_only_appends_model_instructions() -> Resul
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: next_model.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -398,6 +402,7 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: image_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -418,6 +423,7 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: text_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -525,6 +531,7 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: image_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -545,6 +552,7 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: image_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -655,6 +663,7 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: image_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -675,6 +684,7 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: text_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -787,6 +797,7 @@ async fn thread_rollback_after_generated_image_drops_entire_image_turn_history()
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: image_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -815,6 +826,7 @@ async fn thread_rollback_after_generated_image_drops_entire_image_turn_history()
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: image_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -969,6 +981,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: large_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,
@@ -1027,6 +1040,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
             final_output_json_schema: None,
             cwd: test.cwd_path().to_path_buf(),
             approval_policy: AskForApproval::Never,
+            approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             model: smaller_model_slug.to_string(),
             effort: test.config.model_reasoning_effort,

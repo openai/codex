@@ -23,8 +23,8 @@ use codex_core::config::StartedNetworkProxy;
 use codex_core::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS;
 use codex_core::exec::ExecExpiration;
 use codex_core::exec::IO_DRAIN_TIMEOUT_MS;
-use codex_core::exec::SandboxType;
 use codex_core::sandboxing::ExecRequest;
+use codex_sandboxing::SandboxType;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use codex_utils_pty::ProcessHandle;
 use codex_utils_pty::SpawnedProcess;
@@ -42,6 +42,7 @@ use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 
 const EXEC_TIMEOUT_EXIT_CODE: i32 = 124;
+const OUTPUT_CHUNK_SIZE_HINT: usize = 64 * 1024;
 
 #[derive(Clone)]
 pub(crate) struct CommandExecManager {
@@ -577,13 +578,19 @@ fn spawn_process_output(params: SpawnProcessOutputParams) -> tokio::task::JoinHa
         let mut buffer: Vec<u8> = Vec::new();
         let mut observed_num_bytes = 0usize;
         loop {
-            let chunk = tokio::select! {
+            let mut chunk = tokio::select! {
                 chunk = output_rx.recv() => match chunk {
                     Some(chunk) => chunk,
                     None => break,
                 },
                 _ = stdio_timeout_rx.wait_for(|&v| v) => break,
             };
+            // Individual chunks are at most 8KiB, so overshooting a bit is acceptable.
+            while chunk.len() < OUTPUT_CHUNK_SIZE_HINT
+                && let Ok(next_chunk) = output_rx.try_recv()
+            {
+                chunk.extend_from_slice(&next_chunk);
+            }
             let capped_chunk = match output_bytes_cap {
                 Some(output_bytes_cap) => {
                     let capped_chunk_len = output_bytes_cap
@@ -597,8 +604,8 @@ fn spawn_process_output(params: SpawnProcessOutputParams) -> tokio::task::JoinHa
             let cap_reached = Some(observed_num_bytes) == output_bytes_cap;
             if let (true, Some(process_id)) = (stream_output, process_id.as_ref()) {
                 outgoing
-                    .send_server_notification_to_connections(
-                        &[connection_id],
+                    .send_server_notification_to_connection_and_wait(
+                        connection_id,
                         ServerNotification::CommandExecOutputDelta(
                             CommandExecOutputDeltaNotification {
                                 process_id: process_id.clone(),
@@ -727,22 +734,21 @@ mod tests {
             access: ReadOnlyAccess::FullAccess,
             network_access: false,
         };
-        ExecRequest {
-            command: vec!["cmd".to_string()],
-            cwd: PathBuf::from("."),
-            env: HashMap::new(),
-            network: None,
-            expiration: ExecExpiration::DefaultTimeout,
-            sandbox: SandboxType::WindowsRestrictedToken,
-            windows_sandbox_level: WindowsSandboxLevel::Disabled,
-            windows_sandbox_private_desktop: false,
-            sandbox_permissions: codex_core::sandboxing::SandboxPermissions::UseDefault,
-            sandbox_policy: sandbox_policy.clone(),
-            file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
-            network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
-            justification: None,
-            arg0: None,
-        }
+        ExecRequest::new(
+            vec!["cmd".to_string()],
+            PathBuf::from("."),
+            HashMap::new(),
+            /*network*/ None,
+            ExecExpiration::DefaultTimeout,
+            codex_core::exec::ExecCapturePolicy::ShellTool,
+            SandboxType::WindowsRestrictedToken,
+            WindowsSandboxLevel::Disabled,
+            /*windows_sandbox_private_desktop*/ false,
+            sandbox_policy.clone(),
+            FileSystemSandboxPolicy::from(&sandbox_policy),
+            NetworkSandboxPolicy::from(&sandbox_policy),
+            /*arg0*/ None,
+        )
     }
 
     #[tokio::test]
@@ -808,6 +814,7 @@ mod tests {
         let OutgoingEnvelope::ToConnection {
             connection_id,
             message,
+            ..
         } = envelope
         else {
             panic!("expected connection-scoped outgoing message");
@@ -839,22 +846,21 @@ mod tests {
                 outgoing: Arc::new(OutgoingMessageSender::new(tx)),
                 request_id: request_id.clone(),
                 process_id: Some("proc-100".to_string()),
-                exec_request: ExecRequest {
-                    command: vec!["sh".to_string(), "-lc".to_string(), "sleep 30".to_string()],
-                    cwd: PathBuf::from("."),
-                    env: HashMap::new(),
-                    network: None,
-                    expiration: ExecExpiration::Cancellation(CancellationToken::new()),
-                    sandbox: SandboxType::None,
-                    windows_sandbox_level: WindowsSandboxLevel::Disabled,
-                    windows_sandbox_private_desktop: false,
-                    sandbox_permissions: codex_core::sandboxing::SandboxPermissions::UseDefault,
-                    sandbox_policy: sandbox_policy.clone(),
-                    file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
-                    network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
-                    justification: None,
-                    arg0: None,
-                },
+                exec_request: ExecRequest::new(
+                    vec!["sh".to_string(), "-lc".to_string(), "sleep 30".to_string()],
+                    PathBuf::from("."),
+                    HashMap::new(),
+                    /*network*/ None,
+                    ExecExpiration::Cancellation(CancellationToken::new()),
+                    codex_core::exec::ExecCapturePolicy::ShellTool,
+                    SandboxType::None,
+                    WindowsSandboxLevel::Disabled,
+                    /*windows_sandbox_private_desktop*/ false,
+                    sandbox_policy.clone(),
+                    FileSystemSandboxPolicy::from(&sandbox_policy),
+                    NetworkSandboxPolicy::from(&sandbox_policy),
+                    /*arg0*/ None,
+                ),
                 started_network_proxy: None,
                 tty: false,
                 stream_stdin: false,
@@ -889,6 +895,7 @@ mod tests {
         let OutgoingEnvelope::ToConnection {
             connection_id,
             message,
+            ..
         } = envelope
         else {
             panic!("expected connection-scoped outgoing message");

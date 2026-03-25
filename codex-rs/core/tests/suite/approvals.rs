@@ -9,8 +9,8 @@ use codex_core::config_loader::NetworkConstraints;
 use codex_core::config_loader::NetworkRequirementsToml;
 use codex_core::config_loader::RequirementSource;
 use codex_core::config_loader::Sourced;
-use codex_core::features::Feature;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_features::Feature;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
@@ -558,6 +558,7 @@ async fn submit_turn(
             final_output_json_schema: None,
             cwd: test.cwd.path().to_path_buf(),
             approval_policy,
+            approvals_reviewer: None,
             sandbox_policy,
             model: session_model,
             effort: None,
