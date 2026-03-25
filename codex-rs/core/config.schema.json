@@ -332,6 +332,9 @@
           "default": null,
           "description": "Optional feature toggles scoped to this profile.",
           "properties": {
+            "apply_patch_crlf": {
+              "type": "boolean"
+            },
             "apply_patch_freeform": {
               "type": "boolean"
             },
@@ -1949,6 +1952,9 @@
       "default": null,
       "description": "Centralized feature flags (new). Prefer this over individual toggles.",
       "properties": {
+        "apply_patch_crlf": {
+          "type": "boolean"
+        },
         "apply_patch_freeform": {
           "type": "boolean"
         },

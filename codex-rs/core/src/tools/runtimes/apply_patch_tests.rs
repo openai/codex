@@ -2,6 +2,7 @@ use super::*;
 use codex_protocol::protocol::GranularApprovalConfig;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use tempfile::tempdir;
 
 #[test]
 fn wants_no_sandbox_approval_granular_respects_sandbox_flag() {
@@ -35,6 +36,7 @@ fn guardian_review_request_includes_patch_context() {
     let expected_patch = action.patch.clone();
     let request = ApplyPatchRequest {
         action,
+        preserve_crlf: false,
         file_paths: vec![
             AbsolutePathBuf::from_absolute_path(&path).expect("temp path should be absolute"),
         ],
@@ -65,5 +67,41 @@ fn guardian_review_request_includes_patch_context() {
             change_count: 1usize,
             patch: expected_patch,
         }
+    );
+}
+
+#[test]
+fn build_sandbox_command_includes_crlf_flag_when_requested() {
+    let dir = tempdir().expect("tmp");
+    let path = dir.path().join("a.txt");
+    let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
+    let req = ApplyPatchRequest {
+        action,
+        preserve_crlf: true,
+        file_paths: vec![AbsolutePathBuf::try_from(path.clone()).expect("abs path")],
+        changes: HashMap::from([(
+            path,
+            FileChange::Add {
+                content: "hello".to_string(),
+            },
+        )]),
+        exec_approval_requirement: ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
+        },
+        timeout_ms: None,
+        codex_exe: None,
+        additional_permissions: None,
+        permissions_preapproved: false,
+    };
+
+    let spec = ApplyPatchRuntime::build_sandbox_command(&req, dir.path()).expect("sandbox command");
+    assert_eq!(
+        spec.args,
+        vec![
+            CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
+            PRESERVE_CRLF_FLAG.to_string(),
+            req.action.patch
+        ]
     );
 }

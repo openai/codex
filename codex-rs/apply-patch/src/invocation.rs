@@ -13,8 +13,10 @@ use crate::ApplyPatchArgs;
 use crate::ApplyPatchError;
 use crate::ApplyPatchFileChange;
 use crate::ApplyPatchFileUpdate;
+use crate::ApplyPatchOptions;
 use crate::IoError;
 use crate::MaybeApplyPatchVerified;
+use crate::PRESERVE_CRLF_FLAG;
 use crate::parser::Hunk;
 use crate::parser::ParseError;
 use crate::parser::parse_patch;
@@ -100,23 +102,59 @@ fn extract_apply_patch_from_shell(
 }
 
 // TODO: make private once we remove tests in lib.rs
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
+    maybe_parse_apply_patch_with_options(argv, ApplyPatchOptions::default())
+}
+
+pub fn maybe_parse_apply_patch_with_options(
+    argv: &[String],
+    options: ApplyPatchOptions,
+) -> MaybeApplyPatch {
     match argv {
         // Direct invocation: apply_patch <patch>
-        [cmd, body] if APPLY_PATCH_COMMANDS.contains(&cmd.as_str()) => match parse_patch(body) {
-            Ok(source) => MaybeApplyPatch::Body(source),
-            Err(e) => MaybeApplyPatch::PatchParseError(e),
-        },
+        [cmd, body] if APPLY_PATCH_COMMANDS.contains(&cmd.as_str()) => {
+            let body = if options.preserve_crlf {
+                body.to_string()
+            } else {
+                body.replace("\r\n", "\n")
+            };
+            match parse_patch(&body) {
+                Ok(source) => MaybeApplyPatch::Body(source),
+                Err(e) => MaybeApplyPatch::PatchParseError(e),
+            }
+        }
+        // Direct invocation with CRLF preservation: apply_patch --preserve-crlf <patch>
+        [cmd, flag, body]
+            if APPLY_PATCH_COMMANDS.contains(&cmd.as_str()) && flag == PRESERVE_CRLF_FLAG =>
+        {
+            let body = if options.preserve_crlf {
+                body.to_string()
+            } else {
+                body.replace("\r\n", "\n")
+            };
+            match parse_patch(&body) {
+                Ok(source) => MaybeApplyPatch::Body(source),
+                Err(e) => MaybeApplyPatch::PatchParseError(e),
+            }
+        }
         // Shell heredoc form: (optional `cd <path> &&`) apply_patch <<'EOF' ...
         _ => match parse_shell_script(argv) {
             Some((shell, script)) => match extract_apply_patch_from_shell(shell, script) {
-                Ok((body, workdir)) => match parse_patch(&body) {
-                    Ok(mut source) => {
-                        source.workdir = workdir;
-                        MaybeApplyPatch::Body(source)
+                Ok((body, workdir)) => {
+                    let body = if options.preserve_crlf {
+                        body
+                    } else {
+                        body.replace("\r\n", "\n")
+                    };
+                    match parse_patch(&body) {
+                        Ok(mut source) => {
+                            source.workdir = workdir;
+                            MaybeApplyPatch::Body(source)
+                        }
+                        Err(e) => MaybeApplyPatch::PatchParseError(e),
                     }
-                    Err(e) => MaybeApplyPatch::PatchParseError(e),
-                },
+                }
                 Err(ExtractHeredocError::CommandDidNotStartWithApplyPatch) => {
                     MaybeApplyPatch::NotApplyPatch
                 }
@@ -130,6 +168,14 @@ pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
 /// cwd must be an absolute path so that we can resolve relative paths in the
 /// patch.
 pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApplyPatchVerified {
+    maybe_parse_apply_patch_verified_with_options(argv, cwd, ApplyPatchOptions::default())
+}
+
+pub fn maybe_parse_apply_patch_verified_with_options(
+    argv: &[String],
+    cwd: &Path,
+    options: ApplyPatchOptions,
+) -> MaybeApplyPatchVerified {
     // Detect a raw patch body passed directly as the command or as the body of a shell
     // script. In these cases, report an explicit error rather than applying the patch.
     if let [body] = argv
@@ -143,7 +189,7 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
         return MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation);
     }
 
-    match maybe_parse_apply_patch(argv) {
+    match maybe_parse_apply_patch_with_options(argv, options) {
         MaybeApplyPatch::Body(ApplyPatchArgs {
             patch,
             hunks,
@@ -221,7 +267,9 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
 ///
 /// Supported top‑level forms (must be the only top‑level statement):
 /// - `apply_patch <<'EOF'\n...\nEOF`
+/// - `apply_patch --preserve-crlf <<'EOF'\n...\nEOF`
 /// - `cd <path> && apply_patch <<'EOF'\n...\nEOF`
+/// - `cd <path> && apply_patch --preserve-crlf <<'EOF'\n...\nEOF`
 ///
 /// Notes about matching:
 /// - Parsed with Tree‑sitter Bash and a strict query that uses anchors so the
@@ -243,7 +291,9 @@ fn extract_apply_patch_from_bash(
     // whole-script forms, each expressed as a single top-level statement:
     //
     // 1. apply_patch <<'EOF'\n...\nEOF
-    // 2. cd <path> && apply_patch <<'EOF'\n...\nEOF
+    // 2. apply_patch --preserve-crlf <<'EOF'\n...\nEOF
+    // 3. cd <path> && apply_patch <<'EOF'\n...\nEOF
+    // 4. cd <path> && apply_patch --preserve-crlf <<'EOF'\n...\nEOF
     //
     // Key ideas when reading the query:
     // - dots (`.`) between named nodes enforces adjacency among named children and
@@ -282,6 +332,21 @@ fn extract_apply_patch_from_bash(
             (
               program
                 . (redirected_statement
+                    body: (command
+                            name: (command_name (word) @apply_name)
+                            argument: (word) @apply_flag .)
+                    (#any-of? @apply_name "apply_patch" "applypatch")
+                    (#eq? @apply_flag "--preserve-crlf")
+                    redirect: (heredoc_redirect
+                                . (heredoc_start)
+                                . (heredoc_body) @heredoc
+                                . (heredoc_end)
+                                .))
+                .)
+
+            (
+              program
+                . (redirected_statement
                     body: (list
                             . (command
                                 name: (command_name (word) @cd_name) .
@@ -296,6 +361,32 @@ fn extract_apply_patch_from_bash(
                             .)
                     (#eq? @cd_name "cd")
                     (#any-of? @apply_name "apply_patch" "applypatch")
+                    redirect: (heredoc_redirect
+                                . (heredoc_start)
+                                . (heredoc_body) @heredoc
+                                . (heredoc_end)
+                                .))
+                .)
+
+            (
+              program
+                . (redirected_statement
+                    body: (list
+                            . (command
+                                name: (command_name (word) @cd_name) .
+                                argument: [
+                                  (word) @cd_path
+                                  (string (string_content) @cd_path)
+                                  (raw_string) @cd_raw_string
+                                ] .)
+                            "&&"
+                            . (command
+                                name: (command_name (word) @apply_name)
+                                argument: (word) @apply_flag)
+                            .)
+                    (#eq? @cd_name "cd")
+                    (#any-of? @apply_name "apply_patch" "applypatch")
+                    (#eq? @apply_flag "--preserve-crlf")
                     redirect: (heredoc_redirect
                                 . (heredoc_start)
                                 . (heredoc_body) @heredoc
@@ -517,6 +608,26 @@ mod tests {
                         contents: "hi\n".to_string()
                     }]
                 );
+            }
+            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
+        }
+    }
+
+    #[test]
+    fn test_literal_with_preserve_crlf_flag() {
+        let args = strs_to_strings(&[
+            "apply_patch",
+            PRESERVE_CRLF_FLAG,
+            r#"*** Begin Patch
+*** Add File: foo
++hi
+*** End Patch
+"#,
+        ]);
+
+        match maybe_parse_apply_patch(&args) {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, .. }) => {
+                assert_eq!(hunks, expected_single_add());
             }
             result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
         }

@@ -31,6 +31,8 @@ use crate::tools::spec::JsonSchema;
 use async_trait::async_trait;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
+use codex_apply_patch::ApplyPatchOptions;
+use codex_features::Feature;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
@@ -171,8 +173,15 @@ impl ToolHandler for ApplyPatchHandler {
         // Re-parse and verify the patch so we can compute changes and approval.
         // Avoid building temporary ExecParams/command vectors; derive directly from inputs.
         let cwd = turn.cwd.clone();
+        let apply_patch_options = ApplyPatchOptions {
+            preserve_crlf: turn.features.enabled(Feature::ApplyPatchCrlf),
+        };
         let command = vec!["apply_patch".to_string(), patch_input.clone()];
-        match codex_apply_patch::maybe_parse_apply_patch_verified(&command, &cwd) {
+        match codex_apply_patch::maybe_parse_apply_patch_verified_with_options(
+            &command,
+            &cwd,
+            apply_patch_options,
+        ) {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
                 let (file_paths, effective_additional_permissions, file_system_sandbox_policy) =
                     effective_patch_permissions(session.as_ref(), turn.as_ref(), &changes).await;
@@ -197,6 +206,7 @@ impl ToolHandler for ApplyPatchHandler {
 
                         let req = ApplyPatchRequest {
                             action: apply.action,
+                            preserve_crlf: turn.features.enabled(Feature::ApplyPatchCrlf),
                             file_paths,
                             changes,
                             exec_approval_requirement: apply.exec_approval_requirement,
@@ -268,7 +278,14 @@ pub(crate) async fn intercept_apply_patch(
     call_id: &str,
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
-    match codex_apply_patch::maybe_parse_apply_patch_verified(command, cwd) {
+    let apply_patch_options = ApplyPatchOptions {
+        preserve_crlf: turn.features.enabled(Feature::ApplyPatchCrlf),
+    };
+    match codex_apply_patch::maybe_parse_apply_patch_verified_with_options(
+        command,
+        cwd,
+        apply_patch_options,
+    ) {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
             session
                 .record_model_warning(
@@ -300,6 +317,7 @@ pub(crate) async fn intercept_apply_patch(
 
                     let req = ApplyPatchRequest {
                         action: apply.action,
+                        preserve_crlf: turn.features.enabled(Feature::ApplyPatchCrlf),
                         file_paths: approval_keys,
                         changes,
                         exec_approval_requirement: apply.exec_approval_requirement,

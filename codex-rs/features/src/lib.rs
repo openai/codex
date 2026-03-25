@@ -97,6 +97,8 @@ pub enum Feature {
     CodexHooks,
     /// Expose the built-in request_permissions tool.
     RequestPermissionsTool,
+    /// Preserve CRLF line endings when applying CRLF patches.
+    ApplyPatchCrlf,
     /// Allow the model to request web searches that fetch live content.
     WebSearchRequest,
     /// Allow the model to request web searches that fetch cached content.
@@ -650,6 +652,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RequestPermissionsTool,
         key: "request_permissions_tool",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ApplyPatchCrlf,
+        key: "apply_patch_crlf",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

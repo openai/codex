@@ -22,6 +22,7 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
+use codex_apply_patch::PRESERVE_CRLF_FLAG;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
@@ -36,6 +37,7 @@ use std::path::PathBuf;
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
     pub action: ApplyPatchAction,
+    pub preserve_crlf: bool,
     pub file_paths: Vec<AbsolutePathBuf>,
     pub changes: std::collections::HashMap<PathBuf, FileChange>,
     pub exec_approval_requirement: ExecApprovalRequirement,
@@ -84,12 +86,14 @@ impl ApplyPatchRuntime {
                 })?
             }
         };
+        let mut args = vec![CODEX_CORE_APPLY_PATCH_ARG1.to_string()];
+        if req.preserve_crlf {
+            args.push(PRESERVE_CRLF_FLAG.to_string());
+        }
+        args.push(req.action.patch.clone());
         Ok(SandboxCommand {
             program: exe.to_string_lossy().to_string(),
-            args: vec![
-                CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
-                req.action.patch.clone(),
-            ],
+            args,
             cwd: req.action.cwd.clone(),
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
