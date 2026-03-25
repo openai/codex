@@ -377,17 +377,22 @@ fn resolve_sandbox_policies_rejects_partial_split_policies() {
 }
 
 #[test]
-fn resolve_sandbox_policies_uses_split_derived_legacy_policy_for_mismatched_legacy_and_split_inputs()
- {
-    let resolved = resolve_sandbox_policies(
+fn resolve_sandbox_policies_rejects_mismatched_legacy_and_split_inputs() {
+    let err = resolve_sandbox_policies(
         Path::new("/tmp"),
         Some(SandboxPolicy::new_read_only_policy()),
         Some(FileSystemSandboxPolicy::unrestricted()),
         Some(NetworkSandboxPolicy::Enabled),
     )
-    .expect("mismatched legacy and split policies should resolve from split policy");
+    .expect_err("mismatched legacy and split policies should fail");
 
-    assert_eq!(resolved.sandbox_policy, SandboxPolicy::DangerFullAccess);
+    assert!(
+        matches!(
+            err,
+            ResolveSandboxPoliciesError::MismatchedLegacyPolicy { .. }
+        ),
+        "{err}"
+    );
 }
 
 #[test]
@@ -454,49 +459,6 @@ fn resolve_sandbox_policies_accepts_semantically_equivalent_workspace_write_inpu
     .expect("semantically equivalent legacy workspace-write policy should resolve");
 
     assert_eq!(resolved.sandbox_policy, sandbox_policy);
-    assert_eq!(
-        resolved.file_system_sandbox_policy,
-        file_system_sandbox_policy
-    );
-    assert_eq!(
-        resolved.network_sandbox_policy,
-        NetworkSandboxPolicy::Restricted
-    );
-}
-
-#[test]
-fn resolve_sandbox_policies_uses_split_derived_legacy_policy_when_provided_legacy_is_stale() {
-    let temp_dir = tempfile::TempDir::new().expect("tempdir");
-    let workspace = temp_dir.path().join("workspace");
-    std::fs::create_dir_all(&workspace).expect("create workspace");
-    let workspace = AbsolutePathBuf::from_absolute_path(&workspace).expect("absolute workspace");
-
-    let provided_legacy_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![workspace.clone()],
-        read_only_access: ReadOnlyAccess::FullAccess,
-        network_access: false,
-        exclude_tmpdir_env_var: false,
-        exclude_slash_tmp: false,
-    };
-    let derived_legacy_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
-        read_only_access: ReadOnlyAccess::FullAccess,
-        network_access: false,
-        exclude_tmpdir_env_var: true,
-        exclude_slash_tmp: true,
-    };
-    let file_system_sandbox_policy =
-        FileSystemSandboxPolicy::from_legacy_sandbox_policy(&derived_legacy_policy, &workspace);
-
-    let resolved = resolve_sandbox_policies(
-        &workspace,
-        Some(provided_legacy_policy),
-        Some(file_system_sandbox_policy.clone()),
-        Some(NetworkSandboxPolicy::Restricted),
-    )
-    .expect("stale provided legacy policy should resolve from split policy");
-
-    assert_eq!(resolved.sandbox_policy, derived_legacy_policy);
     assert_eq!(
         resolved.file_system_sandbox_policy,
         file_system_sandbox_policy

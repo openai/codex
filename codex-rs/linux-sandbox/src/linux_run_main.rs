@@ -232,6 +232,10 @@ enum ResolveSandboxPoliciesError {
     PartialSplitPolicies,
     SplitPoliciesRequireDirectRuntimeEnforcement(String),
     FailedToDeriveLegacyPolicy(String),
+    MismatchedLegacyPolicy {
+        provided: SandboxPolicy,
+        derived: SandboxPolicy,
+    },
     MissingConfiguration,
 }
 
@@ -254,6 +258,12 @@ impl fmt::Display for ResolveSandboxPoliciesError {
                 write!(
                     f,
                     "failed to derive legacy sandbox policy from split policies: {err}"
+                )
+            }
+            Self::MismatchedLegacyPolicy { provided, derived } => {
+                write!(
+                    f,
+                    "legacy sandbox policy must match split sandbox policies: provided={provided:?}, derived={derived:?}"
                 )
             }
             Self::MissingConfiguration => write!(f, "missing sandbox policy configuration"),
@@ -301,10 +311,9 @@ fn resolve_sandbox_policies(
                 &derived_legacy_policy,
                 sandbox_policy_cwd,
             ) {
-                return Ok(EffectiveSandboxPolicies {
-                    sandbox_policy: derived_legacy_policy,
-                    file_system_sandbox_policy,
-                    network_sandbox_policy,
+                return Err(ResolveSandboxPoliciesError::MismatchedLegacyPolicy {
+                    provided: sandbox_policy,
+                    derived: derived_legacy_policy,
                 });
             }
             Ok(EffectiveSandboxPolicies {
