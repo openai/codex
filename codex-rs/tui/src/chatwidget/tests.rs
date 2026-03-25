@@ -16,6 +16,8 @@ use crate::bottom_pane::MentionBinding;
 use crate::chatwidget::realtime::RealtimeConversationPhase;
 use crate::history_cell::UserHistoryCell;
 use crate::test_backend::VT100Backend;
+use crate::test_support::PathBufExt;
+use crate::test_support::test_path_display;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
 use codex_app_server_protocol::AppSummary;
@@ -434,10 +436,10 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         .sandbox_policy
         .set(SandboxPolicy::new_workspace_write_policy())
         .expect("set sandbox policy");
-    chat.config.cwd = PathBuf::from("/home/user/main");
+    chat.config.cwd = PathBuf::from("/home/user/main").abs();
 
     let expected_sandbox = SandboxPolicy::new_read_only_policy();
-    let expected_cwd = PathBuf::from("/home/user/sub-agent");
+    let expected_cwd = PathBuf::from("/home/user/sub-agent").abs();
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
         forked_from_id: None,
@@ -448,7 +450,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: expected_sandbox.clone(),
-        cwd: expected_cwd.clone(),
+        cwd: expected_cwd.to_path_buf(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
@@ -5801,7 +5803,7 @@ async fn slash_init_skips_when_project_doc_exists() {
     let tempdir = tempdir().unwrap();
     let existing_path = tempdir.path().join(DEFAULT_PROJECT_DOC_FILENAME);
     std::fs::write(&existing_path, "existing instructions").unwrap();
-    chat.config.cwd = tempdir.path().to_path_buf();
+    chat.config.cwd = tempdir.path().to_path_buf().abs();
 
     chat.dispatch_command(SlashCommand::Init);
 
@@ -6822,13 +6824,17 @@ async fn custom_prompt_enter_empty_does_not_send() {
 #[tokio::test]
 async fn view_image_tool_call_adds_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let image_path = chat.config.cwd.join("example.png");
+    let image_path = chat
+        .config
+        .cwd
+        .join("example.png")
+        .expect("absolute image path");
 
     chat.handle_codex_event(Event {
         id: "sub-image".into(),
         msg: EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
             call_id: "call-image".into(),
-            path: image_path,
+            path: image_path.to_path_buf(),
         }),
     });
 
@@ -7118,12 +7124,10 @@ fn strip_osc8_for_snapshot(text: &str) -> String {
 }
 
 fn plugins_test_absolute_path(path: &str) -> AbsolutePathBuf {
-    AbsolutePathBuf::try_from(
-        std::env::temp_dir()
-            .join("codex-plugin-menu-tests")
-            .join(path),
-    )
-    .expect("expected absolute test path")
+    std::env::temp_dir()
+        .join("codex-plugin-menu-tests")
+        .join(path)
+        .abs()
 }
 
 fn plugins_test_interface(
@@ -7205,7 +7209,7 @@ fn plugins_test_response(marketplaces: Vec<PluginMarketplaceEntry>) -> PluginLis
 
 fn render_loaded_plugins_popup(chat: &mut ChatWidget, response: PluginListResponse) -> String {
     let cwd = chat.config.cwd.clone();
-    chat.on_plugins_loaded(cwd, Ok(response));
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
     chat.add_plugins_output();
     render_bottom_popup(chat, 100)
 }
@@ -7356,10 +7360,10 @@ async fn plugin_detail_popup_snapshot_shows_install_actions_and_capability_summa
         summary.clone(),
     ])]);
     let cwd = chat.config.cwd.clone();
-    chat.on_plugins_loaded(cwd.clone(), Ok(response));
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
     chat.add_plugins_output();
     chat.on_plugin_detail_loaded(
-        cwd,
+        cwd.to_path_buf(),
         Ok(PluginReadResponse {
             plugin: plugins_test_detail(
                 summary,
@@ -7396,10 +7400,10 @@ async fn plugin_detail_popup_hides_disclosure_for_installed_plugins() {
         summary.clone(),
     ])]);
     let cwd = chat.config.cwd.clone();
-    chat.on_plugins_loaded(cwd.clone(), Ok(response));
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
     chat.add_plugins_output();
     chat.on_plugin_detail_loaded(
-        cwd,
+        cwd.to_path_buf(),
         Ok(PluginReadResponse {
             plugin: plugins_test_detail(
                 summary,
@@ -7486,7 +7490,7 @@ async fn plugins_popup_refresh_replaces_selection_with_first_row() {
         ),
     ])]);
     let cwd = chat.config.cwd.clone();
-    chat.on_plugins_loaded(cwd, Ok(refreshed));
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(refreshed));
 
     let after = render_bottom_popup(&chat, 100);
     assert!(
@@ -7555,7 +7559,7 @@ async fn plugins_popup_refreshes_installed_counts_after_install() {
         ),
     ])]);
     let cwd = chat.config.cwd.clone();
-    chat.on_plugins_loaded(cwd, Ok(refreshed));
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(refreshed));
 
     let after = render_bottom_popup(&chat, 100);
     assert!(
@@ -8271,8 +8275,7 @@ async fn apps_initial_load_applies_enabled_state_from_config() {
     chat.bottom_pane.set_connectors_enabled(true);
 
     let temp = tempdir().expect("tempdir");
-    let config_toml_path =
-        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path");
+    let config_toml_path = temp.path().join("config.toml").abs();
     let user_config = toml::from_str::<TomlValue>(
         "[apps.connector_1]\nenabled = false\ndisabled_reason = \"user\"\n",
     )
@@ -8336,8 +8339,7 @@ async fn apps_initial_load_applies_enabled_state_from_requirements_with_user_ove
         ..Default::default()
     };
     let temp = tempdir().expect("tempdir");
-    let config_toml_path =
-        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path");
+    let config_toml_path = temp.path().join("config.toml").abs();
     chat.config.config_layer_stack =
         ConfigLayerStack::new(Vec::new(), ConfigRequirements::default(), requirements)
             .expect("requirements stack")
@@ -8912,7 +8914,7 @@ async fn preset_matching_accepts_workspace_write_with_extra_roots() {
         .find(|p| p.id == "auto")
         .expect("auto preset exists");
     let current_sandbox = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![AbsolutePathBuf::try_from("C:\\extra").unwrap()],
+        writable_roots: vec![PathBuf::from("C:\\extra").abs()],
         read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: false,
@@ -9716,8 +9718,7 @@ async fn permissions_selection_marks_guardian_approvals_current_with_custom_work
         .features
         .set_enabled(Feature::GuardianApproval, true);
 
-    let extra_root = AbsolutePathBuf::try_from("/tmp/guardian-approvals-extra")
-        .expect("absolute extra writable root");
+    let extra_root = PathBuf::from("/tmp/guardian-approvals-extra").abs();
 
     chat.handle_codex_event(Event {
         id: "session-configured-custom-workspace".to_string(),
@@ -11627,7 +11628,7 @@ async fn default_terminal_title_refreshes_when_spinner_state_changes() {
     let cwd = chat
         .current_cwd
         .clone()
-        .unwrap_or_else(|| chat.config.cwd.clone());
+        .unwrap_or_else(|| chat.config.cwd.to_path_buf());
     let project = get_git_repo_root(&cwd)
         .map(|root| {
             root.file_name()
@@ -11866,7 +11867,7 @@ async fn status_line_fast_mode_footer_snapshot() {
 #[tokio::test]
 async fn status_line_model_with_reasoning_includes_fast_for_gpt54_only() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    chat.config.cwd = PathBuf::from("/tmp/project");
+    chat.config.cwd = PathBuf::from("/tmp/project").abs();
     chat.config.tui_status_line = Some(vec![
         "model-with-reasoning".to_string(),
         "context-remaining".to_string(),
@@ -11876,10 +11877,11 @@ async fn status_line_model_with_reasoning_includes_fast_for_gpt54_only() {
     chat.set_service_tier(Some(ServiceTier::Fast));
     set_chatgpt_auth(&mut chat);
     chat.refresh_status_surfaces();
+    let test_cwd = test_path_display("/tmp/project");
 
     assert_eq!(
         status_line_text(&chat),
-        Some("gpt-5.4 xhigh fast · 100% left · /tmp/project".to_string())
+        Some(format!("gpt-5.4 xhigh fast · 100% left · {test_cwd}"))
     );
 
     chat.set_model("gpt-5.3-codex");
@@ -11887,18 +11889,22 @@ async fn status_line_model_with_reasoning_includes_fast_for_gpt54_only() {
 
     assert_eq!(
         status_line_text(&chat),
-        Some("gpt-5.3-codex xhigh · 100% left · /tmp/project".to_string())
+        Some(format!("gpt-5.3-codex xhigh · 100% left · {test_cwd}"))
     );
 }
 
 #[tokio::test]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "snapshot path rendering differs on Windows"
+)]
 async fn status_line_model_with_reasoning_fast_footer_snapshot() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.show_welcome_banner = false;
-    chat.config.cwd = PathBuf::from("/tmp/project");
+    chat.config.cwd = PathBuf::from("/tmp/project").abs();
     chat.config.tui_status_line = Some(vec![
         "model-with-reasoning".to_string(),
         "context-remaining".to_string(),
