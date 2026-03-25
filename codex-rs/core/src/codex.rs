@@ -29,6 +29,7 @@ use crate::models_manager::manager::ModelsManager;
 use crate::models_manager::manager::RefreshStrategy;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
+use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
 use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
@@ -835,10 +836,10 @@ pub(crate) struct TurnContext {
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
     pub(crate) environment: Arc<Environment>,
-    /// The session's current working directory. All relative paths provided by
-    /// the model as well as sandbox policies are resolved against this path
+    /// The session's absolute working directory. All relative paths provided
+    /// by the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
-    pub(crate) cwd: PathBuf,
+    pub(crate) cwd: AbsolutePathBuf,
     pub(crate) current_date: Option<String>,
     pub(crate) timezone: Option<String>,
     pub(crate) app_server_client_name: Option<String>,
@@ -979,7 +980,7 @@ impl TurnContext {
     pub(crate) fn resolve_path(&self, path: Option<String>) -> PathBuf {
         path.as_ref()
             .map(PathBuf::from)
-            .map_or_else(|| self.cwd.clone(), |p| self.cwd.join(p))
+            .map_or_else(|| self.cwd.to_path_buf(), |p| self.cwd.as_path().join(p))
     }
 
     pub(crate) fn compact_prompt(&self) -> &str {
@@ -992,7 +993,7 @@ impl TurnContext {
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
             trace_id: self.trace_id.clone(),
-            cwd: self.cwd.clone(),
+            cwd: self.cwd.to_path_buf(),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             approval_policy: self.approval_policy.value(),
@@ -1068,14 +1069,11 @@ pub(crate) struct SessionConfiguration {
     network_sandbox_policy: NetworkSandboxPolicy,
     windows_sandbox_level: WindowsSandboxLevel,
 
-    /// Working directory that should be treated as the *root* of the
+    /// Absolute working directory that should be treated as the *root* of the
     /// session. All relative paths supplied by the model as well as the
-    /// execution sandbox are resolved against this directory **instead**
-    /// of the process-wide current working directory. CLI front-ends are
-    /// expected to expand this to an absolute path before sending the
-    /// `ConfigureSession` operation so that the business-logic layer can
-    /// operate deterministically.
-    cwd: PathBuf,
+    /// execution sandbox are resolved against this directory **instead** of
+    /// the process-wide current working directory.
+    cwd: AbsolutePathBuf,
     /// Directory containing all Codex state for this session.
     codex_home: PathBuf,
     /// Optional user-facing name for the thread, updated during the session.
@@ -1107,7 +1105,7 @@ impl SessionConfiguration {
             approval_policy: self.approval_policy.value(),
             approvals_reviewer: self.approvals_reviewer,
             sandbox_policy: self.sandbox_policy.get().clone(),
-            cwd: self.cwd.clone(),
+            cwd: self.cwd.to_path_buf(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
             personality: self.personality,
@@ -1150,11 +1148,23 @@ impl SessionConfiguration {
         if let Some(windows_sandbox_level) = updates.windows_sandbox_level {
             next_configuration.windows_sandbox_level = windows_sandbox_level;
         }
-        let mut cwd_changed = false;
-        if let Some(cwd) = updates.cwd.clone() {
-            next_configuration.cwd = cwd;
-            cwd_changed = true;
-        }
+
+        let absolute_cwd = updates
+            .cwd
+            .as_ref()
+            .map(|cwd| {
+                AbsolutePathBuf::relative_to_current_dir(normalize_for_native_workdir(
+                    cwd.as_path(),
+                ))
+                .unwrap_or_else(|e| {
+                    warn!("failed to normalize update cwd: {cwd:?}: {e}");
+                    self.cwd.clone()
+                })
+            })
+            .unwrap_or_else(|| self.cwd.clone());
+
+        let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
+        next_configuration.cwd = absolute_cwd;
         if sandbox_policy_changed || (cwd_changed && file_system_policy_matches_legacy) {
             // Preserve richer split policies across cwd-only updates; only
             // rederive when the session is already using the legacy bridge.
@@ -1351,8 +1361,6 @@ impl Session {
         let auth_manager_for_context = auth_manager;
         let provider_for_context = provider;
         let session_telemetry_for_context = session_telemetry;
-        let per_turn_config = Arc::new(per_turn_config);
-
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             available_models: &models_manager.try_list_models().unwrap_or_default(),
@@ -1372,10 +1380,12 @@ impl Session {
         .with_agent_roles(per_turn_config.agent_roles.clone());
 
         let cwd = session_configuration.cwd.clone();
+
+        let per_turn_config = Arc::new(per_turn_config);
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             conversation_id.to_string(),
             sub_id.clone(),
-            cwd.clone(),
+            cwd.to_path_buf(),
             session_configuration.sandbox_policy.get(),
             session_configuration.windows_sandbox_level,
         ));
@@ -1447,13 +1457,6 @@ impl Session {
             session_configuration.collaboration_mode.model(),
             session_configuration.provider
         );
-        if !session_configuration.cwd.is_absolute() {
-            return Err(anyhow::anyhow!(
-                "cwd is not absolute: {:?}",
-                session_configuration.cwd
-            ));
-        }
-
         let forked_from_id = initial_history.forked_from_id();
 
         let (conversation_id, rollout_params) = match &initial_history {
@@ -1723,7 +1726,7 @@ impl Session {
                 ShellSnapshot::start_snapshotting(
                     config.codex_home.clone(),
                     conversation_id,
-                    session_configuration.cwd.clone(),
+                    session_configuration.cwd.to_path_buf(),
                     &mut default_shell,
                     session_telemetry.clone(),
                 )
@@ -1923,7 +1926,7 @@ impl Session {
                 approval_policy: session_configuration.approval_policy.value(),
                 approvals_reviewer: session_configuration.approvals_reviewer,
                 sandbox_policy: session_configuration.sandbox_policy.get().clone(),
-                cwd: session_configuration.cwd.clone(),
+                cwd: session_configuration.cwd.to_path_buf(),
                 reasoning_effort: session_configuration.collaboration_mode.reasoning_effort(),
                 history_log_id,
                 history_entry_count,
@@ -1944,7 +1947,7 @@ impl Session {
         let sandbox_state = SandboxState {
             sandbox_policy: session_configuration.sandbox_policy.get().clone(),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
-            sandbox_cwd: session_configuration.cwd.clone(),
+            sandbox_cwd: session_configuration.cwd.to_path_buf(),
             use_legacy_landlock: config.features.use_legacy_landlock(),
         };
         let mut required_mcp_servers: Vec<String> = mcp_servers
@@ -2408,7 +2411,7 @@ impl Session {
             let sandbox_state = SandboxState {
                 sandbox_policy: per_turn_config.permissions.sandbox_policy.get().clone(),
                 codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
-                sandbox_cwd: per_turn_config.cwd.clone(),
+                sandbox_cwd: per_turn_config.cwd.to_path_buf(),
                 use_legacy_landlock: per_turn_config.features.use_legacy_landlock(),
             };
             if let Err(e) = self
@@ -4139,7 +4142,7 @@ impl Session {
         let sandbox_state = SandboxState {
             sandbox_policy: turn_context.sandbox_policy.get().clone(),
             codex_linux_sandbox_exe: turn_context.codex_linux_sandbox_exe.clone(),
-            sandbox_cwd: turn_context.cwd.clone(),
+            sandbox_cwd: turn_context.cwd.to_path_buf(),
             use_legacy_landlock: turn_context.features.use_legacy_landlock(),
         };
         {
@@ -4920,7 +4923,7 @@ mod handlers {
     ) {
         let cwds = if cwds.is_empty() {
             let state = sess.state.lock().await;
-            vec![state.session_configuration.cwd.clone()]
+            vec![state.session_configuration.cwd.to_path_buf()]
         } else {
             cwds
         };
@@ -5364,7 +5367,7 @@ async fn spawn_review_thread(
     let turn_metadata_state = Arc::new(TurnMetadataState::new(
         sess.conversation_id.to_string(),
         review_turn_id.clone(),
-        parent_turn_context.cwd.clone(),
+        parent_turn_context.cwd.to_path_buf(),
         parent_turn_context.sandbox_policy.get(),
         parent_turn_context.windows_sandbox_level,
     ));
@@ -5853,7 +5856,7 @@ pub(crate) async fn run_turn(
                     let stop_request = codex_hooks::StopRequest {
                         session_id: sess.conversation_id,
                         turn_id: turn_context.sub_id.clone(),
-                        cwd: turn_context.cwd.clone(),
+                        cwd: turn_context.cwd.to_path_buf(),
                         transcript_path: sess.hook_transcript_path().await,
                         model: turn_context.model_info.slug.clone(),
                         permission_mode: stop_hook_permission_mode,
@@ -5903,7 +5906,7 @@ pub(crate) async fn run_turn(
                         .hooks()
                         .dispatch(HookPayload {
                             session_id: sess.conversation_id,
-                            cwd: turn_context.cwd.clone(),
+                            cwd: turn_context.cwd.to_path_buf(),
                             client: turn_context.app_server_client_name.clone(),
                             triggered_at: chrono::Utc::now(),
                             hook_event: HookEvent::AfterAgent {

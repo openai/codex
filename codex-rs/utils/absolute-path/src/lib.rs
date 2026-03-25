@@ -63,6 +63,12 @@ impl AbsolutePathBuf {
         Self::from_absolute_path(current_dir)
     }
 
+    /// Construct an absolute path from `path`, resolving relative paths against
+    /// the process current working directory.
+    pub fn relative_to_current_dir<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+        Self::resolve_path_against_base(path, std::env::current_dir()?)
+    }
+
     pub fn join<P: AsRef<Path>>(&self, path: P) -> std::io::Result<Self> {
         Self::resolve_path_against_base(path, &self.0)
     }
@@ -100,6 +106,14 @@ impl AbsolutePathBuf {
 
 impl AsRef<Path> for AbsolutePathBuf {
     fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for AbsolutePathBuf {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
@@ -214,6 +228,17 @@ mod tests {
         let abs_path_buf = AbsolutePathBuf::resolve_path_against_base("file.txt", base_dir)
             .expect("failed to create");
         assert_eq!(abs_path_buf.as_path(), base_dir.join("file.txt").as_path());
+    }
+
+    #[test]
+    fn relative_to_current_dir_resolves_relative_path() -> std::io::Result<()> {
+        let current_dir = std::env::current_dir()?;
+        let abs_path_buf = AbsolutePathBuf::relative_to_current_dir("file.txt")?;
+        assert_eq!(
+            abs_path_buf.as_path(),
+            current_dir.join("file.txt").as_path()
+        );
+        Ok(())
     }
 
     #[test]

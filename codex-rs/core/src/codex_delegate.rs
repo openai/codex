@@ -22,7 +22,6 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -518,7 +517,7 @@ async fn handle_patch_approval(
         let change_count = changes.len();
         let maybe_files = changes
             .keys()
-            .map(|path| AbsolutePathBuf::from_absolute_path(parent_ctx.cwd.join(path)).ok())
+            .map(|path| parent_ctx.cwd.join(path).ok())
             .collect::<Option<Vec<_>>>();
         if let Some(files) = maybe_files {
             let review_cancel = cancel_token.child_token();
@@ -554,7 +553,7 @@ async fn handle_patch_approval(
                 Arc::clone(parent_ctx),
                 GuardianApprovalRequest::ApplyPatch {
                     id: approval_id.clone(),
-                    cwd: parent_ctx.cwd.clone(),
+                    cwd: parent_ctx.cwd.to_path_buf(),
                     files,
                     change_count,
                     patch,
