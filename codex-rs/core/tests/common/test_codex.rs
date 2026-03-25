@@ -618,9 +618,6 @@ fn ensure_test_model_catalog(config: &mut Config) -> Result<()> {
     model.display_name = TEST_MODEL_WITH_EXPERIMENTAL_TOOLS.to_string();
     model.experimental_supported_tools = vec![
         "test_sync_tool".to_string(),
-        "read_file".to_string(),
-        "grep_files".to_string(),
-        "list_dir".to_string(),
     ];
     config.model_catalog = Some(ModelsResponse {
         models: vec![model],
