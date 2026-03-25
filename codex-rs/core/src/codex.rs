@@ -2215,12 +2215,6 @@ impl Session {
                     self.persist_rollout_items(&rollout_items).await;
                 }
 
-                // Defer seeding the fork's current-session context until the first real turn so
-                // turn/start overrides can be merged before we write model-visible context.
-                // TODO(ccunningham): Some build_initial_context content is still not representable
-                // as steady-state diffs. Persist the remaining model-visible inputs or add
-                // explicit replay events so fork/resume can diff everything deterministically.
-
                 // Forked threads should remain file-backed immediately after startup.
                 self.ensure_rollout_materialized().await;
 
