@@ -88,6 +88,7 @@ pub enum KnownPlan {
     Pro,
     Team,
     Business,
+    #[serde(alias = "hc")]
     Enterprise,
     Edu,
 }
