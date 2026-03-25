@@ -21,6 +21,7 @@ use crate::RequestResult;
 use crate::SHUTDOWN_TIMEOUT;
 use crate::TypedRequestError;
 use crate::request_method_name;
+use crate::server_notification_requires_delivery;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
@@ -854,11 +855,11 @@ async fn reject_if_server_request_dropped(
 
 fn event_requires_delivery(event: &AppServerEvent) -> bool {
     match event {
-        AppServerEvent::ServerNotification(ServerNotification::TurnCompleted(_)) => true,
+        AppServerEvent::ServerNotification(notification) => {
+            server_notification_requires_delivery(notification)
+        }
         AppServerEvent::Disconnected { .. } => true,
-        AppServerEvent::Lagged { .. }
-        | AppServerEvent::ServerNotification(_)
-        | AppServerEvent::ServerRequest(_) => false,
+        AppServerEvent::Lagged { .. } | AppServerEvent::ServerRequest(_) => false,
     }
 }
 
