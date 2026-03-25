@@ -17,6 +17,7 @@ use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
+use core_test_support::PathBufExt;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::responses::ResponseMock;
 use core_test_support::responses::mount_sse_sequence;
@@ -817,7 +818,7 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
     let codex_home = Arc::new(TempDir::new().unwrap());
     let initial_cwd_path = initial_cwd.path().to_path_buf();
     let codex = new_conversation_for_server(&server, codex_home.clone(), move |config| {
-        config.cwd = initial_cwd_path;
+        config.cwd = initial_cwd_path.abs();
     })
     .await;
 

@@ -256,7 +256,7 @@ impl StatusHistoryCell {
         Self {
             model_name,
             model_details,
-            directory: config.cwd.clone(),
+            directory: config.cwd.to_path_buf(),
             permissions,
             agents_summary,
             collaboration_mode: collaboration_mode.map(ToString::to_string),

@@ -1839,59 +1839,6 @@ fn create_test_sync_tool() -> ToolSpec {
     })
 }
 
-fn create_grep_files_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "pattern".to_string(),
-            JsonSchema::String {
-                description: Some("Regular expression pattern to search for.".to_string()),
-            },
-        ),
-        (
-            "include".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional glob that limits which files are searched (e.g. \"*.rs\" or \
-                     \"*.{ts,tsx}\")."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "path".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Directory or file path to search. Defaults to the session's working directory."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "limit".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "Maximum number of file paths to return (defaults to 100).".to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "grep_files".to_string(),
-        description: "Finds files whose contents match the pattern and lists them by modification \
-                      time."
-            .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["pattern".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
 fn create_tool_search_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -2646,7 +2593,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::CodeModeExecuteHandler;
     use crate::tools::handlers::CodeModeWaitHandler;
     use crate::tools::handlers::DynamicToolHandler;
-    use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
     use crate::tools::handlers::JsReplResetHandler;
     use crate::tools::handlers::ListDirHandler;
@@ -2921,20 +2867,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
         }
         builder.register_handler("apply_patch", apply_patch_handler);
-    }
-
-    if config
-        .experimental_supported_tools
-        .contains(&"grep_files".to_string())
-    {
-        let grep_files_handler = Arc::new(GrepFilesHandler);
-        push_tool_spec(
-            &mut builder,
-            create_grep_files_tool(),
-            /*supports_parallel_tool_calls*/ true,
-            config.code_mode_enabled,
-        );
-        builder.register_handler("grep_files", grep_files_handler);
     }
 
     if config

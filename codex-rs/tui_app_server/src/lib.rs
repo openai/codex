@@ -248,6 +248,8 @@ mod wrapping;
 
 #[cfg(test)]
 pub mod test_backend;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
@@ -1221,7 +1223,7 @@ async fn run_ratatui_app(
     let fallback_cwd = match action_and_target_session_if_resume_or_fork {
         Some((action, target_session)) => {
             if remote_mode {
-                Some(current_cwd.clone())
+                Some(current_cwd.to_path_buf())
             } else {
                 match resolve_cwd_for_resume_or_fork(
                     &mut tui,
