@@ -660,8 +660,6 @@ async fn prepare_escalated_exec_turn_default_preserves_macos_seatbelt_extensions
         file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
-        sandbox_permissions: SandboxPermissions::UseDefault,
-        justification: None,
         arg0: None,
         sandbox_policy_cwd: cwd.to_path_buf(),
         macos_seatbelt_profile_extensions: Some(MacOsSeatbeltProfileExtensions {
@@ -712,8 +710,6 @@ async fn prepare_escalated_exec_permissions_preserve_macos_seatbelt_extensions()
         file_system_sandbox_policy: unrestricted_file_system_sandbox_policy(),
         network_sandbox_policy: NetworkSandboxPolicy::Enabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
-        sandbox_permissions: SandboxPermissions::UseDefault,
-        justification: None,
         arg0: None,
         sandbox_policy_cwd: cwd.to_path_buf(),
         macos_seatbelt_profile_extensions: None,
@@ -787,8 +783,6 @@ async fn prepare_escalated_exec_permission_profile_unions_turn_and_requested_mac
         file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
         network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
-        sandbox_permissions: SandboxPermissions::UseDefault,
-        justification: None,
         arg0: None,
         sandbox_policy_cwd: cwd.to_path_buf(),
         macos_seatbelt_profile_extensions: Some(MacOsSeatbeltProfileExtensions {

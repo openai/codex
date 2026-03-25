@@ -46,7 +46,6 @@ use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item;
-use crate::truncate::TruncationPolicy;
 use crate::turn_metadata::TurnMetadataState;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
@@ -117,6 +116,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_terminal_detection::user_agent;
+use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
 use codex_utils_stream_parser::ProposedPlanSegment;
@@ -1007,7 +1007,7 @@ impl TurnContext {
             user_instructions: self.user_instructions.clone(),
             developer_instructions: self.developer_instructions.clone(),
             final_output_json_schema: self.final_output_json_schema.clone(),
-            truncation_policy: Some(self.truncation_policy.into()),
+            truncation_policy: Some(self.truncation_policy),
         }
     }
 
@@ -3537,7 +3537,16 @@ impl Session {
             }
         }
         if turn_context.apps_enabled() {
-            developer_sections.push(render_apps_section());
+            let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
+            let accessible_and_enabled_connectors =
+                connectors::list_accessible_and_enabled_connectors_from_manager(
+                    &mcp_connection_manager,
+                    &turn_context.config,
+                )
+                .await;
+            if let Some(apps_section) = render_apps_section(&accessible_and_enabled_connectors) {
+                developer_sections.push(apps_section);
+            }
         }
         let implicit_skills = turn_context
             .turn_skills

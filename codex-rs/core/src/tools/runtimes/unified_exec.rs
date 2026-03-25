@@ -218,8 +218,6 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             let options = ExecOptions {
                 expiration: ExecExpiration::DefaultTimeout,
                 capture_policy: ExecCapturePolicy::ShellTool,
-                sandbox_permissions: req.sandbox_permissions,
-                justification: req.justification.clone(),
             };
             let exec_env = attempt
                 .env_for(command, options, req.network.as_ref())
@@ -265,8 +263,6 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         let options = ExecOptions {
             expiration: ExecExpiration::DefaultTimeout,
             capture_policy: ExecCapturePolicy::ShellTool,
-            sandbox_permissions: req.sandbox_permissions,
-            justification: req.justification.clone(),
         };
         let exec_env = attempt
             .env_for(command, options, req.network.as_ref())

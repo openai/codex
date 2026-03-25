@@ -744,11 +744,9 @@ mod tests {
             SandboxType::WindowsRestrictedToken,
             WindowsSandboxLevel::Disabled,
             /*windows_sandbox_private_desktop*/ false,
-            codex_core::sandboxing::SandboxPermissions::UseDefault,
             sandbox_policy.clone(),
             FileSystemSandboxPolicy::from(&sandbox_policy),
             NetworkSandboxPolicy::from(&sandbox_policy),
-            /*justification*/ None,
             /*arg0*/ None,
         )
     }
@@ -858,11 +856,9 @@ mod tests {
                     SandboxType::None,
                     WindowsSandboxLevel::Disabled,
                     /*windows_sandbox_private_desktop*/ false,
-                    codex_core::sandboxing::SandboxPermissions::UseDefault,
                     sandbox_policy.clone(),
                     FileSystemSandboxPolicy::from(&sandbox_policy),
                     NetworkSandboxPolicy::from(&sandbox_policy),
-                    /*justification*/ None,
                     /*arg0*/ None,
                 ),
                 started_network_proxy: None,
