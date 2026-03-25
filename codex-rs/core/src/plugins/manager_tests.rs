@@ -1386,7 +1386,7 @@ plugins = true
             path: AbsolutePathBuf::try_from(curated_root.join(".agents/plugins/marketplace.json"))
                 .unwrap(),
             interface: Some(MarketplaceInterface {
-                display_name: Some("ChatGPT Official".to_string()),
+                display_name: Some(OPENAI_CURATED_MARKETPLACE_DISPLAY_NAME.to_string()),
             }),
             plugins: vec![ConfiguredMarketplacePlugin {
                 id: "linear@openai-curated".to_string(),
