@@ -29,10 +29,10 @@ const ERROR_MESSAGE_UI_MAX_BYTES: usize = 2 * 1024; // 2 KiB
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InlineImageRequestLimitExceededError {
-    total_bytes: Option<usize>,
-    limit_bytes: Option<usize>,
-    total_images: Option<usize>,
-    limit_images: Option<usize>,
+    pub(crate) total_bytes: Option<usize>,
+    pub(crate) limit_bytes: Option<usize>,
+    pub(crate) total_images: Option<usize>,
+    pub(crate) limit_images: Option<usize>,
 }
 
 impl InlineImageRequestLimitExceededError {
