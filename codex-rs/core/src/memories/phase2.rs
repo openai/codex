@@ -266,7 +266,16 @@ mod agent {
         let root = memory_root(&config.codex_home);
         let mut agent_config = config.as_ref().clone();
 
-        agent_config.cwd = AbsolutePathBuf::try_from(root).expect("memory root should be absolute");
+        match AbsolutePathBuf::from_absolute_path(root) {
+            Ok(root) => agent_config.cwd = root,
+            Err(err) => {
+                warn!(
+                    "memory phase-2 consolidation could not set cwd from codex_home {}: {err}",
+                    agent_config.codex_home.display()
+                );
+                return None;
+            }
+        }
         // Consolidation threads must never feed back into phase-1 memory generation.
         agent_config.memories.generate_memories = false;
         // Approval policy

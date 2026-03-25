@@ -244,7 +244,7 @@ pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBu
         dirs.reverse();
         dirs
     } else {
-        vec![dir.to_path_buf()]
+        vec![dir]
     };
 
     let mut found: Vec<PathBuf> = Vec::new();
