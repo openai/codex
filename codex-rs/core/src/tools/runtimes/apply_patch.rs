@@ -42,6 +42,7 @@ pub struct ApplyPatchRequest {
     pub additional_permissions: Option<PermissionProfile>,
     pub permissions_preapproved: bool,
     pub timeout_ms: Option<u64>,
+    #[cfg(all(not(target_os = "windows"), not(target_os = "linux")))]
     pub codex_exe: Option<PathBuf>,
 }
 
