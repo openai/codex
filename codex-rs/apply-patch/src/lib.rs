@@ -25,6 +25,10 @@ use crate::invocation::ExtractHeredocError;
 /// Detailed instructions for gpt-4.1 on how to use the `apply_patch` tool.
 pub const APPLY_PATCH_TOOL_INSTRUCTIONS: &str = include_str!("../apply_patch_tool_instructions.md");
 
+/// Basename used when the Codex executable self-invokes as the Linux sandbox
+/// helper.
+pub const CODEX_LINUX_SANDBOX_ARG0: &str = "codex-linux-sandbox";
+
 /// Special argv[1] flag used when the Codex executable self-invokes to run the
 /// internal `apply_patch` path.
 ///

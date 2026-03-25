@@ -2,6 +2,7 @@ use crate::protocol::SandboxPolicy;
 use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
+use codex_apply_patch::CODEX_LINUX_SANDBOX_ARG0;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -11,8 +12,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::process::Child;
-
-const LINUX_SANDBOX_ARG0: &str = "codex-linux-sandbox";
 
 /// Spawn a shell tool command under the Linux sandbox helper
 /// (codex-linux-sandbox), which defaults to bubblewrap for filesystem
@@ -51,14 +50,16 @@ where
         allow_network_for_proxy(/*enforce_managed_network*/ false),
     );
     let codex_linux_sandbox_exe = codex_linux_sandbox_exe.as_ref();
+    // Preserve the helper alias when we already have it; otherwise force argv0
+    // so arg0 dispatch still reaches the Linux sandbox path.
     let arg0 = if codex_linux_sandbox_exe
         .file_name()
         .and_then(|name| name.to_str())
-        == Some(LINUX_SANDBOX_ARG0)
+        == Some(CODEX_LINUX_SANDBOX_ARG0)
     {
         codex_linux_sandbox_exe.to_string_lossy().into_owned()
     } else {
-        LINUX_SANDBOX_ARG0.to_string()
+        CODEX_LINUX_SANDBOX_ARG0.to_string()
     };
     spawn_child_async(SpawnChildRequest {
         program: codex_linux_sandbox_exe.to_path_buf(),
