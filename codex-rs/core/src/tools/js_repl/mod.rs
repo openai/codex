@@ -1050,7 +1050,7 @@ impl JsReplManager {
                 "--experimental-vm-modules".to_string(),
                 kernel_path.to_string_lossy().to_string(),
             ],
-            cwd: turn.cwd.clone(),
+            cwd: turn.cwd.to_path_buf(),
             env,
             additional_permissions: None,
         };

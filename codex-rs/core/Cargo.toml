@@ -27,6 +27,7 @@ bm25 = { workspace = true }
 chardetng = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
+codex-analytics = { workspace = true }
 codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
@@ -42,9 +43,11 @@ codex-skills = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-hooks = { workspace = true }
+codex-instructions = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-artifacts = { workspace = true }
+codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rollout = { workspace = true }
 codex-rmcp-client = { workspace = true }
@@ -57,6 +60,7 @@ codex-utils-image = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 codex-utils-output-truncation = { workspace = true }
 codex-utils-path = { workspace = true }
+codex-utils-plugins = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-readiness = { workspace = true }
 codex-secrets = { workspace = true }

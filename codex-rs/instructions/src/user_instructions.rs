@@ -3,20 +3,21 @@ use serde::Serialize;
 
 use codex_protocol::models::ResponseItem;
 
-use crate::contextual_user_message::AGENTS_MD_FRAGMENT;
-use crate::contextual_user_message::SKILL_FRAGMENT;
+use crate::fragment::AGENTS_MD_FRAGMENT;
+use crate::fragment::AGENTS_MD_START_MARKER;
+use crate::fragment::SKILL_FRAGMENT;
 
-pub const USER_INSTRUCTIONS_PREFIX: &str = "# AGENTS.md instructions for ";
+pub const USER_INSTRUCTIONS_PREFIX: &str = AGENTS_MD_START_MARKER;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename = "user_instructions", rename_all = "snake_case")]
-pub(crate) struct UserInstructions {
+pub struct UserInstructions {
     pub directory: String,
     pub text: String,
 }
 
 impl UserInstructions {
-    pub(crate) fn serialize_to_text(&self) -> String {
+    pub fn serialize_to_text(&self) -> String {
         format!(
             "{prefix}{directory}\n\n<INSTRUCTIONS>\n{contents}\n{suffix}",
             prefix = AGENTS_MD_FRAGMENT.start_marker(),
@@ -35,13 +36,11 @@ impl From<UserInstructions> for ResponseItem {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename = "skill_instructions", rename_all = "snake_case")]
-pub(crate) struct SkillInstructions {
+pub struct SkillInstructions {
     pub name: String,
     pub path: String,
     pub contents: String,
 }
-
-impl SkillInstructions {}
 
 impl From<SkillInstructions> for ResponseItem {
     fn from(si: SkillInstructions) -> Self {

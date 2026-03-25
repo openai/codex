@@ -1,0 +1,30 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-analytics"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_analytics"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-git-utils = { workspace = true }
+codex-login = { workspace = true }
+codex-plugin = { workspace = true }
+codex-protocol = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+sha1 = { workspace = true }
+tokio = { workspace = true, features = [
+    "macros",
+    "rt-multi-thread",
+] }
+tracing = { workspace = true, features = ["log"] }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+serde_json = { workspace = true }

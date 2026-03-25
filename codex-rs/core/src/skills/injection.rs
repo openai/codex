@@ -2,14 +2,14 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use crate::analytics_client::AnalyticsEventsClient;
-use crate::analytics_client::InvocationType;
-use crate::analytics_client::SkillInvocation;
-use crate::analytics_client::TrackEventsContext;
 use crate::instructions::SkillInstructions;
 use crate::mention_syntax::TOOL_MENTION_SIGIL;
 use crate::mentions::build_skill_name_counts;
 use crate::skills::SkillMetadata;
+use codex_analytics::AnalyticsEventsClient;
+use codex_analytics::InvocationType;
+use codex_analytics::SkillInvocation;
+use codex_analytics::TrackEventsContext;
 use codex_otel::SessionTelemetry;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;

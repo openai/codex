@@ -374,10 +374,10 @@ pub struct Config {
     /// Syntax highlighting theme override (kebab-case name).
     pub tui_theme: Option<String>,
 
-    /// The directory that should be treated as the current working directory
-    /// for the session. All relative paths inside the business-logic layer are
-    /// resolved against this path.
-    pub cwd: PathBuf,
+    /// The absolute directory that should be treated as the current working
+    /// directory for the session. All relative paths inside the business-logic
+    /// layer are resolved against this path.
+    pub cwd: AbsolutePathBuf,
 
     /// Preferred store for CLI auth credentials.
     /// file (default): Use a file in the Codex home directory.
@@ -662,7 +662,7 @@ impl ConfigBuilder {
         let loader_overrides = loader_overrides.unwrap_or_default();
         let cwd_override = harness_overrides.cwd.as_deref().or(fallback_cwd.as_deref());
         let cwd = match cwd_override {
-            Some(path) => AbsolutePathBuf::try_from(path)?,
+            Some(path) => AbsolutePathBuf::relative_to_current_dir(path)?,
             None => AbsolutePathBuf::current_dir()?,
         };
         harness_overrides.cwd = Some(cwd.to_path_buf());
@@ -2083,7 +2083,7 @@ impl Config {
         let windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
         let windows_sandbox_private_desktop =
             resolve_windows_sandbox_private_desktop(&cfg, &config_profile);
-        let resolved_cwd = normalize_for_native_workdir({
+        let resolved_cwd = AbsolutePathBuf::try_from(normalize_for_native_workdir({
             use std::env;
 
             match cwd {
@@ -2100,13 +2100,13 @@ impl Config {
                     current
                 }
             }
-        });
+        }))?;
         let mut additional_writable_roots: Vec<AbsolutePathBuf> = additional_writable_roots
             .into_iter()
-            .map(|path| AbsolutePathBuf::resolve_path_against_base(path, &resolved_cwd))
+            .map(|path| AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path()))
             .collect::<Result<Vec<_>, _>>()?;
         let active_project = cfg
-            .get_active_project(&resolved_cwd)
+            .get_active_project(resolved_cwd.as_path())
             .unwrap_or(ProjectConfig { trust_level: None });
         let permission_config_syntax = resolve_permission_config_syntax(
             &config_layer_stack,
@@ -2179,12 +2179,15 @@ impl Config {
                     &mut startup_warnings,
                 )?;
             let mut sandbox_policy = file_system_sandbox_policy
-                .to_legacy_sandbox_policy(network_sandbox_policy, &resolved_cwd)?;
+                .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
             if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
                 file_system_sandbox_policy = file_system_sandbox_policy
-                    .with_additional_writable_roots(&resolved_cwd, &additional_writable_roots);
+                    .with_additional_writable_roots(
+                        resolved_cwd.as_path(),
+                        &additional_writable_roots,
+                    );
                 sandbox_policy = file_system_sandbox_policy
-                    .to_legacy_sandbox_policy(network_sandbox_policy, &resolved_cwd)?;
+                    .to_legacy_sandbox_policy(network_sandbox_policy, resolved_cwd.as_path())?;
             }
             (
                 configured_network_proxy_config,
@@ -2198,7 +2201,7 @@ impl Config {
                 sandbox_mode,
                 config_profile.sandbox_mode,
                 windows_sandbox_level,
-                &resolved_cwd,
+                resolved_cwd.as_path(),
                 Some(&constrained_sandbox_policy),
             );
             if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
@@ -2208,8 +2211,10 @@ impl Config {
                     }
                 }
             }
-            let file_system_sandbox_policy =
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy(&sandbox_policy, &resolved_cwd);
+            let file_system_sandbox_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy(
+                &sandbox_policy,
+                resolved_cwd.as_path(),
+            );
             let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
             (
                 configured_network_proxy_config,
@@ -2545,11 +2550,11 @@ impl Config {
             } else {
                 FileSystemSandboxPolicy::from_legacy_sandbox_policy(
                     &effective_sandbox_policy,
-                    &resolved_cwd,
+                    resolved_cwd.as_path(),
                 )
             };
         let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
-            .with_additional_readable_roots(&resolved_cwd, &helper_readable_roots);
+            .with_additional_readable_roots(resolved_cwd.as_path(), &helper_readable_roots);
         let effective_network_sandbox_policy =
             if effective_sandbox_policy == original_sandbox_policy {
                 network_sandbox_policy

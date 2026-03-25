@@ -1385,6 +1385,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9b18233253483ce2f65329a24072ec414db782531bdbb7d0bbc4bd2ce6b7e21"
 
 [[package]]
+name = "codex-analytics"
+version = "0.0.0"
+dependencies = [
+ "codex-git-utils",
+ "codex-login",
+ "codex-plugin",
+ "codex-protocol",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "sha1",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "codex-ansi-escape"
 version = "0.0.0"
 dependencies = [
@@ -1869,6 +1885,7 @@ dependencies = [
  "chardetng",
  "chrono",
  "clap",
+ "codex-analytics",
  "codex-api",
  "codex-app-server-protocol",
  "codex-apply-patch",
@@ -1883,9 +1900,11 @@ dependencies = [
  "codex-features",
  "codex-git-utils",
  "codex-hooks",
+ "codex-instructions",
  "codex-login",
  "codex-network-proxy",
  "codex-otel",
+ "codex-plugin",
  "codex-protocol",
  "codex-rmcp-client",
  "codex-rollout",
@@ -1904,6 +1923,7 @@ dependencies = [
  "codex-utils-image",
  "codex-utils-output-truncation",
  "codex-utils-path",
+ "codex-utils-plugins",
  "codex-utils-pty",
  "codex-utils-readiness",
  "codex-utils-stream-parser",
@@ -2175,6 +2195,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-instructions"
+version = "0.0.0"
+dependencies = [
+ "codex-protocol",
+ "pretty_assertions",
+ "serde",
+]
+
+[[package]]
 name = "codex-keyring-store"
 version = "0.0.0"
 dependencies = [
@@ -2381,6 +2410,17 @@ dependencies = [
  "url",
  "wiremock",
  "zip",
+]
+
+[[package]]
+name = "codex-plugin"
+version = "0.0.0"
+dependencies = [
+ "codex-utils-absolute-path",
+ "codex-utils-plugins",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2938,6 +2978,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-utils-plugins"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "codex-utils-pty"
 version = "0.0.0"
 dependencies = [
@@ -3004,6 +3053,13 @@ version = "0.0.0"
 dependencies = [
  "pretty_assertions",
  "regex-lite",
+]
+
+[[package]]
+name = "codex-utils-template"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
 ]
 
 [[package]]

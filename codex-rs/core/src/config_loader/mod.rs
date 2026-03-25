@@ -285,6 +285,11 @@ pub async fn load_config_layers_state(
         ));
     }
     if let Some(config) = managed_config_from_mdm {
+        // As a general rule, config from MDM should _not_ include relative
+        // paths, starting with `./`, but a path starting with `~/` _is_ a
+        // supported use case. Because resolve_relative_paths_in_config_toml()
+        // relies on AbsolutePathBufGuard to resolve `~/`, we must supply a
+        // value for base_dir, so codex_home is as good a value as any.
         let managed_config =
             resolve_relative_paths_in_config_toml(config.managed_config, codex_home)?;
         layers.push(ConfigLayerEntry::new_with_raw_toml(
