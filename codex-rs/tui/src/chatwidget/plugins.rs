@@ -415,10 +415,10 @@ impl ChatWidget {
         let total = self.plugin_install_apps_needing_auth.len();
         let current = flow.next_app_index + 1;
         let is_installed = self.plugin_install_auth_app_is_installed(app.id.as_str());
-        let status_label = if is_installed {
+                let status_label = if is_installed {
             "Already installed in this session."
         } else {
-            "Not installed yet."
+            "Install the required Apps in ChatGPT to continue:"
         };
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Plugins".bold()));
