@@ -3017,6 +3017,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-utils-template"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+]
+
+[[package]]
 name = "codex-v8-poc"
 version = "0.0.0"
 dependencies = [
