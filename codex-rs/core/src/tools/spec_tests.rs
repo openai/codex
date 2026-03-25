@@ -2030,8 +2030,7 @@ fn search_tool_requires_model_capability_only() {
 fn tool_suggest_is_not_registered_without_feature_flag() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
-    features.enable(Feature::Apps);
-    features.enable(Feature::Plugins);
+    features.disable(Feature::ToolSuggest);
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
