@@ -1,9 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::ffi::OsStr;
+use std::fs;
 use std::fs::File;
 use std::fs::FileTimes;
-use std::fs::{self};
 use std::io::Write;
 use std::path::Path;
 

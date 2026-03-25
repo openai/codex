@@ -11,7 +11,6 @@ use crate::unix::escalate_protocol::EXEC_WRAPPER_ENV_VAR;
 use crate::unix::escalate_protocol::EscalateAction;
 use crate::unix::escalate_protocol::EscalateRequest;
 use crate::unix::escalate_protocol::EscalateResponse;
-use crate::unix::escalate_protocol::LEGACY_BASH_EXEC_WRAPPER_ENV_VAR;
 use crate::unix::escalate_protocol::SuperExecMessage;
 use crate::unix::escalate_protocol::SuperExecResult;
 use crate::unix::socket::AsyncDatagramSocket;
@@ -46,12 +45,7 @@ pub async fn run_shell_escalation_execve_wrapper(
         .await
         .context("failed to send handshake datagram")?;
     let env = std::env::vars()
-        .filter(|(k, _)| {
-            !matches!(
-                k.as_str(),
-                ESCALATE_SOCKET_ENV_VAR | EXEC_WRAPPER_ENV_VAR | LEGACY_BASH_EXEC_WRAPPER_ENV_VAR
-            )
-        })
+        .filter(|(k, _)| !matches!(k.as_str(), ESCALATE_SOCKET_ENV_VAR | EXEC_WRAPPER_ENV_VAR))
         .collect();
     client
         .send(EscalateRequest {

@@ -73,8 +73,8 @@ async fn drop_kills_wrapper_process_group() -> Result<()> {
             ),
         ],
         Some(HashMap::from([(
-            "CHILD_PID_FILE".to_string(),
-            child_pid_file_str,
+            OsString::from("CHILD_PID_FILE"),
+            OsString::from(child_pid_file_str),
         )])),
         &[],
         None,

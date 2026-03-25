@@ -74,6 +74,7 @@ use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core::skills::model::SkillMetadata;
 use codex_features::FEATURES;
 use codex_features::Feature;
+use codex_git_utils::CommitLogEntry;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
@@ -7322,12 +7323,12 @@ async fn review_commit_picker_shows_subjects_without_timestamps() {
 
     // Show commit picker with synthetic entries.
     let entries = vec![
-        codex_core::git_info::CommitLogEntry {
+        CommitLogEntry {
             sha: "1111111deadbeef".to_string(),
             timestamp: 0,
             subject: "Add new feature X".to_string(),
         },
-        codex_core::git_info::CommitLogEntry {
+        CommitLogEntry {
             sha: "2222222cafebabe".to_string(),
             timestamp: 0,
             subject: "Fix bug Y".to_string(),
@@ -7679,6 +7680,40 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     lines.join("\n")
 }
 
+fn strip_osc8_for_snapshot(text: &str) -> String {
+    // Snapshots should assert the visible popup text, not terminal hyperlink escapes.
+    let bytes = text.as_bytes();
+    let mut stripped = String::with_capacity(text.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"\x1B]8;;") {
+            i += 5;
+            while i < bytes.len() {
+                if bytes[i] == b'\x07' {
+                    i += 1;
+                    break;
+                }
+                if i + 1 < bytes.len() && bytes[i] == b'\x1B' && bytes[i + 1] == b'\\' {
+                    i += 2;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        let ch = text[i..]
+            .chars()
+            .next()
+            .expect("slice should always contain a char");
+        stripped.push(ch);
+        i += ch.len_utf8();
+    }
+
+    stripped
+}
+
 fn plugins_test_absolute_path(path: &str) -> AbsolutePathBuf {
     AbsolutePathBuf::try_from(
         std::env::temp_dir()
@@ -7934,7 +7969,54 @@ async fn plugin_detail_popup_snapshot_shows_install_actions_and_capability_summa
     );
 
     let popup = render_bottom_popup(&chat, 100);
-    assert_snapshot!("plugin_detail_popup_installable", popup);
+    assert_snapshot!(
+        "plugin_detail_popup_installable",
+        strip_osc8_for_snapshot(&popup)
+    );
+}
+
+#[tokio::test]
+async fn plugin_detail_popup_hides_disclosure_for_installed_plugins() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Plugins, true);
+
+    let summary = plugins_test_summary(
+        "plugin-figma",
+        "figma",
+        Some("Figma"),
+        Some("Design handoff."),
+        true,
+        true,
+        PluginInstallPolicy::Available,
+    );
+    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        summary.clone(),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.clone(), Ok(response));
+    chat.add_plugins_output();
+    chat.on_plugin_detail_loaded(
+        cwd,
+        Ok(PluginReadResponse {
+            plugin: plugins_test_detail(
+                summary,
+                Some("Turn Figma files into implementation context."),
+                &["design-review", "extract-copy"],
+                &[("Figma", true), ("Slack", false)],
+                &["figma-mcp", "docs-mcp"],
+            ),
+        }),
+    );
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(
+        !popup.contains("Data shared with this app is subject to the app's"),
+        "expected installed plugin details to hide the disclosure line, got:\n{popup}"
+    );
+    assert_snapshot!(
+        "plugin_detail_popup_installed",
+        strip_osc8_for_snapshot(&popup)
+    );
 }
 
 #[tokio::test]
@@ -8009,7 +8091,7 @@ async fn plugins_popup_refresh_replaces_selection_with_first_row() {
         "expected refresh to rebuild the popup from the new first row, got:\n{after}"
     );
     assert!(
-        after.contains("Slack · ChatGPT Marketplace"),
+        after.contains("Slack"),
         "expected refreshed popup to include the updated plugin list, got:\n{after}"
     );
 }
@@ -8045,7 +8127,7 @@ async fn plugins_popup_refreshes_installed_counts_after_install() {
         "expected initial installed count before refresh, got:\n{before}"
     );
     assert!(
-        before.contains("Can be installed"),
+        before.contains("Available"),
         "expected pre-install popup copy before refresh, got:\n{before}"
     );
 
@@ -8078,7 +8160,7 @@ async fn plugins_popup_refreshes_installed_counts_after_install() {
         "expected /plugins to refresh installed counts after install, got:\n{after}"
     );
     assert!(
-        after.contains("Installed. Press Enter to view plugin details."),
+        after.contains("Installed   Press Enter to view plugin details."),
         "expected refreshed selected row copy to reflect the installed plugin state, got:\n{after}"
     );
 }
@@ -8126,8 +8208,7 @@ async fn plugins_popup_search_filters_visible_rows_snapshot() {
     let popup = render_bottom_popup(&chat, 100);
     assert_snapshot!("plugins_popup_search_filtered", popup);
     assert!(
-        !popup.contains("Calendar · ChatGPT Marketplace")
-            && !popup.contains("Drive · ChatGPT Marketplace"),
+        !popup.contains("Calendar") && !popup.contains("Drive"),
         "expected search to leave only matching rows visible, got:\n{popup}"
     );
 }
@@ -8179,8 +8260,7 @@ async fn plugins_popup_search_no_matches_and_backspace_restores_results() {
 
     let restored = render_bottom_popup(&chat, 100);
     assert!(
-        restored.contains("Calendar · ChatGPT Marketplace")
-            && restored.contains("Slack · ChatGPT Marketplace"),
+        restored.contains("Calendar") && restored.contains("Slack"),
         "expected clearing the query to restore the plugin rows, got:\n{restored}"
     );
     assert!(

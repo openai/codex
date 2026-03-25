@@ -3,14 +3,15 @@ source: tui/src/chatwidget/tests.rs
 expression: popup
 ---
   Plugins
-  Figma · ChatGPT Marketplace
-  Can be installed
+  Figma · Can be installed · ChatGPT Marketplace
+  Data shared with this app is subject to the app's terms of service and privacy policy. Learn
+  more.
   Turn Figma files into implementation context.
 
 › 1. Back to plugins  Return to the plugin list.
   2. Install plugin   Install this plugin now.
-  3. Skills           design-review, extract-copy
-  4. Apps             Figma, Slack
-  5. MCP Servers      figma-mcp, docs-mcp
+     Skills           design-review, extract-copy
+     Apps             Figma, Slack
+     MCP Servers      figma-mcp, docs-mcp
 
   Press esc to close.

@@ -13,9 +13,6 @@ pub const ESCALATE_SOCKET_ENV_VAR: &str = "CODEX_ESCALATE_SOCKET";
 /// Patched shells use this to wrap exec() calls.
 pub const EXEC_WRAPPER_ENV_VAR: &str = "EXEC_WRAPPER";
 
-/// Compatibility alias for older patched bash builds.
-pub const LEGACY_BASH_EXEC_WRAPPER_ENV_VAR: &str = "BASH_EXEC_WRAPPER";
-
 /// The client sends this to the server to request an exec() call.
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct EscalateRequest {

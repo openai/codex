@@ -5,16 +5,17 @@ use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
 use std::collections::HashMap;
 use std::env;
+use std::ffi::OsString;
 
 pub(crate) fn create_env_for_mcp_server(
-    extra_env: Option<HashMap<String, String>>,
+    extra_env: Option<HashMap<OsString, OsString>>,
     env_vars: &[String],
-) -> HashMap<String, String> {
+) -> HashMap<OsString, OsString> {
     DEFAULT_ENV_VARS
         .iter()
         .copied()
         .chain(env_vars.iter().map(String::as_str))
-        .filter_map(|var| env::var(var).ok().map(|value| (var.to_string(), value)))
+        .filter_map(|var| env::var_os(var).map(|value| (OsString::from(var), value)))
         .chain(extra_env.unwrap_or_default())
         .collect()
 }
@@ -140,7 +141,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use serial_test::serial;
-    use std::ffi::OsString;
+    use std::ffi::OsStr;
 
     struct EnvVarGuard {
         key: String,
@@ -148,10 +149,10 @@ mod tests {
     }
 
     impl EnvVarGuard {
-        fn set(key: &str, value: &str) -> Self {
+        fn set(key: &str, value: impl AsRef<OsStr>) -> Self {
             let original = std::env::var_os(key);
             unsafe {
-                std::env::set_var(key, value);
+                std::env::set_var(key, value.as_ref());
             }
             Self {
                 key: key.to_string(),
@@ -177,9 +178,12 @@ mod tests {
     #[tokio::test]
     async fn create_env_honors_overrides() {
         let value = "custom".to_string();
-        let env =
-            create_env_for_mcp_server(Some(HashMap::from([("TZ".into(), value.clone())])), &[]);
-        assert_eq!(env.get("TZ"), Some(&value));
+        let expected = OsString::from(&value);
+        let env = create_env_for_mcp_server(
+            Some(HashMap::from([(OsString::from("TZ"), expected.clone())])),
+            &[],
+        );
+        assert_eq!(env.get(OsStr::new("TZ")), Some(&expected));
     }
 
     #[test]
@@ -187,8 +191,24 @@ mod tests {
     fn create_env_includes_additional_whitelisted_variables() {
         let custom_var = "EXTRA_RMCP_ENV";
         let value = "from-env";
+        let expected = OsString::from(value);
         let _guard = EnvVarGuard::set(custom_var, value);
         let env = create_env_for_mcp_server(None, &[custom_var.to_string()]);
-        assert_eq!(env.get(custom_var), Some(&value.to_string()));
+        assert_eq!(env.get(OsStr::new(custom_var)), Some(&expected));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[serial(extra_rmcp_env)]
+    fn create_env_preserves_path_when_it_is_not_utf8() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let raw_path = std::ffi::OsStr::from_bytes(b"/tmp/codex-\xFF/bin");
+        let expected = raw_path.to_os_string();
+        let _guard = EnvVarGuard::set("PATH", raw_path);
+
+        let env = create_env_for_mcp_server(None, &[]);
+
+        assert_eq!(env.get(OsStr::new("PATH")), Some(&expected));
     }
 }

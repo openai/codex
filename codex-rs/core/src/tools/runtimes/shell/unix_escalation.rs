@@ -120,8 +120,6 @@ pub(super) async fn try_run_zsh_fork(
     let options = ExecOptions {
         expiration: req.timeout_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
-        sandbox_permissions: req.sandbox_permissions,
-        justification: req.justification.clone(),
     };
     let sandbox_exec_request = attempt
         .env_for(command, options, req.network.as_ref())
@@ -136,11 +134,9 @@ pub(super) async fn try_run_zsh_fork(
         sandbox,
         windows_sandbox_level,
         windows_sandbox_private_desktop: _windows_sandbox_private_desktop,
-        sandbox_permissions,
         sandbox_policy,
         file_system_sandbox_policy,
         network_sandbox_policy,
-        justification,
         arg0,
     } = sandbox_exec_request;
     let ParsedShellCommand { script, login, .. } = extract_shell_script(&command)?;
@@ -161,8 +157,6 @@ pub(super) async fn try_run_zsh_fork(
         env: sandbox_env,
         network: sandbox_network,
         windows_sandbox_level,
-        sandbox_permissions,
-        justification,
         arg0,
         sandbox_policy_cwd: ctx.turn.cwd.clone(),
         macos_seatbelt_profile_extensions: ctx
@@ -267,8 +261,6 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         env: exec_request.env.clone(),
         network: exec_request.network.clone(),
         windows_sandbox_level: exec_request.windows_sandbox_level,
-        sandbox_permissions: exec_request.sandbox_permissions,
-        justification: exec_request.justification.clone(),
         arg0: exec_request.arg0.clone(),
         sandbox_policy_cwd: ctx.turn.cwd.clone(),
         macos_seatbelt_profile_extensions: ctx
@@ -864,8 +856,6 @@ struct CoreShellCommandExecutor {
     env: HashMap<String, String>,
     network: Option<codex_network_proxy::NetworkProxy>,
     windows_sandbox_level: WindowsSandboxLevel,
-    sandbox_permissions: SandboxPermissions,
-    justification: Option<String>,
     arg0: Option<String>,
     sandbox_policy_cwd: PathBuf,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -899,7 +889,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
         let mut exec_env = self.env.clone();
         // `env_overlay` comes from `EscalationSession::env()`, so merge only the
         // wrapper/socket variables into the base shell environment.
-        for var in ["CODEX_ESCALATE_SOCKET", "EXEC_WRAPPER", "BASH_EXEC_WRAPPER"] {
+        for var in ["CODEX_ESCALATE_SOCKET", "EXEC_WRAPPER"] {
             if let Some(value) = env_overlay.get(var) {
                 exec_env.insert(var.to_string(), value.clone());
             }
@@ -916,11 +906,9 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 sandbox: self.sandbox,
                 windows_sandbox_level: self.windows_sandbox_level,
                 windows_sandbox_private_desktop: false,
-                sandbox_permissions: self.sandbox_permissions,
                 sandbox_policy: self.sandbox_policy.clone(),
                 file_system_sandbox_policy: self.file_system_sandbox_policy.clone(),
                 network_sandbox_policy: self.network_sandbox_policy,
-                justification: self.justification.clone(),
                 arg0: self.arg0.clone(),
             },
             /*stdout_stream*/ None,
@@ -1044,11 +1032,6 @@ impl CoreShellCommandExecutor {
             self.windows_sandbox_level,
             self.network.is_some(),
         );
-        let sandbox_permissions = if additional_permissions.is_some() {
-            SandboxPermissions::WithAdditionalPermissions
-        } else {
-            SandboxPermissions::UseDefault
-        };
         let command = SandboxCommand {
             program: program.clone(),
             args: args.to_vec(),
@@ -1059,8 +1042,6 @@ impl CoreShellCommandExecutor {
         let options = ExecOptions {
             expiration: ExecExpiration::DefaultTimeout,
             capture_policy: ExecCapturePolicy::ShellTool,
-            sandbox_permissions,
-            justification: self.justification.clone(),
         };
         let exec_request = sandbox_manager.transform(SandboxTransformRequest {
             command,

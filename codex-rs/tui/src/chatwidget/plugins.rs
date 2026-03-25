@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::time::Duration;
+use std::time::Instant;
 
 use super::ChatWidget;
 use crate::app_event::AppEvent;
@@ -6,7 +8,11 @@ use crate::bottom_pane::ColumnWidthMode;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::history_cell;
+use crate::onboarding::mark_url_hyperlink;
 use crate::render::renderable::ColumnRenderable;
+use crate::render::renderable::Renderable;
+use crate::shimmer::shimmer_spans;
+use crate::tui::FrameRequester;
 use codex_app_server_protocol::PluginDetail;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInstallResponse;
@@ -17,10 +23,101 @@ use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::prelude::Widget;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::WidgetRef;
+use ratatui::widgets::Wrap;
 
 const PLUGINS_SELECTION_VIEW_ID: &str = "plugins-selection";
+const LOADING_ANIMATION_DELAY: Duration = Duration::from_secs(1);
+const LOADING_ANIMATION_INTERVAL: Duration = Duration::from_millis(100);
+
+struct DelayedLoadingHeader {
+    started_at: Instant,
+    frame_requester: FrameRequester,
+    animations_enabled: bool,
+    loading_text: String,
+    note: Option<String>,
+}
+
+impl DelayedLoadingHeader {
+    fn new(
+        frame_requester: FrameRequester,
+        animations_enabled: bool,
+        loading_text: String,
+        note: Option<String>,
+    ) -> Self {
+        Self {
+            started_at: Instant::now(),
+            frame_requester,
+            animations_enabled,
+            loading_text,
+            note,
+        }
+    }
+}
+
+impl Renderable for DelayedLoadingHeader {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        if area.is_empty() {
+            return;
+        }
+
+        let mut lines = Vec::with_capacity(3);
+        lines.push(Line::from("Plugins".bold()));
+
+        let now = Instant::now();
+        let elapsed = now.saturating_duration_since(self.started_at);
+        if elapsed < LOADING_ANIMATION_DELAY {
+            self.frame_requester
+                .schedule_frame_in(LOADING_ANIMATION_DELAY - elapsed);
+            lines.push(Line::from(self.loading_text.as_str().dim()));
+        } else if self.animations_enabled {
+            self.frame_requester
+                .schedule_frame_in(LOADING_ANIMATION_INTERVAL);
+            lines.push(Line::from(shimmer_spans(self.loading_text.as_str())));
+        } else {
+            lines.push(Line::from(self.loading_text.as_str().dim()));
+        }
+
+        if let Some(note) = &self.note {
+            lines.push(Line::from(note.as_str().dim()));
+        }
+
+        Paragraph::new(lines).render_ref(area, buf);
+    }
+
+    fn desired_height(&self, _width: u16) -> u16 {
+        2 + u16::from(self.note.is_some())
+    }
+}
+
+const APPS_HELP_ARTICLE_URL: &str = "https://help.openai.com/en/articles/11487775-apps-in-chatgpt";
+
+struct PluginDisclosureLine {
+    line: Line<'static>,
+}
+
+impl Renderable for PluginDisclosureLine {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        Paragraph::new(self.line.clone())
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+        mark_url_hyperlink(buf, area, APPS_HELP_ARTICLE_URL);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        Paragraph::new(self.line.clone())
+            .wrap(Wrap { trim: false })
+            .line_count(width)
+            .try_into()
+            .unwrap_or(u16::MAX)
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub(super) enum PluginsCacheState {
@@ -355,9 +452,7 @@ impl ChatWidget {
             };
             items.push(SelectionItem {
                 name: install_label.to_string(),
-                description: Some(
-                    "Open the same ChatGPT app management link used by /apps.".to_string(),
-                ),
+                description: Some("Open the ChatGPT app management page".to_string()),
                 selected_description: Some("Open the app page in your browser.".to_string()),
                 actions: vec![Box::new(move |tx| {
                     tx.send(AppEvent::OpenUrlInBrowser {
@@ -368,7 +463,7 @@ impl ChatWidget {
             });
         } else {
             items.push(SelectionItem {
-                name: "ChatGPT link unavailable".to_string(),
+                name: "ChatGPT apps link unavailable".to_string(),
                 description: Some("This app did not provide an install/manage URL.".to_string()),
                 is_disabled: true,
                 ..Default::default()
@@ -476,16 +571,14 @@ impl ChatWidget {
     }
 
     fn plugins_loading_popup_params(&self) -> SelectionViewParams {
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from("Plugins".bold()));
-        header.push(Line::from("Loading available plugins...".dim()));
-        header.push(Line::from(
-            "This first pass shows the ChatGPT marketplace only.".dim(),
-        ));
-
         SelectionViewParams {
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
-            header: Box::new(header),
+            header: Box::new(DelayedLoadingHeader::new(
+                self.frame_requester.clone(),
+                self.config.animations,
+                "Loading available plugins...".to_string(),
+                Some("This first pass shows the ChatGPT marketplace only.".to_string()),
+            )),
             items: vec![SelectionItem {
                 name: "Loading plugins...".to_string(),
                 description: Some("This updates when the marketplace list is ready.".to_string()),
@@ -497,20 +590,17 @@ impl ChatWidget {
     }
 
     fn plugin_detail_loading_popup_params(&self, plugin_display_name: &str) -> SelectionViewParams {
-        let mut header = ColumnRenderable::new();
-        header.push(Line::from("Plugins".bold()));
-        header.push(Line::from(
-            format!("Loading details for {plugin_display_name}...").dim(),
-        ));
-
         SelectionViewParams {
             view_id: Some(PLUGINS_SELECTION_VIEW_ID),
-            header: Box::new(header),
+            header: Box::new(DelayedLoadingHeader::new(
+                self.frame_requester.clone(),
+                self.config.animations,
+                format!("Loading details for {plugin_display_name}..."),
+                /*note*/ None,
+            )),
             items: vec![SelectionItem {
                 name: "Loading plugin details...".to_string(),
-                description: Some(
-                    "This updates when the plugin detail request finishes.".to_string(),
-                ),
+                description: Some("This updates when plugin details load.".to_string()),
                 is_disabled: true,
                 ..Default::default()
             }],
@@ -556,7 +646,7 @@ impl ChatWidget {
             header: Box::new(header),
             items: vec![SelectionItem {
                 name: "Uninstalling plugin...".to_string(),
-                description: Some("This updates when plugin removal completes.".to_string()),
+                description: Some("This updates when the plugin removal completes.".to_string()),
                 is_disabled: true,
                 ..Default::default()
             }],
@@ -673,14 +763,21 @@ impl ChatWidget {
                 .then_with(|| left.1.name.cmp(&right.1.name))
                 .then_with(|| left.1.id.cmp(&right.1.id))
         });
+        let status_label_width = plugin_entries
+            .iter()
+            .map(|(_, plugin, _)| plugin_status_label(plugin).chars().count())
+            .max()
+            .unwrap_or(0);
 
         let mut items: Vec<SelectionItem> = Vec::new();
         for (marketplace, plugin, display_name) in plugin_entries {
             let marketplace_label = marketplace_display_name(marketplace);
             let status_label = plugin_status_label(plugin);
-            let description = plugin_brief_description(plugin, &marketplace_label);
+            let description =
+                plugin_brief_description(plugin, &marketplace_label, status_label_width);
+            let selected_status_label = format!("{status_label:<status_label_width$}");
             let selected_description =
-                format!("{status_label}. Press Enter to view plugin details.");
+                format!("{selected_status_label}   Press Enter to view plugin details.");
             let search_value = format!(
                 "{display_name} {} {} {}",
                 plugin.id, plugin.name, marketplace_label
@@ -691,7 +788,7 @@ impl ChatWidget {
             let plugin_name = plugin.name.clone();
 
             items.push(SelectionItem {
-                name: format!("{display_name} · {marketplace_label}"),
+                name: display_name,
                 description: Some(description),
                 selected_description: Some(selected_description),
                 search_value: Some(search_value),
@@ -741,13 +838,37 @@ impl ChatWidget {
     ) -> SelectionViewParams {
         let marketplace_label = plugin.marketplace_name.clone();
         let display_name = plugin_display_name(&plugin.summary);
-        let status_label = plugin_status_label(&plugin.summary);
+        let detail_status_label = if plugin.summary.installed {
+            if plugin.summary.enabled {
+                "Installed"
+            } else {
+                "Installed · Disabled"
+            }
+        } else {
+            match plugin.summary.install_policy {
+                PluginInstallPolicy::NotAvailable => "Not installable",
+                PluginInstallPolicy::Available => "Can be installed",
+                PluginInstallPolicy::InstalledByDefault => "Available by default",
+            }
+        };
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Plugins".bold()));
         header.push(Line::from(
-            format!("{display_name} · {marketplace_label}").bold(),
+            format!("{display_name} · {detail_status_label} · {marketplace_label}").bold(),
         ));
-        header.push(Line::from(status_label.dim()));
+        if !plugin.summary.installed {
+            header.push(PluginDisclosureLine {
+                line: Line::from(vec![
+                    "Data shared with this app is subject to the app's ".into(),
+                    "terms of service".bold(),
+                    " and ".into(),
+                    "privacy policy".bold(),
+                    ". ".into(),
+                    "Learn more".cyan().underlined(),
+                    ".".into(),
+                ]),
+            });
+        }
         if let Some(description) = plugin_detail_description(plugin) {
             header.push(Line::from(description.dim()));
         }
@@ -876,8 +997,13 @@ fn plugin_display_name(plugin: &PluginSummary) -> String {
         .unwrap_or_else(|| plugin.name.clone())
 }
 
-fn plugin_brief_description(plugin: &PluginSummary, marketplace_label: &str) -> String {
+fn plugin_brief_description(
+    plugin: &PluginSummary,
+    marketplace_label: &str,
+    status_label_width: usize,
+) -> String {
     let status_label = plugin_status_label(plugin);
+    let status_label = format!("{status_label:<status_label_width$}");
     match plugin_description(plugin) {
         Some(description) => format!("{status_label} · {marketplace_label} · {description}"),
         None => format!("{status_label} · {marketplace_label}"),
@@ -894,7 +1020,7 @@ fn plugin_status_label(plugin: &PluginSummary) -> &'static str {
     } else {
         match plugin.install_policy {
             PluginInstallPolicy::NotAvailable => "Not installable",
-            PluginInstallPolicy::Available => "Can be installed",
+            PluginInstallPolicy::Available => "Available",
             PluginInstallPolicy::InstalledByDefault => "Available by default",
         }
     }

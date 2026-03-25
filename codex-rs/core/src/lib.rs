@@ -41,7 +41,8 @@ mod exec_policy;
 pub mod external_agent_config;
 pub mod file_watcher;
 mod flags;
-pub mod git_info;
+#[cfg(test)]
+mod git_info_tests;
 mod guardian;
 mod hook_runtime;
 pub mod instructions;
@@ -77,7 +78,6 @@ mod stream_events_utils;
 pub mod test_support;
 mod text_encoding;
 pub use codex_login::token_data;
-mod truncate;
 mod unified_exec;
 pub mod windows_sandbox;
 pub use client::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;

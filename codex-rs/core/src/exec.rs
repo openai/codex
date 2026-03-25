@@ -241,10 +241,10 @@ pub fn build_exec_request(
         expiration,
         capture_policy,
         network,
-        sandbox_permissions,
+        sandbox_permissions: _,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
-        justification,
+        justification: _,
         arg0: _,
     } = params;
     if let Some(network) = network.as_ref() {
@@ -268,8 +268,6 @@ pub fn build_exec_request(
     let options = ExecOptions {
         expiration,
         capture_policy,
-        sandbox_permissions,
-        justification,
     };
     let exec_req = manager
         .transform(SandboxTransformRequest {
@@ -309,11 +307,9 @@ pub(crate) async fn execute_exec_request(
         sandbox,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
-        sandbox_permissions,
         sandbox_policy: _sandbox_policy_from_env,
         file_system_sandbox_policy,
         network_sandbox_policy,
-        justification,
         arg0,
     } = exec_request;
     let _ = _sandbox_policy_from_env;
@@ -325,10 +321,10 @@ pub(crate) async fn execute_exec_request(
         capture_policy,
         env,
         network: network.clone(),
-        sandbox_permissions,
+        sandbox_permissions: SandboxPermissions::UseDefault,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
-        justification,
+        justification: None,
         arg0,
     };
 

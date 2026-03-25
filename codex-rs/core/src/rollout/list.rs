@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::cmp::Reverse;
 use std::ffi::OsStr;
-use std::io::{self};
+use std::io;
 use std::num::NonZero;
 use std::ops::ControlFlow;
 use std::path::Path;
@@ -1039,7 +1039,7 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     summary.git_sha = session_meta_line
                         .git
                         .as_ref()
-                        .and_then(|git| git.commit_hash.clone());
+                        .and_then(|git| git.commit_hash.as_ref().map(|sha| sha.0.clone()));
                     summary.git_origin_url = session_meta_line
                         .git
                         .as_ref()
