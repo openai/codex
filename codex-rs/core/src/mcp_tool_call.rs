@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::McpElicitationObjectType;
 use codex_app_server_protocol::McpElicitationSchema;
 use codex_app_server_protocol::McpServerElicitationRequest;
@@ -13,6 +15,7 @@ use crate::arc_monitor::ArcMonitorOutcome;
 use crate::arc_monitor::monitor_action;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::config::Config;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::load_global_mcp_servers;
@@ -1287,8 +1290,7 @@ async fn maybe_persist_mcp_tool_approval(
         persist_codex_app_tool_approval(&turn_context.config.codex_home, &connector_id, &tool_name)
             .await
     } else {
-        persist_custom_mcp_tool_approval(&turn_context.config.codex_home, &key.server, &tool_name)
-            .await
+        persist_custom_mcp_tool_approval(&turn_context.config, &key.server, &tool_name).await
     };
 
     if let Err(err) = persist_result {
@@ -1327,16 +1329,23 @@ async fn persist_codex_app_tool_approval(
 }
 
 async fn persist_custom_mcp_tool_approval(
-    codex_home: &Path,
+    config: &Config,
     server: &str,
     tool_name: &str,
 ) -> anyhow::Result<()> {
-    let servers = load_global_mcp_servers(codex_home).await?;
-    if !servers.contains_key(server) {
-        anyhow::bail!("MCP server `{server}` is not configured in config.toml");
-    }
+    let config_folder = if let Some(project_config_folder) =
+        project_mcp_tool_approval_config_folder(config, server)
+    {
+        project_config_folder
+    } else {
+        let servers = load_global_mcp_servers(&config.codex_home).await?;
+        if !servers.contains_key(server) {
+            anyhow::bail!("MCP server `{server}` is not configured in config.toml");
+        }
+        config.codex_home.clone()
+    };
 
-    ConfigEditsBuilder::new(codex_home)
+    ConfigEditsBuilder::new(&config_folder)
         .with_edits([ConfigEdit::SetPath {
             segments: vec![
                 "mcp_servers".to_string(),
@@ -1348,6 +1357,35 @@ async fn persist_custom_mcp_tool_approval(
         }])
         .apply()
         .await
+}
+
+fn project_mcp_tool_approval_config_folder(config: &Config, server: &str) -> Option<PathBuf> {
+    config
+        .config_layer_stack
+        .layers_high_to_low()
+        .into_iter()
+        .find_map(|layer| {
+            if !matches!(layer.name, ConfigLayerSource::Project { .. }) {
+                return None;
+            }
+
+            let servers = layer
+                .config
+                .as_table()
+                .and_then(|table| table.get("mcp_servers"))
+                .cloned()
+                .and_then(|value| {
+                    HashMap::<String, crate::config::types::McpServerConfig>::deserialize(value)
+                        .ok()
+                })?;
+            if servers.contains_key(server) {
+                layer
+                    .config_folder()
+                    .map(|folder| folder.as_path().to_path_buf())
+            } else {
+                None
+            }
+        })
 }
 
 fn requires_mcp_tool_approval(annotations: Option<&ToolAnnotations>) -> bool {

@@ -1,6 +1,7 @@
 use super::*;
 use crate::codex::make_session_and_context;
 use crate::config::ApprovalsReviewer;
+use crate::config::ConfigBuilder;
 use crate::config::ConfigToml;
 use crate::config::types::AppConfig;
 use crate::config::types::AppToolConfig;
@@ -937,8 +938,13 @@ async fn persist_custom_mcp_tool_approval_writes_tool_override() {
         "[mcp_servers.docs]\ncommand = \"docs-server\"\n",
     )
     .expect("seed config");
+    let config = ConfigBuilder::default()
+        .codex_home(tmp.path().to_path_buf())
+        .build()
+        .await
+        .expect("load config");
 
-    persist_custom_mcp_tool_approval(tmp.path(), "docs", "search")
+    persist_custom_mcp_tool_approval(&config, "docs", "search")
         .await
         .expect("persist approval");
 
@@ -1037,6 +1043,62 @@ async fn maybe_persist_mcp_tool_approval_reloads_session_config_for_custom_serve
             approval_mode: Some(AppToolApproval::Approve),
         }
     );
+    assert_eq!(mcp_tool_approval_is_remembered(&session, &key).await, true);
+}
+
+#[tokio::test]
+async fn maybe_persist_mcp_tool_approval_writes_project_config_for_project_server() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let codex_home = session.codex_home().await;
+    let project_dir = tempdir().expect("tempdir");
+    std::fs::write(project_dir.path().join(".git"), "gitdir: nowhere").expect("seed git marker");
+    let project_codex_dir = project_dir.path().join(".codex");
+    std::fs::create_dir_all(&project_codex_dir).expect("create project .codex dir");
+    std::fs::write(
+        project_codex_dir.join(CONFIG_TOML_FILE),
+        "[mcp_servers.docs]\ncommand = \"docs-server\"\n",
+    )
+    .expect("seed project config");
+    ConfigEditsBuilder::new(&codex_home)
+        .set_project_trust_level(
+            project_dir.path(),
+            codex_protocol::config_types::TrustLevel::Trusted,
+        )
+        .apply()
+        .await
+        .expect("trust project");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(project_dir.path().to_path_buf()))
+        .build()
+        .await
+        .expect("load project config");
+    turn_context.cwd = config.cwd.clone();
+    turn_context.config = Arc::new(config);
+    let key = McpToolApprovalKey {
+        server: "docs".to_string(),
+        connector_id: None,
+        tool_name: "search".to_string(),
+    };
+
+    maybe_persist_mcp_tool_approval(&session, &turn_context, key.clone()).await;
+
+    let contents = std::fs::read_to_string(project_codex_dir.join(CONFIG_TOML_FILE))
+        .expect("read project config");
+    let parsed: ConfigToml = toml::from_str(&contents).expect("parse project config");
+    let tool = parsed
+        .mcp_servers
+        .get("docs")
+        .and_then(|server| server.tools.get("search"))
+        .expect("docs/search tool config exists");
+
+    assert_eq!(
+        tool,
+        &McpServerToolConfig {
+            approval_mode: Some(AppToolApproval::Approve),
+        }
+    );
+    assert!(contents.contains("[mcp_servers.docs.search]"));
     assert_eq!(mcp_tool_approval_is_remembered(&session, &key).await, true);
 }
 
