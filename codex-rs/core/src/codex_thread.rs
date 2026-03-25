@@ -39,6 +39,7 @@ pub struct ThreadConfigSnapshot {
     pub cwd: PathBuf,
     pub ephemeral: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
+    pub collaboration_mode: codex_protocol::config_types::CollaborationMode,
     pub personality: Option<Personality>,
     pub session_source: SessionSource,
 }

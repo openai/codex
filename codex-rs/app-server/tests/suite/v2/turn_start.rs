@@ -77,6 +77,14 @@ fn body_contains(req: &wiremock::Request, text: &str) -> bool {
         .is_some_and(|body| body.contains(text))
 }
 
+fn request_payload_for_prompt(requests: &[wiremock::Request], prompt: &str) -> serde_json::Value {
+    let request = requests
+        .iter()
+        .find(|req| body_contains(req, prompt))
+        .unwrap_or_else(|| panic!("missing request containing prompt: {prompt}"));
+    serde_json::from_slice(&request.body).expect("request body should be valid JSON")
+}
+
 #[tokio::test]
 async fn turn_start_sends_originator_header() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
@@ -505,6 +513,300 @@ async fn turn_start_emits_notifications_and_accepts_model_override() -> Result<(
     assert_eq!(completed2.thread_id, thread.id);
     assert_eq!(completed2.turn.id, turn2.id);
     assert_eq!(completed2.turn.status, TurnStatus::Completed);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_omitted_settings_inherit_latest_session_state_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().to_path_buf();
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace)?;
+    let inherited_cwd = workspace.join("inherited");
+    std::fs::create_dir(&inherited_cwd)?;
+
+    let responses = vec![
+        create_final_assistant_message_sse_response("thread started")?,
+        create_final_assistant_message_sse_response("session updated")?,
+        create_shell_command_sse_response(
+            vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                "print(42)".to_string(),
+            ],
+            None,
+            Some(5000),
+            "call-inherited",
+        )?,
+        create_final_assistant_message_sse_response("inherited done")?,
+    ];
+    let server = create_mock_responses_server_sequence(responses).await;
+    create_config_toml(
+        codex_home.as_path(),
+        &server.uri(),
+        "untrusted",
+        &BTreeMap::default(),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.as_path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let first_turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "set session defaults".to_string(),
+                text_elements: Vec::new(),
+            }],
+            cwd: Some(inherited_cwd.clone()),
+            approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
+            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
+            model: Some("mock-model-session".to_string()),
+            effort: Some(ReasoningEffort::Medium),
+            summary: Some(ReasoningSummary::Auto),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(first_turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    mcp.clear_message_buffer();
+
+    let second_turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "run inherited command".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(second_turn_id)),
+    )
+    .await??;
+
+    let command_execution_item = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            match mcp.read_next_message().await? {
+                JSONRPCMessage::Request(_) => {
+                    anyhow::bail!("unexpected server request for inherited turn")
+                }
+                JSONRPCMessage::Notification(notification)
+                    if notification.method == "item/started" =>
+                {
+                    let item_started: ItemStartedNotification =
+                        serde_json::from_value(notification.params.expect("item/started params"))?;
+                    if let ThreadItem::CommandExecution { .. } = item_started.item {
+                        return Ok::<ThreadItem, anyhow::Error>(item_started.item);
+                    }
+                }
+                _ => {}
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::CommandExecution { cwd, .. } = command_execution_item else {
+        unreachable!("loop returns only command execution items");
+    };
+    assert_eq!(cwd, inherited_cwd);
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("failed to fetch received requests");
+    let payload = request_payload_for_prompt(&requests, "run inherited command");
+    assert_eq!(payload["model"].as_str(), Some("mock-model-session"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_explicit_settings_override_latest_session_state_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().to_path_buf();
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace)?;
+    let session_cwd = workspace.join("session");
+    let override_cwd = workspace.join("override");
+    std::fs::create_dir(&session_cwd)?;
+    std::fs::create_dir(&override_cwd)?;
+
+    let responses = vec![
+        create_final_assistant_message_sse_response("thread started")?,
+        create_final_assistant_message_sse_response("session updated")?,
+        create_shell_command_sse_response(
+            vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                "print(99)".to_string(),
+            ],
+            None,
+            Some(5000),
+            "call-override",
+        )?,
+        create_final_assistant_message_sse_response("override done")?,
+    ];
+    let server = create_mock_responses_server_sequence(responses).await;
+    create_config_toml(
+        codex_home.as_path(),
+        &server.uri(),
+        "untrusted",
+        &BTreeMap::default(),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.as_path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let first_turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "set session defaults".to_string(),
+                text_elements: Vec::new(),
+            }],
+            cwd: Some(session_cwd.clone()),
+            approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
+            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
+            model: Some("mock-model-session".to_string()),
+            effort: Some(ReasoningEffort::Medium),
+            summary: Some(ReasoningSummary::Auto),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(first_turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    mcp.clear_message_buffer();
+
+    let second_turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "run explicit override command".to_string(),
+                text_elements: Vec::new(),
+            }],
+            cwd: Some(override_cwd.clone()),
+            approval_policy: Some(codex_app_server_protocol::AskForApproval::UnlessTrusted),
+            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
+            model: Some("mock-model-override".to_string()),
+            effort: Some(ReasoningEffort::Medium),
+            summary: Some(ReasoningSummary::Auto),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(second_turn_id)),
+    )
+    .await??;
+
+    let approval_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::CommandExecutionRequestApproval { request_id, params } = approval_request
+    else {
+        panic!("expected command approval request for explicit override turn");
+    };
+    assert_eq!(params.item_id, "call-override");
+
+    mcp.send_response(
+        request_id,
+        serde_json::to_value(CommandExecutionRequestApprovalResponse {
+            decision: CommandExecutionApprovalDecision::Accept,
+        })?,
+    )
+    .await?;
+
+    let command_execution_item = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let message = mcp.read_next_message().await?;
+            let JSONRPCMessage::Notification(notification) = message else {
+                continue;
+            };
+            if notification.method != "item/started" {
+                continue;
+            }
+            let item_started: ItemStartedNotification =
+                serde_json::from_value(notification.params.expect("item/started params"))?;
+            if let ThreadItem::CommandExecution { .. } = item_started.item {
+                return Ok::<ThreadItem, anyhow::Error>(item_started.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::CommandExecution { cwd, .. } = command_execution_item else {
+        unreachable!("loop returns only command execution items");
+    };
+    assert_eq!(cwd, override_cwd);
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("failed to fetch received requests");
+    let payload = request_payload_for_prompt(&requests, "run explicit override command");
+    assert_eq!(payload["model"].as_str(), Some("mock-model-override"));
 
     Ok(())
 }

@@ -1110,6 +1110,7 @@ impl SessionConfiguration {
             cwd: self.cwd.clone(),
             ephemeral: self.original_config_do_not_use.ephemeral,
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
+            collaboration_mode: self.collaboration_mode.clone(),
             personality: self.personality,
             session_source: self.session_source.clone(),
         }
