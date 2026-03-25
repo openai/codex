@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codex_core::ForkSnapshot;
 use codex_core::config::Constrained;
 use codex_execpolicy::Policy;
 use codex_protocol::models::DeveloperInstructions;
@@ -419,7 +420,13 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
     fork_config.permissions.approval_policy = Constrained::allow_any(AskForApproval::UnlessTrusted);
     let forked = initial
         .thread_manager
-        .fork_thread(usize::MAX, fork_config, rollout_path, false, None)
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            fork_config,
+            rollout_path,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
         .await?;
     forked
         .thread
@@ -436,14 +443,14 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
     let body4 = req4.single_request().body_json();
     let input4 = body4["input"].as_array().expect("input array");
     let permissions_fork = permissions_texts(input4);
-    assert_eq!(permissions_fork.len(), permissions_base.len() + 2);
+    assert_eq!(permissions_fork.len(), permissions_base.len() + 1);
     assert_eq!(
         &permissions_fork[..permissions_base.len()],
         permissions_base.as_slice()
     );
     let new_permissions = &permissions_fork[permissions_base.len()..];
-    assert_eq!(new_permissions.len(), 2);
-    assert_eq!(new_permissions[0], new_permissions[1]);
+    assert_eq!(new_permissions.len(), 1);
+    assert_eq!(permissions_fork, permissions_resume);
     assert!(!permissions_base.contains(&new_permissions[0]));
 
     Ok(())

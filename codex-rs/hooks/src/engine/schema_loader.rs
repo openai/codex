@@ -4,6 +4,8 @@ use serde_json::Value;
 
 #[allow(dead_code)]
 pub(crate) struct GeneratedHookSchemas {
+    pub pre_tool_use_command_input: Value,
+    pub pre_tool_use_command_output: Value,
     pub session_start_command_input: Value,
     pub session_start_command_output: Value,
     pub user_prompt_submit_command_input: Value,
@@ -15,6 +17,14 @@ pub(crate) struct GeneratedHookSchemas {
 pub(crate) fn generated_hook_schemas() -> &'static GeneratedHookSchemas {
     static SCHEMAS: OnceLock<GeneratedHookSchemas> = OnceLock::new();
     SCHEMAS.get_or_init(|| GeneratedHookSchemas {
+        pre_tool_use_command_input: parse_json_schema(
+            "pre-tool-use.command.input",
+            include_str!("../../schema/generated/pre-tool-use.command.input.schema.json"),
+        ),
+        pre_tool_use_command_output: parse_json_schema(
+            "pre-tool-use.command.output",
+            include_str!("../../schema/generated/pre-tool-use.command.output.schema.json"),
+        ),
         session_start_command_input: parse_json_schema(
             "session-start.command.input",
             include_str!("../../schema/generated/session-start.command.input.schema.json"),
@@ -56,6 +66,8 @@ mod tests {
     fn loads_generated_hook_schemas() {
         let schemas = generated_hook_schemas();
 
+        assert_eq!(schemas.pre_tool_use_command_input["type"], "object");
+        assert_eq!(schemas.pre_tool_use_command_output["type"], "object");
         assert_eq!(schemas.session_start_command_input["type"], "object");
         assert_eq!(schemas.session_start_command_output["type"], "object");
         assert_eq!(schemas.user_prompt_submit_command_input["type"], "object");

@@ -9,7 +9,7 @@ use codex_core::mcp::auth::McpOAuthLoginSupport;
 use codex_core::mcp::auth::oauth_login_support;
 use codex_core::mcp::auth::resolve_oauth_scopes;
 use codex_core::mcp::auth::should_retry_without_scopes;
-use codex_rmcp_client::perform_oauth_login;
+use codex_rmcp_client::perform_oauth_login_silent;
 use tracing::warn;
 
 use super::CodexMessageProcessor;
@@ -45,7 +45,7 @@ impl CodexMessageProcessor {
             let notification_name = name.clone();
 
             tokio::spawn(async move {
-                let first_attempt = perform_oauth_login(
+                let first_attempt = perform_oauth_login_silent(
                     &name,
                     &oauth_config.url,
                     store_mode,
@@ -60,7 +60,7 @@ impl CodexMessageProcessor {
 
                 let final_result = match first_attempt {
                     Err(err) if should_retry_without_scopes(&resolved_scopes, &err) => {
-                        perform_oauth_login(
+                        perform_oauth_login_silent(
                             &name,
                             &oauth_config.url,
                             store_mode,

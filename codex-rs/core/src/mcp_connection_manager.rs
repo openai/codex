@@ -1440,7 +1440,12 @@ async fn make_rmcp_client(
         } => {
             let command_os: OsString = command.into();
             let args_os: Vec<OsString> = args.into_iter().map(Into::into).collect();
-            RmcpClient::new_stdio_client(command_os, args_os, env, &env_vars, cwd)
+            let env_os = env.map(|env| {
+                env.into_iter()
+                    .map(|(key, value)| (key.into(), value.into()))
+                    .collect::<HashMap<_, _>>()
+            });
+            RmcpClient::new_stdio_client(command_os, args_os, env_os, &env_vars, cwd)
                 .await
                 .map_err(|err| StartupOutcomeError::from(anyhow!(err)))
         }

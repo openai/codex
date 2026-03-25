@@ -1444,10 +1444,12 @@ dependencies = [
  "codex-features",
  "codex-feedback",
  "codex-file-search",
+ "codex-git-utils",
  "codex-login",
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-sandboxing",
  "codex-shell-command",
  "codex-state",
  "codex-utils-absolute-path",
@@ -1488,7 +1490,6 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-arg0",
  "codex-core",
- "codex-features",
  "codex-feedback",
  "codex-protocol",
  "futures",
@@ -1509,6 +1510,7 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-experimental-api-macros",
+ "codex-git-utils",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
@@ -1643,7 +1645,7 @@ dependencies = [
  "clap",
  "codex-connectors",
  "codex-core",
- "codex-git",
+ "codex-git-utils",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
  "pretty_assertions",
@@ -1678,6 +1680,7 @@ dependencies = [
  "codex-protocol",
  "codex-responses-api-proxy",
  "codex-rmcp-client",
+ "codex-sandboxing",
  "codex-state",
  "codex-stdio-to-uds",
  "codex-terminal-detection",
@@ -1767,6 +1770,7 @@ dependencies = [
  "codex-client",
  "codex-cloud-tasks-client",
  "codex-core",
+ "codex-git-utils",
  "codex-login",
  "codex-tui",
  "codex-utils-cli",
@@ -1793,7 +1797,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "codex-backend-client",
- "codex-git",
+ "codex-git-utils",
  "diffy",
  "serde",
  "serde_json",
@@ -1877,14 +1881,15 @@ dependencies = [
  "codex-exec-server",
  "codex-execpolicy",
  "codex-features",
- "codex-file-search",
- "codex-git",
+ "codex-git-utils",
  "codex-hooks",
  "codex-login",
  "codex-network-proxy",
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-rollout",
+ "codex-sandboxing",
  "codex-secrets",
  "codex-shell-command",
  "codex-shell-escalation",
@@ -1897,6 +1902,8 @@ dependencies = [
  "codex-utils-cargo-bin",
  "codex-utils-home-dir",
  "codex-utils-image",
+ "codex-utils-output-truncation",
+ "codex-utils-path",
  "codex-utils-pty",
  "codex-utils-readiness",
  "codex-utils-stream-parser",
@@ -1944,7 +1951,6 @@ dependencies = [
  "test-case",
  "test-log",
  "thiserror 2.0.18",
- "time",
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
@@ -1991,14 +1997,13 @@ dependencies = [
  "codex-cloud-requirements",
  "codex-core",
  "codex-feedback",
+ "codex-git-utils",
  "codex-otel",
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
- "codex-utils-elapsed",
  "codex-utils-oss",
- "codex-utils-sandbox-summary",
  "core_test_support",
  "libc",
  "opentelemetry",
@@ -2006,10 +2011,8 @@ dependencies = [
  "owo-colors",
  "predicates",
  "pretty_assertions",
- "rmcp",
  "serde",
  "serde_json",
- "shlex",
  "supports-color 3.0.2",
  "tempfile",
  "tokio",
@@ -2135,10 +2138,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-git"
+name = "codex-git-utils"
 version = "0.0.0"
 dependencies = [
  "assert_matches",
+ "codex-utils-absolute-path",
+ "futures",
  "once_cell",
  "pretty_assertions",
  "regex",
@@ -2146,6 +2151,7 @@ dependencies = [
  "serde",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "ts-rs",
  "walkdir",
 ]
@@ -2391,9 +2397,10 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-execpolicy",
- "codex-git",
+ "codex-git-utils",
  "codex-utils-absolute-path",
  "codex-utils-image",
+ "codex-utils-string",
  "icu_decimal",
  "icu_locale_core",
  "icu_provider",
@@ -2463,12 +2470,55 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-rollout"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "codex-file-search",
+ "codex-git-utils",
+ "codex-login",
+ "codex-otel",
+ "codex-protocol",
+ "codex-state",
+ "codex-utils-path",
+ "codex-utils-string",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "codex-sandboxing"
+version = "0.0.0"
+dependencies = [
+ "codex-network-proxy",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "dirs",
+ "dunce",
+ "libc",
+ "pretty_assertions",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "codex-secrets"
 version = "0.0.0"
 dependencies = [
  "age",
  "anyhow",
  "base64 0.22.1",
+ "codex-git-utils",
  "codex-keyring-store",
  "keyring",
  "pretty_assertions",
@@ -2539,6 +2589,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "codex-git-utils",
  "codex-protocol",
  "dirs",
  "log",
@@ -2605,6 +2656,7 @@ dependencies = [
  "codex-features",
  "codex-feedback",
  "codex-file-search",
+ "codex-git-utils",
  "codex-login",
  "codex-otel",
  "codex-protocol",
@@ -2698,6 +2750,7 @@ dependencies = [
  "codex-features",
  "codex-feedback",
  "codex-file-search",
+ "codex-git-utils",
  "codex-login",
  "codex-otel",
  "codex-protocol",
@@ -2863,6 +2916,25 @@ dependencies = [
  "codex-core",
  "codex-lmstudio",
  "codex-ollama",
+]
+
+[[package]]
+name = "codex-utils-output-truncation"
+version = "0.0.0"
+dependencies = [
+ "codex-protocol",
+ "codex-utils-string",
+ "pretty_assertions",
+]
+
+[[package]]
+name = "codex-utils-path"
+version = "0.0.0"
+dependencies = [
+ "codex-utils-absolute-path",
+ "dunce",
+ "pretty_assertions",
+ "tempfile",
 ]
 
 [[package]]
@@ -9754,9 +9826,9 @@ checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
 name = "tar"
-version = "0.4.44"
+version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d863878d212c87a19c1a610eb53bb01fe12951c0501cf5a0d65f724914a667a"
+checksum = "22692a6476a21fa75fdfc11d452fda482af402c008cdbaf3476414e122040973"
 dependencies = [
  "filetime",
  "libc",

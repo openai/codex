@@ -14,14 +14,11 @@ use crate::config::Constrained;
 use crate::config::Permissions;
 #[cfg(target_os = "macos")]
 use crate::config::types::ShellEnvironmentPolicy;
-use crate::exec::SandboxType;
 use crate::protocol::AskForApproval;
 use crate::protocol::GranularApprovalConfig;
 use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::SandboxPermissions;
-#[cfg(target_os = "macos")]
-use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 use crate::skills::SkillMetadata;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
@@ -40,6 +37,9 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SkillScope;
+use codex_sandboxing::SandboxType;
+#[cfg(target_os = "macos")]
+use codex_sandboxing::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
 use codex_shell_escalation::EscalationExecution;
 use codex_shell_escalation::EscalationPermissions;
 use codex_shell_escalation::ExecResult;
@@ -660,8 +660,6 @@ async fn prepare_escalated_exec_turn_default_preserves_macos_seatbelt_extensions
         file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
         network_sandbox_policy: NetworkSandboxPolicy::Restricted,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
-        sandbox_permissions: SandboxPermissions::UseDefault,
-        justification: None,
         arg0: None,
         sandbox_policy_cwd: cwd.to_path_buf(),
         macos_seatbelt_profile_extensions: Some(MacOsSeatbeltProfileExtensions {
@@ -712,8 +710,6 @@ async fn prepare_escalated_exec_permissions_preserve_macos_seatbelt_extensions()
         file_system_sandbox_policy: unrestricted_file_system_sandbox_policy(),
         network_sandbox_policy: NetworkSandboxPolicy::Enabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
-        sandbox_permissions: SandboxPermissions::UseDefault,
-        justification: None,
         arg0: None,
         sandbox_policy_cwd: cwd.to_path_buf(),
         macos_seatbelt_profile_extensions: None,
@@ -787,8 +783,6 @@ async fn prepare_escalated_exec_permission_profile_unions_turn_and_requested_mac
         file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
         network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
-        sandbox_permissions: SandboxPermissions::UseDefault,
-        justification: None,
         arg0: None,
         sandbox_policy_cwd: cwd.to_path_buf(),
         macos_seatbelt_profile_extensions: Some(MacOsSeatbeltProfileExtensions {

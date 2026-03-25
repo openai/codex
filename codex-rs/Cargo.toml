@@ -40,8 +40,10 @@ members = [
     "ollama",
     "process-hardening",
     "protocol",
+    "rollout",
     "rmcp-client",
     "responses-api-proxy",
+    "sandboxing",
     "stdio-to-uds",
     "otel",
     "tui",
@@ -49,7 +51,7 @@ members = [
     "v8-poc",
     "utils/absolute-path",
     "utils/cargo-bin",
-    "utils/git",
+    "git-utils",
     "utils/cache",
     "utils/image",
     "utils/json-to-toml",
@@ -64,6 +66,8 @@ members = [
     "utils/sleep-inhibitor",
     "utils/approval-presets",
     "utils/oss",
+    "utils/output-truncation",
+    "utils/path-utils",
     "utils/fuzzy-match",
     "utils/stream-parser",
     "codex-client",
@@ -116,7 +120,7 @@ codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
 codex-feedback = { path = "feedback" }
 codex-features = { path = "features" }
 codex-file-search = { path = "file-search" }
-codex-git = { path = "utils/git" }
+codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
@@ -128,8 +132,10 @@ codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
+codex-rollout = { path = "rollout" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
+codex-sandboxing = { path = "sandboxing" }
 codex-secrets = { path = "secrets" }
 codex-shell-command = { path = "shell-command" }
 codex-shell-escalation = { path = "shell-escalation" }
@@ -152,6 +158,8 @@ codex-utils-home-dir = { path = "utils/home-dir" }
 codex-utils-image = { path = "utils/image" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-oss = { path = "utils/oss" }
+codex-utils-output-truncation = { path = "utils/output-truncation" }
+codex-utils-path = { path = "utils/path-utils" }
 codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }
@@ -288,7 +296,7 @@ supports-color = "3.0.2"
 syntect = "5"
 sys-locale = "0.3.2"
 tempfile = "3.23.0"
-tar = "0.4.44"
+tar = "0.4.45"
 test-log = "0.2.19"
 textwrap = "0.16.2"
 thiserror = "2.0.17"

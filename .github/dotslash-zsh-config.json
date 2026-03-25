@@ -1,0 +1,23 @@
+{
+  "outputs": {
+    "codex-zsh": {
+      "platforms": {
+        "macos-aarch64": {
+          "name": "codex-zsh-aarch64-apple-darwin.tar.gz",
+          "format": "tar.gz",
+          "path": "codex-zsh/bin/zsh"
+        },
+        "linux-x86_64": {
+          "name": "codex-zsh-x86_64-unknown-linux-musl.tar.gz",
+          "format": "tar.gz",
+          "path": "codex-zsh/bin/zsh"
+        },
+        "linux-aarch64": {
+          "name": "codex-zsh-aarch64-unknown-linux-musl.tar.gz",
+          "format": "tar.gz",
+          "path": "codex-zsh/bin/zsh"
+        }
+      }
+    }
+  }
+}

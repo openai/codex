@@ -884,12 +884,31 @@ mod tests {
         access_token: &str,
         refresh_token: &str,
     ) -> serde_json::Value {
+        chatgpt_auth_json_with_last_refresh(
+            plan_type,
+            chatgpt_user_id,
+            account_id,
+            access_token,
+            refresh_token,
+            "2025-01-01T00:00:00Z",
+        )
+    }
+
+    fn chatgpt_auth_json_with_last_refresh(
+        plan_type: &str,
+        chatgpt_user_id: Option<&str>,
+        account_id: Option<&str>,
+        access_token: &str,
+        refresh_token: &str,
+        last_refresh: &str,
+    ) -> serde_json::Value {
         chatgpt_auth_json_with_mode(
             plan_type,
             chatgpt_user_id,
             account_id,
             access_token,
             refresh_token,
+            last_refresh,
             None,
         )
     }
@@ -900,6 +919,7 @@ mod tests {
         account_id: Option<&str>,
         access_token: &str,
         refresh_token: &str,
+        last_refresh: &str,
         auth_mode: Option<&str>,
     ) -> serde_json::Value {
         let header = json!({ "alg": "none", "typ": "JWT" });
@@ -925,7 +945,7 @@ mod tests {
                 "refresh_token": refresh_token,
                 "account_id": account_id,
             },
-            "last_refresh": "2025-01-01T00:00:00Z",
+            "last_refresh": last_refresh,
         });
         if let Some(auth_mode) = auth_mode {
             auth_json["auth_mode"] = serde_json::Value::String(auth_mode.to_string());
@@ -1262,24 +1282,43 @@ enabled = false
 
     #[tokio::test]
     async fn fetch_cloud_requirements_recovers_after_unauthorized_reload() {
-        let auth = managed_auth_context(
-            "business",
-            Some("user-12345"),
-            Some("account-12345"),
-            "stale-access-token",
-            "test-refresh-token",
-        );
+        let auth_home = tempdir().expect("tempdir");
         write_auth_json(
-            auth._home.path(),
-            chatgpt_auth_json(
+            auth_home.path(),
+            chatgpt_auth_json_with_last_refresh(
+                "business",
+                Some("user-12345"),
+                Some("account-12345"),
+                "stale-access-token",
+                "test-refresh-token",
+                // Keep auth "fresh" so the first request hits unauthorized recovery
+                // instead of AuthManager::auth() proactively reloading from disk.
+                "3025-01-01T00:00:00Z",
+            ),
+        )
+        .expect("write initial auth");
+        let auth_manager = Arc::new(AuthManager::new(
+            auth_home.path().to_path_buf(),
+            false,
+            AuthCredentialsStoreMode::File,
+        ));
+
+        write_auth_json(
+            auth_home.path(),
+            chatgpt_auth_json_with_last_refresh(
                 "business",
                 Some("user-12345"),
                 Some("account-12345"),
                 "fresh-access-token",
                 "test-refresh-token",
+                "3025-01-01T00:00:00Z",
             ),
         )
         .expect("write refreshed auth");
+        let auth = ManagedAuthContext {
+            _home: auth_home,
+            manager: auth_manager,
+        };
 
         let fetcher = Arc::new(TokenFetcher {
             expected_token: "fresh-access-token".to_string(),
@@ -1314,24 +1353,41 @@ enabled = false
 
     #[tokio::test]
     async fn fetch_cloud_requirements_recovers_after_unauthorized_reload_updates_cache_identity() {
-        let auth = managed_auth_context(
-            "business",
-            Some("user-12345"),
-            Some("account-12345"),
-            "stale-access-token",
-            "test-refresh-token",
-        );
+        let auth_home = tempdir().expect("tempdir");
         write_auth_json(
-            auth._home.path(),
-            chatgpt_auth_json(
+            auth_home.path(),
+            chatgpt_auth_json_with_last_refresh(
+                "business",
+                Some("user-12345"),
+                Some("account-12345"),
+                "stale-access-token",
+                "test-refresh-token",
+                "3025-01-01T00:00:00Z",
+            ),
+        )
+        .expect("write initial auth");
+        let auth_manager = Arc::new(AuthManager::new(
+            auth_home.path().to_path_buf(),
+            false,
+            AuthCredentialsStoreMode::File,
+        ));
+
+        write_auth_json(
+            auth_home.path(),
+            chatgpt_auth_json_with_last_refresh(
                 "business",
                 Some("user-99999"),
                 Some("account-12345"),
                 "fresh-access-token",
                 "test-refresh-token",
+                "3025-01-01T00:00:00Z",
             ),
         )
         .expect("write refreshed auth");
+        let auth = ManagedAuthContext {
+            _home: auth_home,
+            manager: auth_manager,
+        };
 
         let fetcher = Arc::new(TokenFetcher {
             expected_token: "fresh-access-token".to_string(),
@@ -1432,6 +1488,7 @@ enabled = false
                 Some("account-12345"),
                 "test-access-token",
                 "test-refresh-token",
+                "2025-01-01T00:00:00Z",
                 Some("chatgptAuthTokens"),
             ),
         )
