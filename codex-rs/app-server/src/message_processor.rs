@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
@@ -223,6 +224,7 @@ impl MessageProcessor {
             .set_analytics_events_client(analytics_events_client.clone());
 
         let cli_overrides = Arc::new(RwLock::new(cli_overrides));
+        let runtime_feature_enablement = Arc::new(RwLock::new(BTreeMap::new()));
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager: auth_manager.clone(),
@@ -231,6 +233,7 @@ impl MessageProcessor {
             arg0_paths,
             config: Arc::clone(&config),
             cli_overrides: cli_overrides.clone(),
+            runtime_feature_enablement: runtime_feature_enablement.clone(),
             cloud_requirements: cloud_requirements.clone(),
             feedback,
             log_db,
@@ -243,6 +246,7 @@ impl MessageProcessor {
         let config_api = ConfigApi::new(
             config.codex_home.clone(),
             cli_overrides,
+            runtime_feature_enablement,
             loader_overrides,
             cloud_requirements,
             thread_manager,

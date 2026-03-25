@@ -16,6 +16,7 @@ use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::SandboxMode;
 use codex_core::AnalyticsEventsClient;
 use codex_core::ThreadManager;
+use codex_core::config::Config;
 use codex_core::config::ConfigService;
 use codex_core::config::ConfigServiceError;
 use codex_core::config_loader::CloudRequirementsLoader;
@@ -31,6 +32,7 @@ use codex_features::feature_for_key;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::Op;
 use serde_json::json;
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -64,6 +66,7 @@ impl UserConfigReloader for ThreadManager {
 pub(crate) struct ConfigApi {
     codex_home: PathBuf,
     cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
+    runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
     loader_overrides: LoaderOverrides,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     user_config_reloader: Arc<dyn UserConfigReloader>,
@@ -74,6 +77,7 @@ impl ConfigApi {
     pub(crate) fn new(
         codex_home: PathBuf,
         cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
+        runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
         loader_overrides: LoaderOverrides,
         cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
         user_config_reloader: Arc<dyn UserConfigReloader>,
@@ -82,6 +86,7 @@ impl ConfigApi {
         Self {
             codex_home,
             cli_overrides,
+            runtime_feature_enablement,
             loader_overrides,
             cloud_requirements,
             user_config_reloader,
@@ -89,22 +94,13 @@ impl ConfigApi {
         }
     }
 
-    async fn config_service(
-        &self,
-        fallback_cwd: Option<PathBuf>,
-    ) -> Result<ConfigService, JSONRPCErrorError> {
-        let cloud_requirements = self
-            .cloud_requirements
-            .read()
-            .map(|guard| guard.clone())
-            .unwrap_or_default();
-        Ok(ConfigService::new(
+    fn config_service(&self) -> ConfigService {
+        ConfigService::new(
             self.codex_home.clone(),
-            self.effective_cli_overrides(fallback_cwd, cloud_requirements.clone())
-                .await?,
+            self.current_cli_overrides(),
             self.loader_overrides.clone(),
-            cloud_requirements,
-        ))
+            self.current_cloud_requirements(),
+        )
     }
 
     fn current_cli_overrides(&self) -> Vec<(String, TomlValue)> {
@@ -114,22 +110,30 @@ impl ConfigApi {
             .unwrap_or_default()
     }
 
-    async fn effective_cli_overrides(
+    fn current_runtime_feature_enablement(&self) -> BTreeMap<String, bool> {
+        self.runtime_feature_enablement
+            .read()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
+    fn current_cloud_requirements(&self) -> CloudRequirementsLoader {
+        self.cloud_requirements
+            .read()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
+    async fn load_latest_config(
         &self,
         fallback_cwd: Option<PathBuf>,
-        cloud_requirements: CloudRequirementsLoader,
-    ) -> Result<Vec<(String, TomlValue)>, JSONRPCErrorError> {
-        let cli_overrides = self.current_cli_overrides();
-        if !has_feature_cli_overrides(&cli_overrides) {
-            return Ok(cli_overrides);
-        }
-
-        let config = codex_core::config::ConfigBuilder::default()
+    ) -> Result<Config, JSONRPCErrorError> {
+        let mut config = codex_core::config::ConfigBuilder::default()
             .codex_home(self.codex_home.clone())
-            .cli_overrides(non_feature_cli_overrides(&cli_overrides))
+            .cli_overrides(self.current_cli_overrides())
             .loader_overrides(self.loader_overrides.clone())
             .fallback_cwd(fallback_cwd)
-            .cloud_requirements(cloud_requirements)
+            .cloud_requirements(self.current_cloud_requirements())
             .build()
             .await
             .map_err(|err| JSONRPCErrorError {
@@ -137,12 +141,8 @@ impl ConfigApi {
                 message: format!("failed to resolve feature override precedence: {err}"),
                 data: None,
             })?;
-        let protected_features = protected_feature_keys(&config.config_layer_stack);
-
-        Ok(filter_protected_feature_cli_overrides(
-            cli_overrides,
-            &protected_features,
-        ))
+        apply_runtime_feature_enablement(&mut config, &self.current_runtime_feature_enablement());
+        Ok(config)
     }
 
     pub(crate) async fn read(
@@ -150,19 +150,39 @@ impl ConfigApi {
         params: ConfigReadParams,
     ) -> Result<ConfigReadResponse, JSONRPCErrorError> {
         let fallback_cwd = params.cwd.as_ref().map(PathBuf::from);
-        self.config_service(fallback_cwd)
-            .await?
+        let mut response = self
+            .config_service()
             .read(params)
             .await
-            .map_err(map_error)
+            .map_err(map_error)?;
+        let config = self.load_latest_config(fallback_cwd).await?;
+        for feature_key in SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT {
+            let Some(feature) = feature_for_key(feature_key) else {
+                continue;
+            };
+            let features = response
+                .config
+                .additional
+                .entry("features".to_string())
+                .or_insert_with(|| json!({}));
+            if !features.is_object() {
+                *features = json!({});
+            }
+            if let Some(features) = features.as_object_mut() {
+                features.insert(
+                    (*feature_key).to_string(),
+                    json!(config.features.enabled(feature)),
+                );
+            }
+        }
+        Ok(response)
     }
 
     pub(crate) async fn config_requirements_read(
         &self,
     ) -> Result<ConfigRequirementsReadResponse, JSONRPCErrorError> {
         let requirements = self
-            .config_service(/*fallback_cwd*/ None)
-            .await?
+            .config_service()
             .read_requirements()
             .await
             .map_err(map_error)?
@@ -178,8 +198,7 @@ impl ConfigApi {
         let pending_changes =
             collect_plugin_enabled_candidates([(&params.key_path, &params.value)].into_iter());
         let response = self
-            .config_service(/*fallback_cwd*/ None)
-            .await?
+            .config_service()
             .write_value(params)
             .await
             .map_err(map_error)?;
@@ -199,8 +218,7 @@ impl ConfigApi {
                 .map(|edit| (&edit.key_path, &edit.value)),
         );
         let response = self
-            .config_service(/*fallback_cwd*/ None)
-            .await?
+            .config_service()
             .batch_write(params)
             .await
             .map_err(map_error)?;
@@ -251,32 +269,23 @@ impl ConfigApi {
             return Ok(ExperimentalFeatureEnablementSetResponse { enablement });
         }
 
-        let feature_keys = enablement
-            .keys()
-            .map(|name| format!("features.{name}"))
-            .collect::<BTreeSet<_>>();
         {
-            let mut cli_overrides = self.cli_overrides.write().map_err(|_| JSONRPCErrorError {
-                code: INTERNAL_ERROR_CODE,
-                message: "failed to update feature enablement".to_string(),
-                data: None,
-            })?;
-            cli_overrides.retain(|(key, _)| !feature_keys.contains(key));
-            cli_overrides.extend(
-                enablement.iter().map(|(name, enabled)| {
-                    (format!("features.{name}"), TomlValue::Boolean(*enabled))
-                }),
+            let mut runtime_feature_enablement =
+                self.runtime_feature_enablement
+                    .write()
+                    .map_err(|_| JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: "failed to update feature enablement".to_string(),
+                        data: None,
+                    })?;
+            runtime_feature_enablement.extend(
+                enablement
+                    .iter()
+                    .map(|(name, enabled)| (name.clone(), *enabled)),
             );
         }
 
-        self.config_service(/*fallback_cwd*/ None)
-            .await?
-            .read(ConfigReadParams {
-                include_layers: false,
-                cwd: None,
-            })
-            .await
-            .map_err(map_error)?;
+        self.load_latest_config(/*fallback_cwd*/ None).await?;
         self.user_config_reloader.reload_user_config().await;
 
         Ok(ExperimentalFeatureEnablementSetResponse { enablement })
@@ -296,22 +305,6 @@ impl ConfigApi {
             }
         }
     }
-}
-
-pub(crate) fn has_feature_cli_overrides(cli_overrides: &[(String, TomlValue)]) -> bool {
-    cli_overrides
-        .iter()
-        .any(|(key, _)| key.starts_with("features."))
-}
-
-pub(crate) fn non_feature_cli_overrides(
-    cli_overrides: &[(String, TomlValue)],
-) -> Vec<(String, TomlValue)> {
-    cli_overrides
-        .iter()
-        .filter(|(key, _)| !key.starts_with("features."))
-        .cloned()
-        .collect()
 }
 
 pub(crate) fn protected_feature_keys(
@@ -335,19 +328,26 @@ pub(crate) fn protected_feature_keys(
     protected_features
 }
 
-pub(crate) fn filter_protected_feature_cli_overrides(
-    cli_overrides: Vec<(String, TomlValue)>,
-    protected_features: &BTreeSet<String>,
-) -> Vec<(String, TomlValue)> {
-    cli_overrides
-        .into_iter()
-        .filter(|(key, _)| {
-            let Some(feature) = key.strip_prefix("features.") else {
-                return true;
-            };
-            !protected_features.contains(feature)
-        })
-        .collect()
+pub(crate) fn apply_runtime_feature_enablement(
+    config: &mut Config,
+    runtime_feature_enablement: &BTreeMap<String, bool>,
+) {
+    let protected_features = protected_feature_keys(&config.config_layer_stack);
+    for (name, enabled) in runtime_feature_enablement {
+        if protected_features.contains(name) {
+            continue;
+        }
+        let Some(feature) = feature_for_key(name) else {
+            continue;
+        };
+        if let Err(err) = config.features.set_enabled(feature, *enabled) {
+            warn!(
+                feature = name,
+                error = %err,
+                "failed to apply runtime feature enablement"
+            );
+        }
+    }
 }
 
 fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigRequirements {
@@ -445,6 +445,7 @@ mod tests {
     use super::*;
     use codex_core::AnalyticsEventsClient;
     use codex_core::config_loader::NetworkRequirementsToml as CoreNetworkRequirementsToml;
+    use codex_features::Feature;
     use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -573,6 +574,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn apply_runtime_feature_enablement_keeps_cli_overrides_above_config_and_runtime() {
+        let codex_home = TempDir::new().expect("create temp dir");
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            "[features]\napps = false\n",
+        )
+        .expect("write config");
+
+        let mut config = codex_core::config::ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cli_overrides(vec![(
+                "features.apps".to_string(),
+                TomlValue::Boolean(true),
+            )])
+            .build()
+            .await
+            .expect("load config");
+
+        apply_runtime_feature_enablement(
+            &mut config,
+            &BTreeMap::from([("apps".to_string(), false)]),
+        );
+
+        assert!(config.features.enabled(Feature::Apps));
+    }
+
+    #[tokio::test]
+    async fn apply_runtime_feature_enablement_keeps_cloud_pins_above_cli_and_runtime() {
+        let codex_home = TempDir::new().expect("create temp dir");
+
+        let mut config = codex_core::config::ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .cli_overrides(vec![(
+                "features.apps".to_string(),
+                TomlValue::Boolean(true),
+            )])
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Ok(Some(ConfigRequirementsToml {
+                    feature_requirements: Some(
+                        codex_core::config_loader::FeatureRequirementsToml {
+                            entries: BTreeMap::from([("apps".to_string(), false)]),
+                        },
+                    ),
+                    ..Default::default()
+                }))
+            }))
+            .build()
+            .await
+            .expect("load config");
+
+        apply_runtime_feature_enablement(
+            &mut config,
+            &BTreeMap::from([("apps".to_string(), true)]),
+        );
+
+        assert!(!config.features.enabled(Feature::Apps));
+    }
+
+    #[tokio::test]
     async fn batch_write_reloads_user_config_when_requested() {
         let codex_home = TempDir::new().expect("create temp dir");
         let user_config_path = codex_home.path().join("config.toml");
@@ -587,6 +648,7 @@ mod tests {
         let config_api = ConfigApi::new(
             codex_home.path().to_path_buf(),
             Arc::new(RwLock::new(Vec::new())),
+            Arc::new(RwLock::new(BTreeMap::new())),
             LoaderOverrides::default(),
             Arc::new(RwLock::new(CloudRequirementsLoader::default())),
             reloader.clone(),
