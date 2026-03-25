@@ -52,7 +52,6 @@ fn guardian_review_request_includes_patch_context() {
         additional_permissions: None,
         permissions_preapproved: false,
         timeout_ms: None,
-        codex_exe: None,
     };
 
     let guardian_request = ApplyPatchRuntime::build_guardian_review_request(&request, "call-1");
