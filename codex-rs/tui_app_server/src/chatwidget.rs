@@ -5661,12 +5661,14 @@ impl ChatWidget {
             ThreadItem::Reasoning {
                 summary, content, ..
             } => {
-                for delta in summary {
-                    self.on_agent_reasoning_delta(delta);
-                }
-                if self.config.show_raw_agent_reasoning {
-                    for delta in content {
+                if from_replay {
+                    for delta in summary {
                         self.on_agent_reasoning_delta(delta);
+                    }
+                    if self.config.show_raw_agent_reasoning {
+                        for delta in content {
+                            self.on_agent_reasoning_delta(delta);
+                        }
                     }
                 }
                 self.on_agent_reasoning_final();
