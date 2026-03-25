@@ -195,8 +195,6 @@ impl ToolHandler for ApplyPatchHandler {
                         );
                         emitter.begin(event_ctx).await;
 
-                        #[cfg(all(not(target_os = "windows"), not(target_os = "linux")))]
-                        let codex_exe = turn.codex_linux_sandbox_exe.clone();
                         let req = ApplyPatchRequest {
                             action: apply.action,
                             file_paths,
@@ -207,8 +205,7 @@ impl ToolHandler for ApplyPatchHandler {
                             permissions_preapproved: effective_additional_permissions
                                 .permissions_preapproved,
                             timeout_ms: None,
-                            #[cfg(all(not(target_os = "windows"), not(target_os = "linux")))]
-                            codex_exe,
+                            codex_exe: turn.codex_linux_sandbox_exe.clone(),
                         };
 
                         let mut orchestrator = ToolOrchestrator::new();
@@ -301,8 +298,6 @@ pub(crate) async fn intercept_apply_patch(
                     );
                     emitter.begin(event_ctx).await;
 
-                    #[cfg(all(not(target_os = "windows"), not(target_os = "linux")))]
-                    let codex_exe = turn.codex_linux_sandbox_exe.clone();
                     let req = ApplyPatchRequest {
                         action: apply.action,
                         file_paths: approval_keys,
@@ -313,8 +308,7 @@ pub(crate) async fn intercept_apply_patch(
                         permissions_preapproved: effective_additional_permissions
                             .permissions_preapproved,
                         timeout_ms,
-                        #[cfg(all(not(target_os = "windows"), not(target_os = "linux")))]
-                        codex_exe,
+                        codex_exe: turn.codex_linux_sandbox_exe.clone(),
                     };
 
                     let mut orchestrator = ToolOrchestrator::new();

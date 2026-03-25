@@ -51,7 +51,6 @@ fn guardian_review_request_includes_patch_context() {
         additional_permissions: None,
         permissions_preapproved: false,
         timeout_ms: None,
-        #[cfg(all(not(target_os = "windows"), not(target_os = "linux")))]
         codex_exe: None,
     };
 

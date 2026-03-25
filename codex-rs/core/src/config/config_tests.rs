@@ -5627,7 +5627,11 @@ exit 1
     );
     let fake_bwrap_path: &Path = fake_bwrap.as_ref();
 
-    assert_eq!(system_bwrap_warning_for_path(fake_bwrap_path), None);
+    assert_eq!(
+        system_bwrap_warning_for_path(fake_bwrap_path),
+        None,
+        "Do not warn even if bwrap does not support `--argv0`",
+    );
 }
 
 #[cfg(not(target_os = "linux"))]

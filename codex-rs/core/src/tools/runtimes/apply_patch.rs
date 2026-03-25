@@ -42,7 +42,6 @@ pub struct ApplyPatchRequest {
     pub additional_permissions: Option<PermissionProfile>,
     pub permissions_preapproved: bool,
     pub timeout_ms: Option<u64>,
-    #[cfg(all(not(target_os = "windows"), not(target_os = "linux")))]
     pub codex_exe: Option<PathBuf>,
 }
 
@@ -71,17 +70,19 @@ impl ApplyPatchRuntime {
         req: &ApplyPatchRequest,
         _codex_home: &std::path::Path,
     ) -> Result<SandboxCommand, ToolError> {
-        #[cfg(target_os = "windows")]
-        let exe = codex_windows_sandbox::resolve_current_exe_for_launch(_codex_home, "codex.exe");
-        #[cfg(target_os = "linux")]
-        let exe = std::env::current_exe()
-            .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))?;
-        #[cfg(all(not(target_os = "windows"), not(target_os = "linux")))]
         let exe = if let Some(path) = &req.codex_exe {
             path.clone()
         } else {
-            std::env::current_exe()
-                .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))?
+            #[cfg(target_os = "windows")]
+            {
+                codex_windows_sandbox::resolve_current_exe_for_launch(_codex_home, "codex.exe")
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                std::env::current_exe().map_err(|e| {
+                    ToolError::Rejected(format!("failed to determine codex exe: {e}"))
+                })?
+            }
         };
         Ok(SandboxCommand {
             program: exe.to_string_lossy().to_string(),

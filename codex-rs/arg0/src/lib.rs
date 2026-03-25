@@ -151,7 +151,7 @@ where
     // Retain the TempDir so it exists for the lifetime of the invocation of
     // this executable. Admittedly, we could invoke `keep()` on it, but it
     // would be nice to avoid leaving temporary directories behind, if possible.
-    let path_entry = arg0_dispatch();
+    let path_entry_guard = arg0_dispatch();
 
     // Regular invocation – create a Tokio runtime and execute the provided
     // async entry-point.
@@ -160,11 +160,11 @@ where
         let current_exe = std::env::current_exe().ok();
         let paths = Arg0DispatchPaths {
             codex_linux_sandbox_exe: if cfg!(target_os = "linux") {
-                linux_sandbox_exe_path(path_entry.as_ref(), current_exe)
+                linux_sandbox_exe_path(path_entry_guard.as_ref(), current_exe)
             } else {
                 None
             },
-            main_execve_wrapper_exe: path_entry
+            main_execve_wrapper_exe: path_entry_guard
                 .as_ref()
                 .and_then(|path_entry| path_entry.paths().main_execve_wrapper_exe.clone()),
         };
