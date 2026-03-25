@@ -1665,21 +1665,13 @@ fn test_parallel_support_flags() {
 
     assert!(find_tool(&tools, "exec_command").supports_parallel_tool_calls);
     assert!(!find_tool(&tools, "write_stdin").supports_parallel_tool_calls);
-    assert!(find_tool(&tools, "grep_files").supports_parallel_tool_calls);
-    assert!(find_tool(&tools, "list_dir").supports_parallel_tool_calls);
-    assert!(find_tool(&tools, "read_file").supports_parallel_tool_calls);
 }
 
 #[test]
 fn test_test_model_info_includes_sync_tool() {
     let _config = test_config();
     let mut model_info = model_info_from_models_json("gpt-5-codex");
-    model_info.experimental_supported_tools = vec![
-        "test_sync_tool".to_string(),
-        "read_file".to_string(),
-        "grep_files".to_string(),
-        "list_dir".to_string(),
-    ];
+    model_info.experimental_supported_tools = vec!["test_sync_tool".to_string()];
     let features = Features::with_defaults();
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -1698,17 +1690,6 @@ fn test_test_model_info_includes_sync_tool() {
             .iter()
             .any(|tool| tool_name(&tool.spec) == "test_sync_tool")
     );
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool_name(&tool.spec) == "read_file")
-    );
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool_name(&tool.spec) == "grep_files")
-    );
-    assert!(tools.iter().any(|tool| tool_name(&tool.spec) == "list_dir"));
 }
 
 #[test]
