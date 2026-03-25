@@ -1385,6 +1385,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9b18233253483ce2f65329a24072ec414db782531bdbb7d0bbc4bd2ce6b7e21"
 
 [[package]]
+name = "codex-analytics"
+version = "0.0.0"
+dependencies = [
+ "codex-git-utils",
+ "codex-login",
+ "codex-plugin",
+ "codex-protocol",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "sha1",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "codex-ansi-escape"
 version = "0.0.0"
 dependencies = [
@@ -1869,6 +1885,7 @@ dependencies = [
  "chardetng",
  "chrono",
  "clap",
+ "codex-analytics",
  "codex-api",
  "codex-app-server-protocol",
  "codex-apply-patch",

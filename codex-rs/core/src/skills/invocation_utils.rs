@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::analytics_client::InvocationType;
-use crate::analytics_client::SkillInvocation;
-use crate::analytics_client::build_track_events_context;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::skills::SkillLoadOutcome;
 use crate::skills::SkillMetadata;
+use codex_analytics::InvocationType;
+use codex_analytics::SkillInvocation;
+use codex_analytics::build_track_events_context;
 
 pub(crate) fn build_implicit_skill_path_indexes(
     skills: Vec<SkillMetadata>,

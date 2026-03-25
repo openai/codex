@@ -222,8 +222,11 @@ impl MessageProcessor {
         auth_manager.set_external_auth_refresher(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
         }));
-        let analytics_events_client =
-            AnalyticsEventsClient::new(Arc::clone(&config), Arc::clone(&auth_manager));
+        let analytics_events_client = AnalyticsEventsClient::new(
+            Arc::clone(&auth_manager),
+            config.chatgpt_base_url.trim_end_matches('/').to_string(),
+            config.analytics_enabled,
+        );
         thread_manager
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());
