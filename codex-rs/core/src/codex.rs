@@ -56,6 +56,7 @@ use chrono::Utc;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_exec_server::Environment;
+use codex_exec_server::EnvironmentManager;
 use codex_features::FEATURES;
 use codex_features::Feature;
 use codex_features::unstable_features_warning_event;
@@ -401,6 +402,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
+    pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
@@ -454,6 +456,7 @@ impl Codex {
             mut config,
             auth_manager,
             models_manager,
+            environment_manager,
             skills_manager,
             plugins_manager,
             mcp_manager,
@@ -642,6 +645,7 @@ impl Codex {
             agent_status_tx.clone(),
             conversation_history,
             session_source_clone,
+            environment_manager,
             skills_manager,
             plugins_manager,
             mcp_manager.clone(),
@@ -1446,6 +1450,7 @@ impl Session {
         agent_status: watch::Sender<AgentStatus>,
         initial_history: InitialHistory,
         session_source: SessionSource,
+        environment_manager: Arc<EnvironmentManager>,
         skills_manager: Arc<SkillsManager>,
         plugins_manager: Arc<PluginsManager>,
         mcp_manager: Arc<McpManager>,
@@ -1879,9 +1884,7 @@ impl Session {
             code_mode_service: crate::tools::code_mode::CodeModeService::new(
                 config.js_repl_node_path.clone(),
             ),
-            environment: Arc::new(
-                Environment::create(config.experimental_exec_server_url.clone()).await?,
-            ),
+            environment: environment_manager.current().await?,
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),

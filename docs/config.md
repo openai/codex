@@ -36,6 +36,13 @@ Codex stores the SQLite-backed state DB under `sqlite_home` (config key) or the
 `CODEX_SQLITE_HOME` environment variable. When unset, WorkspaceWrite sandbox
 sessions default to a temp directory; other modes default to `CODEX_HOME`.
 
+## Remote Exec Server
+
+Set `CODEX_EXEC_SERVER_URL` to a websocket URL such as `ws://127.0.0.1:8080`
+to have Codex connect to a remote `codex-exec-server` for exec and filesystem
+operations. This is process-level state and is no longer configured via
+`config.toml`.
+
 ## Custom CA Certificates
 
 Codex can trust a custom root CA bundle for outbound HTTPS and secure websocket

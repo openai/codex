@@ -66,6 +66,7 @@ use codex_core::default_client::get_codex_user_agent;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_feedback::CodexFeedback;
 use codex_login::auth::ExternalAuthRefreshContext;
@@ -176,6 +177,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
     pub(crate) arg0_paths: Arg0DispatchPaths,
     pub(crate) config: Arc<Config>,
+    pub(crate) environment_manager: Arc<EnvironmentManager>,
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
     pub(crate) loader_overrides: LoaderOverrides,
     pub(crate) cloud_requirements: CloudRequirementsLoader,
@@ -194,6 +196,7 @@ impl MessageProcessor {
             outgoing,
             arg0_paths,
             config,
+            environment_manager,
             cli_overrides,
             loader_overrides,
             cloud_requirements,
@@ -217,6 +220,7 @@ impl MessageProcessor {
                     .features
                     .enabled(Feature::DefaultModeRequestUserInput),
             },
+            environment_manager,
         ));
         auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
         auth_manager.set_external_auth_refresher(Arc::new(ExternalAuthRefreshBridge {

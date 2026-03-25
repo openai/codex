@@ -77,6 +77,7 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
+use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use tokio::sync::mpsc;
@@ -383,6 +384,9 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 outgoing: Arc::clone(&processor_outgoing),
                 arg0_paths: args.arg0_paths,
                 config: args.config,
+                environment_manager: Arc::new(EnvironmentManager::new(
+                    /*exec_server_url*/ None,
+                )),
                 cli_overrides: args.cli_overrides,
                 loader_overrides: args.loader_overrides,
                 cloud_requirements: args.cloud_requirements,

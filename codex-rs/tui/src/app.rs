@@ -77,6 +77,7 @@ use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
@@ -2356,6 +2357,7 @@ impl App {
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
+        let environment_manager = Arc::new(EnvironmentManager::from_env());
         let thread_manager = Arc::new(ThreadManager::new(
             &config,
             auth_manager.clone(),
@@ -2365,6 +2367,7 @@ impl App {
                     .features
                     .enabled(Feature::DefaultModeRequestUserInput),
             },
+            environment_manager,
         ));
         let mut model = thread_manager
             .get_models_manager()
