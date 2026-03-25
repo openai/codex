@@ -605,7 +605,10 @@ fn windows_restricted_token_supports_full_read_split_write_read_carveouts() {
             WindowsSandboxLevel::RestrictedToken,
         ),
         Ok(Some(WindowsRestrictedTokenFilesystemOverlay {
-            additional_deny_write_paths: vec![docs],
+            additional_deny_write_paths: vec![
+                codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
+                    .expect("absolute docs"),
+            ],
         }))
     );
 }

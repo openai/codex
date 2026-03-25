@@ -42,6 +42,7 @@ use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use codex_utils_pty::process_group::kill_child_process_group;
 
@@ -100,7 +101,7 @@ pub struct ExecParams {
 /// sandbox semantics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WindowsRestrictedTokenFilesystemOverlay {
-    pub(crate) additional_deny_write_paths: Vec<PathBuf>,
+    pub(crate) additional_deny_write_paths: Vec<AbsolutePathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -481,7 +482,13 @@ async fn exec_windows_sandbox(
     let sandbox_level = windows_sandbox_level;
     let use_elevated = matches!(sandbox_level, WindowsSandboxLevel::Elevated);
     let additional_deny_write_paths = windows_restricted_token_filesystem_overlay
-        .map(|overlay| overlay.additional_deny_write_paths.clone())
+        .map(|overlay| {
+            overlay
+                .additional_deny_write_paths
+                .iter()
+                .map(AbsolutePathBuf::to_path_buf)
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     let spawn_res = tokio::task::spawn_blocking(move || {
         if use_elevated {
@@ -974,11 +981,11 @@ pub(crate) fn resolve_windows_restricted_token_filesystem_overlay(
     let legacy_root_paths: BTreeSet<PathBuf> = legacy_writable_roots
         .iter()
         .map(|root| normalize_windows_overlay_path(root.root.as_path()))
-        .collect();
+        .collect::<std::result::Result<_, _>>()?;
     let split_root_paths: BTreeSet<PathBuf> = split_writable_roots
         .iter()
         .map(|root| normalize_windows_overlay_path(root.root.as_path()))
-        .collect();
+        .collect::<std::result::Result<_, _>>()?;
 
     if legacy_root_paths != split_root_paths {
         return Err(
@@ -1006,9 +1013,10 @@ pub(crate) fn resolve_windows_restricted_token_filesystem_overlay(
 
     let mut additional_deny_write_paths = BTreeSet::new();
     for split_root in &split_writable_roots {
+        let split_root_path = normalize_windows_overlay_path(split_root.root.as_path())?;
         let Some(legacy_root) = legacy_writable_roots.iter().find(|candidate| {
             normalize_windows_overlay_path(candidate.root.as_path())
-                == normalize_windows_overlay_path(split_root.root.as_path())
+                .is_ok_and(|candidate_path| candidate_path == split_root_path)
         }) else {
             return Err(
                 "windows unelevated restricted-token sandbox cannot enforce split writable root sets directly; refusing to run unsandboxed"
@@ -1023,7 +1031,7 @@ pub(crate) fn resolve_windows_restricted_token_filesystem_overlay(
                 .any(|candidate| candidate == read_only_subpath)
             {
                 additional_deny_write_paths
-                    .insert(normalize_windows_overlay_path(read_only_subpath.as_path()));
+                    .insert(normalize_windows_overlay_path(read_only_subpath.as_path())?);
             }
         }
     }
@@ -1033,12 +1041,17 @@ pub(crate) fn resolve_windows_restricted_token_filesystem_overlay(
     }
 
     Ok(Some(WindowsRestrictedTokenFilesystemOverlay {
-        additional_deny_write_paths: additional_deny_write_paths.into_iter().collect(),
+        additional_deny_write_paths: additional_deny_write_paths
+            .into_iter()
+            .map(|path| AbsolutePathBuf::from_absolute_path(path).map_err(|err| err.to_string()))
+            .collect::<std::result::Result<_, _>>()?,
     }))
 }
 
-fn normalize_windows_overlay_path(path: &Path) -> PathBuf {
-    dunce::simplified(path).to_path_buf()
+fn normalize_windows_overlay_path(path: &Path) -> std::result::Result<PathBuf, String> {
+    AbsolutePathBuf::from_absolute_path(dunce::simplified(path))
+        .map(AbsolutePathBuf::into_path_buf)
+        .map_err(|err| err.to_string())
 }
 
 /// Consumes the output of a child process according to the configured capture
