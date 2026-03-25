@@ -1645,7 +1645,7 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let cwd = cwd.unwrap_or_else(|| self.config.cwd.clone());
+        let cwd = cwd.unwrap_or_else(|| self.config.cwd.to_path_buf());
         let mut env = create_env(
             &self.config.permissions.shell_environment_policy,
             /*thread_id*/ None,
@@ -5464,7 +5464,7 @@ impl CodexMessageProcessor {
             per_cwd_extra_user_roots,
         } = params;
         let cwds = if cwds.is_empty() {
-            vec![self.config.cwd.clone()]
+            vec![self.config.cwd.to_path_buf()]
         } else {
             cwds
         };
@@ -7258,7 +7258,7 @@ impl CodexMessageProcessor {
         let command_cwd = params
             .cwd
             .map(PathBuf::from)
-            .unwrap_or_else(|| config.cwd.clone());
+            .unwrap_or_else(|| config.cwd.to_path_buf());
         let cli_overrides = self.current_cli_overrides();
         let runtime_feature_enablement = self.current_runtime_feature_enablement();
         let outgoing = Arc::clone(&self.outgoing);
@@ -7283,7 +7283,7 @@ impl CodexMessageProcessor {
                     let setup_request = WindowsSandboxSetupRequest {
                         mode,
                         policy: config.permissions.sandbox_policy.get().clone(),
-                        policy_cwd: config.cwd.clone(),
+                        policy_cwd: config.cwd.to_path_buf(),
                         command_cwd,
                         env_map: std::env::vars().collect(),
                         codex_home: config.codex_home.clone(),
