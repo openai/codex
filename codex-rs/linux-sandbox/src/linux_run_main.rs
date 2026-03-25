@@ -488,6 +488,14 @@ fn apply_inner_command_argv0_for_launcher(
     supports_argv0: bool,
     argv0_fallback_command: String,
 ) {
+    if !supports_argv0 && let Ok(current_exe) = std::env::current_exe() {
+        let current_exe = current_exe.to_string_lossy();
+        if let Some(command) = argv.iter_mut().find(|arg| arg.as_str() == current_exe) {
+            *command = argv0_fallback_command;
+            return;
+        }
+    }
+
     let command_separator_index = argv
         .iter()
         .position(|arg| arg == "--")
