@@ -336,7 +336,7 @@ where
 fn create_pattern(pattern: &str) -> Pattern {
     Pattern::new(
         pattern,
-        CaseMatching::Smart,
+        CaseMatching::Ignore,
         Normalization::Smart,
         AtomKind::Fuzzy,
     )
@@ -508,7 +508,7 @@ fn matcher_worker(
                         nucleo.pattern.reparse(
                             0,
                             &query,
-                            CaseMatching::Smart,
+                            CaseMatching::Ignore,
                             Normalization::Smart,
                             append,
                         );
