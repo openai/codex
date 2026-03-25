@@ -1266,7 +1266,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
     let previous_context_item = TurnContextItem {
         turn_id: Some(turn_context.sub_id.clone()),
         trace_id: turn_context.trace_id.clone(),
-        cwd: turn_context.cwd.clone(),
+        cwd: turn_context.cwd.to_path_buf(),
         current_date: turn_context.current_date.clone(),
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
@@ -2285,7 +2285,9 @@ async fn session_configuration_apply_preserves_split_file_system_policy_on_cwd_o
     let docs_dir =
         codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs_dir).expect("docs");
 
-    session_configuration.cwd = original_cwd;
+    session_configuration.cwd =
+        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(original_cwd)
+            .expect("absolute cwd");
     session_configuration.sandbox_policy =
         codex_config::Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
@@ -2410,7 +2412,9 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
     let docs_dir =
         codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs_dir).expect("docs");
 
-    session_configuration.cwd = original_cwd;
+    session_configuration.cwd =
+        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(original_cwd)
+            .expect("absolute cwd");
     session_configuration.sandbox_policy =
         codex_config::Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
@@ -2442,6 +2446,36 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
             &project_root,
         )
     );
+}
+
+#[tokio::test]
+async fn session_update_settings_keeps_runtime_cwds_absolute() {
+    let (session, turn_context) = make_session_and_context().await;
+    let updated_cwd = turn_context
+        .cwd
+        .join("project")
+        .expect("resolve project dir");
+    std::fs::create_dir_all(updated_cwd.as_path()).expect("create project dir");
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            cwd: Some(PathBuf::from("project")),
+            ..Default::default()
+        })
+        .await
+        .expect("cwd update should succeed");
+
+    let session_cwd = {
+        let state = session.state.lock().await;
+        state.session_configuration.cwd.clone()
+    };
+    let config = session.get_config().await;
+    let next_turn = session.new_default_turn().await;
+
+    assert_eq!(session_cwd, updated_cwd);
+    assert_eq!(config.cwd, turn_context.cwd);
+    assert_eq!(next_turn.cwd, updated_cwd);
+    assert_eq!(next_turn.config.cwd, updated_cwd);
 }
 
 #[tokio::test]
@@ -3058,7 +3092,7 @@ async fn user_turn_updates_approvals_reviewer() {
                 text: "hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            cwd: config.cwd.clone(),
+            cwd: config.cwd.to_path_buf(),
             approval_policy: config.permissions.approval_policy.value(),
             approvals_reviewer: Some(crate::config::types::ApprovalsReviewer::GuardianSubagent),
             sandbox_policy: config.permissions.sandbox_policy.get().clone(),
@@ -5060,7 +5094,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
                 "echo hi".to_string(),
             ]
         },
-        cwd: turn_context.cwd.clone(),
+        cwd: turn_context.cwd.to_path_buf(),
         expiration: timeout_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),

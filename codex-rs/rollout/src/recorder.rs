@@ -458,7 +458,7 @@ impl RolloutRecorder {
             deferred_log_file_info,
             rx,
             meta,
-            cwd,
+            cwd.to_path_buf(),
             rollout_path.clone(),
             state_db_ctx.clone(),
             state_builder,

@@ -37,7 +37,10 @@ use serde_json::Value;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
+use crate::PathBufExt;
+use crate::PathExt;
 use crate::RemoteEnvConfig;
+use crate::TempDirExt;
 use crate::get_remote_test_env;
 use crate::load_default_config_for_test;
 use crate::responses::WebSocketTestServer;
@@ -297,8 +300,7 @@ fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<Stri
 }
 
 fn absolute_path(path: &Path) -> Result<AbsolutePathBuf> {
-    AbsolutePathBuf::try_from(path.to_path_buf())
-        .map_err(|err| anyhow!("invalid absolute path {}: {err}", path.display()))
+    Ok(path.abs())
 }
 
 /// A collection of different ways the model can output an apply_patch call
@@ -393,7 +395,7 @@ impl TestCodexBuilder {
         let cwd = test_env.cwd.to_path_buf();
         self.config_mutators.push(Box::new(move |config| {
             config.experimental_exec_server_url = experimental_exec_server_url;
-            config.cwd = cwd;
+            config.cwd = cwd.abs();
         }));
 
         let mut test = self.build(server).await?;
@@ -556,7 +558,7 @@ impl TestCodexBuilder {
         };
         let cwd = Arc::new(TempDir::new()?);
         let mut config = load_default_config_for_test(home).await;
-        config.cwd = cwd.path().to_path_buf();
+        config.cwd = cwd.abs();
         config.model_provider = model_provider;
         for hook in self.pre_build_hooks.drain(..) {
             hook(home.path());
@@ -721,7 +723,7 @@ impl TestCodex {
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
-                cwd: self.config.cwd.clone(),
+                cwd: self.config.cwd.to_path_buf(),
                 approval_policy,
                 approvals_reviewer: None,
                 sandbox_policy,

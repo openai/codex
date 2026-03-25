@@ -10,6 +10,7 @@ use chrono::TimeZone;
 use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_state::Stage1Output;
+use core_test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -469,7 +470,7 @@ mod phase2 {
             let codex_home = tempfile::tempdir().expect("create temp codex home");
             let mut config = test_config();
             config.codex_home = codex_home.path().to_path_buf();
-            config.cwd = config.codex_home.clone();
+            config.cwd = config.codex_home.abs();
             let config = Arc::new(config);
 
             let state_db = codex_state::StateRuntime::init(
@@ -507,7 +508,7 @@ mod phase2 {
                 Utc::now(),
                 SessionSource::Cli,
             );
-            metadata_builder.cwd = self.config.cwd.clone();
+            metadata_builder.cwd = self.config.cwd.to_path_buf();
             metadata_builder.model_provider = Some(self.config.model_provider_id.clone());
             let metadata = metadata_builder.build(&self.config.model_provider_id);
 
@@ -882,7 +883,7 @@ mod phase2 {
         let codex_home = tempfile::tempdir().expect("create temp codex home");
         let mut config = test_config();
         config.codex_home = codex_home.path().to_path_buf();
-        config.cwd = config.codex_home.clone();
+        config.cwd = config.codex_home.abs();
         let config = Arc::new(config);
 
         let state_db = codex_state::StateRuntime::init(
@@ -904,7 +905,7 @@ mod phase2 {
             Utc::now(),
             SessionSource::Cli,
         );
-        metadata_builder.cwd = config.cwd.clone();
+        metadata_builder.cwd = config.cwd.to_path_buf();
         metadata_builder.model_provider = Some(config.model_provider_id.clone());
         let metadata = metadata_builder.build(&config.model_provider_id);
         state_db

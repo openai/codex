@@ -158,7 +158,7 @@ pub(super) async fn try_run_zsh_fork(
         network: sandbox_network,
         windows_sandbox_level,
         arg0,
-        sandbox_policy_cwd: ctx.turn.cwd.clone(),
+        sandbox_policy_cwd: ctx.turn.cwd.to_path_buf(),
         macos_seatbelt_profile_extensions: ctx
             .turn
             .config
@@ -262,7 +262,7 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         network: exec_request.network.clone(),
         windows_sandbox_level: exec_request.windows_sandbox_level,
         arg0: exec_request.arg0.clone(),
-        sandbox_policy_cwd: ctx.turn.cwd.clone(),
+        sandbox_policy_cwd: ctx.turn.cwd.to_path_buf(),
         macos_seatbelt_profile_extensions: ctx
             .turn
             .config
