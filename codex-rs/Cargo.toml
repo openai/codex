@@ -385,7 +385,7 @@ ignored = [
     "icu_provider",
     "openssl-sys",
     "codex-utils-readiness",
-    "codex-secrets",
+    "codex-utils-template",
     "codex-v8-poc",
 ]
 

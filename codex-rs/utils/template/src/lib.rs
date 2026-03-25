@@ -154,10 +154,9 @@ impl Template {
                 return Err(TemplateParseError::UnmatchedClosingDelimiter { start: cursor });
             }
 
-            let ch = rest
-                .chars()
-                .next()
-                .expect("cursor is always on a char boundary");
+            let Some(ch) = rest.chars().next() else {
+                break;
+            };
             cursor += ch.len_utf8();
         }
 
@@ -198,11 +197,12 @@ impl Template {
         for segment in &self.segments {
             match segment {
                 Segment::Literal(literal) => rendered.push_str(literal),
-                Segment::Placeholder(name) => rendered.push_str(
-                    variables
-                        .get(name.as_str())
-                        .expect("missing values are validated before rendering"),
-                ),
+                Segment::Placeholder(name) => {
+                    let Some(value) = variables.get(name.as_str()) else {
+                        return Err(TemplateRenderError::MissingValue { name: name.clone() });
+                    };
+                    rendered.push_str(value);
+                }
             }
         }
         Ok(rendered)
@@ -249,10 +249,9 @@ fn parse_placeholder(source: &str, start: usize) -> Result<(String, usize), Temp
             return Ok((placeholder.to_string(), cursor + "}}".len()));
         }
 
-        let ch = rest
-            .chars()
-            .next()
-            .expect("cursor is always on a char boundary");
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
         cursor += ch.len_utf8();
     }
 
