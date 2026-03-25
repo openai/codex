@@ -1,14 +1,38 @@
 use super::AuthRequestTelemetryContext;
+use super::INLINE_IMAGE_REQUEST_LIMIT_OUTCOME_UPSTREAM_REJECTED;
 use super::ModelClient;
 use super::PendingUnauthorizedRetry;
 use super::UnauthorizedRecoveryExecution;
+use crate::client_common::Prompt;
+use codex_api::error::ApiError;
 use codex_otel::SessionTelemetry;
+use codex_otel::metrics::MetricsClient;
+use codex_otel::metrics::MetricsConfig;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use futures::StreamExt;
+use opentelemetry::KeyValue;
+use opentelemetry_sdk::metrics::InMemoryMetricExporter;
+use opentelemetry_sdk::metrics::data::AggregatedMetrics;
+use opentelemetry_sdk::metrics::data::Metric;
+use opentelemetry_sdk::metrics::data::MetricData;
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::BTreeMap;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
+
+const INLINE_IMAGE_REQUEST_LIMIT_METRIC_NAME: &str = "codex.responses.inline_image_limit";
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
     let provider = crate::model_provider_info::create_oss_provider_with_base_url(
@@ -72,6 +96,51 @@ fn test_session_telemetry() -> SessionTelemetry {
     )
 }
 
+fn test_session_telemetry_with_metrics() -> SessionTelemetry {
+    let exporter = InMemoryMetricExporter::default();
+    let metrics = MetricsClient::new(
+        MetricsConfig::in_memory("test", "codex-core", env!("CARGO_PKG_VERSION"), exporter)
+            .with_runtime_reader(),
+    )
+    .expect("in-memory metrics client");
+    test_session_telemetry().with_metrics_without_metadata_tags(metrics)
+}
+
+fn find_metric<'a>(resource_metrics: &'a ResourceMetrics, name: &str) -> &'a Metric {
+    for scope_metrics in resource_metrics.scope_metrics() {
+        for metric in scope_metrics.metrics() {
+            if metric.name() == name {
+                return metric;
+            }
+        }
+    }
+    panic!("metric {name} missing");
+}
+
+fn attributes_to_map<'a>(
+    attributes: impl Iterator<Item = &'a KeyValue>,
+) -> BTreeMap<String, String> {
+    attributes
+        .map(|kv| (kv.key.as_str().to_string(), kv.value.as_str().to_string()))
+        .collect()
+}
+
+fn metric_point(resource_metrics: &ResourceMetrics, name: &str) -> (BTreeMap<String, String>, u64) {
+    let metric = find_metric(resource_metrics, name);
+    match metric.data() {
+        AggregatedMetrics::U64(data) => match data {
+            MetricData::Sum(sum) => {
+                let points: Vec<_> = sum.data_points().collect();
+                assert_eq!(points.len(), 1);
+                let point = points[0];
+                (attributes_to_map(point.attributes()), point.value())
+            }
+            _ => panic!("unexpected counter aggregation"),
+        },
+        _ => panic!("unexpected counter data type"),
+    }
+}
+
 #[test]
 fn build_subagent_headers_sets_other_subagent_label() {
     let client = test_model_client(SessionSource::SubAgent(SubAgentSource::Other(
@@ -119,4 +188,112 @@ fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
     assert!(auth_context.retry_after_unauthorized);
     assert_eq!(auth_context.recovery_mode, Some("managed"));
     assert_eq!(auth_context.recovery_phase, Some("refresh_token"));
+}
+
+#[tokio::test]
+async fn upstream_inline_image_request_limit_rejection_emits_metric() {
+    let session_telemetry = test_session_telemetry_with_metrics();
+    let api_stream = futures::stream::iter(vec![Err(ApiError::InvalidRequest {
+        message: "Request containted 1501 images, max 1500 images allowed per request.".to_string(),
+    })]);
+
+    let (mut response_stream, _last_response_rx) =
+        super::map_response_stream(api_stream, session_telemetry.clone());
+    let err = response_stream
+        .next()
+        .await
+        .expect("stream should produce one event")
+        .expect_err("stream event should be an error");
+    assert!(matches!(err, crate::error::CodexErr::InvalidRequest(_)));
+
+    let snapshot = session_telemetry
+        .snapshot_metrics()
+        .expect("runtime metrics snapshot");
+    let (attrs, value) = metric_point(&snapshot, INLINE_IMAGE_REQUEST_LIMIT_METRIC_NAME);
+    assert_eq!(value, 1);
+    assert_eq!(
+        attrs,
+        BTreeMap::from([
+            ("bytes_exceeded".to_string(), "false".to_string()),
+            ("images_exceeded".to_string(), "true".to_string()),
+            (
+                "outcome".to_string(),
+                INLINE_IMAGE_REQUEST_LIMIT_OUTCOME_UPSTREAM_REJECTED.to_string(),
+            ),
+        ])
+    );
+}
+#[tokio::test]
+async fn compact_conversation_history_emits_metric_for_upstream_inline_image_limit_rejection() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses/compact"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": {
+                "message": "This request contains 1501 images, which exceeds the 1500 image limit for a single Responses API request.",
+                "type": "invalid_request_error",
+                "param": null,
+                "code": null
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let provider = crate::model_provider_info::create_oss_provider_with_base_url(
+        &format!("{}/v1", server.uri()),
+        crate::model_provider_info::WireApi::Responses,
+    );
+    let client = ModelClient::new(
+        None,
+        ThreadId::new(),
+        provider,
+        SessionSource::Cli,
+        None,
+        false,
+        false,
+        None,
+    );
+    let session_telemetry = test_session_telemetry_with_metrics();
+    let prompt = Prompt {
+        input: vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputImage {
+                image_url: "https://example.com/one.png".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }],
+        base_instructions: BaseInstructions::default(),
+        ..Default::default()
+    };
+
+    let err = client
+        .compact_conversation_history(
+            &prompt,
+            &test_model_info(),
+            None,
+            ReasoningSummaryConfig::Auto,
+            &session_telemetry,
+        )
+        .await
+        .expect_err("compact request should be rejected upstream");
+    assert!(matches!(err, crate::error::CodexErr::InvalidRequest(_)));
+
+    let snapshot = session_telemetry
+        .snapshot_metrics()
+        .expect("runtime metrics snapshot");
+    let (attrs, value) = metric_point(&snapshot, super::INLINE_IMAGE_REQUEST_LIMIT_METRIC_NAME);
+    assert_eq!(value, 1);
+    assert_eq!(
+        attrs,
+        BTreeMap::from([
+            ("bytes_exceeded".to_string(), "false".to_string()),
+            ("images_exceeded".to_string(), "true".to_string()),
+            (
+                "outcome".to_string(),
+                INLINE_IMAGE_REQUEST_LIMIT_OUTCOME_UPSTREAM_REJECTED.to_string(),
+            ),
+        ])
+    );
 }

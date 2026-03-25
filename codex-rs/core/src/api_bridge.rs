@@ -10,6 +10,7 @@ use codex_login::token_data::PlanType;
 use http::HeaderMap;
 use serde::Deserialize;
 use serde_json::Value;
+use tracing::warn;
 
 use crate::auth::CodexAuth;
 use crate::error::CodexErr;
@@ -17,6 +18,12 @@ use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
 use crate::error::UsageLimitReachedError;
 use crate::model_provider_info::ModelProviderInfo;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct InlineImageRequestLimitBadRequestObservation {
+    pub(crate) bytes_exceeded: bool,
+    pub(crate) images_exceeded: bool,
+}
 
 pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
     match err {
@@ -63,6 +70,17 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                         .contains("The image data you provided does not represent a valid image")
                     {
                         CodexErr::InvalidImageRequest()
+                    } else if let Some(observation) =
+                        inline_image_request_limit_bad_request_observation(&body_text)
+                    {
+                        warn!(
+                            response_status = %status,
+                            bytes_exceeded = observation.bytes_exceeded,
+                            images_exceeded = observation.images_exceeded,
+                            response_body = %body_text,
+                            "responses request rejected by upstream inline image limit"
+                        );
+                        CodexErr::InvalidRequest(body_text)
                     } else {
                         CodexErr::InvalidRequest(body_text)
                     }
@@ -136,6 +154,24 @@ mod tests;
 
 fn extract_request_tracking_id(headers: Option<&HeaderMap>) -> Option<String> {
     extract_request_id(headers).or_else(|| extract_header(headers, CF_RAY_HEADER))
+}
+
+pub(crate) fn inline_image_request_limit_bad_request_observation(
+    body: &str,
+) -> Option<InlineImageRequestLimitBadRequestObservation> {
+    let body = body.to_ascii_lowercase();
+    let bytes_exceeded = body.contains("image data") && body.contains("byte limit");
+    let images_exceeded = body.contains("image limit")
+        || body.contains("too many images")
+        || body.contains("images allowed per request");
+    if !bytes_exceeded && !images_exceeded {
+        return None;
+    }
+
+    Some(InlineImageRequestLimitBadRequestObservation {
+        bytes_exceeded,
+        images_exceeded,
+    })
 }
 
 fn extract_request_id(headers: Option<&HeaderMap>) -> Option<String> {
