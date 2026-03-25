@@ -1,0 +1,12 @@
+---
+source: tui_app_server/src/chatwidget/tests.rs
+assertion_line: 7306
+expression: terminal.backend()
+---
+"                                                                                "
+"• Working (0s • esc to interrupt)                                               "
+"                                                                                "
+"                                                                                "
+"› Ask Codex to do anything                                                      "
+"                                                                                "
+"   BTW starting...                                           100% context left  "
