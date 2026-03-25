@@ -1,10 +1,10 @@
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
-pub const AGENTS_MD_START_MARKER: &str = "# AGENTS.md instructions for ";
-pub const AGENTS_MD_END_MARKER: &str = "</INSTRUCTIONS>";
-pub const SKILL_OPEN_TAG: &str = "<skill>";
-pub const SKILL_CLOSE_TAG: &str = "</skill>";
+pub(crate) const AGENTS_MD_START_MARKER: &str = "# AGENTS.md instructions for ";
+pub(crate) const AGENTS_MD_END_MARKER: &str = "</INSTRUCTIONS>";
+pub(crate) const SKILL_OPEN_TAG: &str = "<skill>";
+pub(crate) const SKILL_CLOSE_TAG: &str = "</skill>";
 
 #[derive(Clone, Copy)]
 pub struct ContextualUserFragmentDefinition {
