@@ -906,3 +906,40 @@ async fn write_jsonrpc_message(
             ))
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_requires_delivery_marks_transcript_and_disconnect_events() {
+        assert!(event_requires_delivery(
+            &AppServerEvent::ServerNotification(ServerNotification::AgentMessageDelta(
+                codex_app_server_protocol::AgentMessageDeltaNotification {
+                    thread_id: "thread".to_string(),
+                    turn_id: "turn".to_string(),
+                    item_id: "item".to_string(),
+                    delta: "hello".to_string(),
+                },
+            ),)
+        ));
+        assert!(event_requires_delivery(
+            &AppServerEvent::ServerNotification(ServerNotification::ItemCompleted(
+                codex_app_server_protocol::ItemCompletedNotification {
+                    thread_id: "thread".to_string(),
+                    turn_id: "turn".to_string(),
+                    item: codex_app_server_protocol::ThreadItem::Plan {
+                        id: "item".to_string(),
+                        text: "step".to_string(),
+                    },
+                }
+            ),)
+        ));
+        assert!(event_requires_delivery(&AppServerEvent::Disconnected {
+            message: "closed".to_string(),
+        }));
+        assert!(!event_requires_delivery(&AppServerEvent::Lagged {
+            skipped: 1
+        }));
+    }
+}

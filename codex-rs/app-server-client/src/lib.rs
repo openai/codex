@@ -963,6 +963,53 @@ mod tests {
             .expect("message should send");
     }
 
+    fn command_execution_output_delta_notification(delta: &str) -> ServerNotification {
+        ServerNotification::CommandExecutionOutputDelta(
+            codex_app_server_protocol::CommandExecutionOutputDeltaNotification {
+                thread_id: "thread".to_string(),
+                turn_id: "turn".to_string(),
+                item_id: "item".to_string(),
+                delta: delta.to_string(),
+            },
+        )
+    }
+
+    fn agent_message_delta_notification(delta: &str) -> ServerNotification {
+        ServerNotification::AgentMessageDelta(
+            codex_app_server_protocol::AgentMessageDeltaNotification {
+                thread_id: "thread".to_string(),
+                turn_id: "turn".to_string(),
+                item_id: "item".to_string(),
+                delta: delta.to_string(),
+            },
+        )
+    }
+
+    fn item_completed_notification(text: &str) -> ServerNotification {
+        ServerNotification::ItemCompleted(codex_app_server_protocol::ItemCompletedNotification {
+            thread_id: "thread".to_string(),
+            turn_id: "turn".to_string(),
+            item: codex_app_server_protocol::ThreadItem::AgentMessage {
+                id: "item".to_string(),
+                text: text.to_string(),
+                phase: None,
+                memory_citation: None,
+            },
+        })
+    }
+
+    fn turn_completed_notification() -> ServerNotification {
+        ServerNotification::TurnCompleted(codex_app_server_protocol::TurnCompletedNotification {
+            thread_id: "thread".to_string(),
+            turn: codex_app_server_protocol::Turn {
+                id: "turn".to_string(),
+                items: Vec::new(),
+                status: codex_app_server_protocol::TurnStatus::Completed,
+                error: None,
+            },
+        })
+    }
+
     fn test_remote_connect_args(websocket_url: String) -> RemoteAppServerConnectArgs {
         RemoteAppServerConnectArgs {
             websocket_url,
@@ -1071,6 +1118,94 @@ mod tests {
             .await
             .expect("typed request should succeed");
         client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
+    async fn forward_in_process_event_preserves_transcript_notifications_under_backpressure() {
+        let (event_tx, mut event_rx) = mpsc::channel(1);
+        event_tx
+            .send(InProcessServerEvent::ServerNotification(
+                command_execution_output_delta_notification("stdout-1"),
+            ))
+            .await
+            .expect("initial event should enqueue");
+
+        let mut skipped_events = 0usize;
+        let result = forward_in_process_event(
+            &event_tx,
+            &mut skipped_events,
+            InProcessServerEvent::ServerNotification(command_execution_output_delta_notification(
+                "stdout-2",
+            )),
+            |_| {},
+        )
+        .await;
+        assert_eq!(result, ForwardEventResult::Continue);
+        assert_eq!(skipped_events, 1);
+
+        let receive_task = tokio::spawn(async move {
+            let mut events = Vec::new();
+            for _ in 0..5 {
+                events.push(
+                    timeout(Duration::from_secs(2), event_rx.recv())
+                        .await
+                        .expect("event should arrive before timeout")
+                        .expect("event stream should stay open"),
+                );
+            }
+            events
+        });
+
+        for notification in [
+            agent_message_delta_notification("hello"),
+            item_completed_notification("hello"),
+            turn_completed_notification(),
+        ] {
+            let result = forward_in_process_event(
+                &event_tx,
+                &mut skipped_events,
+                InProcessServerEvent::ServerNotification(notification),
+                |_| {},
+            )
+            .await;
+            assert_eq!(result, ForwardEventResult::Continue);
+        }
+        assert_eq!(skipped_events, 0);
+
+        let events = receive_task
+            .await
+            .expect("receiver task should join successfully");
+        assert!(matches!(
+            &events[0],
+            InProcessServerEvent::ServerNotification(
+                ServerNotification::CommandExecutionOutputDelta(notification)
+            ) if notification.delta == "stdout-1"
+        ));
+        assert!(matches!(
+            &events[1],
+            InProcessServerEvent::Lagged { skipped: 1 }
+        ));
+        assert!(matches!(
+            &events[2],
+            InProcessServerEvent::ServerNotification(ServerNotification::AgentMessageDelta(
+                notification
+            )) if notification.delta == "hello"
+        ));
+        assert!(matches!(
+            &events[3],
+            InProcessServerEvent::ServerNotification(ServerNotification::ItemCompleted(
+                notification
+            )) if matches!(
+                &notification.item,
+                codex_app_server_protocol::ThreadItem::AgentMessage { text, .. } if text == "hello"
+            )
+        ));
+        assert!(matches!(
+            &events[4],
+            InProcessServerEvent::ServerNotification(ServerNotification::TurnCompleted(
+                notification
+            )) if notification.turn.status == codex_app_server_protocol::TurnStatus::Completed
+        ));
     }
 
     #[tokio::test]
@@ -1234,6 +1369,104 @@ mod tests {
             AppServerEvent::ServerNotification(ServerNotification::AccountUpdated(_))
         ));
 
+        client.shutdown().await.expect("shutdown should complete");
+    }
+
+    #[tokio::test]
+    async fn remote_backpressure_preserves_transcript_notifications() {
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        let websocket_url = start_test_remote_server(|mut websocket| async move {
+            expect_remote_initialize(&mut websocket).await;
+            for notification in [
+                command_execution_output_delta_notification("stdout-1"),
+                command_execution_output_delta_notification("stdout-2"),
+                agent_message_delta_notification("hello"),
+                item_completed_notification("hello"),
+                turn_completed_notification(),
+            ] {
+                write_websocket_message(
+                    &mut websocket,
+                    JSONRPCMessage::Notification(
+                        serde_json::from_value(
+                            serde_json::to_value(notification)
+                                .expect("notification should serialize"),
+                        )
+                        .expect("notification should convert to JSON-RPC"),
+                    ),
+                )
+                .await;
+            }
+            let _ = done_rx.await;
+        })
+        .await;
+        let mut client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
+            websocket_url,
+            client_name: "codex-app-server-client-test".to_string(),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: 1,
+        })
+        .await
+        .expect("remote client should connect");
+
+        let first_event = timeout(Duration::from_secs(2), client.next_event())
+            .await
+            .expect("first event should arrive before timeout")
+            .expect("event stream should stay open");
+        assert!(matches!(
+            first_event,
+            AppServerEvent::ServerNotification(ServerNotification::CommandExecutionOutputDelta(
+                notification
+            )) if notification.delta == "stdout-1"
+        ));
+
+        let second_event = timeout(Duration::from_secs(2), client.next_event())
+            .await
+            .expect("second event should arrive before timeout")
+            .expect("event stream should stay open");
+        assert!(matches!(
+            second_event,
+            AppServerEvent::Lagged { skipped: 1 }
+        ));
+
+        let third_event = timeout(Duration::from_secs(2), client.next_event())
+            .await
+            .expect("third event should arrive before timeout")
+            .expect("event stream should stay open");
+        assert!(matches!(
+            third_event,
+            AppServerEvent::ServerNotification(ServerNotification::AgentMessageDelta(
+                notification
+            )) if notification.delta == "hello"
+        ));
+
+        let fourth_event = timeout(Duration::from_secs(2), client.next_event())
+            .await
+            .expect("fourth event should arrive before timeout")
+            .expect("event stream should stay open");
+        assert!(matches!(
+            fourth_event,
+            AppServerEvent::ServerNotification(ServerNotification::ItemCompleted(notification))
+                if matches!(
+                    &notification.item,
+                    codex_app_server_protocol::ThreadItem::AgentMessage { text, .. } if text == "hello"
+                )
+        ));
+
+        let fifth_event = timeout(Duration::from_secs(2), client.next_event())
+            .await
+            .expect("fifth event should arrive before timeout")
+            .expect("event stream should stay open");
+        assert!(matches!(
+            fifth_event,
+            AppServerEvent::ServerNotification(ServerNotification::TurnCompleted(notification))
+                if notification.turn.status == codex_app_server_protocol::TurnStatus::Completed
+        ));
+
+        done_tx
+            .send(())
+            .expect("server completion signal should send");
         client.shutdown().await.expect("shutdown should complete");
     }
 
@@ -1476,7 +1709,7 @@ mod tests {
     }
 
     #[test]
-    fn event_requires_delivery_marks_terminal_events() {
+    fn event_requires_delivery_marks_transcript_and_terminal_events() {
         assert!(event_requires_delivery(
             &InProcessServerEvent::ServerNotification(
                 codex_app_server_protocol::ServerNotification::TurnCompleted(
@@ -1492,9 +1725,49 @@ mod tests {
                 )
             )
         ));
+        assert!(event_requires_delivery(
+            &InProcessServerEvent::ServerNotification(
+                codex_app_server_protocol::ServerNotification::AgentMessageDelta(
+                    codex_app_server_protocol::AgentMessageDeltaNotification {
+                        thread_id: "thread".to_string(),
+                        turn_id: "turn".to_string(),
+                        item_id: "item".to_string(),
+                        delta: "hello".to_string(),
+                    }
+                )
+            )
+        ));
+        assert!(event_requires_delivery(
+            &InProcessServerEvent::ServerNotification(
+                codex_app_server_protocol::ServerNotification::ItemCompleted(
+                    codex_app_server_protocol::ItemCompletedNotification {
+                        thread_id: "thread".to_string(),
+                        turn_id: "turn".to_string(),
+                        item: codex_app_server_protocol::ThreadItem::AgentMessage {
+                            id: "item".to_string(),
+                            text: "hello".to_string(),
+                            phase: None,
+                            memory_citation: None,
+                        },
+                    }
+                )
+            )
+        ));
         assert!(!event_requires_delivery(&InProcessServerEvent::Lagged {
             skipped: 1
         }));
+        assert!(!event_requires_delivery(
+            &InProcessServerEvent::ServerNotification(
+                codex_app_server_protocol::ServerNotification::CommandExecutionOutputDelta(
+                    codex_app_server_protocol::CommandExecutionOutputDeltaNotification {
+                        thread_id: "thread".to_string(),
+                        turn_id: "turn".to_string(),
+                        item_id: "item".to_string(),
+                        delta: "stdout".to_string(),
+                    }
+                )
+            )
+        ));
     }
 
     #[tokio::test]
