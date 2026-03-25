@@ -97,6 +97,17 @@ fn event_requires_delivery(event: &InProcessServerEvent) -> bool {
     }
 }
 
+/// Returns `true` for notifications that must survive backpressure.
+///
+/// Transcript events (`AgentMessageDelta`, `PlanDelta`, reasoning deltas) and
+/// the authoritative `ItemCompleted` / `TurnCompleted` form the lossless tier
+/// of the event stream. Dropping any of these corrupts the visible assistant
+/// output or leaves surfaces waiting for a completion signal that already
+/// fired. Everything else (`CommandExecutionOutputDelta`, progress, etc.) is
+/// best-effort and may be dropped with only cosmetic impact.
+///
+/// Both the in-process and remote transports delegate to this function so the
+/// classification stays in sync.
 pub(crate) fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
     matches!(
         notification,
@@ -109,12 +120,25 @@ pub(crate) fn server_notification_requires_delivery(notification: &ServerNotific
     )
 }
 
+/// Outcome of attempting to forward a single event to the consumer channel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ForwardEventResult {
+    /// The event was delivered (or intentionally dropped); the stream is healthy.
     Continue,
+    /// The consumer channel is closed; the caller should stop producing events.
     DisableStream,
 }
 
+/// Forwards a single in-process event to the consumer, respecting the
+/// lossless/best-effort split.
+///
+/// Lossless events (transcript deltas, item/turn completions) block until the
+/// consumer drains capacity. Best-effort events use `try_send` and increment
+/// `skipped_events` on failure. When a lag marker needs to be flushed before a
+/// lossless event, the flush itself blocks so the marker is never lost.
+///
+/// If a dropped event is a `ServerRequest`, `reject_server_request` is called
+/// so the server does not wait for a response that will never come.
 async fn forward_in_process_event<F>(
     event_tx: &mpsc::Sender<InProcessServerEvent>,
     skipped_events: &mut usize,
