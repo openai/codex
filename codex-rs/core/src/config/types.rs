@@ -158,6 +158,9 @@ pub(crate) struct RawMcpServerConfig {
     pub scopes: Option<Vec<String>>,
     #[serde(default)]
     pub oauth_resource: Option<String>,
+    /// Legacy display-name field accepted for backward compatibility.
+    #[serde(default, rename = "name")]
+    pub _name: Option<String>,
     #[serde(default)]
     #[serde(flatten)]
     pub tools: HashMap<String, McpServerToolConfig>,

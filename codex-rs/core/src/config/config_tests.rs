@@ -1969,6 +1969,7 @@ fn mcp_servers_toml_parses_per_tool_approval_overrides() {
         r#"
 [mcp_servers.docs]
 command = "docs-server"
+name = "Docs"
 
 [mcp_servers.docs.search]
 approval_mode = "approve"
