@@ -9,7 +9,7 @@ use codex_utils_home_dir::find_codex_home;
 use std::os::unix::fs::symlink;
 use tempfile::TempDir;
 
-pub const LINUX_SANDBOX_ARG0: &str = "codex-linux-sandbox";
+const LINUX_SANDBOX_ARG0: &str = "codex-linux-sandbox";
 const APPLY_PATCH_ARG0: &str = "apply_patch";
 const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
 #[cfg(unix)]

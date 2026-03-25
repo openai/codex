@@ -5608,23 +5608,6 @@ exit 1
     assert_eq!(system_bwrap_warning_for_path(fake_bwrap_path), None);
 }
 
-#[cfg(target_os = "linux")]
-#[test]
-fn system_bwrap_warning_skips_supported_system_bwrap() {
-    let fake_bwrap = write_fake_bwrap(
-        r#"#!/bin/sh
-if [ "$1" = "--help" ]; then
-  echo '  --argv0 PROGRAM'
-  exit 0
-fi
-exit 1
-"#,
-    );
-    let fake_bwrap_path: &Path = fake_bwrap.as_ref();
-
-    assert_eq!(system_bwrap_warning_for_path(fake_bwrap_path), None);
-}
-
 #[cfg(not(target_os = "linux"))]
 #[test]
 fn system_bwrap_warning_is_disabled_off_linux() {

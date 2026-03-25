@@ -2,7 +2,6 @@ use crate::protocol::SandboxPolicy;
 use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
-use codex_arg0::LINUX_SANDBOX_ARG0;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -12,6 +11,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::process::Child;
+
+const LINUX_SANDBOX_ARG0: &str = "codex-linux-sandbox";
 
 /// Spawn a shell tool command under the Linux sandbox helper
 /// (codex-linux-sandbox), which defaults to bubblewrap for filesystem
