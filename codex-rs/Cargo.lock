@@ -1887,6 +1887,7 @@ dependencies = [
  "codex-login",
  "codex-network-proxy",
  "codex-otel",
+ "codex-plugin",
  "codex-protocol",
  "codex-rmcp-client",
  "codex-rollout",
@@ -2392,6 +2393,17 @@ dependencies = [
  "url",
  "wiremock",
  "zip",
+]
+
+[[package]]
+name = "codex-plugin"
+version = "0.0.0"
+dependencies = [
+ "codex-utils-absolute-path",
+ "codex-utils-plugins",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

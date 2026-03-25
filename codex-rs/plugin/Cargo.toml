@@ -1,0 +1,21 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-plugin"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_plugin"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-utils-absolute-path = { workspace = true }
+codex-utils-plugins = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+

@@ -46,6 +46,7 @@ codex-instructions = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-artifacts = { workspace = true }
+codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rollout = { workspace = true }
 codex-rmcp-client = { workspace = true }
