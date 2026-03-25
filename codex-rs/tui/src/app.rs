@@ -36,6 +36,8 @@ use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
+#[cfg(test)]
+use crate::test_support::normalize_snapshot_path;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -4993,7 +4995,7 @@ mod tests {
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/tmp/project"),
+                cwd: PathBuf::from("/tmp/project").abs().to_path_buf(),
                 reasoning_effort: None,
                 history_log_id: 0,
                 history_entry_count: 0,
@@ -6952,7 +6954,7 @@ guardian_approval = true
             !rendered.contains("Bracken Ferry"),
             "clear header should not replay prior conversation turns"
         );
-        rendered
+        normalize_snapshot_path(rendered, "/tmp/project")
     }
 
     #[tokio::test]
@@ -6990,7 +6992,10 @@ guardian_approval = true
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert_snapshot!("clear_ui_header_fast_status_gpt54_only", rendered);
+        assert_snapshot!(
+            "clear_ui_header_fast_status_gpt54_only",
+            normalize_snapshot_path(rendered, "/tmp/project")
+        );
     }
 
     async fn make_test_app() -> App {

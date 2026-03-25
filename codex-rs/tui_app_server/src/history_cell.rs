@@ -29,6 +29,8 @@ use crate::style::proposed_plan_style;
 use crate::style::user_message_style;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
+#[cfg(test)]
+use crate::test_support::normalize_snapshot_path;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
 use crate::tooltips;
@@ -2885,7 +2887,7 @@ mod tests {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            cwd: PathBuf::from("/tmp/project"),
+            cwd: PathBuf::from("/tmp/project").abs().to_path_buf(),
             reasoning_effort: None,
             history_log_id: 0,
             history_entry_count: 0,
@@ -2978,7 +2980,7 @@ mod tests {
     fn ps_output_empty_snapshot() {
         let cell = new_unified_exec_processes_output(Vec::new());
         let rendered = render_lines(&cell.display_lines(60)).join("\n");
-        insta::assert_snapshot!(rendered);
+        insta::assert_snapshot!(normalize_snapshot_path(rendered, "/tmp/project"));
     }
 
     #[tokio::test]

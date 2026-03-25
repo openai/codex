@@ -22,3 +22,11 @@ impl PathBufExt for PathBuf {
         self.as_path().abs()
     }
 }
+
+pub(crate) fn test_path_display(path: &str) -> String {
+    Path::new(path).abs().display().to_string()
+}
+
+pub(crate) fn normalize_snapshot_path(rendered: String, path: &str) -> String {
+    rendered.replace(&test_path_display(path), path)
+}

@@ -17,6 +17,8 @@ use crate::chatwidget::realtime::RealtimeConversationPhase;
 use crate::history_cell::UserHistoryCell;
 use crate::test_backend::VT100Backend;
 use crate::test_support::PathBufExt;
+use crate::test_support::normalize_snapshot_path;
+use crate::test_support::test_path_display;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
 use codex_app_server_protocol::AppSummary;
@@ -438,7 +440,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
     chat.config.cwd = PathBuf::from("/home/user/main").abs();
 
     let expected_sandbox = SandboxPolicy::new_read_only_policy();
-    let expected_cwd = PathBuf::from("/home/user/sub-agent");
+    let expected_cwd = PathBuf::from("/home/user/sub-agent").abs();
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
         forked_from_id: None,
@@ -449,7 +451,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: expected_sandbox.clone(),
-        cwd: expected_cwd.clone(),
+        cwd: expected_cwd.to_path_buf(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
@@ -471,7 +473,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         chat.config_ref().permissions.sandbox_policy.get(),
         &expected_sandbox
     );
-    assert_eq!(chat.config_ref().cwd.to_path_buf(), expected_cwd);
+    assert_eq!(&chat.config_ref().cwd, &expected_cwd);
 }
 
 #[tokio::test]
@@ -11876,10 +11878,11 @@ async fn status_line_model_with_reasoning_includes_fast_for_gpt54_only() {
     chat.set_service_tier(Some(ServiceTier::Fast));
     set_chatgpt_auth(&mut chat);
     chat.refresh_status_surfaces();
+    let test_cwd = test_path_display("/tmp/project");
 
     assert_eq!(
         status_line_text(&chat),
-        Some("gpt-5.4 xhigh fast · 100% left · /tmp/project".to_string())
+        Some(format!("gpt-5.4 xhigh fast · 100% left · {test_cwd}"))
     );
 
     chat.set_model("gpt-5.3-codex");
@@ -11887,7 +11890,7 @@ async fn status_line_model_with_reasoning_includes_fast_for_gpt54_only() {
 
     assert_eq!(
         status_line_text(&chat),
-        Some("gpt-5.3-codex xhigh · 100% left · /tmp/project".to_string())
+        Some(format!("gpt-5.3-codex xhigh · 100% left · {test_cwd}"))
     );
 }
 
@@ -11917,7 +11920,7 @@ async fn status_line_model_with_reasoning_fast_footer_snapshot() {
         .expect("draw model-with-reasoning footer");
     assert_snapshot!(
         "status_line_model_with_reasoning_fast_footer",
-        terminal.backend()
+        normalize_snapshot_path(terminal.backend().to_string(), "/tmp/project")
     );
 }
 
