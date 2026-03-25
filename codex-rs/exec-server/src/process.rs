@@ -25,6 +25,9 @@ pub enum ExecSessionEvent {
     Closed {
         seq: u64,
     },
+    Failed {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

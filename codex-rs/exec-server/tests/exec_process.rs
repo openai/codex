@@ -22,7 +22,7 @@ use common::exec_server::exec_server;
 
 struct ProcessContext {
     backend: Arc<dyn ExecBackend>,
-    _server: Option<ExecServerHarness>,
+    server: Option<ExecServerHarness>,
 }
 
 async fn create_process_context(use_remote: bool) -> Result<ProcessContext> {
@@ -31,13 +31,13 @@ async fn create_process_context(use_remote: bool) -> Result<ProcessContext> {
         let environment = Environment::create(Some(server.websocket_url().to_string())).await?;
         Ok(ProcessContext {
             backend: environment.get_exec_backend(),
-            _server: Some(server),
+            server: Some(server),
         })
     } else {
         let environment = Environment::create(None).await?;
         Ok(ProcessContext {
             backend: environment.get_exec_backend(),
-            _server: None,
+            server: None,
         })
     }
 }
@@ -67,6 +67,9 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
                 } => exit_code = Some(code),
                 ExecSessionEvent::Closed { .. } => break,
                 ExecSessionEvent::Output { .. } => {}
+                ExecSessionEvent::Failed { message } => {
+                    anyhow::bail!("process failed before Closed event: {message}")
+                }
             },
             None => anyhow::bail!("event stream closed before Closed event"),
         }
@@ -93,6 +96,9 @@ async fn collect_process_output_from_events(
                 } => exit_code = Some(code),
                 ExecSessionEvent::Closed { .. } => {
                     break;
+                }
+                ExecSessionEvent::Failed { message } => {
+                    anyhow::bail!("process failed before Closed event: {message}");
                 }
             },
             None => {
@@ -193,6 +199,52 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
     assert_eq!(output, "queued output\n");
     assert_eq!(exit_code, 0);
     assert!(closed);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
+    let mut context = create_process_context(/*use_remote*/ true).await?;
+    let session = context
+        .backend
+        .start(ExecParams {
+            process_id: "proc-disconnect".to_string(),
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "sleep 10".to_string(),
+            ],
+            cwd: std::env::current_dir()?,
+            env: Default::default(),
+            tty: false,
+            arg0: None,
+        })
+        .await?;
+
+    let server = context
+        .server
+        .as_mut()
+        .expect("remote context should include exec-server harness");
+    server.shutdown().await?;
+
+    let mut events = session.events;
+    loop {
+        match timeout(Duration::from_secs(2), events.recv()).await? {
+            Some(ExecSessionEvent::Failed { message }) => {
+                assert!(
+                    message.starts_with("exec-server transport disconnected"),
+                    "unexpected failure message: {message}"
+                );
+                break;
+            }
+            Some(ExecSessionEvent::Output { .. } | ExecSessionEvent::Exited { .. }) => {}
+            Some(ExecSessionEvent::Closed { .. }) => {
+                anyhow::bail!("received Closed instead of transport failure")
+            }
+            None => anyhow::bail!("event stream closed before Failed event"),
+        }
+    }
+
     Ok(())
 }
 

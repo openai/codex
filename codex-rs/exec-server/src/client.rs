@@ -360,12 +360,19 @@ impl ExecServerClient {
                                 && let Err(err) =
                                     handle_server_notification(&inner, notification).await
                             {
-                                let _ = err;
+                                fail_all_sessions(
+                                    &inner,
+                                    format!("exec-server notification handling failed: {err}"),
+                                )
+                                .await;
                                 return;
                             }
                         }
                         RpcClientEvent::Disconnected { reason } => {
-                            let _ = reason;
+                            if let Some(inner) = weak.upgrade() {
+                                fail_all_sessions(&inner, disconnected_message(reason.as_deref()))
+                                    .await;
+                            }
                             return;
                         }
                     }
@@ -404,6 +411,32 @@ impl From<RpcCallError> for ExecServerError {
                 message: error.message,
             },
         }
+    }
+}
+
+fn disconnected_message(reason: Option<&str>) -> String {
+    match reason {
+        Some(reason) => format!("exec-server transport disconnected: {reason}"),
+        None => "exec-server transport disconnected".to_string(),
+    }
+}
+
+async fn fail_all_sessions(inner: &Arc<Inner>, message: String) {
+    let sessions = {
+        let _sessions_write_guard = inner.sessions_write_lock.lock().await;
+        let sessions = inner.sessions.load();
+        let drained_sessions = sessions.as_ref().clone();
+        inner.sessions.store(Arc::new(HashMap::new()));
+        drained_sessions
+    };
+
+    for (_, events_tx) in sessions {
+        // Do not block disconnect handling behind a full bounded queue. Best
+        // effort deliver a terminal failure event, then drop the sender so
+        // receivers still observe EOF if the queue was already saturated.
+        let _ = events_tx.try_send(ExecSessionEvent::Failed {
+            message: message.clone(),
+        });
     }
 }
 
