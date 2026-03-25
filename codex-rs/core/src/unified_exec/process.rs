@@ -132,7 +132,6 @@ impl UnifiedExecProcess {
                 .writer_sender()
                 .send(data.to_vec())
                 .await
-                .map(|()| ())
                 .map_err(|_| UnifiedExecError::WriteToStdin),
             ProcessHandle::Remote(process_handle) => {
                 match process_handle.write(data.to_vec()).await {
@@ -334,14 +333,17 @@ impl UnifiedExecProcess {
 
     fn spawn_remote_output_task(
         started: StartedExecProcess,
-        output_buffer: OutputBuffer,
-        output_notify: Arc<Notify>,
-        output_closed: Arc<AtomicBool>,
-        output_closed_notify: Arc<Notify>,
+        output_handles: OutputHandles,
         output_tx: broadcast::Sender<Vec<u8>>,
         state_tx: watch::Sender<ProcessState>,
-        cancellation_token: CancellationToken,
     ) -> JoinHandle<()> {
+        let OutputHandles {
+            output_buffer,
+            output_notify,
+            output_closed,
+            output_closed_notify,
+            cancellation_token,
+        } = output_handles;
         let StartedExecProcess { mut events, .. } = started;
         tokio::spawn(async move {
             loop {
@@ -427,15 +429,12 @@ impl From<(StartedExecProcess, SandboxType)> for UnifiedExecProcess {
     fn from((started, sandbox_type): (StartedExecProcess, SandboxType)) -> Self {
         let process_handle = ProcessHandle::Remote(Arc::clone(&started.process));
         let mut managed = Self::new(process_handle, sandbox_type, /*spawn_lifecycle*/ None);
+        let output_handles = managed.output_handles();
         managed.output_task = Some(Self::spawn_remote_output_task(
             started,
-            Arc::clone(&managed.output_buffer),
-            Arc::clone(&managed.output_notify),
-            Arc::clone(&managed.output_closed),
-            Arc::clone(&managed.output_closed_notify),
+            output_handles,
             managed.output_tx.clone(),
             managed.state_tx.clone(),
-            managed.cancellation_token.clone(),
         ));
         managed
     }

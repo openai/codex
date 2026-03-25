@@ -7,7 +7,7 @@ use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::sandboxing::ExecRequest;
 use crate::tools::context::ExecCommandToolOutput;
-use crate::truncate::approx_token_count;
+use codex_utils_output_truncation::approx_token_count;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::process::OutputHandles;
 use codex_sandboxing::SandboxType;
@@ -46,23 +46,27 @@ fn test_exec_request(
     cwd: PathBuf,
     env: HashMap<String, String>,
 ) -> ExecRequest {
-    ExecRequest {
+    let windows_sandbox_private_desktop = false;
+    let sandbox_policy = turn.sandbox_policy.get().clone();
+    let file_system_sandbox_policy = turn.file_system_sandbox_policy.clone();
+    let network_sandbox_policy = turn.network_sandbox_policy;
+    let network = None;
+    let arg0 = None;
+    ExecRequest::new(
         command,
         cwd,
         env,
-        network: None,
-        expiration: ExecExpiration::DefaultTimeout,
-        capture_policy: ExecCapturePolicy::ShellTool,
-        sandbox: SandboxType::None,
-        windows_sandbox_level: turn.windows_sandbox_level,
-        windows_sandbox_private_desktop: false,
-        sandbox_permissions: SandboxPermissions::UseDefault,
-        sandbox_policy: turn.sandbox_policy.get().clone(),
-        file_system_sandbox_policy: turn.file_system_sandbox_policy.clone(),
-        network_sandbox_policy: turn.network_sandbox_policy,
-        justification: None,
-        arg0: None,
-    }
+        network,
+        ExecExpiration::DefaultTimeout,
+        ExecCapturePolicy::ShellTool,
+        SandboxType::None,
+        turn.windows_sandbox_level,
+        windows_sandbox_private_desktop,
+        sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+        arg0,
+    )
 }
 
 async fn exec_command_with_tty(
