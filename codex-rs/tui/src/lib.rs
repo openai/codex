@@ -251,6 +251,8 @@ mod wrapping;
 
 #[cfg(test)]
 pub mod test_backend;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;

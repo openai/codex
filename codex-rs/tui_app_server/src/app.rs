@@ -42,6 +42,8 @@ use crate::read_session_model;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
+#[cfg(test)]
+use crate::test_support::PathBufExt;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -1039,7 +1041,7 @@ impl App {
 
     async fn refresh_in_memory_config_from_disk(&mut self) -> Result<()> {
         let mut config = self
-            .rebuild_config_for_cwd(self.chat_widget.config_ref().cwd.clone())
+            .rebuild_config_for_cwd(self.chat_widget.config_ref().cwd.to_path_buf())
             .await?;
         self.apply_runtime_policy_overrides(&mut config);
         self.config = config;
@@ -1406,7 +1408,7 @@ impl App {
                 self.chat_widget.current_model(),
                 self.chat_widget.current_service_tier(),
             ),
-            self.config.cwd.clone(),
+            self.config.cwd.to_path_buf(),
             version,
         )
         .display_lines(width)
@@ -1702,7 +1704,7 @@ impl App {
                     cwd: self
                         .thread_cwd(thread_id)
                         .await
-                        .unwrap_or_else(|| self.config.cwd.clone()),
+                        .unwrap_or_else(|| self.config.cwd.to_path_buf()),
                     changes: HashMap::new(),
                 }),
             ),
@@ -3077,7 +3079,7 @@ impl App {
         chat_widget
             .maybe_prompt_windows_sandbox_enable(should_prompt_windows_sandbox_nux_at_startup);
 
-        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
         #[cfg(not(debug_assertions))]
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
@@ -3144,7 +3146,13 @@ impl App {
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
                 let sandbox_policy = app.config.permissions.sandbox_policy.get().clone();
-                Self::spawn_world_writable_scan(cwd, env_map, logs_base_dir, sandbox_policy, tx);
+                Self::spawn_world_writable_scan(
+                    cwd.to_path_buf(),
+                    env_map,
+                    logs_base_dir,
+                    sandbox_policy,
+                    tx,
+                );
             }
         }
 
@@ -3369,7 +3377,7 @@ impl App {
                 .await?
                 {
                     SessionSelection::Resume(target_session) => {
-                        let current_cwd = self.config.cwd.clone();
+                        let current_cwd = self.config.cwd.to_path_buf();
                         let resume_cwd = if self.remote_app_server_url.is_some() {
                             current_cwd.clone()
                         } else {
@@ -3417,7 +3425,8 @@ impl App {
                                 self.shutdown_current_thread(app_server).await;
                                 self.config = resume_config;
                                 tui.set_notification_method(self.config.tui_notification_method);
-                                self.file_search.update_search_dir(self.config.cwd.clone());
+                                self.file_search
+                                    .update_search_dir(self.config.cwd.to_path_buf());
                                 match self
                                     .replace_chat_widget_with_app_server_thread(tui, resumed)
                                     .await
@@ -3715,7 +3724,8 @@ impl App {
                     plugin_display_name,
                     result,
                 );
-                if install_succeeded && self.chat_widget.config_ref().cwd == cwd {
+                if install_succeeded && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path()
+                {
                     self.fetch_plugins_list(app_server, cwd.clone());
                     if should_refresh_plugin_detail {
                         self.fetch_plugin_detail(
@@ -4190,7 +4200,9 @@ impl App {
                     plugin_display_name,
                     result,
                 );
-                if uninstall_succeeded && self.chat_widget.config_ref().cwd == cwd {
+                if uninstall_succeeded
+                    && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path()
+                {
                     self.fetch_plugins_list(app_server, cwd);
                 }
             }
@@ -4377,7 +4389,7 @@ impl App {
                         let logs_base_dir = self.config.codex_home.clone();
                         let sandbox_policy = self.config.permissions.sandbox_policy.get().clone();
                         Self::spawn_world_writable_scan(
-                            cwd,
+                            cwd.to_path_buf(),
                             env_map,
                             logs_base_dir,
                             sandbox_policy,
@@ -6693,7 +6705,7 @@ mod tests {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
-        let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
+        let config_toml_path = codex_home.path().join("config.toml").abs();
         let config_toml = "approvals_reviewer = \"guardian_subagent\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
@@ -6785,7 +6797,7 @@ mod tests {
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
         let guardian_approvals = guardian_approvals_mode();
-        let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
+        let config_toml_path = codex_home.path().join("config.toml").abs();
         let config_toml = "approvals_reviewer = \"user\"\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
@@ -6852,7 +6864,7 @@ mod tests {
         let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
-        let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
+        let config_toml_path = codex_home.path().join("config.toml").abs();
         let config_toml = "approvals_reviewer = \"user\"\napproval_policy = \"on-request\"\nsandbox_mode = \"workspace-write\"\n\n[features]\nguardian_approval = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
@@ -6913,7 +6925,7 @@ mod tests {
         app.config.codex_home = codex_home.path().to_path_buf();
         let guardian_approvals = guardian_approvals_mode();
         app.active_profile = Some("guardian".to_string());
-        let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
+        let config_toml_path = codex_home.path().join("config.toml").abs();
         let config_toml = "profile = \"guardian\"\napprovals_reviewer = \"user\"\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
@@ -6983,7 +6995,7 @@ mod tests {
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
         app.active_profile = Some("guardian".to_string());
-        let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
+        let config_toml_path = codex_home.path().join("config.toml").abs();
         let config_toml = r#"
 profile = "guardian"
 approvals_reviewer = "user"
@@ -7071,7 +7083,7 @@ guardian_approval = true
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf();
         app.active_profile = Some("guardian".to_string());
-        let config_toml_path = AbsolutePathBuf::try_from(codex_home.path().join("config.toml"))?;
+        let config_toml_path = codex_home.path().join("config.toml").abs();
         let config_toml = "profile = \"guardian\"\napprovals_reviewer = \"guardian_subagent\"\n\n[features]\nguardian_approval = true\n";
         std::fs::write(config_toml_path.as_path(), config_toml)?;
         let user_config = toml::from_str::<TomlValue>(config_toml)?;
@@ -7652,7 +7664,7 @@ guardian_approval = true
 
     async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {
         let mut app = make_test_app().await;
-        app.config.cwd = PathBuf::from("/tmp/project");
+        app.config.cwd = PathBuf::from("/tmp/project").abs();
         app.chat_widget.set_model("gpt-test");
         app.chat_widget
             .set_reasoning_effort(Some(ReasoningEffortConfig::High));
@@ -7705,7 +7717,7 @@ guardian_approval = true
                 approval_policy: AskForApproval::Never,
                 approvals_reviewer: ApprovalsReviewer::User,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/tmp/project"),
+                cwd: PathBuf::from("/tmp/project").abs().to_path_buf(),
                 reasoning_effort: Some(ReasoningEffortConfig::High),
                 history_log_id: 0,
                 history_entry_count: 0,
@@ -7763,21 +7775,33 @@ guardian_approval = true
     }
 
     #[tokio::test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "snapshot path rendering differs on Windows"
+    )]
     async fn clear_ui_after_long_transcript_snapshots_fresh_header_only() {
         let rendered = render_clear_ui_header_after_long_transcript_for_snapshot().await;
         assert_snapshot!("clear_ui_after_long_transcript_fresh_header_only", rendered);
     }
 
     #[tokio::test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "snapshot path rendering differs on Windows"
+    )]
     async fn ctrl_l_clear_ui_after_long_transcript_reuses_clear_header_snapshot() {
         let rendered = render_clear_ui_header_after_long_transcript_for_snapshot().await;
         assert_snapshot!("clear_ui_after_long_transcript_fresh_header_only", rendered);
     }
 
     #[tokio::test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "snapshot path rendering differs on Windows"
+    )]
     async fn clear_ui_header_shows_fast_status_only_for_gpt54() {
         let mut app = make_test_app().await;
-        app.config.cwd = PathBuf::from("/tmp/project");
+        app.config.cwd = PathBuf::from("/tmp/project").abs();
         app.chat_widget.set_model("gpt-5.4");
         app.chat_widget
             .set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
@@ -7803,7 +7827,7 @@ guardian_approval = true
     async fn make_test_app() -> App {
         let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
 
@@ -7853,7 +7877,7 @@ guardian_approval = true
     ) {
         let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
         let config = chat_widget.config_ref().clone();
-        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
 
@@ -8598,7 +8622,7 @@ guardian_approval = true
             }),
         });
 
-        assert_eq!(app.chat_widget.config_ref().cwd, next_cwd);
+        assert_eq!(app.chat_widget.config_ref().cwd.to_path_buf(), next_cwd);
         assert_eq!(app.config.cwd, original_cwd);
 
         app.refresh_in_memory_config_from_disk().await?;
@@ -8618,7 +8642,7 @@ guardian_approval = true
         let current_cwd = current_config.cwd.clone();
 
         let resume_config = app
-            .rebuild_config_for_resume_or_fallback(&current_cwd, current_cwd.clone())
+            .rebuild_config_for_resume_or_fallback(&current_cwd, current_cwd.to_path_buf())
             .await?;
 
         assert_eq!(resume_config, current_config);

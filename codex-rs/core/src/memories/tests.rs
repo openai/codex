@@ -435,6 +435,7 @@ mod phase2 {
     use codex_state::Phase2JobClaimOutcome;
     use codex_state::Stage1Output;
     use codex_state::ThreadMetadataBuilder;
+    use core_test_support::PathBufExt;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration;
@@ -469,7 +470,7 @@ mod phase2 {
             let codex_home = tempfile::tempdir().expect("create temp codex home");
             let mut config = test_config();
             config.codex_home = codex_home.path().to_path_buf();
-            config.cwd = config.codex_home.clone();
+            config.cwd = config.codex_home.abs();
             let config = Arc::new(config);
 
             let state_db = codex_state::StateRuntime::init(
@@ -507,7 +508,7 @@ mod phase2 {
                 Utc::now(),
                 SessionSource::Cli,
             );
-            metadata_builder.cwd = self.config.cwd.clone();
+            metadata_builder.cwd = self.config.cwd.to_path_buf();
             metadata_builder.model_provider = Some(self.config.model_provider_id.clone());
             let metadata = metadata_builder.build(&self.config.model_provider_id);
 
@@ -882,7 +883,7 @@ mod phase2 {
         let codex_home = tempfile::tempdir().expect("create temp codex home");
         let mut config = test_config();
         config.codex_home = codex_home.path().to_path_buf();
-        config.cwd = config.codex_home.clone();
+        config.cwd = config.codex_home.abs();
         let config = Arc::new(config);
 
         let state_db = codex_state::StateRuntime::init(
@@ -904,7 +905,7 @@ mod phase2 {
             Utc::now(),
             SessionSource::Cli,
         );
-        metadata_builder.cwd = config.cwd.clone();
+        metadata_builder.cwd = config.cwd.to_path_buf();
         metadata_builder.model_provider = Some(config.model_provider_id.clone());
         let metadata = metadata_builder.build(&config.model_provider_id);
         state_db
