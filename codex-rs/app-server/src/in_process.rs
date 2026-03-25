@@ -384,9 +384,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 outgoing: Arc::clone(&processor_outgoing),
                 arg0_paths: args.arg0_paths,
                 config: args.config,
-                environment_manager: Arc::new(EnvironmentManager::new(
-                    /*exec_server_url*/ None,
-                )),
+                environment_manager: Arc::new(EnvironmentManager::from_env()),
                 cli_overrides: args.cli_overrides,
                 loader_overrides: args.loader_overrides,
                 cloud_requirements: args.cloud_requirements,
