@@ -1418,6 +1418,8 @@ fn default_read_only_subpaths_for_writable_root(
     if protect_missing_dot_codex || path_exists_or_is_symlink(top_level_codex.as_path()) {
         subpaths.push(top_level_codex);
     }
+    // A read-only `.codex/` directory does not stop writes through a
+    // symlinked `.codex/config.toml` that points back into the writable root.
     let top_level_codex_config = writable_root.join(".codex/config.toml");
     if path_exists_or_is_symlink(top_level_codex_config.as_path()) {
         subpaths.push(top_level_codex_config);
