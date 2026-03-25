@@ -1591,6 +1591,7 @@ dependencies = [
  "anyhow",
  "codex-apply-patch",
  "codex-linux-sandbox",
+ "codex-sandboxing",
  "codex-shell-escalation",
  "codex-utils-home-dir",
  "dotenvy",
@@ -2219,6 +2220,7 @@ dependencies = [
  "clap",
  "codex-core",
  "codex-protocol",
+ "codex-sandboxing",
  "codex-utils-absolute-path",
  "landlock",
  "libc",
@@ -2418,8 +2420,6 @@ version = "0.0.0"
 dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-plugins",
- "serde",
- "serde_json",
  "thiserror 2.0.18",
 ]
 

@@ -2,6 +2,7 @@ use super::*;
 use codex_protocol::protocol::GranularApprovalConfig;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+#[cfg(not(target_os = "windows"))]
 use std::path::Path;
 
 #[test]

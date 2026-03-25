@@ -2,10 +2,10 @@ use crate::protocol::SandboxPolicy;
 use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
-use codex_apply_patch::CODEX_LINUX_SANDBOX_ARG0;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_sandboxing::landlock::allow_network_for_proxy;
 use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_policies;
 use std::collections::HashMap;
@@ -57,6 +57,8 @@ where
         .and_then(|name| name.to_str())
         == Some(CODEX_LINUX_SANDBOX_ARG0)
     {
+        // Old bubblewrap builds without `--argv0` need a real helper path whose
+        // basename still dispatches to the Linux sandbox entrypoint.
         codex_linux_sandbox_exe.to_string_lossy().into_owned()
     } else {
         CODEX_LINUX_SANDBOX_ARG0.to_string()
