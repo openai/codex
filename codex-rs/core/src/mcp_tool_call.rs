@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -14,6 +15,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
+use crate::config::load_global_mcp_servers;
 use crate::config::types::AppToolApproval;
 use crate::connectors;
 use crate::guardian::GuardianApprovalRequest;
@@ -46,6 +48,7 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use rmcp::model::ToolAnnotations;
+use serde::Deserialize;
 use serde::Serialize;
 use std::path::Path;
 use std::sync::Arc;
@@ -100,6 +103,11 @@ pub(crate) async fn handle_mcp_tool_call(
     } else {
         connectors::AppToolPolicy::default()
     };
+    let approval_mode = if server == CODEX_APPS_MCP_SERVER_NAME {
+        app_tool_policy.approval
+    } else {
+        custom_mcp_tool_approval_mode(turn_context.as_ref(), &server, &tool_name)
+    };
 
     if server == CODEX_APPS_MCP_SERVER_NAME && !app_tool_policy.enabled {
         let result = notify_mcp_tool_call_skip(
@@ -134,7 +142,7 @@ pub(crate) async fn handle_mcp_tool_call(
         &call_id,
         &invocation,
         metadata.as_ref(),
-        app_tool_policy.approval,
+        approval_mode,
     )
     .await
     {
@@ -390,6 +398,27 @@ pub(crate) struct McpToolApprovalMetadata {
 
 const MCP_TOOL_CODEX_APPS_META_KEY: &str = "_codex_apps";
 
+fn custom_mcp_tool_approval_mode(
+    turn_context: &TurnContext,
+    server: &str,
+    tool_name: &str,
+) -> AppToolApproval {
+    turn_context
+        .config
+        .config_layer_stack
+        .effective_config()
+        .as_table()
+        .and_then(|table| table.get("mcp_servers"))
+        .cloned()
+        .and_then(|value| {
+            HashMap::<String, crate::config::types::McpServerConfig>::deserialize(value).ok()
+        })
+        .and_then(|servers| servers.get(server).cloned())
+        .and_then(|server| server.tools.get(tool_name).cloned())
+        .and_then(|tool| tool.approval_mode)
+        .unwrap_or_default()
+}
+
 fn build_mcp_tool_call_request_meta(
     turn_context: &TurnContext,
     server: &str,
@@ -459,7 +488,6 @@ const MCP_TOOL_APPROVAL_TOOL_PARAMS_KEY: &str = "tool_params";
 const MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY: &str = "tool_params_display";
 const MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_DEFAULT: &str = "mcp_tool_call__default";
 const MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_ALWAYS_ALLOW: &str = "mcp_tool_call__always_allow";
-const MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_FULL_ACCESS: &str = "mcp_tool_call__full_access";
 
 pub(crate) fn is_mcp_tool_approval_question_id(question_id: &str) -> bool {
     question_id
@@ -494,11 +522,14 @@ async fn maybe_request_mcp_tool_approval(
     metadata: Option<&McpToolApprovalMetadata>,
     approval_mode: AppToolApproval,
 ) -> Option<McpToolApprovalDecision> {
+    if is_full_access_mode(turn_context) {
+        return None;
+    }
+
     let annotations = metadata.and_then(|metadata| metadata.annotations.as_ref());
     let approval_required = requires_mcp_tool_approval(annotations);
     let mut monitor_reason = None;
-    let auto_approved_by_policy = approval_mode == AppToolApproval::Approve
-        || (approval_mode == AppToolApproval::Auto && is_full_access_mode(turn_context));
+    let auto_approved_by_policy = approval_mode == AppToolApproval::Approve;
 
     if auto_approved_by_policy {
         if !approval_required {
@@ -711,12 +742,7 @@ fn persistent_mcp_tool_approval_key(
     metadata: Option<&McpToolApprovalMetadata>,
     approval_mode: AppToolApproval,
 ) -> Option<McpToolApprovalKey> {
-    if invocation.server != CODEX_APPS_MCP_SERVER_NAME {
-        return None;
-    }
-
     session_mcp_tool_approval_key(invocation, metadata, approval_mode)
-        .filter(|key| key.connector_id.is_some())
 }
 
 pub(crate) fn build_guardian_mcp_tool_review_request(
@@ -764,16 +790,12 @@ fn is_full_access_mode(turn_context: &TurnContext) -> bool {
 
 fn mcp_tool_approval_callsite_mode(
     approval_mode: AppToolApproval,
-    turn_context: &TurnContext,
+    _turn_context: &TurnContext,
 ) -> &'static str {
     match approval_mode {
         AppToolApproval::Approve => MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_ALWAYS_ALLOW,
         AppToolApproval::Auto | AppToolApproval::Prompt => {
-            if approval_mode == AppToolApproval::Auto && is_full_access_mode(turn_context) {
-                MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_FULL_ACCESS
-            } else {
-                MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_DEFAULT
-            }
+            MCP_TOOL_CALL_ARC_MONITOR_CALLSITE_DEFAULT
         }
     }
 }
@@ -1255,21 +1277,26 @@ async fn maybe_persist_mcp_tool_approval(
     turn_context: &TurnContext,
     key: McpToolApprovalKey,
 ) {
-    let Some(connector_id) = key.connector_id.clone() else {
-        remember_mcp_tool_approval(sess, key).await;
-        return;
-    };
     let tool_name = key.tool_name.clone();
 
-    if let Err(err) =
+    let persist_result = if key.server == CODEX_APPS_MCP_SERVER_NAME {
+        let Some(connector_id) = key.connector_id.clone() else {
+            remember_mcp_tool_approval(sess, key).await;
+            return;
+        };
         persist_codex_app_tool_approval(&turn_context.config.codex_home, &connector_id, &tool_name)
             .await
-    {
+    } else {
+        persist_custom_mcp_tool_approval(&turn_context.config.codex_home, &key.server, &tool_name)
+            .await
+    };
+
+    if let Err(err) = persist_result {
         error!(
             error = %err,
-            connector_id,
+            server = key.server,
             tool_name,
-            "failed to persist codex app tool approval"
+            "failed to persist MCP tool approval"
         );
         remember_mcp_tool_approval(sess, key).await;
         return;
@@ -1290,6 +1317,30 @@ async fn persist_codex_app_tool_approval(
                 "apps".to_string(),
                 connector_id.to_string(),
                 "tools".to_string(),
+                tool_name.to_string(),
+                "approval_mode".to_string(),
+            ],
+            value: value("approve"),
+        }])
+        .apply()
+        .await
+}
+
+async fn persist_custom_mcp_tool_approval(
+    codex_home: &Path,
+    server: &str,
+    tool_name: &str,
+) -> anyhow::Result<()> {
+    let servers = load_global_mcp_servers(codex_home).await?;
+    if !servers.contains_key(server) {
+        anyhow::bail!("MCP server `{server}` is not configured in config.toml");
+    }
+
+    ConfigEditsBuilder::new(codex_home)
+        .with_edits([ConfigEdit::SetPath {
+            segments: vec![
+                "mcp_servers".to_string(),
+                server.to_string(),
                 tool_name.to_string(),
                 "approval_mode".to_string(),
             ],

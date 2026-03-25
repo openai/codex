@@ -108,6 +108,10 @@ pub struct McpServerConfig {
     /// Optional OAuth resource parameter to include during MCP login (RFC 8707).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth_resource: Option<String>,
+
+    /// Per-tool approval settings keyed by tool name.
+    #[serde(default, flatten, skip_serializing_if = "HashMap::is_empty")]
+    pub tools: HashMap<String, McpServerToolConfig>,
 }
 
 // Raw MCP config shape used for deserialization and JSON Schema generation.
@@ -154,6 +158,9 @@ pub(crate) struct RawMcpServerConfig {
     pub scopes: Option<Vec<String>>,
     #[serde(default)]
     pub oauth_resource: Option<String>,
+    #[serde(default)]
+    #[serde(flatten)]
+    pub tools: HashMap<String, McpServerToolConfig>,
 }
 
 impl<'de> Deserialize<'de> for McpServerConfig {
@@ -178,6 +185,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
         let disabled_tools = raw.disabled_tools.clone();
         let scopes = raw.scopes.clone();
         let oauth_resource = raw.oauth_resource.clone();
+        let tools = raw.tools.clone();
 
         fn throw_if_set<E, T>(transport: &str, field: &str, value: Option<&T>) -> Result<(), E>
         where
@@ -236,6 +244,7 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             disabled_tools,
             scopes,
             oauth_resource,
+            tools,
         })
     }
 }
@@ -494,6 +503,15 @@ pub enum AppToolApproval {
     Auto,
     Prompt,
     Approve,
+}
+
+/// Per-tool approval settings for a single MCP server tool.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct McpServerToolConfig {
+    /// Approval mode for this tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_mode: Option<AppToolApproval>,
 }
 
 /// Default settings that apply to all apps.
