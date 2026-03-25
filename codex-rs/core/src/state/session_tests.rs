@@ -38,7 +38,7 @@ async fn set_agent_task_persists_plaintext_task_for_session_reuse() {
     let session_configuration = make_session_configuration_for_tests().await;
     let mut state = SessionState::new(session_configuration);
     let agent_task = RegisteredAgentTask {
-        agent_runtime_id: "agent_123".to_string(),
+        agent_runtime_id: "agent-123".to_string(),
         task_id: "task_123".to_string(),
         registered_at: "2026-03-23T12:00:00Z".to_string(),
     };

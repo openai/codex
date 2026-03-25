@@ -169,30 +169,29 @@ pub(crate) fn auth_provider_from_auth(
     provider: &ModelProviderInfo,
 ) -> crate::error::Result<CoreAuthProvider> {
     if let Some(api_key) = provider.api_key()? {
-        return Ok(CoreAuthProvider {
-            token: Some(api_key),
-            account_id: None,
-        });
+        return Ok(CoreAuthProvider::from_bearer_token(
+            Some(api_key),
+            /*account_id*/ None,
+        ));
     }
 
     if let Some(token) = provider.experimental_bearer_token.clone() {
-        return Ok(CoreAuthProvider {
-            token: Some(token),
-            account_id: None,
-        });
+        return Ok(CoreAuthProvider::from_bearer_token(
+            Some(token),
+            /*account_id*/ None,
+        ));
     }
 
     if let Some(auth) = auth {
         let token = auth.get_token()?;
-        Ok(CoreAuthProvider {
-            token: Some(token),
-            account_id: auth.get_account_id(),
-        })
+        Ok(CoreAuthProvider::from_bearer_token(
+            Some(token),
+            auth.get_account_id(),
+        ))
     } else {
-        Ok(CoreAuthProvider {
-            token: None,
-            account_id: None,
-        })
+        Ok(CoreAuthProvider::from_bearer_token(
+            /*token*/ None, /*account_id*/ None,
+        ))
     }
 }
 
@@ -211,15 +210,32 @@ struct UsageErrorBody {
 
 #[derive(Clone, Default)]
 pub(crate) struct CoreAuthProvider {
-    token: Option<String>,
+    authorization_header_value: Option<String>,
     account_id: Option<String>,
 }
 
 impl CoreAuthProvider {
+    pub(crate) fn from_bearer_token(token: Option<String>, account_id: Option<String>) -> Self {
+        Self {
+            authorization_header_value: token.map(|token| format!("Bearer {token}")),
+            account_id,
+        }
+    }
+
+    pub(crate) fn from_authorization_header_value(
+        authorization_header_value: Option<String>,
+        account_id: Option<String>,
+    ) -> Self {
+        Self {
+            authorization_header_value,
+            account_id,
+        }
+    }
+
     pub(crate) fn auth_header_attached(&self) -> bool {
-        self.token
+        self.authorization_header_value
             .as_ref()
-            .is_some_and(|token| http::HeaderValue::from_str(&format!("Bearer {token}")).is_ok())
+            .is_some_and(|value| http::HeaderValue::from_str(value).is_ok())
     }
 
     pub(crate) fn auth_header_name(&self) -> Option<&'static str> {
@@ -228,16 +244,31 @@ impl CoreAuthProvider {
 
     #[cfg(test)]
     pub(crate) fn for_test(token: Option<&str>, account_id: Option<&str>) -> Self {
-        Self {
-            token: token.map(str::to_string),
-            account_id: account_id.map(str::to_string),
-        }
+        Self::from_bearer_token(token.map(str::to_string), account_id.map(str::to_string))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test_authorization_header(
+        authorization_header_value: Option<&str>,
+        account_id: Option<&str>,
+    ) -> Self {
+        Self::from_authorization_header_value(
+            authorization_header_value.map(str::to_string),
+            account_id.map(str::to_string),
+        )
     }
 }
 
 impl ApiAuthProvider for CoreAuthProvider {
     fn bearer_token(&self) -> Option<String> {
-        self.token.clone()
+        self.authorization_header_value
+            .as_deref()
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .map(str::to_string)
+    }
+
+    fn authorization_header_value(&self) -> Option<String> {
+        self.authorization_header_value.clone()
     }
 
     fn account_id(&self) -> Option<String> {

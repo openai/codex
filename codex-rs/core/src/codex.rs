@@ -1371,7 +1371,6 @@ impl Session {
         .await;
         handlers::shutdown(self, self.next_internal_sub_id()).await;
     }
-
     async fn ensure_agent_task_registered(&self) -> anyhow::Result<Option<RegisteredAgentTask>> {
         {
             let state = self.state.lock().await;
@@ -1908,6 +1907,11 @@ impl Session {
             });
         }
 
+        let agent_identity_manager = Arc::new(AgentIdentityManager::new(
+            config.as_ref(),
+            Arc::clone(&auth_manager),
+            session_configuration.session_source.clone(),
+        ));
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized
             // instance. It will be replaced with one created via
@@ -1932,11 +1936,7 @@ impl Session {
             hooks,
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
-            agent_identity_manager: Arc::new(AgentIdentityManager::new(
-                config.as_ref(),
-                Arc::clone(&auth_manager),
-                session_configuration.session_source.clone(),
-            )),
+            agent_identity_manager: Arc::clone(&agent_identity_manager),
             shell_snapshot_tx,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
@@ -1953,8 +1953,9 @@ impl Session {
             network_proxy,
             network_approval: Arc::clone(&network_approval),
             state_db: state_db_ctx.clone(),
-            model_client: ModelClient::new(
+            model_client: ModelClient::new_with_agent_identity_manager(
                 Some(Arc::clone(&auth_manager)),
+                Some(agent_identity_manager),
                 conversation_id,
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
@@ -5771,9 +5772,13 @@ pub(crate) async fn run_turn(
         }))
         .await;
     }
-    if let Err(error) = sess.ensure_agent_task_registered().await {
-        warn!(error = %error, "agent task registration failed");
-    }
+    let agent_task = match sess.ensure_agent_task_registered().await {
+        Ok(agent_task) => agent_task,
+        Err(error) => {
+            warn!(error = %error, "agent task registration failed");
+            None
+        }
+    };
 
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
@@ -5796,8 +5801,21 @@ pub(crate) async fn run_turn(
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
-    let mut client_session =
-        prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    let mut prewarmed_client_session = prewarmed_client_session;
+    if agent_task.is_some()
+        && let Some(prewarmed_client_session) = prewarmed_client_session.as_mut()
+    {
+        prewarmed_client_session.disable_cached_websocket_session_on_drop();
+    }
+    let mut client_session = if let Some(agent_task) = agent_task {
+        sess.services
+            .model_client
+            .new_session_with_agent_task(Some(agent_task))
+    } else if let Some(prewarmed_client_session) = prewarmed_client_session.take() {
+        prewarmed_client_session
+    } else {
+        sess.services.model_client.new_session()
+    };
 
     loop {
         if run_pending_session_start_hooks(&sess, &turn_context).await {

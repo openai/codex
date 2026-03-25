@@ -31,8 +31,11 @@ use tracing::warn;
 use crate::config::Config;
 use crate::default_client::create_client;
 
+mod assertion;
 mod task_registration;
 
+#[cfg(test)]
+pub(crate) use assertion::AgentAssertionEnvelope;
 pub(crate) use task_registration::RegisteredAgentTask;
 
 const AGENT_IDENTITY_SECRET_NAME: &str = "AGENT_IDENTITY";
@@ -46,6 +49,16 @@ pub(crate) struct AgentIdentityManager {
     feature_enabled: bool,
     abom: AgentBillOfMaterials,
     ensure_lock: Arc<Mutex<()>>,
+}
+
+impl std::fmt::Debug for AgentIdentityManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentIdentityManager")
+            .field("chatgpt_base_url", &self.chatgpt_base_url)
+            .field("feature_enabled", &self.feature_enabled)
+            .field("abom", &self.abom)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -271,7 +284,7 @@ impl AgentIdentityManager {
     }
 
     #[cfg(test)]
-    fn new_for_tests(
+    pub(crate) fn new_for_tests(
         auth_manager: Arc<AuthManager>,
         feature_enabled: bool,
         chatgpt_base_url: String,
@@ -286,6 +299,30 @@ impl AgentIdentityManager {
             abom: build_abom(session_source),
             ensure_lock: Arc::new(Mutex::new(())),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn seed_generated_identity_for_tests(
+        &self,
+        agent_runtime_id: &str,
+    ) -> Result<StoredAgentIdentity> {
+        let binding = self
+            .current_binding()
+            .await
+            .context("test agent identity requires ChatGPT auth")?;
+        let key_material = generate_agent_key_material()?;
+        let stored_identity = StoredAgentIdentity {
+            binding_id: binding.binding_id.clone(),
+            chatgpt_account_id: binding.chatgpt_account_id.clone(),
+            chatgpt_user_id: binding.chatgpt_user_id.clone(),
+            agent_runtime_id: agent_runtime_id.to_string(),
+            private_key_pkcs8_base64: key_material.private_key_pkcs8_base64,
+            public_key_ssh: key_material.public_key_ssh,
+            registered_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+            abom: self.abom.clone(),
+        };
+        self.store_identity(&binding, &stored_identity)?;
+        Ok(stored_identity)
     }
 }
 
@@ -478,7 +515,7 @@ mod tests {
             .and(header("authorization", "Bearer access-token-account-123"))
             .and(header("chatgpt-account-id", "account-123"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "agent_runtime_id": "agent_123",
+                "agent_runtime_id": "agent-123",
             })))
             .expect(1)
             .mount(&server)
@@ -512,7 +549,7 @@ mod tests {
             .unwrap()
             .expect("identity should be reused");
 
-        assert_eq!(first.agent_runtime_id, "agent_123");
+        assert_eq!(first.agent_runtime_id, "agent-123");
         assert_eq!(first, second);
         assert_eq!(first.abom.agent_harness_id, "codex-cli");
         assert_eq!(first.chatgpt_account_id, "account-123");
@@ -525,7 +562,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/v1/agent/register"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "agent_runtime_id": "agent_456",
+                "agent_runtime_id": "agent-456",
             })))
             .expect(1)
             .mount(&server)
@@ -565,13 +602,13 @@ mod tests {
             .unwrap()
             .expect("identity should be registered");
 
-        assert_eq!(stored.agent_runtime_id, "agent_456");
+        assert_eq!(stored.agent_runtime_id, "agent-456");
         let persisted = secrets_manager
             .get(&scope, &name)
             .expect("read secret")
             .expect("secret");
         let parsed: StoredAgentIdentity = serde_json::from_str(&persisted).expect("json");
-        assert_eq!(parsed.agent_runtime_id, "agent_456");
+        assert_eq!(parsed.agent_runtime_id, "agent-456");
     }
 
     #[tokio::test]

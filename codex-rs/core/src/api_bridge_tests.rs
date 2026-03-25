@@ -134,10 +134,24 @@ fn map_api_error_extracts_identity_auth_details_from_headers() {
 #[test]
 fn core_auth_provider_reports_when_auth_header_will_attach() {
     let auth = CoreAuthProvider {
-        token: Some("access-token".to_string()),
+        authorization_header_value: Some("Bearer access-token".to_string()),
         account_id: None,
     };
 
     assert!(auth.auth_header_attached());
     assert_eq!(auth.auth_header_name(), Some("authorization"));
+}
+
+#[test]
+fn core_auth_provider_supports_non_bearer_authorization_headers() {
+    let auth =
+        CoreAuthProvider::for_test_authorization_header(Some("AgentAssertion opaque-token"), None);
+
+    assert!(auth.auth_header_attached());
+    assert_eq!(auth.auth_header_name(), Some("authorization"));
+    assert_eq!(auth.bearer_token(), None);
+    assert_eq!(
+        auth.authorization_header_value(),
+        Some("AgentAssertion opaque-token".to_string())
+    );
 }

@@ -30,6 +30,8 @@ use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+use crate::agent_identity::AgentIdentityManager;
+use crate::agent_identity::RegisteredAgentTask;
 use crate::api_bridge::CoreAuthProvider;
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
@@ -86,6 +88,7 @@ use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio_tungstenite::tungstenite::Error;
 use tokio_tungstenite::tungstenite::Message;
+use tracing::debug;
 use tracing::instrument;
 use tracing::trace;
 use tracing::warn;
@@ -132,6 +135,7 @@ pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
 #[derive(Debug)]
 struct ModelClientState {
     auth_manager: Option<Arc<AuthManager>>,
+    agent_identity_manager: Option<Arc<AgentIdentityManager>>,
     conversation_id: ThreadId,
     provider: ModelProviderInfo,
     auth_env_telemetry: AuthEnvTelemetry,
@@ -197,6 +201,8 @@ pub struct ModelClient {
 pub struct ModelClientSession {
     client: ModelClient,
     websocket_session: WebsocketSession,
+    agent_task: Option<RegisteredAgentTask>,
+    cache_websocket_session_on_drop: bool,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -261,6 +267,31 @@ impl ModelClient {
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
     ) -> Self {
+        Self::new_with_agent_identity_manager(
+            auth_manager,
+            /*agent_identity_manager*/ None,
+            conversation_id,
+            provider,
+            session_source,
+            model_verbosity,
+            enable_request_compression,
+            include_timing_metrics,
+            beta_features_header,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_agent_identity_manager(
+        auth_manager: Option<Arc<AuthManager>>,
+        agent_identity_manager: Option<Arc<AgentIdentityManager>>,
+        conversation_id: ThreadId,
+        provider: ModelProviderInfo,
+        session_source: SessionSource,
+        model_verbosity: Option<VerbosityConfig>,
+        enable_request_compression: bool,
+        include_timing_metrics: bool,
+        beta_features_header: Option<String>,
+    ) -> Self {
         let codex_api_key_env_enabled = auth_manager
             .as_ref()
             .is_some_and(|manager| manager.codex_api_key_env_enabled());
@@ -268,6 +299,7 @@ impl ModelClient {
         Self {
             state: Arc::new(ModelClientState {
                 auth_manager,
+                agent_identity_manager,
                 conversation_id,
                 provider,
                 auth_env_telemetry,
@@ -287,9 +319,25 @@ impl ModelClient {
     /// This constructor does not perform network I/O itself; the session opens a websocket lazily
     /// when the first stream request is issued.
     pub fn new_session(&self) -> ModelClientSession {
+        self.new_session_with_agent_task(/*agent_task*/ None)
+    }
+
+    pub(crate) fn new_session_with_agent_task(
+        &self,
+        agent_task: Option<RegisteredAgentTask>,
+    ) -> ModelClientSession {
+        let cache_websocket_session_on_drop = agent_task.is_none();
+        let websocket_session = if agent_task.is_some() {
+            drop(self.take_cached_websocket_session());
+            WebsocketSession::default()
+        } else {
+            self.take_cached_websocket_session()
+        };
         ModelClientSession {
             client: self.clone(),
-            websocket_session: self.take_cached_websocket_session(),
+            websocket_session,
+            agent_task,
+            cache_websocket_session_on_drop,
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -350,7 +398,7 @@ impl ModelClient {
         if prompt.input.is_empty() {
             return Ok(Vec::new());
         }
-        let client_setup = self.current_client_setup().await?;
+        let client_setup = self.current_client_setup(/*agent_task*/ None).await?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry = Self::build_request_telemetry(
             session_telemetry,
@@ -419,7 +467,7 @@ impl ModelClient {
             return Ok(Vec::new());
         }
 
-        let client_setup = self.current_client_setup().await?;
+        let client_setup = self.current_client_setup(/*agent_task*/ None).await?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry = Self::build_request_telemetry(
             session_telemetry,
@@ -523,7 +571,10 @@ impl ModelClient {
     ///
     /// This centralizes setup used by both prewarm and normal request paths so they stay in
     /// lockstep when auth/provider resolution changes.
-    async fn current_client_setup(&self) -> Result<CurrentClientSetup> {
+    async fn current_client_setup(
+        &self,
+        agent_task: Option<&RegisteredAgentTask>,
+    ) -> Result<CurrentClientSetup> {
         let auth = match self.state.auth_manager.as_ref() {
             Some(manager) => manager.auth().await,
             None => None,
@@ -532,7 +583,33 @@ impl ModelClient {
             .state
             .provider
             .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
-        let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
+        let api_auth = match (agent_task, self.state.agent_identity_manager.as_ref()) {
+            (Some(agent_task), Some(agent_identity_manager)) => {
+                if let Some(authorization_header_value) = agent_identity_manager
+                    .authorization_header_for_task(agent_task)
+                    .await
+                    .map_err(|err| {
+                        CodexErr::Stream(
+                            format!("failed to build agent assertion authorization: {err}"),
+                            None,
+                        )
+                    })?
+                {
+                    debug!(
+                        agent_runtime_id = %agent_task.agent_runtime_id,
+                        task_id = %agent_task.task_id,
+                        "using agent assertion authorization for downstream request"
+                    );
+                    CoreAuthProvider::from_authorization_header_value(
+                        Some(authorization_header_value),
+                        /*account_id*/ None,
+                    )
+                } else {
+                    auth_provider_from_auth(auth.clone(), &self.state.provider)?
+                }
+            }
+            _ => auth_provider_from_auth(auth.clone(), &self.state.provider)?,
+        };
         Ok(CurrentClientSetup {
             auth,
             api_provider,
@@ -665,12 +742,18 @@ impl ModelClient {
 impl Drop for ModelClientSession {
     fn drop(&mut self) {
         let websocket_session = std::mem::take(&mut self.websocket_session);
-        self.client
-            .store_cached_websocket_session(websocket_session);
+        if self.cache_websocket_session_on_drop {
+            self.client
+                .store_cached_websocket_session(websocket_session);
+        }
     }
 }
 
 impl ModelClientSession {
+    pub(crate) fn disable_cached_websocket_session_on_drop(&mut self) {
+        self.cache_websocket_session_on_drop = false;
+    }
+
     fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
         self.websocket_session.last_request = None;
@@ -864,11 +947,15 @@ impl ModelClientSession {
             return Ok(());
         }
 
-        let client_setup = self.client.current_client_setup().await.map_err(|err| {
-            ApiError::Stream(format!(
-                "failed to build websocket prewarm client setup: {err}"
-            ))
-        })?;
+        let client_setup = self
+            .client
+            .current_client_setup(self.agent_task.as_ref())
+            .await
+            .map_err(|err| {
+                ApiError::Stream(format!(
+                    "failed to build websocket prewarm client setup: {err}"
+                ))
+            })?;
         let auth_context = AuthRequestTelemetryContext::new(
             client_setup.auth.as_ref().map(CodexAuth::auth_mode),
             &client_setup.api_auth,
@@ -1022,7 +1109,10 @@ impl ModelClientSession {
             .map(super::auth::AuthManager::unauthorized_recovery);
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
-            let client_setup = self.client.current_client_setup().await?;
+            let client_setup = self
+                .client
+                .current_client_setup(self.agent_task.as_ref())
+                .await?;
             let transport = ReqwestTransport::new(build_reqwest_client());
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
@@ -1111,7 +1201,10 @@ impl ModelClientSession {
             .map(super::auth::AuthManager::unauthorized_recovery);
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
-            let client_setup = self.client.current_client_setup().await?;
+            let client_setup = self
+                .client
+                .current_client_setup(self.agent_task.as_ref())
+                .await?;
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                 &client_setup.api_auth,
