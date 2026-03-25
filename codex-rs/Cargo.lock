@@ -1905,6 +1905,7 @@ dependencies = [
  "codex-utils-image",
  "codex-utils-output-truncation",
  "codex-utils-path",
+ "codex-utils-plugins",
  "codex-utils-pty",
  "codex-utils-readiness",
  "codex-utils-stream-parser",
@@ -2944,6 +2945,15 @@ dependencies = [
  "codex-utils-absolute-path",
  "dunce",
  "pretty_assertions",
+ "tempfile",
+]
+
+[[package]]
+name = "codex-utils-plugins"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

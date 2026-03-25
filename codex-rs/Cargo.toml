@@ -69,6 +69,7 @@ members = [
     "utils/oss",
     "utils/output-truncation",
     "utils/path-utils",
+    "utils/plugins",
     "utils/fuzzy-match",
     "utils/stream-parser",
     "codex-client",
@@ -162,6 +163,7 @@ codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-oss = { path = "utils/oss" }
 codex-utils-output-truncation = { path = "utils/output-truncation" }
 codex-utils-path = { path = "utils/path-utils" }
+codex-utils-plugins = { path = "utils/plugins" }
 codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }

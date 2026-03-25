@@ -1,11 +1,10 @@
 use codex_utils_absolute_path::AbsolutePathBuf;
+pub(crate) use codex_utils_plugins::PLUGIN_MANIFEST_PATH;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::fs;
 use std::path::Component;
 use std::path::Path;
-
-pub(crate) const PLUGIN_MANIFEST_PATH: &str = ".codex-plugin/plugin.json";
 const MAX_DEFAULT_PROMPT_COUNT: usize = 3;
 const MAX_DEFAULT_PROMPT_LEN: usize = 128;
 
