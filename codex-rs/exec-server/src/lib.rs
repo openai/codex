@@ -58,6 +58,7 @@ pub use protocol::TerminateParams;
 pub use protocol::TerminateResponse;
 pub use protocol::WriteParams;
 pub use protocol::WriteResponse;
+pub use protocol::WriteStatus;
 pub use server::DEFAULT_LISTEN_URL;
 pub use server::ExecServerListenUrlParseError;
 pub use server::run_main;

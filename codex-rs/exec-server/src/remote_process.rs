@@ -9,6 +9,7 @@ use crate::ExecServerError;
 use crate::ProcessId;
 use crate::StartedExecProcess;
 use crate::protocol::ExecParams;
+use crate::protocol::WriteResponse;
 
 #[derive(Clone)]
 pub(crate) struct RemoteProcess {
@@ -25,15 +26,12 @@ impl RemoteProcess {
         Self { client }
     }
 
-    async fn write(&self, process_id: &str, chunk: Vec<u8>) -> Result<(), ExecServerError> {
-        let response = self.client.write(process_id, chunk).await?;
-        if response.accepted {
-            Ok(())
-        } else {
-            Err(ExecServerError::Protocol(format!(
-                "exec-server did not accept stdin for process {process_id}"
-            )))
-        }
+    async fn write(
+        &self,
+        process_id: &str,
+        chunk: Vec<u8>,
+    ) -> Result<WriteResponse, ExecServerError> {
+        self.client.write(process_id, chunk).await
     }
 
     async fn terminate_process(&self, process_id: &str) -> Result<(), ExecServerError> {
@@ -68,7 +66,7 @@ impl ExecProcess for RemoteExecProcess {
         &self.process_id
     }
 
-    async fn write(&self, chunk: Vec<u8>) -> Result<(), ExecServerError> {
+    async fn write(&self, chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError> {
         self.backend.write(&self.process_id, chunk).await
     }
 

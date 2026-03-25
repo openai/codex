@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 use crate::ExecServerError;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::ExecParams;
+use crate::protocol::WriteResponse;
 
 pub(crate) const SESSION_EVENT_CHANNEL_CAPACITY: usize = 2048;
 
@@ -78,7 +79,7 @@ impl From<String> for ProcessId {
 pub trait ExecProcess: Send + Sync {
     fn process_id(&self) -> &ProcessId;
 
-    async fn write(&self, chunk: Vec<u8>) -> Result<(), ExecServerError>;
+    async fn write(&self, chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError>;
 
     async fn terminate(&self) -> Result<(), ExecServerError>;
 }

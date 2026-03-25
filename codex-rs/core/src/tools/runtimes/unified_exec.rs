@@ -45,9 +45,12 @@ use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+/// Request payload used by the unified-exec runtime after approvals and
+/// sandbox preferences have been resolved for the current turn.
 #[derive(Clone, Debug)]
 pub struct UnifiedExecRequest {
     pub command: Vec<String>,
+    pub process_id: i32,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
     pub explicit_env_overrides: HashMap<String, String>,
@@ -61,6 +64,8 @@ pub struct UnifiedExecRequest {
     pub exec_approval_requirement: ExecApprovalRequirement,
 }
 
+/// Cache key for approval decisions that can be reused across equivalent
+/// unified-exec launches.
 #[derive(serde::Serialize, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct UnifiedExecApprovalKey {
     pub command: Vec<String>,
@@ -70,12 +75,15 @@ pub struct UnifiedExecApprovalKey {
     pub additional_permissions: Option<PermissionProfile>,
 }
 
+/// Runtime adapter that keeps policy and sandbox orchestration on the
+/// unified-exec side while delegating process startup to the manager.
 pub struct UnifiedExecRuntime<'a> {
     manager: &'a UnifiedExecProcessManager,
     shell_mode: UnifiedExecShellMode,
 }
 
 impl<'a> UnifiedExecRuntime<'a> {
+    /// Creates a runtime bound to the shared unified-exec process manager.
     pub fn new(manager: &'a UnifiedExecProcessManager, shell_mode: UnifiedExecShellMode) -> Self {
         Self {
             manager,
@@ -234,12 +242,24 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .await?
             {
                 Some(prepared) => {
+                    if ctx
+                        .turn
+                        .environment
+                        .experimental_exec_server_url()
+                        .is_some()
+                    {
+                        return Err(ToolError::Rejected(
+                            "unified_exec zsh-fork is not supported when experimental_exec_server_url is configured".to_string(),
+                        ));
+                    }
                     return self
                         .manager
                         .open_session_with_exec_env(
+                            req.process_id,
                             &prepared.exec_request,
                             req.tty,
                             prepared.spawn_lifecycle,
+                            ctx.turn.environment.as_ref(),
                         )
                         .await
                         .map_err(|err| match err {
@@ -272,7 +292,13 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .env_for(command, options, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
         self.manager
-            .open_session_with_exec_env(&exec_env, req.tty, Box::new(NoopSpawnLifecycle))
+            .open_session_with_exec_env(
+                req.process_id,
+                &exec_env,
+                req.tty,
+                Box::new(NoopSpawnLifecycle),
+                ctx.turn.environment.as_ref(),
+            )
             .await
             .map_err(|err| match err {
                 UnifiedExecError::SandboxDenied { output, .. } => {

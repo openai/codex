@@ -100,10 +100,19 @@ pub struct WriteParams {
     pub chunk: ByteChunk,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WriteStatus {
+    Accepted,
+    UnknownProcess,
+    StdinClosed,
+    Starting,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WriteResponse {
-    pub accepted: bool,
+    pub status: WriteStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

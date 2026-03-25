@@ -35,6 +35,7 @@ use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
+use crate::protocol::WriteStatus;
 use crate::rpc::RpcNotificationSender;
 use crate::rpc::RpcServerOutboundMessage;
 use crate::rpc::internal_error;
@@ -356,20 +357,20 @@ impl LocalProcess {
         let _input_bytes = params.chunk.0.len();
         let writer_tx = {
             let process_map = self.inner.processes.lock().await;
-            let process = process_map.get(&params.process_id).ok_or_else(|| {
-                invalid_request(format!("unknown process id {}", params.process_id))
-            })?;
+            let Some(process) = process_map.get(&params.process_id) else {
+                return Ok(WriteResponse {
+                    status: WriteStatus::UnknownProcess,
+                });
+            };
             let ProcessEntry::Running(process) = process else {
-                return Err(invalid_request(format!(
-                    "process id {} is starting",
-                    params.process_id
-                )));
+                return Ok(WriteResponse {
+                    status: WriteStatus::Starting,
+                });
             };
             if !process.tty {
-                return Err(invalid_request(format!(
-                    "stdin is closed for process {}",
-                    params.process_id
-                )));
+                return Ok(WriteResponse {
+                    status: WriteStatus::StdinClosed,
+                });
             }
             process.session.writer_sender()
         };
@@ -379,7 +380,9 @@ impl LocalProcess {
             .await
             .map_err(|_| internal_error("failed to write to process stdin".to_string()))?;
 
-        Ok(WriteResponse { accepted: true })
+        Ok(WriteResponse {
+            status: WriteStatus::Accepted,
+        })
     }
 
     pub(crate) async fn terminate_process(
@@ -429,7 +432,7 @@ impl ExecProcess for LocalExecProcess {
         &self.process_id
     }
 
-    async fn write(&self, chunk: Vec<u8>) -> Result<(), ExecServerError> {
+    async fn write(&self, chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError> {
         self.backend.write(&self.process_id, chunk).await
     }
 
@@ -439,21 +442,17 @@ impl ExecProcess for LocalExecProcess {
 }
 
 impl LocalProcess {
-    async fn write(&self, process_id: &str, chunk: Vec<u8>) -> Result<(), ExecServerError> {
-        let response = self
-            .exec_write(WriteParams {
-                process_id: process_id.to_string(),
-                chunk: chunk.into(),
-            })
-            .await
-            .map_err(map_handler_error)?;
-        if response.accepted {
-            Ok(())
-        } else {
-            Err(ExecServerError::Protocol(format!(
-                "exec-server did not accept stdin for process {process_id}"
-            )))
-        }
+    async fn write(
+        &self,
+        process_id: &str,
+        chunk: Vec<u8>,
+    ) -> Result<WriteResponse, ExecServerError> {
+        self.exec_write(WriteParams {
+            process_id: process_id.to_string(),
+            chunk: chunk.into(),
+        })
+        .await
+        .map_err(map_handler_error)
     }
 
     async fn terminate(&self, process_id: &str) -> Result<(), ExecServerError> {
