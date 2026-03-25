@@ -44,6 +44,12 @@ async fn list_tool_suggest_discoverable_plugins_returns_empty_when_plugins_featu
     let codex_home = tempdir().expect("tempdir should succeed");
     let curated_root = crate::plugins::curated_plugins_repo_path(codex_home.path());
     write_openai_curated_marketplace(&curated_root, &["slack"]);
+    write_file(
+        &codex_home.path().join(crate::config::CONFIG_TOML_FILE),
+        r#"[features]
+plugins = false
+"#,
+    );
 
     let config = load_plugins_config(codex_home.path()).await;
     let discoverable_plugins = list_tool_suggest_discoverable_plugins(&config)

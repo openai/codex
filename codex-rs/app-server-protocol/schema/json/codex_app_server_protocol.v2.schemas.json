@@ -1424,6 +1424,54 @@
             },
             "method": {
               "enum": [
+                "fs/watch"
+              ],
+              "title": "Fs/watchRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FsWatchParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/watchRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/unwatch"
+              ],
+              "title": "Fs/unwatchRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FsUnwatchParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Fs/unwatchRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "skills/config/write"
               ],
               "title": "Skills/config/writeRequestMethod",
@@ -1631,6 +1679,30 @@
             "params"
           ],
           "title": "ExperimentalFeature/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "experimentalFeature/enablement/set"
+              ],
+              "title": "ExperimentalFeature/enablement/setRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ExperimentalFeatureEnablementSetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "ExperimentalFeature/enablement/setRequest",
           "type": "object"
         },
         {
@@ -3761,6 +3833,40 @@
       ],
       "type": "object"
     },
+    "ExperimentalFeatureEnablementSetParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "enablement": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "description": "Process-wide runtime feature enablement keyed by canonical feature name.\n\nOnly named features are updated. Omitted features are left unchanged. Send an empty map for a no-op.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "enablement"
+      ],
+      "title": "ExperimentalFeatureEnablementSetParams",
+      "type": "object"
+    },
+    "ExperimentalFeatureEnablementSetResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "enablement": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "description": "Feature enablement entries updated by this request.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "enablement"
+      ],
+      "title": "ExperimentalFeatureEnablementSetResponse",
+      "type": "object"
+    },
     "ExperimentalFeatureListParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -4037,6 +4143,29 @@
       ],
       "type": "string"
     },
+    "FsChangedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Filesystem watch notification emitted for `fs/watch` subscribers.",
+      "properties": {
+        "changedPaths": {
+          "description": "File or directory paths associated with this event.",
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        },
+        "watchId": {
+          "description": "Watch identifier returned by `fs/watch`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "changedPaths",
+        "watchId"
+      ],
+      "title": "FsChangedNotification",
+      "type": "object"
+    },
     "FsCopyParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Copy a file or directory tree on the host filesystem.",
@@ -4289,6 +4418,70 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Successful response for `fs/remove`.",
       "title": "FsRemoveResponse",
+      "type": "object"
+    },
+    "FsUnwatchParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Stop filesystem watch notifications for a prior `fs/watch`.",
+      "properties": {
+        "watchId": {
+          "description": "Watch identifier returned by `fs/watch`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "watchId"
+      ],
+      "title": "FsUnwatchParams",
+      "type": "object"
+    },
+    "FsUnwatchResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Successful response for `fs/unwatch`.",
+      "title": "FsUnwatchResponse",
+      "type": "object"
+    },
+    "FsWatchParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Start filesystem watch notifications for an absolute path.",
+      "properties": {
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Absolute file or directory path to watch."
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "FsWatchParams",
+      "type": "object"
+    },
+    "FsWatchResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Created watch handle returned by `fs/watch`.",
+      "properties": {
+        "path": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Canonicalized path associated with the watch."
+        },
+        "watchId": {
+          "description": "Connection-scoped watch identifier used for `fs/unwatch` and `fs/changed`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "watchId"
+      ],
+      "title": "FsWatchResponse",
       "type": "object"
     },
     "FsWriteFileParams": {
@@ -8538,6 +8731,26 @@
             "params"
           ],
           "title": "App/list/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "fs/changed"
+              ],
+              "title": "Fs/changedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/FsChangedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Fs/changedNotification",
           "type": "object"
         },
         {

@@ -1,9 +1,10 @@
+#![allow(warnings, clippy::all)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::ffi::OsStr;
+use std::fs;
 use std::fs::File;
 use std::fs::FileTimes;
-use std::fs::{self};
 use std::io::Write;
 use std::path::Path;
 
@@ -17,14 +18,15 @@ use time::format_description::FormatItem;
 use time::macros::format_description;
 use uuid::Uuid;
 
-use crate::rollout::INTERACTIVE_SESSION_SOURCES;
-use crate::rollout::list::Cursor;
-use crate::rollout::list::ThreadItem;
-use crate::rollout::list::ThreadSortKey;
-use crate::rollout::list::ThreadsPage;
-use crate::rollout::list::get_threads;
-use crate::rollout::list::read_head_for_summary;
-use crate::rollout::rollout_date_parts;
+use crate::INTERACTIVE_SESSION_SOURCES;
+use crate::find_thread_path_by_id_str;
+use crate::list::Cursor;
+use crate::list::ThreadItem;
+use crate::list::ThreadSortKey;
+use crate::list::ThreadsPage;
+use crate::list::get_threads;
+use crate::list::read_head_for_summary;
+use crate::rollout_date_parts;
 use anyhow::Result;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
@@ -229,7 +231,7 @@ async fn find_thread_path_falls_back_when_db_path_is_stale() {
     ));
     insert_state_db_thread(home, thread_id, stale_db_path.as_path(), false).await;
 
-    let found = crate::rollout::find_thread_path_by_id_str(home, &uuid.to_string())
+    let found = find_thread_path_by_id_str(home, &uuid.to_string())
         .await
         .expect("lookup should succeed");
     assert_eq!(found, Some(fs_rollout_path.clone()));
@@ -255,7 +257,7 @@ async fn find_thread_path_repairs_missing_db_row_after_filesystem_fallback() {
         .await
         .expect("backfill should be complete");
 
-    let found = crate::rollout::find_thread_path_by_id_str(home, &uuid.to_string())
+    let found = find_thread_path_by_id_str(home, &uuid.to_string())
         .await
         .expect("lookup should succeed");
     assert_eq!(found, Some(fs_rollout_path.clone()));

@@ -1,48 +1,12 @@
-use super::TruncationPolicy;
-use super::approx_token_count;
-use super::formatted_truncate_text;
-use super::formatted_truncate_text_content_items_with_policy;
-use super::split_string;
-use super::truncate_function_output_items_with_policy;
-use super::truncate_text;
-use super::truncate_with_token_budget;
+use crate::TruncationPolicy;
+use crate::approx_token_count;
+use crate::approx_tokens_from_byte_count_i64;
+use crate::formatted_truncate_text;
+use crate::formatted_truncate_text_content_items_with_policy;
+use crate::truncate_function_output_items_with_policy;
+use crate::truncate_text;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use pretty_assertions::assert_eq;
-
-#[test]
-fn split_string_works() {
-    assert_eq!(split_string("hello world", 5, 5), (1, "hello", "world"));
-    assert_eq!(split_string("abc", 0, 0), (3, "", ""));
-}
-
-#[test]
-fn split_string_handles_empty_string() {
-    assert_eq!(split_string("", 4, 4), (0, "", ""));
-}
-
-#[test]
-fn split_string_only_keeps_prefix_when_tail_budget_is_zero() {
-    assert_eq!(split_string("abcdef", 3, 0), (3, "abc", ""));
-}
-
-#[test]
-fn split_string_only_keeps_suffix_when_prefix_budget_is_zero() {
-    assert_eq!(split_string("abcdef", 0, 3), (3, "", "def"));
-}
-
-#[test]
-fn split_string_handles_overlapping_budgets_without_removal() {
-    assert_eq!(split_string("abcdef", 4, 4), (0, "abcd", "ef"));
-}
-
-#[test]
-fn split_string_respects_utf8_boundaries() {
-    assert_eq!(split_string("😀abc😀", 5, 5), (1, "😀a", "c😀"));
-
-    assert_eq!(split_string("😀😀😀😀😀", 1, 1), (5, "", ""));
-    assert_eq!(split_string("😀😀😀😀😀", 7, 7), (3, "😀", "😀"));
-    assert_eq!(split_string("😀😀😀😀😀", 8, 8), (1, "😀😀", "😀😀"));
-}
 
 #[test]
 fn truncate_bytes_less_than_placeholder_returns_placeholder() {
@@ -127,31 +91,6 @@ fn truncate_tokens_reports_original_line_count_when_truncated() {
 }
 
 #[test]
-fn truncate_with_token_budget_returns_original_when_under_limit() {
-    let s = "short output";
-    let limit = 100;
-    let (out, original) = truncate_with_token_budget(s, TruncationPolicy::Tokens(limit));
-    assert_eq!(out, s);
-    assert_eq!(original, None);
-}
-
-#[test]
-fn truncate_with_token_budget_reports_truncation_at_zero_limit() {
-    let s = "abcdef";
-    let (out, original) = truncate_with_token_budget(s, TruncationPolicy::Tokens(0));
-    assert_eq!(out, "…2 tokens truncated…");
-    assert_eq!(original, Some(2));
-}
-
-#[test]
-fn truncate_middle_tokens_handles_utf8_content() {
-    let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with text\n";
-    let (out, tokens) = truncate_with_token_budget(s, TruncationPolicy::Tokens(8));
-    assert_eq!(out, "😀😀😀😀…8 tokens truncated… line with text\n");
-    assert_eq!(tokens, Some(16));
-}
-
-#[test]
 fn truncate_middle_bytes_handles_utf8_content() {
     let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with text\n";
     let out = truncate_text(s, TruncationPolicy::Bytes(20));
@@ -185,7 +124,6 @@ fn truncates_across_multiple_under_limit_texts_and_reports_omitted() {
     let output =
         truncate_function_output_items_with_policy(&items, TruncationPolicy::Tokens(limit));
 
-    // Expect: t1 (full), t2 (full), image, t3 (truncated), summary mentioning 2 omitted.
     assert_eq!(output.len(), 5);
 
     let first_text = match &output[0] {
@@ -243,6 +181,29 @@ fn formatted_truncate_text_content_items_with_policy_returns_original_under_limi
 
     assert_eq!(output, items);
     assert_eq!(original_token_count, None);
+}
+
+#[test]
+fn formatted_truncate_text_content_items_with_policy_preserves_empty_leading_text_behavior() {
+    let items = vec![
+        FunctionCallOutputContentItem::InputText {
+            text: String::new(),
+        },
+        FunctionCallOutputContentItem::InputText {
+            text: "abc".to_string(),
+        },
+    ];
+
+    let (output, original_token_count) =
+        formatted_truncate_text_content_items_with_policy(&items, TruncationPolicy::Bytes(0));
+
+    assert_eq!(
+        output,
+        vec![FunctionCallOutputContentItem::InputText {
+            text: "Total output lines: 1\n\n…3 chars truncated…".to_string(),
+        }]
+    );
+    assert_eq!(original_token_count, Some(1));
 }
 
 #[test]
@@ -310,4 +271,11 @@ fn formatted_truncate_text_content_items_with_policy_merges_all_text_for_token_b
         }]
     );
     assert_eq!(original_token_count, Some(5));
+}
+
+#[test]
+fn byte_count_conversion_clamps_non_positive_values() {
+    assert_eq!(approx_tokens_from_byte_count_i64(/*bytes*/ -1), 0);
+    assert_eq!(approx_tokens_from_byte_count_i64(/*bytes*/ 0), 0);
+    assert_eq!(approx_tokens_from_byte_count_i64(/*bytes*/ 5), 2);
 }

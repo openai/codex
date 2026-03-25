@@ -1,11 +1,13 @@
+//! Path normalization, symlink resolution, and atomic writes shared across Codex crates.
+
+pub mod env;
+
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashSet;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
-
-use crate::env;
 
 pub fn normalize_for_path_comparison(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
     let canonical = path.as_ref().canonicalize()?;

@@ -7680,6 +7680,40 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     lines.join("\n")
 }
 
+fn strip_osc8_for_snapshot(text: &str) -> String {
+    // Snapshots should assert the visible popup text, not terminal hyperlink escapes.
+    let bytes = text.as_bytes();
+    let mut stripped = String::with_capacity(text.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"\x1B]8;;") {
+            i += 5;
+            while i < bytes.len() {
+                if bytes[i] == b'\x07' {
+                    i += 1;
+                    break;
+                }
+                if i + 1 < bytes.len() && bytes[i] == b'\x1B' && bytes[i + 1] == b'\\' {
+                    i += 2;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        let ch = text[i..]
+            .chars()
+            .next()
+            .expect("slice should always contain a char");
+        stripped.push(ch);
+        i += ch.len_utf8();
+    }
+
+    stripped
+}
+
 fn plugins_test_absolute_path(path: &str) -> AbsolutePathBuf {
     AbsolutePathBuf::try_from(
         std::env::temp_dir()
@@ -7935,7 +7969,54 @@ async fn plugin_detail_popup_snapshot_shows_install_actions_and_capability_summa
     );
 
     let popup = render_bottom_popup(&chat, 100);
-    assert_snapshot!("plugin_detail_popup_installable", popup);
+    assert_snapshot!(
+        "plugin_detail_popup_installable",
+        strip_osc8_for_snapshot(&popup)
+    );
+}
+
+#[tokio::test]
+async fn plugin_detail_popup_hides_disclosure_for_installed_plugins() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.set_feature_enabled(Feature::Plugins, true);
+
+    let summary = plugins_test_summary(
+        "plugin-figma",
+        "figma",
+        Some("Figma"),
+        Some("Design handoff."),
+        true,
+        true,
+        PluginInstallPolicy::Available,
+    );
+    let response = plugins_test_response(vec![plugins_test_curated_marketplace(vec![
+        summary.clone(),
+    ])]);
+    let cwd = chat.config.cwd.clone();
+    chat.on_plugins_loaded(cwd.clone(), Ok(response));
+    chat.add_plugins_output();
+    chat.on_plugin_detail_loaded(
+        cwd,
+        Ok(PluginReadResponse {
+            plugin: plugins_test_detail(
+                summary,
+                Some("Turn Figma files into implementation context."),
+                &["design-review", "extract-copy"],
+                &[("Figma", true), ("Slack", false)],
+                &["figma-mcp", "docs-mcp"],
+            ),
+        }),
+    );
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert!(
+        !popup.contains("Data shared with this app is subject to the app's"),
+        "expected installed plugin details to hide the disclosure line, got:\n{popup}"
+    );
+    assert_snapshot!(
+        "plugin_detail_popup_installed",
+        strip_osc8_for_snapshot(&popup)
+    );
 }
 
 #[tokio::test]

@@ -48,7 +48,6 @@ fn guardian_review_request_includes_patch_context() {
             reason: None,
             proposed_execpolicy_amendment: None,
         },
-        sandbox_permissions: SandboxPermissions::UseDefault,
         additional_permissions: None,
         permissions_preapproved: false,
         timeout_ms: None,

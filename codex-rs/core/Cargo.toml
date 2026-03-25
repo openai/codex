@@ -40,13 +40,13 @@ codex-login = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-skills = { workspace = true }
 codex-execpolicy = { workspace = true }
-codex-file-search = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-hooks = { workspace = true }
 codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-artifacts = { workspace = true }
 codex-protocol = { workspace = true }
+codex-rollout = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
@@ -55,6 +55,8 @@ codex-utils-absolute-path = { workspace = true }
 codex-utils-cache = { workspace = true }
 codex-utils-image = { workspace = true }
 codex-utils-home-dir = { workspace = true }
+codex-utils-output-truncation = { workspace = true }
+codex-utils-path = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-readiness = { workspace = true }
 codex-secrets = { workspace = true }
@@ -94,12 +96,6 @@ similar = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
 thiserror = { workspace = true }
-time = { workspace = true, features = [
-    "formatting",
-    "parsing",
-    "local-offset",
-    "macros",
-] }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",

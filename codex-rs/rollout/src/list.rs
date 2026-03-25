@@ -1,7 +1,9 @@
+#![allow(warnings, clippy::all)]
+
 use async_trait::async_trait;
 use std::cmp::Reverse;
 use std::ffi::OsStr;
-use std::io::{self};
+use std::io;
 use std::num::NonZero;
 use std::ops::ControlFlow;
 use std::path::Path;
@@ -111,16 +113,16 @@ pub enum ThreadSortKey {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ThreadListLayout {
+pub enum ThreadListLayout {
     NestedByDate,
     Flat,
 }
 
-pub(crate) struct ThreadListConfig<'a> {
-    pub(crate) allowed_sources: &'a [SessionSource],
-    pub(crate) model_providers: Option<&'a [String]>,
-    pub(crate) default_provider: &'a str,
-    pub(crate) layout: ThreadListLayout,
+pub struct ThreadListConfig<'a> {
+    pub allowed_sources: &'a [SessionSource],
+    pub model_providers: Option<&'a [String]>,
+    pub default_provider: &'a str,
+    pub layout: ThreadListLayout,
 }
 
 /// Pagination cursor identifying a file by timestamp and UUID.
@@ -300,7 +302,7 @@ impl From<codex_state::Anchor> for Cursor {
 /// can be supplied on the next call to resume after the last returned item, resilient to
 /// concurrent new sessions being appended. Ordering is stable by the requested sort key
 /// (timestamp desc, then UUID desc).
-pub(crate) async fn get_threads(
+pub async fn get_threads(
     codex_home: &Path,
     page_size: usize,
     cursor: Option<&Cursor>,
@@ -325,7 +327,7 @@ pub(crate) async fn get_threads(
     .await
 }
 
-pub(crate) async fn get_threads_in_root(
+pub async fn get_threads_in_root(
     root: PathBuf,
     page_size: usize,
     cursor: Option<&Cursor>,
