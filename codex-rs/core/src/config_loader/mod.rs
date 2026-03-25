@@ -286,7 +286,8 @@ pub async fn load_config_layers_state(
     }
     if let Some(config) = managed_config_from_mdm {
         // Use codex_home as the synthetic base so AbsolutePathBufGuard expands
-        // both `~` and `./` here. In practice, MDM is expected to use `~`.
+        // both `~` and `./` here. In practice, MDM is expected to use `~`
+        // because MDM is set by a trusted person.
         let managed_config =
             resolve_relative_paths_in_config_toml(config.managed_config, codex_home)?;
         layers.push(ConfigLayerEntry::new_with_raw_toml(
