@@ -166,6 +166,8 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
         BTreeMap::from([
             ("plugins".to_string(), true),
             ("tool_search".to_string(), true),
+            ("tool_suggest".to_string(), true),
+            ("tool_call_mcp_elicitation".to_string(), false),
         ]),
     )
     .await?;
@@ -176,6 +178,8 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
             enablement: BTreeMap::from([
                 ("plugins".to_string(), true),
                 ("tool_search".to_string(), true),
+                ("tool_suggest".to_string(), true),
+                ("tool_call_mcp_elicitation".to_string(), false),
             ]),
         }
     );
@@ -202,6 +206,20 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
             .get("features")
             .and_then(|features| features.get("tool_search")),
         Some(&json!(true))
+    );
+    assert_eq!(
+        config
+            .additional
+            .get("features")
+            .and_then(|features| features.get("tool_suggest")),
+        Some(&json!(true))
+    );
+    assert_eq!(
+        config
+            .additional
+            .get("features")
+            .and_then(|features| features.get("tool_call_mcp_elicitation")),
+        Some(&json!(false))
     );
 
     Ok(())
@@ -263,7 +281,9 @@ async fn experimental_feature_enablement_set_rejects_non_allowlisted_feature() -
         error.message
     );
     assert!(
-        error.message.contains("apps, plugins, tool_search"),
+        error
+            .message
+            .contains("apps, plugins, tool_search, tool_suggest, tool_call_mcp_elicitation"),
         "{}",
         error.message
     );
