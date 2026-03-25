@@ -1022,7 +1022,7 @@ pub(crate) fn resolve_windows_restricted_token_filesystem_overlay(
                 .iter()
                 .any(|candidate| candidate == read_only_subpath)
             {
-                additional_deny_write_paths.insert(read_only_subpath.to_path_buf());
+                additional_deny_write_paths.insert(normalize_windows_overlay_path(read_only_subpath.as_path()));
             }
         }
     }
