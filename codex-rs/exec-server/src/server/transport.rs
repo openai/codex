@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
+use tracing::warn;
 
 use crate::connection::JsonRpcConnection;
 use crate::server::processor::run_connection;
@@ -72,7 +73,9 @@ async fn run_websocket_listener(
                     .await;
                 }
                 Err(err) => {
-                    let _ = (peer_addr, err);
+                    warn!(
+                        "failed to accept exec-server websocket connection from {peer_addr}: {err}"
+                    );
                 }
             }
         });
