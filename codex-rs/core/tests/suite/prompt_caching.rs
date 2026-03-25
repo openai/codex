@@ -16,7 +16,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::TempDirExt;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -689,7 +689,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     let new_cwd = TempDir::new().unwrap();
     let writable = TempDir::new().unwrap();
     let new_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![AbsolutePathBuf::try_from(writable.path()).unwrap()],
+        writable_roots: vec![writable.abs()],
         read_only_access: Default::default(),
         network_access: true,
         exclude_tmpdir_env_var: true,

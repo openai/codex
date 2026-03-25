@@ -80,6 +80,7 @@ use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::W3cTraceContext;
+use core_test_support::PathBufExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
@@ -2282,12 +2283,9 @@ async fn session_configuration_apply_preserves_split_file_system_policy_on_cwd_o
     let original_cwd = project_root.join("subdir");
     let docs_dir = original_cwd.join("docs");
     std::fs::create_dir_all(&docs_dir).expect("create docs dir");
-    let docs_dir =
-        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs_dir).expect("docs");
+    let docs_dir = docs_dir.abs();
 
-    session_configuration.cwd =
-        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(original_cwd)
-            .expect("absolute cwd");
+    session_configuration.cwd = original_cwd.abs();
     session_configuration.sandbox_policy =
         codex_config::Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
@@ -2409,12 +2407,9 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
     let original_cwd = project_root.join("subdir");
     let docs_dir = original_cwd.join("docs");
     std::fs::create_dir_all(&docs_dir).expect("create docs dir");
-    let docs_dir =
-        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs_dir).expect("docs");
+    let docs_dir = docs_dir.abs();
 
-    session_configuration.cwd =
-        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(original_cwd)
-            .expect("absolute cwd");
+    session_configuration.cwd = original_cwd.abs();
     session_configuration.sandbox_policy =
         codex_config::Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),

@@ -83,13 +83,14 @@ fn http_mcp(url: &str) -> McpServerConfig {
 #[test]
 fn load_config_normalizes_relative_cwd_override() -> std::io::Result<()> {
     let expected_cwd = AbsolutePathBuf::relative_to_current_dir("nested")?;
+    let codex_home = tempdir()?;
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         ConfigOverrides {
             cwd: Some(PathBuf::from("nested")),
             ..Default::default()
         },
-        tempdir()?.into_path(),
+        codex_home.abs().into_path_buf(),
     )?;
 
     assert_eq!(config.cwd, expected_cwd);

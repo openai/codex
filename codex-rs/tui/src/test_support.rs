@@ -1,5 +1,3 @@
-#![expect(clippy::expect_used)]
-
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
 use std::path::PathBuf;
@@ -10,7 +8,8 @@ pub(crate) trait PathExt {
 
 impl PathExt for Path {
     fn abs(&self) -> AbsolutePathBuf {
-        AbsolutePathBuf::try_from(self.to_path_buf()).expect("path should already be absolute")
+        AbsolutePathBuf::try_from(self.to_path_buf())
+            .unwrap_or_else(|_| panic!("path should already be absolute"))
     }
 }
 

@@ -1417,8 +1417,12 @@ impl ChatWidget {
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = event.rollout_path.clone();
         self.current_cwd = Some(event.cwd.clone());
-        self.config.cwd =
-            AbsolutePathBuf::try_from(event.cwd.clone()).expect("session cwd should be absolute");
+        match AbsolutePathBuf::try_from(event.cwd.clone()) {
+            Ok(cwd) => self.config.cwd = cwd,
+            Err(err) => {
+                tracing::warn!(path = %event.cwd.display(), %err, "session cwd should be absolute");
+            }
+        }
         if let Err(err) = self
             .config
             .permissions
@@ -4543,8 +4547,7 @@ impl ChatWidget {
                     Ok(path) => path,
                     Err(err) => {
                         self.add_error_message(format!(
-                            "Failed to prepare {}: {err}",
-                            DEFAULT_PROJECT_DOC_FILENAME
+                            "Failed to prepare {DEFAULT_PROJECT_DOC_FILENAME}: {err}",
                         ));
                         return;
                     }
