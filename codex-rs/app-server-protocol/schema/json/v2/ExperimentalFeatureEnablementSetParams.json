@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "enablement": {
+      "additionalProperties": {
+        "type": "boolean"
+      },
+      "description": "Process-wide runtime feature enablement keyed by canonical feature name.\n\nOnly named features are updated. Omitted features are left unchanged. Send an empty map for a no-op.",
+      "type": "object"
+    }
+  },
+  "required": [
+    "enablement"
+  ],
+  "title": "ExperimentalFeatureEnablementSetParams",
+  "type": "object"
+}

@@ -9,6 +9,7 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingError;
 use crate::outgoing_message::OutgoingMessage;
+use crate::outgoing_message::QueuedOutgoingMessage;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::ConnectInfo;
@@ -205,7 +206,7 @@ impl FromStr for AppServerTransport {
 pub(crate) enum TransportEvent {
     ConnectionOpened {
         connection_id: ConnectionId,
-        writer: mpsc::Sender<OutgoingMessage>,
+        writer: mpsc::Sender<QueuedOutgoingMessage>,
         disconnect_sender: Option<CancellationToken>,
     },
     ConnectionClosed {
@@ -243,13 +244,13 @@ pub(crate) struct OutboundConnectionState {
     pub(crate) initialized: Arc<AtomicBool>,
     pub(crate) experimental_api_enabled: Arc<AtomicBool>,
     pub(crate) opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
-    pub(crate) writer: mpsc::Sender<OutgoingMessage>,
+    pub(crate) writer: mpsc::Sender<QueuedOutgoingMessage>,
     disconnect_sender: Option<CancellationToken>,
 }
 
 impl OutboundConnectionState {
     pub(crate) fn new(
-        writer: mpsc::Sender<OutgoingMessage>,
+        writer: mpsc::Sender<QueuedOutgoingMessage>,
         initialized: Arc<AtomicBool>,
         experimental_api_enabled: Arc<AtomicBool>,
         opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
@@ -280,7 +281,7 @@ pub(crate) async fn start_stdio_connection(
     stdio_handles: &mut Vec<JoinHandle<()>>,
 ) -> IoResult<()> {
     let connection_id = ConnectionId(0);
-    let (writer_tx, mut writer_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
+    let (writer_tx, mut writer_rx) = mpsc::channel::<QueuedOutgoingMessage>(CHANNEL_CAPACITY);
     let writer_tx_for_reader = writer_tx.clone();
     transport_event_tx
         .send(TransportEvent::ConnectionOpened {
@@ -327,14 +328,17 @@ pub(crate) async fn start_stdio_connection(
 
     stdio_handles.push(tokio::spawn(async move {
         let mut stdout = io::stdout();
-        while let Some(outgoing_message) = writer_rx.recv().await {
-            let Some(mut json) = serialize_outgoing_message(outgoing_message) else {
+        while let Some(queued_message) = writer_rx.recv().await {
+            let Some(mut json) = serialize_outgoing_message(queued_message.message) else {
                 continue;
             };
             json.push('\n');
             if let Err(err) = stdout.write_all(json.as_bytes()).await {
                 error!("Failed to write to stdout: {err}");
                 break;
+            }
+            if let Some(write_complete_tx) = queued_message.write_complete_tx {
+                let _ = write_complete_tx.send(());
             }
         }
         info!("stdout writer exited (channel closed)");
@@ -390,7 +394,7 @@ async fn run_websocket_connection(
     websocket_stream: WebSocket,
     transport_event_tx: mpsc::Sender<TransportEvent>,
 ) {
-    let (writer_tx, writer_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
+    let (writer_tx, writer_rx) = mpsc::channel::<QueuedOutgoingMessage>(CHANNEL_CAPACITY);
     let writer_tx_for_reader = writer_tx.clone();
     let disconnect_token = CancellationToken::new();
     if transport_event_tx
@@ -441,7 +445,7 @@ async fn run_websocket_connection(
 
 async fn run_websocket_outbound_loop(
     mut websocket_writer: futures::stream::SplitSink<WebSocket, WebSocketMessage>,
-    mut writer_rx: mpsc::Receiver<OutgoingMessage>,
+    mut writer_rx: mpsc::Receiver<QueuedOutgoingMessage>,
     mut writer_control_rx: mpsc::Receiver<WebSocketMessage>,
     disconnect_token: CancellationToken,
 ) {
@@ -458,15 +462,18 @@ async fn run_websocket_outbound_loop(
                     break;
                 }
             }
-            outgoing_message = writer_rx.recv() => {
-                let Some(outgoing_message) = outgoing_message else {
+            queued_message = writer_rx.recv() => {
+                let Some(queued_message) = queued_message else {
                     break;
                 };
-                let Some(json) = serialize_outgoing_message(outgoing_message) else {
+                let Some(json) = serialize_outgoing_message(queued_message.message) else {
                     continue;
                 };
                 if websocket_writer.send(WebSocketMessage::Text(json.into())).await.is_err() {
                     break;
+                }
+                if let Some(write_complete_tx) = queued_message.write_complete_tx {
+                    let _ = write_complete_tx.send(());
                 }
             }
         }
@@ -476,7 +483,7 @@ async fn run_websocket_outbound_loop(
 async fn run_websocket_inbound_loop(
     mut websocket_reader: futures::stream::SplitStream<WebSocket>,
     transport_event_tx: mpsc::Sender<TransportEvent>,
-    writer_tx_for_reader: mpsc::Sender<OutgoingMessage>,
+    writer_tx_for_reader: mpsc::Sender<QueuedOutgoingMessage>,
     writer_control_tx: mpsc::Sender<WebSocketMessage>,
     connection_id: ConnectionId,
     disconnect_token: CancellationToken,
@@ -527,7 +534,7 @@ async fn run_websocket_inbound_loop(
 
 async fn forward_incoming_message(
     transport_event_tx: &mpsc::Sender<TransportEvent>,
-    writer: &mpsc::Sender<OutgoingMessage>,
+    writer: &mpsc::Sender<QueuedOutgoingMessage>,
     connection_id: ConnectionId,
     payload: &str,
 ) -> bool {
@@ -544,7 +551,7 @@ async fn forward_incoming_message(
 
 async fn enqueue_incoming_message(
     transport_event_tx: &mpsc::Sender<TransportEvent>,
-    writer: &mpsc::Sender<OutgoingMessage>,
+    writer: &mpsc::Sender<QueuedOutgoingMessage>,
     connection_id: ConnectionId,
     message: JSONRPCMessage,
 ) -> bool {
@@ -567,7 +574,7 @@ async fn enqueue_incoming_message(
                     data: None,
                 },
             });
-            match writer.try_send(overload_error) {
+            match writer.try_send(QueuedOutgoingMessage::new(overload_error)) {
                 Ok(()) => true,
                 Err(mpsc::error::TrySendError::Closed(_)) => false,
                 Err(mpsc::error::TrySendError::Full(_overload_error)) => {
@@ -633,6 +640,7 @@ async fn send_message_to_connection(
     connections: &mut HashMap<ConnectionId, OutboundConnectionState>,
     connection_id: ConnectionId,
     message: OutgoingMessage,
+    write_complete_tx: Option<tokio::sync::oneshot::Sender<()>>,
 ) -> bool {
     let Some(connection_state) = connections.get(&connection_id) else {
         warn!("dropping message for disconnected connection: {connection_id:?}");
@@ -644,8 +652,12 @@ async fn send_message_to_connection(
     }
 
     let writer = connection_state.writer.clone();
+    let queued_message = QueuedOutgoingMessage {
+        message,
+        write_complete_tx,
+    };
     if connection_state.can_disconnect() {
-        match writer.try_send(message) {
+        match writer.try_send(queued_message) {
             Ok(()) => false,
             Err(mpsc::error::TrySendError::Full(_)) => {
                 warn!(
@@ -657,7 +669,7 @@ async fn send_message_to_connection(
                 disconnect_connection(connections, connection_id)
             }
         }
-    } else if writer.send(message).await.is_err() {
+    } else if writer.send(queued_message).await.is_err() {
         disconnect_connection(connections, connection_id)
     } else {
         false
@@ -696,8 +708,11 @@ pub(crate) async fn route_outgoing_envelope(
         OutgoingEnvelope::ToConnection {
             connection_id,
             message,
+            write_complete_tx,
         } => {
-            let _ = send_message_to_connection(connections, connection_id, message).await;
+            let _ =
+                send_message_to_connection(connections, connection_id, message, write_complete_tx)
+                    .await;
         }
         OutgoingEnvelope::Broadcast { message } => {
             let target_connections: Vec<ConnectionId> = connections
@@ -714,8 +729,13 @@ pub(crate) async fn route_outgoing_envelope(
                 .collect();
 
             for connection_id in target_connections {
-                let _ =
-                    send_message_to_connection(connections, connection_id, message.clone()).await;
+                let _ = send_message_to_connection(
+                    connections,
+                    connection_id,
+                    message.clone(),
+                    /*write_complete_tx*/ None,
+                )
+                .await;
             }
         }
     }
@@ -826,7 +846,8 @@ mod tests {
             .recv()
             .await
             .expect("request should receive overload error");
-        let overload_json = serde_json::to_value(overload).expect("serialize overload error");
+        let overload_json =
+            serde_json::to_value(overload.message).expect("serialize overload error");
         assert_eq!(
             overload_json,
             json!({
@@ -930,13 +951,15 @@ mod tests {
             .expect("transport queue should accept first message");
 
         writer_tx
-            .send(OutgoingMessage::AppServerNotification(
-                ServerNotification::ConfigWarning(ConfigWarningNotification {
-                    summary: "queued".to_string(),
-                    details: None,
-                    path: None,
-                    range: None,
-                }),
+            .send(QueuedOutgoingMessage::new(
+                OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
+                    ConfigWarningNotification {
+                        summary: "queued".to_string(),
+                        details: None,
+                        path: None,
+                        range: None,
+                    },
+                )),
             ))
             .await
             .expect("writer queue should accept first message");
@@ -960,7 +983,8 @@ mod tests {
             .recv()
             .await
             .expect("writer queue should still contain original message");
-        let queued_json = serde_json::to_value(queued_outgoing).expect("serialize queued message");
+        let queued_json =
+            serde_json::to_value(queued_outgoing.message).expect("serialize queued message");
         assert_eq!(
             queued_json,
             json!({
@@ -1005,6 +1029,7 @@ mod tests {
                         range: None,
                     },
                 )),
+                write_complete_tx: None,
             },
         )
         .await;
@@ -1013,6 +1038,92 @@ mod tests {
             writer_rx.try_recv().is_err(),
             "opted-out notification should be dropped"
         );
+    }
+
+    #[tokio::test]
+    async fn to_connection_notifications_are_dropped_for_opted_out_clients() {
+        let connection_id = ConnectionId(10);
+        let (writer_tx, mut writer_rx) = mpsc::channel(1);
+
+        let mut connections = HashMap::new();
+        connections.insert(
+            connection_id,
+            OutboundConnectionState::new(
+                writer_tx,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(RwLock::new(HashSet::from(["configWarning".to_string()]))),
+                None,
+            ),
+        );
+
+        route_outgoing_envelope(
+            &mut connections,
+            OutgoingEnvelope::ToConnection {
+                connection_id,
+                message: OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
+                    ConfigWarningNotification {
+                        summary: "task_started".to_string(),
+                        details: None,
+                        path: None,
+                        range: None,
+                    },
+                )),
+                write_complete_tx: None,
+            },
+        )
+        .await;
+
+        assert!(
+            writer_rx.try_recv().is_err(),
+            "opted-out notifications should not reach clients"
+        );
+    }
+
+    #[tokio::test]
+    async fn to_connection_notifications_are_preserved_for_non_opted_out_clients() {
+        let connection_id = ConnectionId(11);
+        let (writer_tx, mut writer_rx) = mpsc::channel(1);
+
+        let mut connections = HashMap::new();
+        connections.insert(
+            connection_id,
+            OutboundConnectionState::new(
+                writer_tx,
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(AtomicBool::new(true)),
+                Arc::new(RwLock::new(HashSet::new())),
+                None,
+            ),
+        );
+
+        route_outgoing_envelope(
+            &mut connections,
+            OutgoingEnvelope::ToConnection {
+                connection_id,
+                message: OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
+                    ConfigWarningNotification {
+                        summary: "task_started".to_string(),
+                        details: None,
+                        path: None,
+                        range: None,
+                    },
+                )),
+                write_complete_tx: None,
+            },
+        )
+        .await;
+
+        let message = writer_rx
+            .recv()
+            .await
+            .expect("notification should reach non-opted-out clients");
+        assert!(matches!(
+            message.message,
+            OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
+                ConfigWarningNotification { summary, .. }
+            )) if summary == "task_started"
+        ));
     }
 
     #[tokio::test]
@@ -1068,6 +1179,7 @@ mod tests {
                         available_decisions: None,
                     },
                 }),
+                write_complete_tx: None,
             },
         )
         .await;
@@ -1076,7 +1188,7 @@ mod tests {
             .recv()
             .await
             .expect("request should be delivered to the connection");
-        let json = serde_json::to_value(message).expect("request should serialize");
+        let json = serde_json::to_value(message.message).expect("request should serialize");
         assert_eq!(json["params"].get("additionalPermissions"), None);
         assert_eq!(json["params"].get("skillMetadata"), None);
     }
@@ -1134,6 +1246,7 @@ mod tests {
                         available_decisions: None,
                     },
                 }),
+                write_complete_tx: None,
             },
         )
         .await;
@@ -1142,7 +1255,7 @@ mod tests {
             .recv()
             .await
             .expect("request should be delivered to the connection");
-        let json = serde_json::to_value(message).expect("request should serialize");
+        let json = serde_json::to_value(message.message).expect("request should serialize");
         let allowed_path = absolute_path("/tmp/allowed").to_string_lossy().into_owned();
         assert_eq!(
             json["params"]["additionalPermissions"],
@@ -1204,7 +1317,7 @@ mod tests {
             }),
         );
         slow_writer_tx
-            .try_send(queued_message)
+            .try_send(QueuedOutgoingMessage::new(queued_message))
             .expect("channel should have room");
 
         let broadcast_message = OutgoingMessage::AppServerNotification(
@@ -1233,7 +1346,7 @@ mod tests {
             .try_recv()
             .expect("fast connection should receive the broadcast notification");
         assert!(matches!(
-            fast_message,
+            fast_message.message,
             OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
                 ConfigWarningNotification { summary, .. }
             )) if summary == "test"
@@ -1243,7 +1356,7 @@ mod tests {
             .try_recv()
             .expect("slow connection should retain its original buffered message");
         assert!(matches!(
-            slow_message,
+            slow_message.message,
             OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
                 ConfigWarningNotification { summary, .. }
             )) if summary == "already-buffered"
@@ -1255,13 +1368,15 @@ mod tests {
         let connection_id = ConnectionId(3);
         let (writer_tx, mut writer_rx) = mpsc::channel(1);
         writer_tx
-            .send(OutgoingMessage::AppServerNotification(
-                ServerNotification::ConfigWarning(ConfigWarningNotification {
-                    summary: "queued".to_string(),
-                    details: None,
-                    path: None,
-                    range: None,
-                }),
+            .send(QueuedOutgoingMessage::new(
+                OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
+                    ConfigWarningNotification {
+                        summary: "queued".to_string(),
+                        details: None,
+                        path: None,
+                        range: None,
+                    },
+                )),
             ))
             .await
             .expect("channel should accept the first queued message");
@@ -1291,6 +1406,7 @@ mod tests {
                             range: None,
                         }),
                     ),
+                    write_complete_tx: None,
                 },
             )
             .await
@@ -1306,7 +1422,7 @@ mod tests {
             .expect("routing task should succeed");
 
         assert!(matches!(
-            first,
+            first.message,
             OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
                 ConfigWarningNotification { summary, .. }
             )) if summary == "queued"
@@ -1315,7 +1431,7 @@ mod tests {
             .try_recv()
             .expect("second notification should be delivered once the queue has room");
         assert!(matches!(
-            second,
+            second.message,
             OutgoingMessage::AppServerNotification(ServerNotification::ConfigWarning(
                 ConfigWarningNotification { summary, .. }
             )) if summary == "second"

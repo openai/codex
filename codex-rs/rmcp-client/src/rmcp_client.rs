@@ -390,7 +390,7 @@ enum TransportRecipe {
     Stdio {
         program: OsString,
         args: Vec<OsString>,
-        env: Option<HashMap<String, String>>,
+        env: Option<HashMap<OsString, OsString>>,
         env_vars: Vec<String>,
         cwd: Option<PathBuf>,
     },
@@ -478,7 +478,7 @@ impl RmcpClient {
     pub async fn new_stdio_client(
         program: OsString,
         args: Vec<OsString>,
-        env: Option<HashMap<String, String>>,
+        env: Option<HashMap<OsString, OsString>>,
         env_vars: &[String],
         cwd: Option<PathBuf>,
     ) -> io::Result<Self> {

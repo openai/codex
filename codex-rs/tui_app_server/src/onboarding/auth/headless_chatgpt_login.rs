@@ -29,6 +29,7 @@ use super::ContinueInBrowserState;
 use super::ContinueWithDeviceCodeState;
 use super::SignInState;
 use super::mark_url_hyperlink;
+use super::maybe_open_auth_url_in_browser;
 use super::onboarding_request_id;
 
 pub(super) fn start_headless_chatgpt_login(widget: &mut AuthModeWidget) {
@@ -289,6 +290,7 @@ async fn fallback_to_browser_login(
         .await
     {
         Ok(LoginAccountResponse::Chatgpt { login_id, auth_url }) => {
+            maybe_open_auth_url_in_browser(&request_handle, &auth_url);
             *error.write().unwrap() = None;
             let _updated = set_device_code_state_for_active_attempt(
                 &sign_in_state,

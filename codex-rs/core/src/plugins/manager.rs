@@ -4,6 +4,7 @@ use super::load_plugin_manifest;
 use super::manifest::PluginManifestInterface;
 use super::marketplace::MarketplaceError;
 use super::marketplace::MarketplaceInterface;
+use super::marketplace::MarketplaceListError;
 use super::marketplace::MarketplacePluginAuthPolicy;
 use super::marketplace::MarketplacePluginPolicy;
 use super::marketplace::MarketplacePluginSource;
@@ -176,6 +177,12 @@ pub struct ConfiguredMarketplacePlugin {
     pub interface: Option<PluginManifestInterface>,
     pub installed: bool,
     pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConfiguredMarketplaceListOutcome {
+    pub marketplaces: Vec<ConfiguredMarketplace>,
+    pub errors: Vec<MarketplaceListError>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -996,16 +1003,16 @@ impl PluginsManager {
         &self,
         config: &Config,
         additional_roots: &[AbsolutePathBuf],
-    ) -> Result<Vec<ConfiguredMarketplace>, MarketplaceError> {
+    ) -> Result<ConfiguredMarketplaceListOutcome, MarketplaceError> {
         if !config.features.enabled(Feature::Plugins) {
-            return Ok(Vec::new());
+            return Ok(ConfiguredMarketplaceListOutcome::default());
         }
 
         let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
-        let marketplaces = list_marketplaces(&self.marketplace_roots(additional_roots))?;
+        let marketplace_outcome = list_marketplaces(&self.marketplace_roots(additional_roots))?;
         let mut seen_plugin_keys = HashSet::new();
-
-        Ok(marketplaces
+        let marketplaces = marketplace_outcome
+            .marketplaces
             .into_iter()
             .filter_map(|marketplace| {
                 let marketplace_name = marketplace.name.clone();
@@ -1043,7 +1050,12 @@ impl PluginsManager {
                     plugins,
                 })
             })
-            .collect())
+            .collect();
+
+        Ok(ConfiguredMarketplaceListOutcome {
+            marketplaces,
+            errors: marketplace_outcome.errors,
+        })
     }
 
     pub fn read_plugin_for_config(
@@ -1550,7 +1562,14 @@ fn load_plugin(
     };
 
     let manifest_paths = &manifest.paths;
-    loaded_plugin.manifest_name = Some(manifest.name.clone());
+    loaded_plugin.manifest_name = manifest
+        .interface
+        .as_ref()
+        .and_then(|interface| interface.display_name.as_deref())
+        .map(str::trim)
+        .filter(|display_name| !display_name.is_empty())
+        .map(str::to_string)
+        .or_else(|| Some(manifest.name.clone()));
     loaded_plugin.manifest_description = manifest.description.clone();
     loaded_plugin.skill_roots = plugin_skill_roots(plugin_root.as_path(), manifest_paths);
     let resolved_skills = load_plugin_skills(

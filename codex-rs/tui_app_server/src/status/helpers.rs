@@ -42,7 +42,7 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
                     .map(|name| name.to_string_lossy().to_string())
                     .unwrap_or_else(|| "<unknown>".to_string());
                 let display = if let Some(parent) = p.parent() {
-                    if parent == config.cwd {
+                    if parent == config.cwd.as_path() {
                         file_name.clone()
                     } else {
                         let mut cur = config.cwd.as_path();

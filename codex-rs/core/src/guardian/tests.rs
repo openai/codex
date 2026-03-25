@@ -25,7 +25,8 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::ReviewDecision;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::PathBufExt;
+use core_test_support::TempDirExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses::ev_assistant_message;
@@ -322,7 +323,7 @@ fn guardian_assessment_action_value_redacts_apply_patch_patch_text() {
         ("/tmp", "/tmp/guardian.txt")
     };
     let cwd = PathBuf::from(cwd);
-    let file = AbsolutePathBuf::try_from(file).expect("absolute path");
+    let file = PathBuf::from(file).abs();
     let action = GuardianApprovalRequest::ApplyPatch {
         id: "patch-1".to_string(),
         cwd: cwd.clone(),
@@ -356,7 +357,7 @@ fn guardian_request_turn_id_prefers_network_access_owner_turn() {
     let apply_patch = GuardianApprovalRequest::ApplyPatch {
         id: "patch-1".to_string(),
         cwd: PathBuf::from("/tmp"),
-        files: vec![AbsolutePathBuf::try_from("/tmp/guardian.txt").expect("absolute path")],
+        files: vec![PathBuf::from("/tmp/guardian.txt").abs()],
         change_count: 1usize,
         patch: "*** Begin Patch\n*** Update File: guardian.txt\n@@\n+hello\n*** End Patch"
             .to_string(),
@@ -384,7 +385,7 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
         GuardianApprovalRequest::ApplyPatch {
             id: "patch-1".to_string(),
             cwd: PathBuf::from("/tmp"),
-            files: vec![AbsolutePathBuf::try_from("/tmp/guardian.txt").expect("absolute path")],
+            files: vec![PathBuf::from("/tmp/guardian.txt").abs()],
             change_count: 1usize,
             patch: "*** Begin Patch\n*** Update File: guardian.txt\n@@\n+hello\n*** End Patch"
                 .to_string(),
@@ -512,7 +513,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     let (mut session, mut turn) = crate::codex::make_session_and_context().await;
     let temp_cwd = TempDir::new()?;
     let mut config = (*turn.config).clone();
-    config.cwd = temp_cwd.path().to_path_buf();
+    config.cwd = temp_cwd.abs();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
     let models_manager = Arc::new(test_support::models_manager_with_provider(

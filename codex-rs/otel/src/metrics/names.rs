@@ -1,5 +1,6 @@
 pub const TOOL_CALL_COUNT_METRIC: &str = "codex.tool.call";
 pub const TOOL_CALL_DURATION_METRIC: &str = "codex.tool.call.duration_ms";
+pub const TOOL_CALL_UNIFIED_EXEC_METRIC: &str = "codex.tool.unified_exec";
 pub const API_CALL_COUNT_METRIC: &str = "codex.api_request";
 pub const API_CALL_DURATION_METRIC: &str = "codex.api_request.duration_ms";
 pub const SSE_EVENT_COUNT_METRIC: &str = "codex.sse_event";

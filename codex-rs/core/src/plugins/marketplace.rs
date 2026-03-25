@@ -2,9 +2,9 @@ use super::PluginManifestInterface;
 use super::load_plugin_manifest;
 use super::store::PluginId;
 use super::store::PluginIdError;
-use crate::git_info::get_git_repo_root;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
+use codex_git_utils::get_git_repo_root;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dirs::home_dir;
@@ -31,6 +31,18 @@ pub struct Marketplace {
     pub path: AbsolutePathBuf,
     pub interface: Option<MarketplaceInterface>,
     pub plugins: Vec<MarketplacePlugin>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketplaceListError {
+    pub path: AbsolutePathBuf,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MarketplaceListOutcome {
+    pub marketplaces: Vec<Marketplace>,
+    pub errors: Vec<MarketplaceListError>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,7 +207,7 @@ pub fn resolve_marketplace_plugin(
 
 pub fn list_marketplaces(
     additional_roots: &[AbsolutePathBuf],
-) -> Result<Vec<Marketplace>, MarketplaceError> {
+) -> Result<MarketplaceListOutcome, MarketplaceError> {
     list_marketplaces_with_home(additional_roots, home_dir().as_deref())
 }
 
@@ -246,23 +258,27 @@ pub(crate) fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Ma
 fn list_marketplaces_with_home(
     additional_roots: &[AbsolutePathBuf],
     home_dir: Option<&Path>,
-) -> Result<Vec<Marketplace>, MarketplaceError> {
-    let mut marketplaces = Vec::new();
+) -> Result<MarketplaceListOutcome, MarketplaceError> {
+    let mut outcome = MarketplaceListOutcome::default();
 
     for marketplace_path in discover_marketplace_paths_from_roots(additional_roots, home_dir) {
         match load_marketplace(&marketplace_path) {
-            Ok(marketplace) => marketplaces.push(marketplace),
+            Ok(marketplace) => outcome.marketplaces.push(marketplace),
             Err(err) => {
                 warn!(
                     path = %marketplace_path.display(),
                     error = %err,
                     "skipping marketplace that failed to load"
                 );
+                outcome.errors.push(MarketplaceListError {
+                    path: marketplace_path,
+                    message: err.to_string(),
+                });
             }
         }
     }
 
-    Ok(marketplaces)
+    Ok(outcome)
 }
 
 fn discover_marketplace_paths_from_roots(

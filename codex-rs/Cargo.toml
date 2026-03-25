@@ -40,6 +40,7 @@ members = [
     "ollama",
     "process-hardening",
     "protocol",
+    "rollout",
     "rmcp-client",
     "responses-api-proxy",
     "sandboxing",
@@ -50,7 +51,7 @@ members = [
     "v8-poc",
     "utils/absolute-path",
     "utils/cargo-bin",
-    "utils/git",
+    "git-utils",
     "utils/cache",
     "utils/image",
     "utils/json-to-toml",
@@ -65,8 +66,11 @@ members = [
     "utils/sleep-inhibitor",
     "utils/approval-presets",
     "utils/oss",
+    "utils/output-truncation",
+    "utils/path-utils",
     "utils/fuzzy-match",
     "utils/stream-parser",
+    "utils/template",
     "codex-client",
     "codex-api",
     "state",
@@ -117,7 +121,7 @@ codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
 codex-feedback = { path = "feedback" }
 codex-features = { path = "features" }
 codex-file-search = { path = "file-search" }
-codex-git = { path = "utils/git" }
+codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
@@ -129,6 +133,7 @@ codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
+codex-rollout = { path = "rollout" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-rmcp-client = { path = "rmcp-client" }
 codex-sandboxing = { path = "sandboxing" }
@@ -154,12 +159,15 @@ codex-utils-home-dir = { path = "utils/home-dir" }
 codex-utils-image = { path = "utils/image" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-oss = { path = "utils/oss" }
+codex-utils-output-truncation = { path = "utils/output-truncation" }
+codex-utils-path = { path = "utils/path-utils" }
 codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }
 codex-utils-sandbox-summary = { path = "utils/sandbox-summary" }
 codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
 codex-utils-stream-parser = { path = "utils/stream-parser" }
+codex-utils-template = { path = "utils/template" }
 codex-utils-string = { path = "utils/string" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
@@ -380,7 +388,7 @@ ignored = [
     "icu_provider",
     "openssl-sys",
     "codex-utils-readiness",
-    "codex-secrets",
+    "codex-utils-template",
     "codex-v8-poc",
 ]
 

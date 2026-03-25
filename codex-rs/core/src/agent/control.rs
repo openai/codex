@@ -812,35 +812,32 @@ impl AgentControl {
                 return;
             };
             let child_thread = state.get_thread(child_thread_id).await.ok();
-            if let Some(child_agent_path) = child_agent_path
+            let message = format_subagent_notification_message(child_reference.as_str(), &status);
+            if child_agent_path.is_some()
                 && child_thread
                     .as_ref()
                     .map(|thread| thread.enabled(Feature::MultiAgentV2))
                     .unwrap_or(true)
             {
-                let AgentStatus::Completed(Some(content)) = &status else {
+                let Some(child_agent_path) = child_agent_path.clone() else {
                     return;
                 };
-                let Some((parent_path, _)) = child_agent_path.as_str().rsplit_once('/') else {
-                    return;
-                };
-                let Ok(parent_agent_path) = AgentPath::try_from(parent_path) else {
-                    return;
-                };
-                let Some(parent_thread_id) = control.state.agent_id_for_path(&parent_agent_path)
+                let Some(parent_agent_path) = child_agent_path
+                    .as_str()
+                    .rsplit_once('/')
+                    .and_then(|(parent, _)| AgentPath::try_from(parent).ok())
                 else {
                     return;
                 };
+                let communication = InterAgentCommunication::new(
+                    child_agent_path,
+                    parent_agent_path,
+                    Vec::new(),
+                    message,
+                    /*trigger_turn*/ false,
+                );
                 let _ = control
-                    .send_inter_agent_communication(
-                        parent_thread_id,
-                        InterAgentCommunication::new(
-                            child_agent_path,
-                            parent_agent_path,
-                            Vec::new(),
-                            content.clone(),
-                        ),
-                    )
+                    .send_inter_agent_communication(parent_thread_id, communication)
                     .await;
                 return;
             }
@@ -848,10 +845,7 @@ impl AgentControl {
                 return;
             };
             parent_thread
-                .inject_user_message_without_turn(format_subagent_notification_message(
-                    child_reference.as_str(),
-                    &status,
-                ))
+                .inject_user_message_without_turn(message)
                 .await;
         });
     }
@@ -1111,7 +1105,7 @@ fn last_task_message_from_item(item: &ResponseItem) -> Option<String> {
     }
 
     match item {
-        ResponseItem::Message { role, content, .. } if role == "user" => {
+        ResponseItem::Message { role, .. } if role == "user" => {
             let Some(TurnItem::UserMessage(message)) = parse_turn_item(item) else {
                 return None;
             };

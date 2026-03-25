@@ -14,6 +14,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cargo_bin::cargo_bin;
 use core_test_support::fs_wait;
 use pretty_assertions::assert_eq;
@@ -30,6 +31,7 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
     let responses = Vec::new();
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
+    let expected_codex_home = AbsolutePathBuf::try_from(codex_home.path().canonicalize()?)?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
     let mut mcp = McpProcess::new(codex_home.path()).await?;
 
@@ -48,11 +50,13 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
     };
     let InitializeResponse {
         user_agent,
+        codex_home: response_codex_home,
         platform_family,
         platform_os,
     } = to_response::<InitializeResponse>(response)?;
 
     assert!(user_agent.starts_with("codex_vscode/"));
+    assert_eq!(response_codex_home, expected_codex_home);
     assert_eq!(platform_family, std::env::consts::FAMILY);
     assert_eq!(platform_os, std::env::consts::OS);
     Ok(())
@@ -63,6 +67,7 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
     let responses = Vec::new();
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
+    let expected_codex_home = AbsolutePathBuf::try_from(codex_home.path().canonicalize()?)?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
     let mut mcp = McpProcess::new_with_env(
         codex_home.path(),
@@ -88,11 +93,13 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
     };
     let InitializeResponse {
         user_agent,
+        codex_home: response_codex_home,
         platform_family,
         platform_os,
     } = to_response::<InitializeResponse>(response)?;
 
     assert!(user_agent.starts_with("codex_originator_via_env_var/"));
+    assert_eq!(response_codex_home, expected_codex_home);
     assert_eq!(platform_family, std::env::consts::FAMILY);
     assert_eq!(platform_os, std::env::consts::OS);
     Ok(())

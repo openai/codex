@@ -1,6 +1,7 @@
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
@@ -24,20 +25,24 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::SandboxPolicy;
-use crate::sandboxing::CommandSpec;
+use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
-use crate::sandboxing::SandboxManager;
 use crate::sandboxing::SandboxPermissions;
 use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 use crate::text_encoding::bytes_to_string_smart;
-use crate::tools::sandboxing::SandboxablePreference;
 use codex_network_proxy::NetworkProxy;
-#[cfg(any(target_os = "windows", test))]
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxTransformRequest;
+use codex_sandboxing::SandboxType;
+use codex_sandboxing::SandboxablePreference;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use codex_utils_pty::process_group::kill_child_process_group;
 
@@ -86,6 +91,17 @@ pub struct ExecParams {
     pub windows_sandbox_private_desktop: bool,
     pub justification: Option<String>,
     pub arg0: Option<String>,
+}
+
+/// Extra filesystem deny-write carveouts for the non-elevated Windows
+/// restricted-token backend.
+///
+/// These are applied on top of the legacy `WorkspaceWrite` allow set, so we
+/// can support a narrow split-policy subset without changing legacy Windows
+/// sandbox semantics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WindowsRestrictedTokenFilesystemOverlay {
+    pub(crate) additional_deny_write_paths: Vec<AbsolutePathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -178,31 +194,6 @@ impl ExecCapturePolicy {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum SandboxType {
-    None,
-
-    /// Only available on macOS.
-    MacosSeatbelt,
-
-    /// Only available on Linux.
-    LinuxSeccomp,
-
-    /// Only available on Windows.
-    WindowsRestrictedToken,
-}
-
-impl SandboxType {
-    pub(crate) fn as_metric_tag(self) -> &'static str {
-        match self {
-            SandboxType::None => "none",
-            SandboxType::MacosSeatbelt => "seatbelt",
-            SandboxType::LinuxSeccomp => "seccomp",
-            SandboxType::WindowsRestrictedToken => "windows_sandbox",
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct StdoutStream {
     pub sub_id: String,
@@ -263,10 +254,10 @@ pub fn build_exec_request(
         expiration,
         capture_policy,
         network,
-        sandbox_permissions,
+        sandbox_permissions: _,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
-        justification,
+        justification: _,
         arg0: _,
     } = params;
     if let Some(network) = network.as_ref() {
@@ -279,22 +270,21 @@ pub fn build_exec_request(
         ))
     })?;
 
-    let spec = CommandSpec {
+    let manager = SandboxManager::new();
+    let command = SandboxCommand {
         program: program.clone(),
         args: args.to_vec(),
         cwd,
         env,
+        additional_permissions: None,
+    };
+    let options = ExecOptions {
         expiration,
         capture_policy,
-        sandbox_permissions,
-        additional_permissions: None,
-        justification,
     };
-
-    let manager = SandboxManager::new();
-    let exec_req = manager
-        .transform(crate::sandboxing::SandboxTransformRequest {
-            spec,
+    let mut exec_req = manager
+        .transform(SandboxTransformRequest {
+            command,
             policy: sandbox_policy,
             file_system_policy: file_system_sandbox_policy,
             network_policy: network_sandbox_policy,
@@ -309,7 +299,18 @@ pub fn build_exec_request(
             windows_sandbox_level,
             windows_sandbox_private_desktop,
         })
+        .map(|request| ExecRequest::from_sandbox_exec_request(request, options))
         .map_err(CodexErr::from)?;
+    exec_req.windows_restricted_token_filesystem_overlay =
+        resolve_windows_restricted_token_filesystem_overlay(
+            exec_req.sandbox,
+            &exec_req.sandbox_policy,
+            &exec_req.file_system_sandbox_policy,
+            exec_req.network_sandbox_policy,
+            sandbox_cwd,
+            exec_req.windows_sandbox_level,
+        )
+        .map_err(CodexErr::UnsupportedOperation)?;
     Ok(exec_req)
 }
 
@@ -329,11 +330,10 @@ pub(crate) async fn execute_exec_request(
         sandbox,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
-        sandbox_permissions,
         sandbox_policy: _sandbox_policy_from_env,
         file_system_sandbox_policy,
         network_sandbox_policy,
-        justification,
+        windows_restricted_token_filesystem_overlay,
         arg0,
     } = exec_request;
     let _ = _sandbox_policy_from_env;
@@ -345,10 +345,10 @@ pub(crate) async fn execute_exec_request(
         capture_policy,
         env,
         network: network.clone(),
-        sandbox_permissions,
+        sandbox_permissions: SandboxPermissions::UseDefault,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
-        justification,
+        justification: None,
         arg0,
     };
 
@@ -358,6 +358,7 @@ pub(crate) async fn execute_exec_request(
         sandbox,
         sandbox_policy,
         &file_system_sandbox_policy,
+        windows_restricted_token_filesystem_overlay.as_ref(),
         network_sandbox_policy,
         stdout_stream,
         after_spawn,
@@ -437,11 +438,11 @@ fn record_windows_sandbox_spawn_failure(
 async fn exec_windows_sandbox(
     params: ExecParams,
     sandbox_policy: &SandboxPolicy,
+    windows_restricted_token_filesystem_overlay: Option<&WindowsRestrictedTokenFilesystemOverlay>,
 ) -> Result<RawExecToolCallOutput> {
     use crate::config::find_codex_home;
-    use codex_protocol::config_types::WindowsSandboxLevel;
-    use codex_windows_sandbox::run_windows_sandbox_capture;
     use codex_windows_sandbox::run_windows_sandbox_capture_elevated;
+    use codex_windows_sandbox::run_windows_sandbox_capture_with_extra_deny_write_paths;
 
     let ExecParams {
         command,
@@ -480,6 +481,15 @@ async fn exec_windows_sandbox(
     let command_path = command.first().cloned();
     let sandbox_level = windows_sandbox_level;
     let use_elevated = matches!(sandbox_level, WindowsSandboxLevel::Elevated);
+    let additional_deny_write_paths = windows_restricted_token_filesystem_overlay
+        .map(|overlay| {
+            overlay
+                .additional_deny_write_paths
+                .iter()
+                .map(AbsolutePathBuf::to_path_buf)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let spawn_res = tokio::task::spawn_blocking(move || {
         if use_elevated {
             run_windows_sandbox_capture_elevated(
@@ -493,7 +503,7 @@ async fn exec_windows_sandbox(
                 windows_sandbox_private_desktop,
             )
         } else {
-            run_windows_sandbox_capture(
+            run_windows_sandbox_capture_with_extra_deny_write_paths(
                 policy_str.as_str(),
                 &sandbox_cwd,
                 codex_home.as_ref(),
@@ -501,6 +511,7 @@ async fn exec_windows_sandbox(
                 &cwd,
                 env,
                 timeout_ms,
+                &additional_deny_write_paths,
                 windows_sandbox_private_desktop,
             )
         }
@@ -620,7 +631,7 @@ fn finalize_exec_result(
 
 pub(crate) mod errors {
     use super::CodexErr;
-    use crate::sandboxing::SandboxTransformError;
+    use codex_sandboxing::SandboxTransformError;
 
     impl From<SandboxTransformError> for CodexErr {
         fn from(err: SandboxTransformError) -> Self {
@@ -809,29 +820,25 @@ impl Default for ExecToolCallOutput {
     }
 }
 
-#[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+#[allow(clippy::too_many_arguments)]
 async fn exec(
     params: ExecParams,
-    sandbox: SandboxType,
-    sandbox_policy: &SandboxPolicy,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    _sandbox: SandboxType,
+    _sandbox_policy: &SandboxPolicy,
+    _file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    _windows_restricted_token_filesystem_overlay: Option<&WindowsRestrictedTokenFilesystemOverlay>,
     network_sandbox_policy: NetworkSandboxPolicy,
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<RawExecToolCallOutput> {
     #[cfg(target_os = "windows")]
-    if sandbox == SandboxType::WindowsRestrictedToken {
-        let support = windows_restricted_token_sandbox_support(
-            sandbox,
-            params.windows_sandbox_level,
-            sandbox_policy,
-            file_system_sandbox_policy,
-            network_sandbox_policy,
-        );
-        if let Some(reason) = support.unsupported_reason {
-            return Err(CodexErr::Io(io::Error::other(reason)));
-        }
-        return exec_windows_sandbox(params, sandbox_policy).await;
+    if _sandbox == SandboxType::WindowsRestrictedToken {
+        return exec_windows_sandbox(
+            params,
+            _sandbox_policy,
+            _windows_restricted_token_filesystem_overlay,
+        )
+        .await;
     }
     let ExecParams {
         command,
@@ -876,54 +883,175 @@ async fn exec(
 }
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-#[derive(Debug, PartialEq, Eq)]
-struct WindowsRestrictedTokenSandboxSupport {
-    should_use: bool,
-    unsupported_reason: Option<String>,
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn windows_restricted_token_sandbox_support(
+fn should_use_windows_restricted_token_sandbox(
     sandbox: SandboxType,
-    windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
     sandbox_policy: &SandboxPolicy,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
-) -> WindowsRestrictedTokenSandboxSupport {
-    if sandbox != SandboxType::WindowsRestrictedToken {
-        return WindowsRestrictedTokenSandboxSupport {
-            should_use: false,
-            unsupported_reason: None,
-        };
-    }
-
-    // Windows currently reuses SandboxType::WindowsRestrictedToken for both
-    // the legacy restricted-token backend and the elevated setup/runner path.
-    // The sandbox level decides whether restricted read-only policies are
-    // supported.
-    let should_use = file_system_sandbox_policy.kind == FileSystemSandboxKind::Restricted
+) -> bool {
+    sandbox == SandboxType::WindowsRestrictedToken
+        && file_system_sandbox_policy.kind == FileSystemSandboxKind::Restricted
         && !matches!(
             sandbox_policy,
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
         )
-        && (matches!(
-            windows_sandbox_level,
-            codex_protocol::config_types::WindowsSandboxLevel::Elevated
-        ) || sandbox_policy.has_full_disk_read_access());
+}
 
-    let unsupported_reason = if should_use {
-        None
-    } else {
-        Some(format!(
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn unsupported_windows_restricted_token_sandbox_reason(
+    sandbox: SandboxType,
+    sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
+    sandbox_policy_cwd: &Path,
+    windows_sandbox_level: WindowsSandboxLevel,
+) -> Option<String> {
+    resolve_windows_restricted_token_filesystem_overlay(
+        sandbox,
+        sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+        sandbox_policy_cwd,
+        windows_sandbox_level,
+    )
+    .err()
+}
+
+pub(crate) fn resolve_windows_restricted_token_filesystem_overlay(
+    sandbox: SandboxType,
+    sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
+    sandbox_policy_cwd: &Path,
+    windows_sandbox_level: WindowsSandboxLevel,
+) -> std::result::Result<Option<WindowsRestrictedTokenFilesystemOverlay>, String> {
+    if sandbox != SandboxType::WindowsRestrictedToken {
+        return Ok(None);
+    }
+
+    let needs_direct_runtime_enforcement = file_system_sandbox_policy
+        .needs_direct_runtime_enforcement(network_sandbox_policy, sandbox_policy_cwd);
+
+    if should_use_windows_restricted_token_sandbox(
+        sandbox,
+        sandbox_policy,
+        file_system_sandbox_policy,
+    ) && !needs_direct_runtime_enforcement
+    {
+        return Ok(None);
+    }
+
+    if !should_use_windows_restricted_token_sandbox(
+        sandbox,
+        sandbox_policy,
+        file_system_sandbox_policy,
+    ) {
+        return Err(format!(
             "windows sandbox backend cannot enforce file_system={:?}, network={network_sandbox_policy:?}, legacy_policy={sandbox_policy:?}; refusing to run unsandboxed",
             file_system_sandbox_policy.kind,
-        ))
-    };
-
-    WindowsRestrictedTokenSandboxSupport {
-        should_use,
-        unsupported_reason,
+        ));
     }
+
+    if windows_sandbox_level != WindowsSandboxLevel::RestrictedToken {
+        return Err(
+            "windows elevated sandbox backend cannot enforce split filesystem permissions directly; refusing to run unsandboxed"
+                .to_string(),
+        );
+    }
+
+    if !file_system_sandbox_policy.has_full_disk_read_access() {
+        return Err(
+            "windows unelevated restricted-token sandbox cannot enforce split filesystem read restrictions directly; refusing to run unsandboxed"
+                .to_string(),
+        );
+    }
+
+    if !file_system_sandbox_policy
+        .get_unreadable_roots_with_cwd(sandbox_policy_cwd)
+        .is_empty()
+    {
+        return Err(
+            "windows unelevated restricted-token sandbox cannot enforce unreadable split filesystem carveouts directly; refusing to run unsandboxed"
+                .to_string(),
+        );
+    }
+
+    let legacy_writable_roots = sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
+    let split_writable_roots =
+        file_system_sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
+    let legacy_root_paths: BTreeSet<PathBuf> = legacy_writable_roots
+        .iter()
+        .map(|root| normalize_windows_overlay_path(root.root.as_path()))
+        .collect::<std::result::Result<_, _>>()?;
+    let split_root_paths: BTreeSet<PathBuf> = split_writable_roots
+        .iter()
+        .map(|root| normalize_windows_overlay_path(root.root.as_path()))
+        .collect::<std::result::Result<_, _>>()?;
+
+    if legacy_root_paths != split_root_paths {
+        return Err(
+            "windows unelevated restricted-token sandbox cannot enforce split writable root sets directly; refusing to run unsandboxed"
+                .to_string(),
+        );
+    }
+
+    for writable_root in &split_writable_roots {
+        for read_only_subpath in &writable_root.read_only_subpaths {
+            if split_writable_roots.iter().any(|candidate| {
+                candidate.root.as_path() != writable_root.root.as_path()
+                    && candidate
+                        .root
+                        .as_path()
+                        .starts_with(read_only_subpath.as_path())
+            }) {
+                return Err(
+                    "windows unelevated restricted-token sandbox cannot reopen writable descendants under read-only carveouts directly; refusing to run unsandboxed"
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    let mut additional_deny_write_paths = BTreeSet::new();
+    for split_root in &split_writable_roots {
+        let split_root_path = normalize_windows_overlay_path(split_root.root.as_path())?;
+        let Some(legacy_root) = legacy_writable_roots.iter().find(|candidate| {
+            normalize_windows_overlay_path(candidate.root.as_path())
+                .is_ok_and(|candidate_path| candidate_path == split_root_path)
+        }) else {
+            return Err(
+                "windows unelevated restricted-token sandbox cannot enforce split writable root sets directly; refusing to run unsandboxed"
+                    .to_string(),
+            );
+        };
+
+        for read_only_subpath in &split_root.read_only_subpaths {
+            if !legacy_root
+                .read_only_subpaths
+                .iter()
+                .any(|candidate| candidate == read_only_subpath)
+            {
+                additional_deny_write_paths
+                    .insert(normalize_windows_overlay_path(read_only_subpath.as_path())?);
+            }
+        }
+    }
+
+    if additional_deny_write_paths.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(WindowsRestrictedTokenFilesystemOverlay {
+        additional_deny_write_paths: additional_deny_write_paths
+            .into_iter()
+            .map(|path| AbsolutePathBuf::from_absolute_path(path).map_err(|err| err.to_string()))
+            .collect::<std::result::Result<_, _>>()?,
+    }))
+}
+
+fn normalize_windows_overlay_path(path: &Path) -> std::result::Result<PathBuf, String> {
+    AbsolutePathBuf::from_absolute_path(dunce::simplified(path))
+        .map(AbsolutePathBuf::into_path_buf)
+        .map_err(|err| err.to_string())
 }
 
 /// Consumes the output of a child process according to the configured capture
