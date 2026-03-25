@@ -21,7 +21,6 @@ anyhow = { workspace = true }
 arc-swap = "1.8.2"
 async-channel = { workspace = true }
 async-trait = { workspace = true }
-askama = { workspace = true }
 base64 = { workspace = true }
 bm25 = { workspace = true }
 chardetng = { workspace = true }
@@ -62,6 +61,7 @@ codex-utils-readiness = { workspace = true }
 codex-secrets = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-utils-stream-parser = { workspace = true }
+codex-utils-template = { workspace = true }
 codex-windows-sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
 csv = { workspace = true }
 dirs = { workspace = true }
