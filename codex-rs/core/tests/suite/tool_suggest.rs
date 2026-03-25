@@ -6,7 +6,7 @@ use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::types::ToolSuggestDiscoverable;
 use codex_core::config::types::ToolSuggestDiscoverableType;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
@@ -62,6 +62,10 @@ fn configure_apps_without_search_tool(config: &mut Config, apps_base_url: &str) 
     config
         .features
         .enable(Feature::Apps)
+        .expect("test config should allow feature update");
+    config
+        .features
+        .enable(Feature::Plugins)
         .expect("test config should allow feature update");
     config
         .features
