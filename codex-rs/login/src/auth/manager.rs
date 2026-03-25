@@ -1313,10 +1313,6 @@ impl AuthManager {
     /// token is the same as the cached, then ask the token authority to refresh.
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
         let _refresh_guard = self.refresh_lock.lock().await;
-        self.refresh_token_locked().await
-    }
-
-    async fn refresh_token_locked(&self) -> Result<(), RefreshTokenError> {
         let auth_before_reload = self.auth_cached();
         if auth_before_reload
             .as_ref()
@@ -1333,7 +1329,7 @@ impl AuthManager {
                 tracing::info!("Skipping token refresh because auth changed after guarded reload.");
                 Ok(())
             }
-            ReloadOutcome::ReloadedNoChange => self.refresh_token_from_authority_locked().await,
+            ReloadOutcome::ReloadedNoChange => self.refresh_token_from_authority_impl().await,
             ReloadOutcome::Skipped => {
                 Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
                     RefreshTokenFailedReason::Other,
@@ -1349,10 +1345,10 @@ impl AuthManager {
     /// the caller.
     pub async fn refresh_token_from_authority(&self) -> Result<(), RefreshTokenError> {
         let _refresh_guard = self.refresh_lock.lock().await;
-        self.refresh_token_from_authority_locked().await
+        self.refresh_token_from_authority_impl().await
     }
 
-    async fn refresh_token_from_authority_locked(&self) -> Result<(), RefreshTokenError> {
+    async fn refresh_token_from_authority_impl(&self) -> Result<(), RefreshTokenError> {
         tracing::info!("Refreshing token");
 
         let auth = match self.auth_cached() {
