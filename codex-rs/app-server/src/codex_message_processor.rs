@@ -5513,7 +5513,7 @@ impl CodexMessageProcessor {
         };
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
-        let cli_overrides = self.cli_overrides.as_slice();
+        let cli_overrides = self.current_cli_overrides();
         let mut data = Vec::new();
         for cwd in cwds {
             let extra_roots = extra_roots_by_cwd
@@ -5537,7 +5537,7 @@ impl CodexMessageProcessor {
             let config_layer_stack = match load_config_layers_state(
                 &self.config.codex_home,
                 Some(cwd_abs),
-                cli_overrides,
+                &cli_overrides,
                 LoaderOverrides::default(),
                 CloudRequirementsLoader::default(),
             )
