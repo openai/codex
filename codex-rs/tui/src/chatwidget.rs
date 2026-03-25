@@ -1824,6 +1824,19 @@ impl ChatWidget {
         self.request_redraw();
 
         let had_pending_steers = !self.pending_steers.is_empty();
+        if had_pending_steers {
+            // Some tasks, such as `/compact`, can finish without ever committing steer input back
+            // through core. When that happens, preserve FIFO by converting the leftover steers
+            // into normal queued follow-up turns ahead of any tab-queued drafts.
+            let pending_steers: Vec<UserMessage> = self
+                .pending_steers
+                .drain(..)
+                .map(|pending| pending.user_message)
+                .collect();
+            for user_message in pending_steers.into_iter().rev() {
+                self.queued_user_messages.push_front(user_message);
+            }
+        }
         self.refresh_pending_input_preview();
 
         if !from_replay && !self.has_queued_follow_up_messages() && !had_pending_steers {
