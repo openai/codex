@@ -1887,9 +1887,11 @@ dependencies = [
  "codex-features",
  "codex-git-utils",
  "codex-hooks",
+ "codex-instructions",
  "codex-login",
  "codex-network-proxy",
  "codex-otel",
+ "codex-plugin",
  "codex-protocol",
  "codex-rmcp-client",
  "codex-rollout",
@@ -1908,6 +1910,7 @@ dependencies = [
  "codex-utils-image",
  "codex-utils-output-truncation",
  "codex-utils-path",
+ "codex-utils-plugins",
  "codex-utils-pty",
  "codex-utils-readiness",
  "codex-utils-stream-parser",
@@ -2179,6 +2182,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-instructions"
+version = "0.0.0"
+dependencies = [
+ "codex-protocol",
+ "pretty_assertions",
+ "serde",
+]
+
+[[package]]
 name = "codex-keyring-store"
 version = "0.0.0"
 dependencies = [
@@ -2385,6 +2397,17 @@ dependencies = [
  "url",
  "wiremock",
  "zip",
+]
+
+[[package]]
+name = "codex-plugin"
+version = "0.0.0"
+dependencies = [
+ "codex-utils-absolute-path",
+ "codex-utils-plugins",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2938,6 +2961,15 @@ dependencies = [
  "codex-utils-absolute-path",
  "dunce",
  "pretty_assertions",
+ "tempfile",
+]
+
+[[package]]
+name = "codex-utils-plugins"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

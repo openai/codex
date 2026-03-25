@@ -208,6 +208,10 @@ struct ResumeCommand {
     #[arg(long = "all", default_value_t = false)]
     all: bool,
 
+    /// Include non-interactive sessions in the resume picker and --last selection.
+    #[arg(long = "include-non-interactive", default_value_t = false)]
+    include_non_interactive: bool,
+
     #[clap(flatten)]
     remote: InteractiveRemoteOptions,
 
@@ -704,6 +708,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             session_id,
             last,
             all,
+            include_non_interactive,
             remote,
             config_overrides,
         })) => {
@@ -713,6 +718,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 session_id,
                 last,
                 all,
+                include_non_interactive,
                 config_overrides,
             );
             let exit_info = run_interactive_tui(
@@ -1182,6 +1188,7 @@ fn finalize_resume_interactive(
     session_id: Option<String>,
     last: bool,
     show_all: bool,
+    include_non_interactive: bool,
     resume_cli: TuiCli,
 ) -> TuiCli {
     // Start with the parsed interactive CLI so resume shares the same
@@ -1191,6 +1198,7 @@ fn finalize_resume_interactive(
     interactive.resume_last = last;
     interactive.resume_session_id = resume_session_id;
     interactive.resume_show_all = show_all;
+    interactive.resume_include_non_interactive = include_non_interactive;
 
     // Merge resume-scoped flags and overrides with highest precedence.
     merge_interactive_cli_flags(&mut interactive, resume_cli);
@@ -1303,6 +1311,7 @@ mod tests {
             session_id,
             last,
             all,
+            include_non_interactive,
             remote: _,
             config_overrides: resume_cli,
         }) = subcommand.expect("resume present")
@@ -1316,6 +1325,7 @@ mod tests {
             session_id,
             last,
             all,
+            include_non_interactive,
             resume_cli,
         )
     }
@@ -1509,6 +1519,15 @@ mod tests {
         let interactive = finalize_resume_from_args(["codex", "resume", "--all"].as_ref());
         assert!(interactive.resume_picker);
         assert!(interactive.resume_show_all);
+    }
+
+    #[test]
+    fn resume_include_non_interactive_flag_sets_source_filter_override() {
+        let interactive =
+            finalize_resume_from_args(["codex", "resume", "--include-non-interactive"].as_ref());
+
+        assert!(interactive.resume_picker);
+        assert!(interactive.resume_include_non_interactive);
     }
 
     #[test]

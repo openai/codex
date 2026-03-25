@@ -60,6 +60,21 @@ pub enum SessionPickerAction {
     Fork,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum SessionSourceFilter {
+    InteractiveOnly,
+    IncludeNonInteractive,
+}
+
+impl SessionSourceFilter {
+    fn allowed_sources(self) -> &'static [codex_protocol::protocol::SessionSource] {
+        match self {
+            SessionSourceFilter::InteractiveOnly => INTERACTIVE_SESSION_SOURCES.as_slice(),
+            SessionSourceFilter::IncludeNonInteractive => &[],
+        }
+    }
+}
+
 impl SessionPickerAction {
     fn title(self) -> &'static str {
         match self {
@@ -116,15 +131,24 @@ enum BackgroundEvent {
 /// new sessions appear during pagination.
 ///
 /// Filtering happens in two layers:
-/// 1. Provider and source filtering at the backend (only interactive CLI sessions
-///    for the current model provider).
+/// 1. Provider and source filtering at the backend (interactive sessions for the
+///    current model provider by default, optionally including non-interactive
+///    sessions).
 /// 2. Working-directory filtering at the picker (unless `--all` is passed).
 pub async fn run_resume_picker(
     tui: &mut Tui,
     config: &Config,
     show_all: bool,
+    source_filter: SessionSourceFilter,
 ) -> Result<SessionSelection> {
-    run_session_picker(tui, config, show_all, SessionPickerAction::Resume).await
+    run_session_picker(
+        tui,
+        config,
+        show_all,
+        source_filter,
+        SessionPickerAction::Resume,
+    )
+    .await
 }
 
 pub async fn run_fork_picker(
@@ -132,13 +156,21 @@ pub async fn run_fork_picker(
     config: &Config,
     show_all: bool,
 ) -> Result<SessionSelection> {
-    run_session_picker(tui, config, show_all, SessionPickerAction::Fork).await
+    run_session_picker(
+        tui,
+        config,
+        show_all,
+        SessionSourceFilter::InteractiveOnly,
+        SessionPickerAction::Fork,
+    )
+    .await
 }
 
 async fn run_session_picker(
     tui: &mut Tui,
     config: &Config,
     show_all: bool,
+    source_filter: SessionSourceFilter,
     action: SessionPickerAction,
 ) -> Result<SessionSelection> {
     let alt = AltScreenGuard::enter(tui);
@@ -154,6 +186,7 @@ async fn run_session_picker(
 
     let config = config.clone();
     let loader_tx = bg_tx.clone();
+    let allowed_sources = source_filter.allowed_sources();
     let page_loader: PageLoader = Arc::new(move |request: PageLoadRequest| {
         let tx = loader_tx.clone();
         let config = config.clone();
@@ -164,7 +197,7 @@ async fn run_session_picker(
                 PAGE_SIZE,
                 request.cursor.as_ref(),
                 request.sort_key,
-                INTERACTIVE_SESSION_SOURCES.as_slice(),
+                allowed_sources,
                 Some(provider_filter.as_slice()),
                 request.default_provider.as_str(),
                 /*search_term*/ None,

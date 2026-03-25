@@ -25,6 +25,7 @@ members = [
     "skills",
     "core",
     "hooks",
+    "instructions",
     "secrets",
     "exec",
     "exec-server",
@@ -68,6 +69,7 @@ members = [
     "utils/oss",
     "utils/output-truncation",
     "utils/path-utils",
+    "utils/plugins",
     "utils/fuzzy-match",
     "utils/stream-parser",
     "utils/template",
@@ -78,6 +80,7 @@ members = [
     "codex-experimental-api-macros",
     "test-macros",
     "package-manager",
+    "plugin",
     "artifacts",
 ]
 resolver = "2"
@@ -123,6 +126,7 @@ codex-features = { path = "features" }
 codex-file-search = { path = "file-search" }
 codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
+codex-instructions = { path = "instructions" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
@@ -131,6 +135,7 @@ codex-mcp-server = { path = "mcp-server" }
 codex-network-proxy = { path = "network-proxy" }
 codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
+codex-plugin = { path = "plugin" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-rollout = { path = "rollout" }
@@ -161,6 +166,7 @@ codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-oss = { path = "utils/oss" }
 codex-utils-output-truncation = { path = "utils/output-truncation" }
 codex-utils-path = { path = "utils/path-utils" }
+codex-utils-plugins = { path = "utils/plugins" }
 codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }

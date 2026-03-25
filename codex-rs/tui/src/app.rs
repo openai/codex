@@ -2819,6 +2819,7 @@ impl App {
                     tui,
                     &self.config,
                     /*show_all*/ false,
+                    crate::resume_picker::SessionSourceFilter::InteractiveOnly,
                 )
                 .await?
                 {
