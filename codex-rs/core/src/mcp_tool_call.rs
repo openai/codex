@@ -19,6 +19,8 @@ use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::types::AppToolApproval;
 use crate::connectors;
+use crate::guardian::GUARDIAN_TIMEOUT_MESSAGE;
+use crate::guardian::GuardianApprovalDecision;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::GuardianMcpAnnotations;
 use crate::guardian::guardian_approval_request_to_json;
@@ -187,6 +189,17 @@ pub(crate) async fn handle_mcp_tool_call(
             }
             McpToolApprovalDecision::Decline => {
                 let message = "user rejected MCP tool call".to_string();
+                notify_mcp_tool_call_skip(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    &call_id,
+                    invocation,
+                    message,
+                    /*already_started*/ true,
+                )
+                .await
+            }
+            McpToolApprovalDecision::TimedOut(message) => {
                 notify_mcp_tool_call_skip(
                     sess.as_ref(),
                     turn_context.as_ref(),
@@ -374,6 +387,7 @@ enum McpToolApprovalDecision {
     AcceptForSession,
     AcceptAndRemember,
     Decline,
+    TimedOut(String),
     Cancel,
     BlockedBySafetyMonitor(String),
 }
@@ -441,6 +455,7 @@ pub(crate) const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Allow for this se
 // real "Decline" answer, so this lets guardian denials round-trip distinctly from user cancel.
 // This is not a user-facing option.
 pub(crate) const MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC: &str = "__codex_mcp_decline__";
+pub(crate) const MCP_TOOL_APPROVAL_TIMED_OUT_SYNTHETIC: &str = "__codex_mcp_timed_out__";
 const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER: &str = "Allow and don't ask me again";
 const MCP_TOOL_APPROVAL_CANCEL: &str = "Cancel";
 const MCP_TOOL_APPROVAL_KIND_KEY: &str = "codex_approval_kind";
@@ -744,13 +759,17 @@ pub(crate) fn build_guardian_mcp_tool_review_request(
     }
 }
 
-fn mcp_tool_approval_decision_from_guardian(decision: ReviewDecision) -> McpToolApprovalDecision {
+fn mcp_tool_approval_decision_from_guardian(
+    decision: GuardianApprovalDecision,
+) -> McpToolApprovalDecision {
     match decision {
-        ReviewDecision::Approved
-        | ReviewDecision::ApprovedExecpolicyAmendment { .. }
-        | ReviewDecision::NetworkPolicyAmendment { .. } => McpToolApprovalDecision::Accept,
-        ReviewDecision::ApprovedForSession => McpToolApprovalDecision::AcceptForSession,
-        ReviewDecision::Denied | ReviewDecision::Abort => McpToolApprovalDecision::Decline,
+        GuardianApprovalDecision::Approved => McpToolApprovalDecision::Accept,
+        GuardianApprovalDecision::Denied | GuardianApprovalDecision::Aborted => {
+            McpToolApprovalDecision::Decline
+        }
+        GuardianApprovalDecision::TimedOut => {
+            McpToolApprovalDecision::TimedOut(GUARDIAN_TIMEOUT_MESSAGE.to_string())
+        }
     }
 }
 
@@ -1179,6 +1198,11 @@ fn parse_mcp_tool_approval_response(
         McpToolApprovalDecision::Decline
     } else if answers
         .iter()
+        .any(|answer| answer == MCP_TOOL_APPROVAL_TIMED_OUT_SYNTHETIC)
+    {
+        McpToolApprovalDecision::TimedOut(GUARDIAN_TIMEOUT_MESSAGE.to_string())
+    } else if answers
+        .iter()
         .any(|answer| answer == MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION)
     {
         McpToolApprovalDecision::AcceptForSession
@@ -1245,6 +1269,7 @@ async fn apply_mcp_tool_approval_decision(
         }
         McpToolApprovalDecision::Accept
         | McpToolApprovalDecision::Decline
+        | McpToolApprovalDecision::TimedOut(_)
         | McpToolApprovalDecision::Cancel
         | McpToolApprovalDecision::BlockedBySafetyMonitor(_) => {}
     }

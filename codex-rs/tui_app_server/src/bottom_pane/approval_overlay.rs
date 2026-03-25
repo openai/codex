@@ -1079,7 +1079,11 @@ mod tests {
         let mut saw_op = false;
         while let Ok(ev) = rx.try_recv() {
             if let AppEvent::SubmitThreadOp {
-                op: Op::ExecApproval { decision, .. },
+                op:
+                    Op::ExecApproval {
+                        outcome: codex_protocol::protocol::ApprovalOutcome::Decision { decision },
+                        ..
+                    },
                 ..
             } = ev
             {
@@ -1529,7 +1533,11 @@ mod tests {
         let mut decision = None;
         while let Ok(ev) = rx.try_recv() {
             if let AppEvent::SubmitThreadOp {
-                op: Op::ExecApproval { decision: d, .. },
+                op:
+                    Op::ExecApproval {
+                        outcome: codex_protocol::protocol::ApprovalOutcome::Decision { decision: d },
+                        ..
+                    },
                 ..
             } = ev
             {

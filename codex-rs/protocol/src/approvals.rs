@@ -98,6 +98,7 @@ pub enum GuardianAssessmentStatus {
     InProgress,
     Approved,
     Denied,
+    TimedOut,
     Aborted,
 }
 

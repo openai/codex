@@ -113,7 +113,9 @@ pub(crate) async fn on_patch_approval_response(
             if let Err(submit_err) = codex
                 .submit(Op::PatchApproval {
                     id: approval_id.clone(),
-                    decision: ReviewDecision::Denied,
+                    outcome: codex_protocol::protocol::ApprovalOutcome::from(
+                        ReviewDecision::Denied,
+                    ),
                 })
                 .await
             {
@@ -133,7 +135,7 @@ pub(crate) async fn on_patch_approval_response(
     if let Err(err) = codex
         .submit(Op::PatchApproval {
             id: approval_id,
-            decision: response.decision,
+            outcome: codex_protocol::protocol::ApprovalOutcome::from(response.decision),
         })
         .await
     {

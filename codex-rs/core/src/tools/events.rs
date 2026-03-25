@@ -333,6 +333,11 @@ impl ToolEmitter {
                 let result = Err(FunctionCallError::RespondToModel(message));
                 (event, result)
             }
+            Err(ToolError::Message(msg)) => {
+                let event = ToolEventStage::Failure(ToolEventFailure::Message(msg.clone()));
+                let result = Err(FunctionCallError::RespondToModel(msg));
+                (event, result)
+            }
             Err(ToolError::Rejected(msg)) => {
                 // Normalize common rejection messages for exec tools so tests and
                 // users see a clear, consistent phrase.

@@ -35,8 +35,8 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
@@ -865,7 +865,7 @@ impl SessionTelemetry {
         &self,
         tool_name: &str,
         call_id: &str,
-        decision: &ReviewDecision,
+        outcome: &ApprovalOutcome,
         source: ToolDecisionSource,
     ) {
         log_event!(
@@ -873,7 +873,7 @@ impl SessionTelemetry {
             event.name = "codex.tool_decision",
             tool_name = %tool_name,
             call_id = %call_id,
-            decision = %decision.clone().to_string().to_lowercase(),
+            decision = %outcome.to_opaque_string(),
             source = %source.to_string(),
         );
     }

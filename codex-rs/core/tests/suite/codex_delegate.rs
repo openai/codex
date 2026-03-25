@@ -1,5 +1,6 @@
 use codex_core::config::Constrained;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -102,7 +103,7 @@ async fn codex_delegate_forwards_exec_approval_and_proceeds_on_approval() {
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Approved,
+            outcome: ApprovalOutcome::from(ReviewDecision::Approved),
         })
         .await
         .expect("submit exec approval");
@@ -181,7 +182,7 @@ async fn codex_delegate_forwards_patch_approval_and_proceeds_on_decision() {
     test.codex
         .submit(Op::PatchApproval {
             id: approval.call_id,
-            decision: ReviewDecision::Denied,
+            outcome: ApprovalOutcome::from(ReviewDecision::Denied),
         })
         .await
         .expect("submit patch approval");

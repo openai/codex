@@ -9,6 +9,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::mcp::RequestId as McpRequestId;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationStartParams;
@@ -68,11 +69,11 @@ pub(crate) enum AppCommandView<'a> {
     ExecApproval {
         id: &'a str,
         turn_id: &'a Option<String>,
-        decision: &'a ReviewDecision,
+        outcome: &'a ApprovalOutcome,
     },
     PatchApproval {
         id: &'a str,
-        decision: &'a ReviewDecision,
+        outcome: &'a ApprovalOutcome,
     },
     ResolveElicitation {
         server_name: &'a str,
@@ -209,12 +210,15 @@ impl AppCommand {
         Self(Op::ExecApproval {
             id,
             turn_id,
-            decision,
+            outcome: ApprovalOutcome::from(decision),
         })
     }
 
     pub(crate) fn patch_approval(id: String, decision: ReviewDecision) -> Self {
-        Self(Op::PatchApproval { id, decision })
+        Self(Op::PatchApproval {
+            id,
+            outcome: ApprovalOutcome::from(decision),
+        })
     }
 
     pub(crate) fn resolve_elicitation(
@@ -356,13 +360,13 @@ impl AppCommand {
             Op::ExecApproval {
                 id,
                 turn_id,
-                decision,
+                outcome,
             } => AppCommandView::ExecApproval {
                 id,
                 turn_id,
-                decision,
+                outcome,
             },
-            Op::PatchApproval { id, decision } => AppCommandView::PatchApproval { id, decision },
+            Op::PatchApproval { id, outcome } => AppCommandView::PatchApproval { id, outcome },
             Op::ResolveElicitation {
                 server_name,
                 request_id,

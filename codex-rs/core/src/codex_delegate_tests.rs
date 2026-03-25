@@ -6,6 +6,7 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
@@ -342,7 +343,92 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
         Op::ExecApproval {
             id: "callback-approval-1".to_string(),
             turn_id: Some("child-turn-1".to_string()),
-            decision: ReviewDecision::Abort,
+            outcome: ApprovalOutcome::from(ReviewDecision::Abort),
+        }
+    );
+}
+
+#[tokio::test]
+async fn handle_exec_approval_preserves_timed_out_outcome_for_reply() {
+    let (parent_session, parent_ctx, rx_events) =
+        crate::codex::make_session_and_context_with_rx().await;
+    *parent_session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+
+    let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_tx_events, rx_events_child) = bounded(SUBMISSION_CHANNEL_CAPACITY);
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let codex = Arc::new(Codex {
+        tx_sub,
+        rx_event: rx_events_child,
+        agent_status,
+        session: Arc::clone(&parent_session),
+        session_loop_termination: completed_session_loop_termination(),
+    });
+
+    let cancel_token = CancellationToken::new();
+    let handle = tokio::spawn({
+        let codex = Arc::clone(&codex);
+        let parent_session = Arc::clone(&parent_session);
+        let parent_ctx = Arc::clone(&parent_ctx);
+        let cancel_token = cancel_token.clone();
+        async move {
+            handle_exec_approval(
+                codex.as_ref(),
+                "child-turn-1".to_string(),
+                &parent_session,
+                &parent_ctx,
+                ExecApprovalRequestEvent {
+                    call_id: "command-item-1".to_string(),
+                    approval_id: Some("callback-approval-1".to_string()),
+                    turn_id: "child-turn-1".to_string(),
+                    command: vec!["rm".to_string(), "-rf".to_string(), "tmp".to_string()],
+                    cwd: PathBuf::from("/tmp"),
+                    reason: Some("unsafe subcommand".to_string()),
+                    network_approval_context: None,
+                    proposed_execpolicy_amendment: None,
+                    proposed_network_policy_amendments: None,
+                    additional_permissions: None,
+                    skill_metadata: None,
+                    available_decisions: Some(vec![
+                        ReviewDecision::Approved,
+                        ReviewDecision::Abort,
+                    ]),
+                    parsed_cmd: Vec::new(),
+                },
+                &cancel_token,
+            )
+            .await;
+        }
+    });
+
+    let request_event = timeout(Duration::from_secs(2), rx_events.recv())
+        .await
+        .expect("timed out waiting for exec approval request")
+        .expect("exec approval request missing");
+    let EventMsg::ExecApprovalRequest(request) = request_event.msg else {
+        panic!("expected ExecApprovalRequest event");
+    };
+    assert_eq!(request.effective_approval_id(), "callback-approval-1");
+
+    parent_session
+        .notify_approval("callback-approval-1", ApprovalOutcome::TimedOut)
+        .await;
+
+    timeout(Duration::from_secs(2), handle)
+        .await
+        .expect("handle_exec_approval hung")
+        .expect("handle_exec_approval join error");
+
+    let submission = timeout(Duration::from_secs(2), rx_sub.recv())
+        .await
+        .expect("exec approval response timed out")
+        .expect("exec approval response missing");
+    assert_eq!(
+        submission.op,
+        Op::ExecApproval {
+            id: "callback-approval-1".to_string(),
+            turn_id: Some("child-turn-1".to_string()),
+            outcome: ApprovalOutcome::TimedOut,
         }
     );
 }

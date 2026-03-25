@@ -10,6 +10,7 @@ use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecToolCallOutput;
 use crate::guardian::GUARDIAN_REJECTION_MESSAGE;
+use crate::guardian::GUARDIAN_TIMEOUT_MESSAGE;
 use crate::guardian::routes_approval_to_guardian;
 use crate::network_policy_decision::network_approval_context_from_payload;
 use crate::tools::network_approval::DeferredNetworkApproval;
@@ -26,6 +27,7 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::default_exec_approval_requirement;
 use codex_otel::ToolDecisionSource;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ReviewDecision;
@@ -39,6 +41,15 @@ pub(crate) struct ToolOrchestrator {
 pub(crate) struct OrchestratorRunResult<Out> {
     pub output: Out,
     pub deferred_network_approval: Option<DeferredNetworkApproval>,
+}
+
+fn approval_denial_tool_error(turn_ctx: &crate::codex::TurnContext) -> ToolError {
+    let reason = if routes_approval_to_guardian(turn_ctx) {
+        GUARDIAN_REJECTION_MESSAGE.to_string()
+    } else {
+        "rejected by user".to_string()
+    };
+    ToolError::Rejected(reason)
 }
 
 impl ToolOrchestrator {
@@ -124,7 +135,12 @@ impl ToolOrchestrator {
         });
         match requirement {
             ExecApprovalRequirement::Skip { .. } => {
-                otel.tool_decision(otel_tn, otel_ci, &ReviewDecision::Approved, otel_cfg);
+                otel.tool_decision(
+                    otel_tn,
+                    otel_ci,
+                    &ApprovalOutcome::from(ReviewDecision::Approved),
+                    otel_cfg,
+                );
             }
             ExecApprovalRequirement::Forbidden { reason } => {
                 return Err(ToolError::Rejected(reason));
@@ -137,29 +153,34 @@ impl ToolOrchestrator {
                     retry_reason: reason,
                     network_approval_context: None,
                 };
-                let decision = tool.start_approval_async(req, approval_ctx).await;
+                let approval_outcome = tool.start_approval_async(req, approval_ctx).await;
                 let otel_source = if routes_approval_to_guardian(turn_ctx) {
                     otel_automated_reviewer.clone()
                 } else {
                     otel_user.clone()
                 };
+                otel.tool_decision(otel_tn, otel_ci, &approval_outcome, otel_source);
 
-                otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
-
-                match decision {
-                    ReviewDecision::Denied | ReviewDecision::Abort => {
-                        let reason = if routes_approval_to_guardian(turn_ctx) {
-                            GUARDIAN_REJECTION_MESSAGE.to_string()
-                        } else {
-                            "rejected by user".to_string()
-                        };
-                        return Err(ToolError::Rejected(reason));
+                match approval_outcome {
+                    ApprovalOutcome::TimedOut => {
+                        return Err(ToolError::Message(GUARDIAN_TIMEOUT_MESSAGE.to_string()));
                     }
-                    ReviewDecision::Approved
-                    | ReviewDecision::ApprovedExecpolicyAmendment { .. }
-                    | ReviewDecision::ApprovedForSession => {}
-                    ReviewDecision::NetworkPolicyAmendment {
-                        network_policy_amendment,
+                    ApprovalOutcome::Decision {
+                        decision: ReviewDecision::Denied | ReviewDecision::Abort,
+                    } => {
+                        return Err(approval_denial_tool_error(turn_ctx));
+                    }
+                    ApprovalOutcome::Decision {
+                        decision:
+                            ReviewDecision::Approved
+                            | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+                            | ReviewDecision::ApprovedForSession,
+                    } => {}
+                    ApprovalOutcome::Decision {
+                        decision:
+                            ReviewDecision::NetworkPolicyAmendment {
+                                network_policy_amendment,
+                            },
                     } => match network_policy_amendment.action {
                         NetworkPolicyRuleAction::Allow => {}
                         NetworkPolicyRuleAction::Deny => {
@@ -291,28 +312,34 @@ impl ToolOrchestrator {
                         network_approval_context: network_approval_context.clone(),
                     };
 
-                    let decision = tool.start_approval_async(req, approval_ctx).await;
+                    let approval_outcome = tool.start_approval_async(req, approval_ctx).await;
                     let otel_source = if routes_approval_to_guardian(turn_ctx) {
                         otel_automated_reviewer
                     } else {
                         otel_user
                     };
-                    otel.tool_decision(otel_tn, otel_ci, &decision, otel_source);
+                    otel.tool_decision(otel_tn, otel_ci, &approval_outcome, otel_source);
 
-                    match decision {
-                        ReviewDecision::Denied | ReviewDecision::Abort => {
-                            let reason = if routes_approval_to_guardian(turn_ctx) {
-                                GUARDIAN_REJECTION_MESSAGE.to_string()
-                            } else {
-                                "rejected by user".to_string()
-                            };
-                            return Err(ToolError::Rejected(reason));
+                    match approval_outcome {
+                        ApprovalOutcome::TimedOut => {
+                            return Err(ToolError::Message(GUARDIAN_TIMEOUT_MESSAGE.to_string()));
                         }
-                        ReviewDecision::Approved
-                        | ReviewDecision::ApprovedExecpolicyAmendment { .. }
-                        | ReviewDecision::ApprovedForSession => {}
-                        ReviewDecision::NetworkPolicyAmendment {
-                            network_policy_amendment,
+                        ApprovalOutcome::Decision {
+                            decision: ReviewDecision::Denied | ReviewDecision::Abort,
+                        } => {
+                            return Err(approval_denial_tool_error(turn_ctx));
+                        }
+                        ApprovalOutcome::Decision {
+                            decision:
+                                ReviewDecision::Approved
+                                | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+                                | ReviewDecision::ApprovedForSession,
+                        } => {}
+                        ApprovalOutcome::Decision {
+                            decision:
+                                ReviewDecision::NetworkPolicyAmendment {
+                                    network_policy_amendment,
+                                },
                         } => match network_policy_amendment.action {
                             NetworkPolicyRuleAction::Allow => {}
                             NetworkPolicyRuleAction::Deny => {

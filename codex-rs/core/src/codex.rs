@@ -266,6 +266,7 @@ use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
 use crate::protocol::ApplyPatchApprovalRequestEvent;
+use crate::protocol::ApprovalOutcome;
 use crate::protocol::AskForApproval;
 use crate::protocol::BackgroundEventEvent;
 use crate::protocol::CompactedItem;
@@ -2883,7 +2884,7 @@ impl Session {
         additional_permissions: Option<PermissionProfile>,
         skill_metadata: Option<ExecApprovalRequestSkillMetadata>,
         available_decisions: Option<Vec<ReviewDecision>>,
-    ) -> ReviewDecision {
+    ) -> ApprovalOutcome {
         //  command-level approvals use `call_id`.
         // `approval_id` is only present for subcommand callbacks (execve intercept)
         let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
@@ -2940,7 +2941,9 @@ impl Session {
             parsed_cmd,
         });
         self.send_event(turn_context, event).await;
-        rx_approve.await.unwrap_or(ReviewDecision::Abort)
+        rx_approve
+            .await
+            .unwrap_or_else(|_| ApprovalOutcome::from(ReviewDecision::Abort))
     }
 
     pub async fn request_patch_approval(
@@ -2950,7 +2953,7 @@ impl Session {
         changes: HashMap<PathBuf, FileChange>,
         reason: Option<String>,
         grant_root: Option<PathBuf>,
-    ) -> oneshot::Receiver<ReviewDecision> {
+    ) -> oneshot::Receiver<ApprovalOutcome> {
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
         let approval_id = call_id.clone();
@@ -3244,7 +3247,7 @@ impl Session {
         }
     }
 
-    pub async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {
+    pub async fn notify_approval(&self, approval_id: &str, outcome: ApprovalOutcome) {
         let entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
@@ -3257,7 +3260,7 @@ impl Session {
         };
         match entry {
             Some(tx_approve) => {
-                tx_approve.send(decision).ok();
+                tx_approve.send(outcome).ok();
             }
             None => {
                 warn!("No pending approval found for call_id: {approval_id}");
@@ -4333,13 +4336,13 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 Op::ExecApproval {
                     id: approval_id,
                     turn_id,
-                    decision,
+                    outcome,
                 } => {
-                    handlers::exec_approval(&sess, approval_id, turn_id, decision).await;
+                    handlers::exec_approval(&sess, approval_id, turn_id, outcome).await;
                     false
                 }
-                Op::PatchApproval { id, decision } => {
-                    handlers::patch_approval(&sess, id, decision).await;
+                Op::PatchApproval { id, outcome } => {
+                    handlers::patch_approval(&sess, id, outcome).await;
                     false
                 }
                 Op::UserInputAnswer { id, response } => {
@@ -4505,6 +4508,7 @@ mod handlers {
     use crate::tasks::UserShellCommandTask;
     use crate::tasks::execute_user_shell_command;
     use codex_protocol::custom_prompts::CustomPrompt;
+    use codex_protocol::protocol::ApprovalOutcome;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
@@ -4749,12 +4753,15 @@ mod handlers {
         sess: &Arc<Session>,
         approval_id: String,
         turn_id: Option<String>,
-        decision: ReviewDecision,
+        outcome: ApprovalOutcome,
     ) {
         let event_turn_id = turn_id.unwrap_or_else(|| approval_id.clone());
-        if let ReviewDecision::ApprovedExecpolicyAmendment {
-            proposed_execpolicy_amendment,
-        } = &decision
+        if let ApprovalOutcome::Decision {
+            decision:
+                ReviewDecision::ApprovedExecpolicyAmendment {
+                    proposed_execpolicy_amendment,
+                },
+        } = &outcome
         {
             match sess
                 .persist_execpolicy_amendment(proposed_execpolicy_amendment)
@@ -4779,17 +4786,21 @@ mod handlers {
                 }
             }
         }
-        match decision {
-            ReviewDecision::Abort => {
+        match outcome {
+            ApprovalOutcome::Decision {
+                decision: ReviewDecision::Abort,
+            } => {
                 sess.interrupt_task().await;
             }
             other => sess.notify_approval(&approval_id, other).await,
         }
     }
 
-    pub async fn patch_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
-        match decision {
-            ReviewDecision::Abort => {
+    pub async fn patch_approval(sess: &Arc<Session>, id: String, outcome: ApprovalOutcome) {
+        match outcome {
+            ApprovalOutcome::Decision {
+                decision: ReviewDecision::Abort,
+            } => {
                 sess.interrupt_task().await;
             }
             other => sess.notify_approval(&id, other).await,

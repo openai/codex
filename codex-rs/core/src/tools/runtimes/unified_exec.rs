@@ -39,7 +39,7 @@ use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_sandboxing::SandboxablePreference;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
@@ -111,7 +111,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         &'b mut self,
         req: &'b UnifiedExecRequest,
         ctx: ApprovalCtx<'b>,
-    ) -> BoxFuture<'b, ReviewDecision> {
+    ) -> BoxFuture<'b, ApprovalOutcome> {
         let keys = self.approval_keys(req);
         let session = ctx.session;
         let turn = ctx.turn;
@@ -136,7 +136,8 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                     },
                     retry_reason,
                 )
-                .await;
+                .await
+                .into();
             }
             with_cached_approval(&session.services, "unified_exec", keys, || async move {
                 let available_decisions = None;

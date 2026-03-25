@@ -760,7 +760,7 @@ mod tests {
         store.note_outbound_op(&Op::ExecApproval {
             id: "approval-1".to_string(),
             turn_id: Some("turn-1".to_string()),
-            decision: ReviewDecision::Approved,
+            outcome: codex_protocol::protocol::ApprovalOutcome::from(ReviewDecision::Approved),
         });
 
         let snapshot = store.snapshot();
@@ -847,7 +847,7 @@ mod tests {
 
         store.note_outbound_op(&Op::PatchApproval {
             id: "call-1".to_string(),
-            decision: ReviewDecision::Approved,
+            outcome: codex_protocol::protocol::ApprovalOutcome::from(ReviewDecision::Approved),
         });
 
         let snapshot = store.snapshot();
@@ -911,7 +911,7 @@ mod tests {
         store.note_outbound_op(&Op::ExecApproval {
             id: "call-1".to_string(),
             turn_id: Some("turn-1".to_string()),
-            decision: ReviewDecision::Approved,
+            outcome: codex_protocol::protocol::ApprovalOutcome::from(ReviewDecision::Approved),
         });
 
         assert_eq!(store.has_pending_thread_approvals(), false);

@@ -36,7 +36,7 @@ use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_sandboxing::SandboxablePreference;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
@@ -143,7 +143,7 @@ impl Approvable<ShellRequest> for ShellRuntime {
         &'a mut self,
         req: &'a ShellRequest,
         ctx: ApprovalCtx<'a>,
-    ) -> BoxFuture<'a, ReviewDecision> {
+    ) -> BoxFuture<'a, ApprovalOutcome> {
         let keys = self.approval_keys(req);
         let command = req.command.clone();
         let cwd = req.cwd.clone();
@@ -167,7 +167,8 @@ impl Approvable<ShellRequest> for ShellRuntime {
                     },
                     retry_reason,
                 )
-                .await;
+                .await
+                .into();
             }
             with_cached_approval(&session.services, "shell", keys, move || async move {
                 let available_decisions = None;

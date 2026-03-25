@@ -5,6 +5,7 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use codex_async_utils::OrCancelExt;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
@@ -44,6 +45,7 @@ use crate::guardian::routes_approval_to_guardian;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
+use crate::mcp_tool_call::MCP_TOOL_APPROVAL_TIMED_OUT_SYNTHETIC;
 use crate::mcp_tool_call::build_guardian_mcp_tool_review_request;
 use crate::mcp_tool_call::is_mcp_tool_approval_question_id;
 use crate::mcp_tool_call::lookup_mcp_tool_metadata;
@@ -436,7 +438,7 @@ async fn handle_exec_approval(
         available_decisions,
         ..
     } = event;
-    let decision = if routes_approval_to_guardian(parent_ctx) {
+    let outcome = if routes_approval_to_guardian(parent_ctx) {
         let review_cancel = cancel_token.child_token();
         let review_rx = spawn_guardian_review(
             Arc::clone(parent_session),
@@ -457,7 +459,11 @@ async fn handle_exec_approval(
             review_cancel.clone(),
         );
         await_approval_with_cancel(
-            async move { review_rx.await.unwrap_or_default() },
+            async move {
+                review_rx
+                    .await
+                    .unwrap_or_else(|_| ApprovalOutcome::from(ReviewDecision::Denied))
+            },
             parent_session,
             &approval_id_for_op,
             cancel_token,
@@ -491,7 +497,7 @@ async fn handle_exec_approval(
         .submit(Op::ExecApproval {
             id: approval_id_for_op,
             turn_id: Some(turn_id),
-            decision,
+            outcome,
         })
         .await;
 }
@@ -513,7 +519,7 @@ async fn handle_patch_approval(
         ..
     } = event;
     let approval_id = call_id.clone();
-    let guardian_decision = if routes_approval_to_guardian(parent_ctx) {
+    let guardian_outcome = if routes_approval_to_guardian(parent_ctx) {
         let change_count = changes.len();
         let maybe_files = changes
             .keys()
@@ -563,7 +569,11 @@ async fn handle_patch_approval(
             );
             Some(
                 await_approval_with_cancel(
-                    async move { review_rx.await.unwrap_or_default() },
+                    async move {
+                        review_rx
+                            .await
+                            .unwrap_or_else(|_| ApprovalOutcome::from(ReviewDecision::Denied))
+                    },
                     parent_session,
                     &approval_id,
                     cancel_token,
@@ -577,14 +587,18 @@ async fn handle_patch_approval(
     } else {
         None
     };
-    let decision = if let Some(decision) = guardian_decision {
-        decision
+    let outcome = if let Some(outcome) = guardian_outcome {
+        outcome
     } else {
         let decision_rx = parent_session
             .request_patch_approval(parent_ctx, call_id, changes, reason, grant_root)
             .await;
         await_approval_with_cancel(
-            async move { decision_rx.await.unwrap_or_default() },
+            async move {
+                decision_rx
+                    .await
+                    .unwrap_or_else(|_| ApprovalOutcome::from(ReviewDecision::Abort))
+            },
             parent_session,
             &approval_id,
             cancel_token,
@@ -595,7 +609,7 @@ async fn handle_patch_approval(
     let _ = codex
         .submit(Op::PatchApproval {
             id: approval_id,
-            decision,
+            outcome,
         })
         .await;
 }
@@ -679,16 +693,22 @@ async fn maybe_auto_review_mcp_request_user_input(
         /*retry_reason*/ None,
         review_cancel.clone(),
     );
-    let decision = await_approval_with_cancel(
-        async move { review_rx.await.unwrap_or_default() },
+    let outcome = await_approval_with_cancel(
+        async move {
+            review_rx
+                .await
+                .unwrap_or_else(|_| ApprovalOutcome::from(ReviewDecision::Denied))
+        },
         parent_session,
         &event.call_id,
         cancel_token,
         Some(&review_cancel),
     )
     .await;
-    let selected_label = match decision {
-        ReviewDecision::ApprovedForSession => question
+    let selected_label = match outcome {
+        ApprovalOutcome::Decision {
+            decision: ReviewDecision::ApprovedForSession,
+        } => question
             .options
             .as_ref()
             .and_then(|options| {
@@ -698,12 +718,16 @@ async fn maybe_auto_review_mcp_request_user_input(
             })
             .map(|option| option.label.clone())
             .unwrap_or_else(|| MCP_TOOL_APPROVAL_ACCEPT.to_string()),
-        ReviewDecision::Approved
-        | ReviewDecision::ApprovedExecpolicyAmendment { .. }
-        | ReviewDecision::NetworkPolicyAmendment { .. } => MCP_TOOL_APPROVAL_ACCEPT.to_string(),
-        ReviewDecision::Denied | ReviewDecision::Abort => {
-            MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC.to_string()
-        }
+        ApprovalOutcome::Decision {
+            decision:
+                ReviewDecision::Approved
+                | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+                | ReviewDecision::NetworkPolicyAmendment { .. },
+        } => MCP_TOOL_APPROVAL_ACCEPT.to_string(),
+        ApprovalOutcome::TimedOut => MCP_TOOL_APPROVAL_TIMED_OUT_SYNTHETIC.to_string(),
+        ApprovalOutcome::Decision {
+            decision: ReviewDecision::Denied | ReviewDecision::Abort,
+        } => MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC.to_string(),
     };
     Some(RequestUserInputResponse {
         answers: HashMap::from([(
@@ -721,14 +745,14 @@ fn spawn_guardian_review(
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     cancel_token: CancellationToken,
-) -> oneshot::Receiver<ReviewDecision> {
+) -> oneshot::Receiver<ApprovalOutcome> {
     let (tx, rx) = oneshot::channel();
     std::thread::spawn(move || {
         let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
         else {
-            let _ = tx.send(ReviewDecision::Denied);
+            let _ = tx.send(ApprovalOutcome::from(ReviewDecision::Denied));
             return;
         };
         let decision = runtime.block_on(review_approval_request_with_cancel(
@@ -738,7 +762,7 @@ fn spawn_guardian_review(
             retry_reason,
             cancel_token,
         ));
-        let _ = tx.send(decision);
+        let _ = tx.send(decision.into());
     });
     rx
 }
@@ -821,16 +845,16 @@ where
     }
 }
 
-/// Await an approval decision, aborting on cancellation.
+/// Await an approval outcome, aborting on cancellation.
 async fn await_approval_with_cancel<F>(
     fut: F,
     parent_session: &Session,
     approval_id: &str,
     cancel_token: &CancellationToken,
     review_cancel_token: Option<&CancellationToken>,
-) -> codex_protocol::protocol::ReviewDecision
+) -> ApprovalOutcome
 where
-    F: core::future::Future<Output = codex_protocol::protocol::ReviewDecision>,
+    F: core::future::Future<Output = ApprovalOutcome>,
 {
     tokio::select! {
         biased;
@@ -838,13 +862,14 @@ where
             if let Some(review_cancel_token) = review_cancel_token {
                 review_cancel_token.cancel();
             }
+            let abort = ApprovalOutcome::from(ReviewDecision::Abort);
             parent_session
-                .notify_approval(approval_id, codex_protocol::protocol::ReviewDecision::Abort)
+                .notify_approval(approval_id, abort.clone())
                 .await;
-            codex_protocol::protocol::ReviewDecision::Abort
+            abort
         }
-        decision = fut => {
-            decision
+        outcome = fut => {
+            outcome
         }
     }
 }

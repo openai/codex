@@ -374,16 +374,16 @@ pub enum Op {
         /// Turn id associated with the approval event, when available.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         turn_id: Option<String>,
-        /// The user's decision in response to the request.
-        decision: ReviewDecision,
+        /// The outcome of resolving the request.
+        outcome: ApprovalOutcome,
     },
 
     /// Approve a code patch
     PatchApproval {
         /// The id of the submission we are approving
         id: String,
-        /// The user's decision in response to the request.
-        decision: ReviewDecision,
+        /// The outcome of resolving the request.
+        outcome: ApprovalOutcome,
     },
 
     /// Resolve an MCP elicitation request.
@@ -3333,6 +3333,45 @@ impl ReviewDecision {
             ReviewDecision::Denied => "denied",
             ReviewDecision::Abort => "abort",
         }
+    }
+}
+
+/// Result of resolving an approval request.
+///
+/// `ReviewDecision` represents the generic approval choices available to a
+/// user or policy surface. Some approval flows, such as guardian review, can
+/// also end without an intentional rejection. Those cases are represented as a
+/// richer outcome here so timeout information can survive hops through session
+/// state and delegated subagents.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ApprovalOutcome {
+    Decision { decision: ReviewDecision },
+    TimedOut,
+}
+
+impl ApprovalOutcome {
+    /// Returns an opaque version of the outcome without PII. We can't use an
+    /// ignored flag on `serde` because the serialization is required by some
+    /// surfaces.
+    pub fn to_opaque_string(&self) -> &'static str {
+        match self {
+            Self::Decision { decision } => decision.to_opaque_string(),
+            Self::TimedOut => "timed_out",
+        }
+    }
+
+    pub fn into_decision(self) -> Option<ReviewDecision> {
+        match self {
+            Self::Decision { decision } => Some(decision),
+            Self::TimedOut => None,
+        }
+    }
+}
+
+impl From<ReviewDecision> for ApprovalOutcome {
+    fn from(decision: ReviewDecision) -> Self {
+        Self::Decision { decision }
     }
 }
 

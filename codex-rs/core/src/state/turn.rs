@@ -18,7 +18,7 @@ use rmcp::model::RequestId;
 use tokio::sync::oneshot;
 
 use crate::codex::TurnContext;
-use crate::protocol::ReviewDecision;
+use crate::protocol::ApprovalOutcome;
 use crate::protocol::TokenUsage;
 use crate::tasks::SessionTask;
 use codex_protocol::models::PermissionProfile;
@@ -75,7 +75,7 @@ impl ActiveTurn {
 /// Mutable state for a single turn.
 #[derive(Default)]
 pub(crate) struct TurnState {
-    pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
+    pending_approvals: HashMap<String, oneshot::Sender<ApprovalOutcome>>,
     pending_request_permissions: HashMap<String, oneshot::Sender<RequestPermissionsResponse>>,
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
@@ -90,15 +90,15 @@ impl TurnState {
     pub(crate) fn insert_pending_approval(
         &mut self,
         key: String,
-        tx: oneshot::Sender<ReviewDecision>,
-    ) -> Option<oneshot::Sender<ReviewDecision>> {
+        tx: oneshot::Sender<ApprovalOutcome>,
+    ) -> Option<oneshot::Sender<ApprovalOutcome>> {
         self.pending_approvals.insert(key, tx)
     }
 
     pub(crate) fn remove_pending_approval(
         &mut self,
         key: &str,
-    ) -> Option<oneshot::Sender<ReviewDecision>> {
+    ) -> Option<oneshot::Sender<ApprovalOutcome>> {
         self.pending_approvals.remove(key)
     }
 

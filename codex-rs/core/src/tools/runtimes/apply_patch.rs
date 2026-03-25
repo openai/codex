@@ -23,6 +23,7 @@ use crate::tools::sandboxing::with_cached_approval;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
@@ -126,7 +127,7 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         &'a mut self,
         req: &'a ApplyPatchRequest,
         ctx: ApprovalCtx<'a>,
-    ) -> BoxFuture<'a, ReviewDecision> {
+    ) -> BoxFuture<'a, ApprovalOutcome> {
         let session = ctx.session;
         let turn = ctx.turn;
         let call_id = ctx.call_id.to_string();
@@ -136,10 +137,12 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
                 let action = ApplyPatchRuntime::build_guardian_review_request(req, ctx.call_id);
-                return review_approval_request(session, turn, action, retry_reason).await;
+                return review_approval_request(session, turn, action, retry_reason)
+                    .await
+                    .into();
             }
             if req.permissions_preapproved && retry_reason.is_none() {
-                return ReviewDecision::Approved;
+                return ApprovalOutcome::from(ReviewDecision::Approved);
             }
             if let Some(reason) = retry_reason {
                 let rx_approve = session
@@ -151,7 +154,9 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                         /*grant_root*/ None,
                     )
                     .await;
-                return rx_approve.await.unwrap_or_default();
+                return rx_approve
+                    .await
+                    .unwrap_or_else(|_| ApprovalOutcome::from(ReviewDecision::Abort));
             }
 
             with_cached_approval(
@@ -164,7 +169,9 @@ impl Approvable<ApplyPatchRequest> for ApplyPatchRuntime {
                             turn, call_id, changes, /*reason*/ None, /*grant_root*/ None,
                         )
                         .await;
-                    rx_approve.await.unwrap_or_default()
+                    rx_approve
+                        .await
+                        .unwrap_or_else(|_| ApprovalOutcome::from(ReviewDecision::Abort))
                 },
             )
             .await

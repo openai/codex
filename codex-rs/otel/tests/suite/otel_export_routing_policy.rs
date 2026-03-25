@@ -2,6 +2,7 @@ use codex_otel::AuthEnvTelemetryMetadata;
 use codex_otel::OtelProvider;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
+use codex_otel::ToolDecisionSource;
 use opentelemetry::KeyValue;
 use opentelemetry::logs::AnyValue;
 use opentelemetry::trace::TracerProvider as _;
@@ -20,6 +21,7 @@ use tracing_subscriber::layer::SubscriberExt;
 
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
@@ -198,6 +200,52 @@ fn otel_export_routing_policy_routes_user_prompt_log_and_trace_events() {
     assert!(!prompt_trace_attrs.contains_key("prompt"));
     assert!(!prompt_trace_attrs.contains_key("user.email"));
     assert!(!prompt_trace_attrs.contains_key("user.account_id"));
+}
+
+#[test]
+fn otel_export_routing_policy_logs_tool_timeout_decision_as_timed_out() {
+    let log_exporter = InMemoryLogExporter::default();
+    let logger_provider = SdkLoggerProvider::builder()
+        .with_simple_exporter(log_exporter.clone())
+        .build();
+
+    let subscriber = tracing_subscriber::registry().with(
+        opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(&logger_provider)
+            .with_filter(filter_fn(OtelProvider::log_export_filter)),
+    );
+
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        let manager = SessionTelemetry::new(
+            ThreadId::new(),
+            "gpt-5.1",
+            "gpt-5.1",
+            Some("account-id".to_string()),
+            None,
+            Some(TelemetryAuthMode::ApiKey),
+            "codex_exec".to_string(),
+            true,
+            "tty".to_string(),
+            SessionSource::Cli,
+        );
+        manager.tool_decision(
+            "local_shell",
+            "call-timeout",
+            &ApprovalOutcome::TimedOut,
+            ToolDecisionSource::AutomatedReviewer,
+        );
+    });
+
+    logger_provider.force_flush().expect("flush logs");
+
+    let logs = log_exporter.get_emitted_logs().expect("log export");
+    let tool_log = find_log_by_event_name(&logs, "codex.tool_decision");
+    let tool_log_attrs = log_attributes(&tool_log.record);
+
+    assert_eq!(
+        tool_log_attrs.get("decision").map(String::as_str),
+        Some("timed_out")
+    );
 }
 
 #[test]

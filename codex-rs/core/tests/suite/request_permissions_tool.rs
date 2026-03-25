@@ -5,6 +5,7 @@ use anyhow::Result;
 use codex_core::config::Constrained;
 use codex_features::Feature;
 use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -277,7 +278,7 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
             .submit(Op::ExecApproval {
                 id: approval.effective_approval_id(),
                 turn_id: None,
-                decision: ReviewDecision::Approved,
+                outcome: ApprovalOutcome::from(ReviewDecision::Approved),
             })
             .await?;
         wait_for_event(&test.codex, |event| {

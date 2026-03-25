@@ -395,7 +395,7 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
     )
     .await;
 
-    assert_eq!(decision, ReviewDecision::Abort);
+    assert_eq!(decision, GuardianApprovalDecision::Aborted);
 
     let mut guardian_statuses = Vec::new();
     let mut warnings = Vec::new();
@@ -415,6 +415,14 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
         ]
     );
     assert!(warnings.is_empty());
+}
+
+#[test]
+fn guardian_timed_out_decision_maps_to_denied_review_decision() {
+    assert_eq!(
+        GuardianApprovalDecision::TimedOut.into_review_decision(),
+        ReviewDecision::Denied
+    );
 }
 
 #[tokio::test]
@@ -774,7 +782,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     )
     .await;
 
-    assert_eq!(decision, ReviewDecision::Denied);
+    assert_eq!(decision, GuardianApprovalDecision::Denied);
 
     let mut warnings = Vec::new();
     let mut denial_rationales = Vec::new();
@@ -883,7 +891,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
     };
     assert_eq!(
         review_approval_request(&session, &turn, initial_request, None).await,
-        ReviewDecision::Approved
+        GuardianApprovalDecision::Approved
     );
 
     let second_request = GuardianApprovalRequest::Shell {
@@ -936,7 +944,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
         Some("parallel follow-up".to_string()),
     )
     .await;
-    assert_eq!(third_decision, ReviewDecision::Approved);
+    assert_eq!(third_decision, GuardianApprovalDecision::Approved);
     let requests = server.requests().await;
     assert_eq!(requests.len(), 3);
     let third_request_body = serde_json::from_slice::<serde_json::Value>(&requests[2])?;
@@ -959,7 +967,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
     gate_tx
         .send(())
         .expect("second guardian review gate should still be open");
-    assert_eq!(second_review.await?, ReviewDecision::Approved);
+    assert_eq!(second_review.await?, GuardianApprovalDecision::Approved);
     server.shutdown().await;
 
     Ok(())

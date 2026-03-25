@@ -4432,6 +4432,7 @@ pub enum GuardianApprovalReviewStatus {
     InProgress,
     Approved,
     Denied,
+    TimedOut,
     Aborted,
 }
 
@@ -7672,6 +7673,26 @@ mod tests {
                 risk_score: None,
                 risk_level: None,
                 rationale: None,
+            }
+        );
+    }
+
+    #[test]
+    fn automatic_approval_review_deserializes_timed_out_status() {
+        let review: GuardianApprovalReview = serde_json::from_value(json!({
+            "status": "timedOut",
+            "riskScore": null,
+            "riskLevel": null,
+            "rationale": "review timed out"
+        }))
+        .expect("timed-out automatic review should deserialize");
+        assert_eq!(
+            review,
+            GuardianApprovalReview {
+                status: GuardianApprovalReviewStatus::TimedOut,
+                risk_score: None,
+                risk_level: None,
+                rationale: Some("review timed out".to_string()),
             }
         );
     }

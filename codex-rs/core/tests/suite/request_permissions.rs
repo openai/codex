@@ -6,6 +6,7 @@ use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
@@ -378,7 +379,7 @@ async fn with_additional_permissions_requires_approval_under_on_request() -> Res
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Approved,
+            outcome: ApprovalOutcome::from(ReviewDecision::Approved),
         })
         .await?;
     wait_for_completion(&test).await;
@@ -566,7 +567,7 @@ async fn relative_additional_permissions_resolve_against_tool_workdir() -> Resul
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Approved,
+            outcome: ApprovalOutcome::from(ReviewDecision::Approved),
         })
         .await?;
     wait_for_completion(&test).await;
@@ -660,7 +661,7 @@ async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_cwd
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Approved,
+            outcome: ApprovalOutcome::from(ReviewDecision::Approved),
         })
         .await?;
     wait_for_completion(&test).await;
@@ -761,7 +762,7 @@ async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_tmp
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Approved,
+            outcome: ApprovalOutcome::from(ReviewDecision::Approved),
         })
         .await?;
     wait_for_completion(&test).await;
@@ -869,7 +870,7 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Approved,
+            outcome: ApprovalOutcome::from(ReviewDecision::Approved),
         })
         .await?;
     wait_for_completion(&test).await;
@@ -971,7 +972,7 @@ async fn with_additional_permissions_denied_approval_blocks_execution() -> Resul
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Denied,
+            outcome: ApprovalOutcome::from(ReviewDecision::Denied),
         })
         .await?;
     wait_for_completion(&test).await;
@@ -1100,7 +1101,7 @@ async fn request_permissions_grants_apply_to_later_exec_command_calls() -> Resul
             .submit(Op::ExecApproval {
                 id: approval.effective_approval_id(),
                 turn_id: None,
-                decision: ReviewDecision::Approved,
+                outcome: ApprovalOutcome::from(ReviewDecision::Approved),
             })
             .await?;
         wait_for_completion(&test).await;
@@ -1210,7 +1211,7 @@ async fn request_permissions_preapprove_explicit_exec_permissions_outside_on_req
             .submit(Op::ExecApproval {
                 id: approval.effective_approval_id(),
                 turn_id: None,
-                decision: ReviewDecision::Approved,
+                outcome: ApprovalOutcome::from(ReviewDecision::Approved),
             })
             .await?;
         wait_for_completion(&test).await;
@@ -1323,7 +1324,7 @@ async fn request_permissions_grants_apply_to_later_shell_command_calls() -> Resu
             .submit(Op::ExecApproval {
                 id: approval.effective_approval_id(),
                 turn_id: None,
-                decision: ReviewDecision::Approved,
+                outcome: ApprovalOutcome::from(ReviewDecision::Approved),
             })
             .await?;
         wait_for_completion(&test).await;
@@ -1432,7 +1433,7 @@ async fn request_permissions_grants_apply_to_later_shell_command_calls_without_i
             .submit(Op::ExecApproval {
                 id: approval.effective_approval_id(),
                 turn_id: None,
-                decision: ReviewDecision::Approved,
+                outcome: ApprovalOutcome::from(ReviewDecision::Approved),
             })
             .await?;
         wait_for_completion(&test).await;
@@ -1601,7 +1602,7 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Approved,
+            outcome: ApprovalOutcome::from(ReviewDecision::Approved),
         })
         .await?;
     wait_for_completion(&test).await;
@@ -1846,7 +1847,7 @@ async fn request_permissions_session_grants_carry_across_turns() -> Result<()> {
             .submit(Op::ExecApproval {
                 id: approval.effective_approval_id(),
                 turn_id: None,
-                decision: ReviewDecision::Approved,
+                outcome: ApprovalOutcome::from(ReviewDecision::Approved),
             })
             .await?;
         wait_for_completion(&test).await;

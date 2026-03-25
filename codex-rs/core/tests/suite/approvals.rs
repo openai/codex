@@ -15,6 +15,7 @@ use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
@@ -1715,7 +1716,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
                 .submit(Op::ExecApproval {
                     id: approval.effective_approval_id(),
                     turn_id: None,
-                    decision: decision.clone(),
+                    outcome: ApprovalOutcome::from(decision.clone()),
                 })
                 .await?;
             wait_for_completion(&test).await;
@@ -1736,7 +1737,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
             test.codex
                 .submit(Op::PatchApproval {
                     id: approval.call_id,
-                    decision: decision.clone(),
+                    outcome: ApprovalOutcome::from(decision.clone()),
                 })
                 .await?;
             wait_for_completion(&test).await;
@@ -1819,7 +1820,7 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
     test.codex
         .submit(Op::PatchApproval {
             id: approval.call_id,
-            decision: ReviewDecision::ApprovedForSession,
+            outcome: ApprovalOutcome::from(ReviewDecision::ApprovedForSession),
         })
         .await?;
     wait_for_completion(&test).await;
@@ -1939,9 +1940,9 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::ApprovedExecpolicyAmendment {
+            outcome: ApprovalOutcome::from(ReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment: expected_execpolicy_amendment.clone(),
-            },
+            }),
         })
         .await?;
     wait_for_completion(&test).await;
@@ -2178,9 +2179,9 @@ async fn spawned_subagent_execpolicy_amendment_propagates_to_parent_session() ->
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::ApprovedExecpolicyAmendment {
+            outcome: ApprovalOutcome::from(ReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment: expected_execpolicy_amendment,
-            },
+            }),
         })
         .await?;
 
@@ -2403,9 +2404,9 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
         .submit(Op::ExecApproval {
             id: approval_id,
             turn_id: None,
-            decision: ReviewDecision::ApprovedExecpolicyAmendment {
+            outcome: ApprovalOutcome::from(ReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment: amendment.clone(),
-            },
+            }),
         })
         .await?;
     wait_for_completion(&test).await;
@@ -2599,7 +2600,7 @@ allow_local_binding = true
                     .submit(Op::ExecApproval {
                         id: approval.effective_approval_id(),
                         turn_id: None,
-                        decision: ReviewDecision::Approved,
+                        outcome: ApprovalOutcome::from(ReviewDecision::Approved),
                     })
                     .await?;
             }
@@ -2637,9 +2638,9 @@ allow_local_binding = true
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::NetworkPolicyAmendment {
+            outcome: ApprovalOutcome::from(ReviewDecision::NetworkPolicyAmendment {
                 network_policy_amendment: deny_network_amendment.clone(),
-            },
+            }),
         })
         .await?;
     wait_for_completion(&test).await;
@@ -2742,7 +2743,7 @@ allow_local_binding = true
                     .submit(Op::ExecApproval {
                         id: approval.effective_approval_id(),
                         turn_id: None,
-                        decision: ReviewDecision::Approved,
+                        outcome: ApprovalOutcome::from(ReviewDecision::Approved),
                     })
                     .await?;
             }
@@ -2826,7 +2827,7 @@ async fn compound_command_with_one_safe_command_still_requires_approval() -> Res
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Denied,
+            outcome: ApprovalOutcome::from(ReviewDecision::Denied),
         })
         .await?;
     wait_for_completion(&test).await;

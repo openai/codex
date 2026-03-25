@@ -269,7 +269,7 @@ impl ApprovalOverlay {
             op: Op::ExecApproval {
                 id: id.to_string(),
                 turn_id: None,
-                decision,
+                outcome: codex_protocol::protocol::ApprovalOutcome::from(decision),
             },
         });
     }
@@ -331,7 +331,7 @@ impl ApprovalOverlay {
             thread_id,
             op: Op::PatchApproval {
                 id: id.to_string(),
-                decision,
+                outcome: codex_protocol::protocol::ApprovalOutcome::from(decision),
             },
         });
     }
@@ -1093,7 +1093,11 @@ mod tests {
         let mut saw_op = false;
         while let Ok(ev) = rx.try_recv() {
             if let AppEvent::SubmitThreadOp {
-                op: Op::ExecApproval { decision, .. },
+                op:
+                    Op::ExecApproval {
+                        outcome: codex_protocol::protocol::ApprovalOutcome::Decision { decision },
+                        ..
+                    },
                 ..
             } = ev
             {
@@ -1543,7 +1547,11 @@ mod tests {
         let mut decision = None;
         while let Ok(ev) = rx.try_recv() {
             if let AppEvent::SubmitThreadOp {
-                op: Op::ExecApproval { decision: d, .. },
+                op:
+                    Op::ExecApproval {
+                        outcome: codex_protocol::protocol::ApprovalOutcome::Decision { decision: d },
+                        ..
+                    },
                 ..
             } = ev
             {

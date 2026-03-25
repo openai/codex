@@ -3532,7 +3532,12 @@ async fn exec_approval_uses_approval_id_when_present() {
     let mut found = false;
     while let Ok(app_ev) = rx.try_recv() {
         if let AppEvent::SubmitThreadOp {
-            op: Op::ExecApproval { id, decision, .. },
+            op:
+                Op::ExecApproval {
+                    id,
+                    outcome: codex_protocol::protocol::ApprovalOutcome::Decision { decision },
+                    ..
+                },
             ..
         } = app_ev
         {
@@ -11144,6 +11149,71 @@ async fn guardian_denied_exec_renders_warning_and_denied_request() {
 }
 
 #[tokio::test]
+async fn guardian_timed_out_exec_renders_warning_without_denied_request() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.show_welcome_banner = false;
+    let action = serde_json::json!({
+        "tool": "shell",
+        "command": "git push origin main",
+    });
+
+    chat.handle_codex_event(Event {
+        id: "guardian-in-progress".into(),
+        msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+            id: "guardian-timeout-1".into(),
+            turn_id: "turn-1".into(),
+            status: GuardianAssessmentStatus::InProgress,
+            risk_score: None,
+            risk_level: None,
+            rationale: None,
+            action: Some(action.clone()),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "guardian-warning".into(),
+        msg: EventMsg::Warning(WarningEvent {
+            message: "Automatic approval review timed out before it could finish evaluating this action. The action was not intentionally rejected, and a retry may succeed.".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "guardian-assessment".into(),
+        msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+            id: "guardian-timeout-1".into(),
+            turn_id: "turn-1".into(),
+            status: GuardianAssessmentStatus::TimedOut,
+            risk_score: None,
+            risk_level: None,
+            rationale: Some("Automatic approval review timed out before it could finish evaluating this action. The action was not intentionally rejected, and a retry may succeed.".into()),
+            action: Some(action),
+        }),
+    });
+
+    let width: u16 = 140;
+    let ui_height: u16 = chat.desired_height(width);
+    let vt_height: u16 = 14;
+    let viewport = Rect::new(0, vt_height - ui_height - 1, width, ui_height);
+
+    let backend = VT100Backend::new(width, vt_height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    term.set_viewport_area(viewport);
+
+    for lines in drain_insert_history(&mut rx) {
+        crate::insert_history::insert_history_lines(&mut term, lines)
+            .expect("Failed to insert history lines in test");
+    }
+
+    term.draw(|f| {
+        chat.render(f.area(), f.buffer_mut());
+    })
+    .expect("draw guardian timeout history");
+
+    assert_snapshot!(
+        "guardian_timed_out_exec_renders_warning_without_denied_request",
+        term.backend().vt100().screen().contents()
+    );
+}
+
+#[tokio::test]
 async fn guardian_approved_exec_renders_approved_request() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.show_welcome_banner = false;
@@ -11715,7 +11785,11 @@ async fn apply_patch_approval_sends_op_with_call_id() {
     let mut found = false;
     while let Ok(app_ev) = rx.try_recv() {
         if let AppEvent::SubmitThreadOp {
-            op: Op::PatchApproval { id, decision },
+            op:
+                Op::PatchApproval {
+                    id,
+                    outcome: codex_protocol::protocol::ApprovalOutcome::Decision { decision },
+                },
             ..
         } = app_ev
         {
@@ -11766,7 +11840,10 @@ async fn apply_patch_full_flow_integration_like() {
         .try_recv()
         .expect("expected op forwarded to codex channel");
     match forwarded {
-        Op::PatchApproval { id, decision } => {
+        Op::PatchApproval {
+            id,
+            outcome: codex_protocol::protocol::ApprovalOutcome::Decision { decision },
+        } => {
             assert_eq!(id, "call-1");
             assert_matches!(decision, codex_protocol::protocol::ReviewDecision::Approved);
         }

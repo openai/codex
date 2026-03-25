@@ -1,5 +1,6 @@
 use codex_core::config::Constrained;
 use codex_features::Feature;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -766,7 +767,7 @@ async fn handle_response_item_records_tool_result_for_custom_tool_call() {
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         let line = lines
@@ -839,7 +840,7 @@ async fn handle_response_item_records_tool_result_for_function_call() {
         .await
         .unwrap();
 
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TokenCount(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     logs_assert(|lines: &[&str]| {
         let line = lines
@@ -1159,7 +1160,7 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Approved,
+            outcome: ApprovalOutcome::from(ReviewDecision::Approved),
         })
         .await
         .unwrap();
@@ -1225,7 +1226,7 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::ApprovedForSession,
+            outcome: ApprovalOutcome::from(ReviewDecision::ApprovedForSession),
         })
         .await
         .unwrap();
@@ -1291,7 +1292,7 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Approved,
+            outcome: ApprovalOutcome::from(ReviewDecision::Approved),
         })
         .await
         .unwrap();
@@ -1357,7 +1358,7 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Denied,
+            outcome: ApprovalOutcome::from(ReviewDecision::Denied),
         })
         .await
         .unwrap();
@@ -1423,7 +1424,7 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::ApprovedForSession,
+            outcome: ApprovalOutcome::from(ReviewDecision::ApprovedForSession),
         })
         .await
         .unwrap();
@@ -1490,7 +1491,7 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Denied,
+            outcome: ApprovalOutcome::from(ReviewDecision::Denied),
         })
         .await
         .unwrap();

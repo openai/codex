@@ -119,14 +119,18 @@ impl PendingAppServerRequests {
     {
         let op: AppCommand = op.into();
         let resolution = match op.view() {
-            AppCommandView::ExecApproval { id, decision, .. } => self
+            AppCommandView::ExecApproval { id, outcome, .. } => self
                 .exec_approvals
                 .remove(id)
                 .map(|request_id| {
+                    let decision = outcome.clone().into_decision().ok_or_else(|| {
+                        "cannot serialize timed-out exec approval as an app-server decision"
+                            .to_string()
+                    })?;
                     Ok::<AppServerRequestResolution, String>(AppServerRequestResolution {
                         request_id,
                         result: serde_json::to_value(CommandExecutionRequestApprovalResponse {
-                            decision: decision.clone().into(),
+                            decision: decision.into(),
                         })
                         .map_err(|err| {
                             format!("failed to serialize command execution approval response: {err}")
@@ -134,14 +138,18 @@ impl PendingAppServerRequests {
                     })
                 })
                 .transpose()?,
-            AppCommandView::PatchApproval { id, decision } => self
+            AppCommandView::PatchApproval { id, outcome } => self
                 .file_change_approvals
                 .remove(id)
                 .map(|request_id| {
+                    let decision = outcome.clone().into_decision().ok_or_else(|| {
+                        "cannot serialize timed-out patch approval as an app-server decision"
+                            .to_string()
+                    })?;
                     Ok::<AppServerRequestResolution, String>(AppServerRequestResolution {
                         request_id,
                         result: serde_json::to_value(FileChangeRequestApprovalResponse {
-                            decision: file_change_decision(decision)?,
+                            decision: file_change_decision(&decision)?,
                         })
                         .map_err(|err| {
                             format!("failed to serialize file change approval response: {err}")
@@ -331,7 +339,7 @@ mod tests {
             .take_resolution(&Op::ExecApproval {
                 id: "approval-1".to_string(),
                 turn_id: None,
-                decision: ReviewDecision::Approved,
+                outcome: codex_protocol::protocol::ApprovalOutcome::from(ReviewDecision::Approved),
             })
             .expect("resolution should serialize")
             .expect("request should be pending");
@@ -537,12 +545,14 @@ mod tests {
         let error = pending
             .take_resolution(&Op::PatchApproval {
                 id: "patch-1".to_string(),
-                decision: ReviewDecision::ApprovedExecpolicyAmendment {
-                    proposed_execpolicy_amendment: ExecPolicyAmendment::new(vec![
-                        "echo".to_string(),
-                        "hi".to_string(),
-                    ]),
-                },
+                outcome: codex_protocol::protocol::ApprovalOutcome::from(
+                    ReviewDecision::ApprovedExecpolicyAmendment {
+                        proposed_execpolicy_amendment: ExecPolicyAmendment::new(vec![
+                            "echo".to_string(),
+                            "hi".to_string(),
+                        ]),
+                    },
+                ),
             })
             .expect_err("invalid patch decision should fail");
 

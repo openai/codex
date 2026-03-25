@@ -4,6 +4,7 @@
 use anyhow::Result;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::protocol::ApprovalOutcome;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
@@ -257,7 +258,7 @@ permissions:
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Denied,
+            outcome: ApprovalOutcome::from(ReviewDecision::Denied),
         })
         .await?;
 
@@ -351,7 +352,7 @@ permissions:
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Denied,
+            outcome: ApprovalOutcome::from(ReviewDecision::Denied),
         })
         .await?;
 
@@ -446,7 +447,7 @@ permissions:
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::Denied,
+            outcome: ApprovalOutcome::from(ReviewDecision::Denied),
         })
         .await?;
 
@@ -895,7 +896,7 @@ async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> R
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
             turn_id: None,
-            decision: ReviewDecision::ApprovedForSession,
+            outcome: ApprovalOutcome::from(ReviewDecision::ApprovedForSession),
         })
         .await?;
 

@@ -138,7 +138,7 @@ async fn on_exec_approval_response(
         .submit(Op::ExecApproval {
             id: approval_id,
             turn_id: Some(event_id),
-            decision: response.decision,
+            outcome: codex_protocol::protocol::ApprovalOutcome::from(response.decision),
         })
         .await
     {
