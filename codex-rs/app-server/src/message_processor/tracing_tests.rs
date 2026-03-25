@@ -24,6 +24,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
+use codex_core::state_db::init;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
@@ -117,7 +118,7 @@ impl TracingHarness {
         let server = create_mock_responses_server_repeating_assistant("Done").await;
         let codex_home = TempDir::new()?;
         let config = Arc::new(build_test_config(codex_home.path(), &server.uri()).await?);
-        let (processor, outgoing_rx) = build_test_processor(config);
+        let (processor, outgoing_rx) = build_test_processor(config).await;
         let tracing = init_test_tracing();
         tracing.exporter.reset();
         tracing::callsite::rebuild_interest_cache();
@@ -224,7 +225,7 @@ async fn build_test_config(codex_home: &Path, server_uri: &str) -> Result<Config
         .await?)
 }
 
-fn build_test_processor(
+async fn build_test_processor(
     config: Arc<Config>,
 ) -> (
     MessageProcessor,
@@ -232,6 +233,9 @@ fn build_test_processor(
 ) {
     let (outgoing_tx, outgoing_rx) = mpsc::channel(16);
     let outgoing = Arc::new(OutgoingMessageSender::new(outgoing_tx));
+    let state_db = init(config.as_ref())
+        .await
+        .expect("state db should initialize in tracing tests");
     let processor = MessageProcessor::new(MessageProcessorArgs {
         outgoing,
         arg0_paths: Arg0DispatchPaths::default(),
@@ -241,6 +245,7 @@ fn build_test_processor(
         cloud_requirements: CloudRequirementsLoader::default(),
         feedback: CodexFeedback::new(),
         log_db: None,
+        state_db: Some(state_db),
         config_warnings: Vec::new(),
         session_source: SessionSource::VSCode,
         enable_codex_api_key_env: false,

@@ -4,6 +4,7 @@ use app_test_support::create_fake_rollout;
 use app_test_support::create_fake_rollout_with_source;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
+use app_test_support::fake_rollout_cwd;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
 use chrono::DateTime;
@@ -37,7 +38,6 @@ use std::fs;
 use std::fs::FileTimes;
 use std::fs::OpenOptions;
 use std::path::Path;
-use std::path::PathBuf;
 use tempfile::TempDir;
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -358,12 +358,13 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
     )
     .await?;
     assert_eq!(data1.len(), 2);
+    let expected_cwd = fake_rollout_cwd();
     for thread in &data1 {
         assert_eq!(thread.preview, "Hello");
         assert_eq!(thread.model_provider, "mock_provider");
         assert!(thread.created_at > 0);
         assert_eq!(thread.updated_at, thread.created_at);
-        assert_eq!(thread.cwd, PathBuf::from("/"));
+        assert_eq!(thread.cwd, expected_cwd);
         assert_eq!(thread.cli_version, "0.0.0");
         assert_eq!(thread.source, SessionSource::Cli);
         assert_eq!(thread.git_info, None);
@@ -390,7 +391,7 @@ async fn thread_list_pagination_next_cursor_none_on_last_page() -> Result<()> {
         assert_eq!(thread.model_provider, "mock_provider");
         assert!(thread.created_at > 0);
         assert_eq!(thread.updated_at, thread.created_at);
-        assert_eq!(thread.cwd, PathBuf::from("/"));
+        assert_eq!(thread.cwd, expected_cwd);
         assert_eq!(thread.cli_version, "0.0.0");
         assert_eq!(thread.source, SessionSource::Cli);
         assert_eq!(thread.git_info, None);
@@ -446,7 +447,7 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
     let expected_ts = chrono::DateTime::parse_from_rfc3339("2025-01-02T11:00:00Z")?.timestamp();
     assert_eq!(thread.created_at, expected_ts);
     assert_eq!(thread.updated_at, expected_ts);
-    assert_eq!(thread.cwd, PathBuf::from("/"));
+    assert_eq!(thread.cwd, fake_rollout_cwd());
     assert_eq!(thread.cli_version, "0.0.0");
     assert_eq!(thread.source, SessionSource::Cli);
     assert_eq!(thread.git_info, None);
@@ -484,6 +485,20 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
     )?;
 
     let mut mcp = init_mcp(codex_home.path()).await?;
+    let expected_cwd = list_threads(
+        &mut mcp,
+        None,
+        Some(10),
+        Some(vec!["mock_provider".to_string()]),
+        None,
+        None,
+    )
+    .await?
+    .data
+    .into_iter()
+    .find(|summary| summary.id == filtered_id)
+    .map(|summary| summary.cwd)
+    .ok_or_else(|| anyhow::anyhow!("filtered thread missing from unfiltered list"))?;
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
             cursor: None,
@@ -492,7 +507,7 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
             model_providers: Some(vec!["mock_provider".to_string()]),
             source_kinds: None,
             archived: None,
-            cwd: Some(target_cwd.to_string_lossy().into_owned()),
+            cwd: Some(expected_cwd.to_string_lossy().into_owned()),
             search_term: None,
         })
         .await?;
@@ -509,7 +524,7 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].id, filtered_id);
     assert_ne!(data[0].id, unfiltered_id);
-    assert_eq!(data[0].cwd, target_cwd);
+    assert_eq!(data[0].cwd, expected_cwd);
 
     Ok(())
 }
@@ -587,6 +602,71 @@ sqlite = true
     assert_eq!(next_cursor, None);
     let ids: Vec<_> = data.iter().map(|thread| thread.id.as_str()).collect();
     assert_eq!(ids, vec![newer_match, older_match]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_list_keeps_empty_search_results_when_db_page_is_empty() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join("config.toml"),
+        r#"
+model = "mock-model"
+approval_policy = "never"
+suppress_unstable_features_warning = true
+
+[features]
+sqlite = true
+"#,
+    )?;
+
+    create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T10-00-00",
+        "2025-01-02T10:00:00Z",
+        "match: needle",
+        Some("mock_provider"),
+        None,
+    )?;
+    create_fake_rollout(
+        codex_home.path(),
+        "2025-01-02T11-00-00",
+        "2025-01-02T11:00:00Z",
+        "no hit here",
+        Some("mock_provider"),
+        None,
+    )?;
+
+    let state_db =
+        codex_state::StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into())
+            .await?;
+    state_db.mark_backfill_complete(None).await?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+    let request_id = mcp
+        .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            cursor: None,
+            limit: Some(10),
+            sort_key: None,
+            model_providers: Some(vec!["mock_provider".to_string()]),
+            source_kinds: None,
+            archived: None,
+            cwd: None,
+            search_term: Some("absent".to_string()),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadListResponse {
+        data, next_cursor, ..
+    } = to_response::<ThreadListResponse>(resp)?;
+
+    assert_eq!(next_cursor, None);
+    assert!(data.is_empty());
 
     Ok(())
 }
@@ -996,7 +1076,7 @@ async fn thread_list_includes_git_info() -> Result<()> {
     };
     assert_eq!(thread.git_info, Some(expected_git));
     assert_eq!(thread.source, SessionSource::Cli);
-    assert_eq!(thread.cwd, PathBuf::from("/"));
+    assert_eq!(thread.cwd, fake_rollout_cwd());
     assert_eq!(thread.cli_version, "0.0.0");
 
     Ok(())

@@ -25,6 +25,9 @@ use uuid::Uuid;
 pub type StateDbHandle = Arc<codex_state::StateRuntime>;
 
 /// Initialize the state runtime for thread state persistence and backfill checks.
+///
+/// Callers that keep a shared runtime alive for repeated state reads should use
+/// this helper instead of reopening SQLite on each lookup.
 pub async fn init(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
     let config = RolloutConfig::from_view(config);
     let runtime = match codex_state::StateRuntime::init(

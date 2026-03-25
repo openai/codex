@@ -723,7 +723,8 @@ async fn run_ratatui_app(
         if let Some(id_str) = cli.fork_session_id.as_deref() {
             let is_uuid = Uuid::parse_str(id_str).is_ok();
             let path = if is_uuid {
-                find_thread_path_by_id_str(&config.codex_home, id_str).await?
+                find_thread_path_by_id_str(&config.codex_home, id_str, /*state_db_ctx*/ None)
+                    .await?
             } else {
                 find_thread_path_by_name_str(&config.codex_home, id_str).await?
             };
@@ -816,7 +817,7 @@ async fn run_ratatui_app(
     } else if let Some(id_str) = cli.resume_session_id.as_deref() {
         let is_uuid = Uuid::parse_str(id_str).is_ok();
         let path = if is_uuid {
-            find_thread_path_by_id_str(&config.codex_home, id_str).await?
+            find_thread_path_by_id_str(&config.codex_home, id_str, /*state_db_ctx*/ None).await?
         } else {
             find_thread_path_by_name_str(&config.codex_home, id_str).await?
         };

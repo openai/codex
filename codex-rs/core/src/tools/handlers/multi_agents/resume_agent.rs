@@ -163,6 +163,7 @@ async fn try_resume_closed_agent(
                 /*agent_role*/ None,
                 /*task_name*/ None,
             )?,
+            session.state_db(),
         )
         .await
         .map(|_| ())

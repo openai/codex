@@ -233,8 +233,8 @@ use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_core::state_db;
 use codex_core::state_db::StateDbHandle;
-use codex_core::state_db::get_state_db;
 use codex_core::state_db::reconcile_rollout;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
@@ -324,6 +324,7 @@ use crate::filters::source_kind_matches;
 use crate::thread_state::ThreadListenerCommand;
 use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
+use arc_swap::ArcSwapOption;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
@@ -384,6 +385,7 @@ pub(crate) struct CodexMessageProcessor {
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     fuzzy_search_sessions: Arc<Mutex<HashMap<String, FuzzyFileSearchSession>>>,
     background_tasks: TaskTracker,
+    state_db: ArcSwapOption<StateRuntime>,
     feedback: CodexFeedback,
     log_db: Option<LogDbLayer>,
 }
@@ -430,9 +432,23 @@ pub(crate) struct CodexMessageProcessorArgs {
     pub(crate) cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
+    pub(crate) state_db: Option<StateDbHandle>,
 }
 
 impl CodexMessageProcessor {
+    async fn shared_state_db(&self) -> Option<StateDbHandle> {
+        if let Some(state_db) = self.state_db.load_full() {
+            return Some(state_db);
+        }
+
+        let recovered = state_db::init(self.config.as_ref()).await;
+        if let Some(recovered) = recovered.as_ref() {
+            self.state_db.store(Some(recovered.clone()));
+        }
+
+        recovered
+    }
+
     pub(crate) fn clear_plugin_related_caches(&self) {
         self.thread_manager.plugins_manager().clear_cache();
         self.thread_manager.skills_manager().clear_cache();
@@ -482,6 +498,7 @@ impl CodexMessageProcessor {
 
         Ok((thread_id, thread))
     }
+
     pub fn new(args: CodexMessageProcessorArgs) -> Self {
         let CodexMessageProcessorArgs {
             auth_manager,
@@ -494,6 +511,7 @@ impl CodexMessageProcessor {
             cloud_requirements,
             feedback,
             log_db,
+            state_db,
         } = args;
         Self {
             auth_manager,
@@ -512,6 +530,7 @@ impl CodexMessageProcessor {
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             fuzzy_search_sessions: Arc::new(Mutex::new(HashMap::new())),
             background_tasks: TaskTracker::new(),
+            state_db: ArcSwapOption::new(state_db),
             feedback,
             log_db,
         }
@@ -2236,29 +2255,34 @@ impl CodexMessageProcessor {
             }
         };
 
-        let rollout_path =
-            match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await
-            {
-                Ok(Some(p)) => p,
-                Ok(None) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("no rollout found for thread id {thread_id}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INVALID_REQUEST_ERROR_CODE,
-                        message: format!("failed to locate thread id {thread_id}: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            };
+        let state_db = self.shared_state_db().await;
+        let rollout_path = match find_thread_path_by_id_str(
+            &self.config.codex_home,
+            &thread_id.to_string(),
+            state_db,
+        )
+        .await
+        {
+            Ok(Some(p)) => p,
+            Ok(None) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("no rollout found for thread id {thread_id}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("failed to locate thread id {thread_id}: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
 
         let thread_id_str = thread_id.to_string();
         match self.archive_thread_common(thread_id, &rollout_path).await {
@@ -2386,20 +2410,25 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let thread_exists =
-            match find_thread_path_by_id_str(&self.config.codex_home, &thread_id.to_string()).await
-            {
-                Ok(Some(_)) => true,
-                Ok(None) => false,
-                Err(err) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("failed to locate thread id {thread_id}: {err}"),
-                    )
-                    .await;
-                    return;
-                }
-            };
+        let state_db = self.shared_state_db().await;
+        let thread_exists = match find_thread_path_by_id_str(
+            &self.config.codex_home,
+            &thread_id.to_string(),
+            state_db,
+        )
+        .await
+        {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(err) => {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("failed to locate thread id {thread_id}: {err}"),
+                )
+                .await;
+                return;
+            }
+        };
 
         if !thread_exists {
             self.send_invalid_request_error(request_id, format!("thread not found: {thread_id}"))
@@ -2472,7 +2501,7 @@ impl CodexMessageProcessor {
         let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
         let mut state_db_ctx = loaded_thread.as_ref().and_then(|thread| thread.state_db());
         if state_db_ctx.is_none() {
-            state_db_ctx = get_state_db(&self.config).await;
+            state_db_ctx = self.shared_state_db().await;
         }
         let Some(state_db_ctx) = state_db_ctx else {
             self.send_internal_error(
@@ -2675,33 +2704,37 @@ impl CodexMessageProcessor {
             return Ok(());
         }
 
-        let rollout_path =
-            match find_thread_path_by_id_str(&self.config.codex_home, &thread_uuid.to_string())
-                .await
+        let rollout_path = match find_thread_path_by_id_str(
+            &self.config.codex_home,
+            &thread_uuid.to_string(),
+            Some(state_db_ctx.clone()),
+        )
+        .await
+        {
+            Ok(Some(path)) => path,
+            Ok(None) => match find_archived_thread_path_by_id_str(
+                &self.config.codex_home,
+                &thread_uuid.to_string(),
+                Some(state_db_ctx.clone()),
+            )
+            .await
             {
                 Ok(Some(path)) => path,
-                Ok(None) => match find_archived_thread_path_by_id_str(
-                    &self.config.codex_home,
-                    &thread_uuid.to_string(),
-                )
-                .await
-                {
-                    Ok(Some(path)) => path,
-                    Ok(None) => {
-                        return Err(invalid_request(format!("thread not found: {thread_uuid}")));
-                    }
-                    Err(err) => {
-                        return Err(internal_error(format!(
-                            "failed to locate archived thread id {thread_uuid}: {err}"
-                        )));
-                    }
-                },
+                Ok(None) => {
+                    return Err(invalid_request(format!("thread not found: {thread_uuid}")));
+                }
                 Err(err) => {
                     return Err(internal_error(format!(
-                        "failed to locate thread id {thread_uuid}: {err}"
+                        "failed to locate archived thread id {thread_uuid}: {err}"
                     )));
                 }
-            };
+            },
+            Err(err) => {
+                return Err(internal_error(format!(
+                    "failed to locate thread id {thread_uuid}: {err}"
+                )));
+            }
+        };
 
         reconcile_rollout(
             Some(state_db_ctx),
@@ -2744,9 +2777,11 @@ impl CodexMessageProcessor {
             }
         };
 
+        let state_db = self.shared_state_db().await;
         let archived_path = match find_archived_thread_path_by_id_str(
             &self.config.codex_home,
             &thread_id.to_string(),
+            state_db,
         )
         .await
         {
@@ -2773,7 +2808,7 @@ impl CodexMessageProcessor {
 
         let rollout_path_display = archived_path.display().to_string();
         let fallback_provider = self.config.model_provider_id.clone();
-        let state_db_ctx = get_state_db(&self.config).await;
+        let state_db_ctx = self.shared_state_db().await;
         let archived_folder = self
             .config
             .codex_home
@@ -3253,34 +3288,43 @@ impl CodexMessageProcessor {
 
         let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
         let loaded_thread_state_db = loaded_thread.as_ref().and_then(|thread| thread.state_db());
+        let state_db = if loaded_thread_state_db.is_some() {
+            None
+        } else {
+            self.shared_state_db().await
+        };
         let db_summary = if let Some(state_db_ctx) = loaded_thread_state_db.as_ref() {
             read_summary_from_state_db_context_by_thread_id(Some(state_db_ctx), thread_uuid).await
         } else {
-            read_summary_from_state_db_by_thread_id(&self.config, thread_uuid).await
+            read_summary_from_state_db_by_thread_id(state_db.as_ref(), thread_uuid).await
         };
         let mut rollout_path = db_summary.as_ref().map(|summary| summary.path.clone());
         if rollout_path.is_none() || include_turns {
-            rollout_path =
-                match find_thread_path_by_id_str(&self.config.codex_home, &thread_uuid.to_string())
-                    .await
-                {
-                    Ok(Some(path)) => Some(path),
-                    Ok(None) => {
-                        if include_turns {
-                            None
-                        } else {
-                            rollout_path
-                        }
+            let state_db_ctx = loaded_thread_state_db.clone().or_else(|| state_db.clone());
+            rollout_path = match find_thread_path_by_id_str(
+                &self.config.codex_home,
+                &thread_uuid.to_string(),
+                state_db_ctx,
+            )
+            .await
+            {
+                Ok(Some(path)) => Some(path),
+                Ok(None) => {
+                    if include_turns {
+                        None
+                    } else {
+                        rollout_path
                     }
-                    Err(err) => {
-                        self.send_invalid_request_error(
-                            request_id,
-                            format!("failed to locate thread id {thread_uuid}: {err}"),
-                        )
-                        .await;
-                        return;
-                    }
-                };
+                }
+                Err(err) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to locate thread id {thread_uuid}: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
         }
 
         if include_turns && rollout_path.is_none() && db_summary.is_some() {
@@ -3651,7 +3695,7 @@ impl CodexMessageProcessor {
         let InitialHistory::Resumed(resumed_history) = thread_history else {
             return None;
         };
-        let state_db_ctx = get_state_db(&self.config).await?;
+        let state_db_ctx = self.shared_state_db().await?;
         let persisted_metadata = state_db_ctx
             .get_thread(resumed_history.conversation_id)
             .await
@@ -3680,6 +3724,7 @@ impl CodexMessageProcessor {
                 return true;
             }
 
+            let shared_state_db = self.shared_state_db().await;
             let rollout_path = if let Some(path) = existing_thread.rollout_path() {
                 if path.exists() {
                     path
@@ -3687,6 +3732,9 @@ impl CodexMessageProcessor {
                     match find_thread_path_by_id_str(
                         &self.config.codex_home,
                         &existing_thread_id.to_string(),
+                        existing_thread
+                            .state_db()
+                            .or_else(|| shared_state_db.clone()),
                     )
                     .await
                     {
@@ -3713,6 +3761,9 @@ impl CodexMessageProcessor {
                 match find_thread_path_by_id_str(
                     &self.config.codex_home,
                     &existing_thread_id.to_string(),
+                    existing_thread
+                        .state_db()
+                        .or_else(|| shared_state_db.clone()),
                 )
                 .await
                 {
@@ -3772,12 +3823,13 @@ impl CodexMessageProcessor {
                     mismatch_details.join("; ")
                 );
             }
+            let state_db_ctx = existing_thread.state_db();
             let thread_summary = match load_thread_summary_for_rollout(
-                &self.config,
                 existing_thread_id,
                 rollout_path.as_path(),
                 config_snapshot.model_provider_id.as_str(),
                 /*persisted_metadata*/ None,
+                state_db_ctx.as_ref(),
             )
             .await
             {
@@ -3868,9 +3920,11 @@ impl CodexMessageProcessor {
                 }
             };
 
+            let state_db = self.shared_state_db().await;
             match find_thread_path_by_id_str(
                 &self.config.codex_home,
                 &existing_thread_id.to_string(),
+                state_db,
             )
             .await
             {
@@ -3918,12 +3972,13 @@ impl CodexMessageProcessor {
     ) -> std::result::Result<Thread, String> {
         let thread = match thread_history {
             InitialHistory::Resumed(resumed) => {
+                let state_db_ctx = thread.state_db();
                 load_thread_summary_for_rollout(
-                    &self.config,
                     resumed.conversation_id,
                     resumed.rollout_path.as_path(),
                     fallback_provider,
                     persisted_resume_metadata,
+                    state_db_ctx.as_ref(),
                 )
                 .await
             }
@@ -3999,9 +4054,11 @@ impl CodexMessageProcessor {
                 }
             };
 
+            let state_db = self.shared_state_db().await;
             match find_thread_path_by_id_str(
                 &self.config.codex_home,
                 &existing_thread_id.to_string(),
+                state_db,
             )
             .await
             {
@@ -4025,9 +4082,13 @@ impl CodexMessageProcessor {
             }
         };
 
-        let history_cwd =
-            read_history_cwd_from_state_db(&self.config, source_thread_id, rollout_path.as_path())
-                .await;
+        let state_db = self.shared_state_db().await;
+        let history_cwd = read_history_cwd_from_state_db(
+            state_db.as_ref(),
+            source_thread_id,
+            rollout_path.as_path(),
+        )
+        .await;
 
         // Persist Windows sandbox mode.
         let mut cli_overrides = cli_overrides.unwrap_or_default();
@@ -4249,9 +4310,10 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: GetConversationSummaryParams,
     ) {
+        let state_db = self.shared_state_db().await;
         if let GetConversationSummaryParams::ThreadId { conversation_id } = &params
             && let Some(summary) =
-                read_summary_from_state_db_by_thread_id(&self.config, *conversation_id).await
+                read_summary_from_state_db_by_thread_id(state_db.as_ref(), *conversation_id).await
         {
             let response = GetConversationSummaryResponse { summary };
             self.outgoing.send_response(request_id, response).await;
@@ -4267,9 +4329,11 @@ impl CodexMessageProcessor {
                 }
             }
             GetConversationSummaryParams::ThreadId { conversation_id } => {
-                match codex_core::find_thread_path_by_id_str(
+                let state_db = self.shared_state_db().await;
+                match find_thread_path_by_id_str(
                     &self.config.codex_home,
                     &conversation_id.to_string(),
+                    state_db,
                 )
                 .await
                 {
@@ -4352,7 +4416,7 @@ impl CodexMessageProcessor {
         let fallback_provider = self.config.model_provider_id.clone();
         let (allowed_sources_vec, source_kind_filter) = compute_source_filters(source_kinds);
         let allowed_sources = allowed_sources_vec.as_slice();
-        let state_db_ctx = get_state_db(&self.config).await;
+        let state_db_ctx = self.shared_state_db().await;
 
         while remaining > 0 {
             let page_size = remaining.min(THREAD_LIST_MAX_LIMIT);
@@ -5205,7 +5269,7 @@ impl CodexMessageProcessor {
         self.finalize_thread_teardown(thread_id).await;
 
         if state_db_ctx.is_none() {
-            state_db_ctx = get_state_db(&self.config).await;
+            state_db_ctx = self.shared_state_db().await;
         }
 
         // Move the rollout file to archived.
@@ -6556,18 +6620,27 @@ impl CodexMessageProcessor {
         let rollout_path = if let Some(path) = parent_thread.rollout_path() {
             path
         } else {
-            find_thread_path_by_id_str(&self.config.codex_home, &parent_thread_id.to_string())
-                .await
-                .map_err(|err| JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to locate thread id {parent_thread_id}: {err}"),
-                    data: None,
-                })?
-                .ok_or_else(|| JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("no rollout found for thread id {parent_thread_id}"),
-                    data: None,
-                })?
+            let state_db = if let Some(state_db) = parent_thread.state_db() {
+                Some(state_db)
+            } else {
+                self.shared_state_db().await
+            };
+            find_thread_path_by_id_str(
+                &self.config.codex_home,
+                &parent_thread_id.to_string(),
+                state_db,
+            )
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to locate thread id {parent_thread_id}: {err}"),
+                data: None,
+            })?
+            .ok_or_else(|| JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("no rollout found for thread id {parent_thread_id}"),
+                data: None,
+            })?
         };
 
         let mut config = self.config.as_ref().clone();
@@ -7160,11 +7233,10 @@ impl CodexMessageProcessor {
             if let Some(log_db) = self.log_db.as_ref() {
                 log_db.flush().await;
             }
-            let state_db_ctx = get_state_db(&self.config).await;
-            match (state_db_ctx.as_ref(), conversation_id) {
-                (Some(state_db_ctx), Some(conversation_id)) => {
+            match (self.shared_state_db().await, conversation_id) {
+                (Some(state_db), Some(conversation_id)) => {
                     let thread_id_text = conversation_id.to_string();
-                    match state_db_ctx.query_feedback_logs(&thread_id_text).await {
+                    match state_db.query_feedback_logs(&thread_id_text).await {
                         Ok(logs) if logs.is_empty() => None,
                         Ok(logs) => Some(logs),
                         Err(err) => {
@@ -7313,7 +7385,17 @@ impl CodexMessageProcessor {
     async fn resolve_rollout_path(&self, conversation_id: ThreadId) -> Option<PathBuf> {
         match self.thread_manager.get_thread(conversation_id).await {
             Ok(conv) => conv.rollout_path(),
-            Err(_) => None,
+            Err(_) => {
+                let state_db = self.shared_state_db().await;
+                find_thread_path_by_id_str(
+                    &self.config.codex_home,
+                    &conversation_id.to_string(),
+                    state_db,
+                )
+                .await
+                .ok()
+                .flatten()
+            }
         }
     }
 }
@@ -7962,12 +8044,12 @@ async fn derive_config_for_cwd(
 }
 
 async fn read_history_cwd_from_state_db(
-    config: &Config,
+    state_db_ctx: Option<&StateDbHandle>,
     thread_id: Option<ThreadId>,
     rollout_path: &Path,
 ) -> Option<PathBuf> {
-    if let Some(state_db_ctx) = get_state_db(config).await
-        && let Some(thread_id) = thread_id
+    if let Some(thread_id) = thread_id
+        && let Some(state_db_ctx) = state_db_ctx
         && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
     {
         return Some(metadata.cwd);
@@ -7984,11 +8066,10 @@ async fn read_history_cwd_from_state_db(
 }
 
 async fn read_summary_from_state_db_by_thread_id(
-    config: &Config,
+    state_db_ctx: Option<&StateDbHandle>,
     thread_id: ThreadId,
 ) -> Option<ConversationSummary> {
-    let state_db_ctx = get_state_db(config).await;
-    read_summary_from_state_db_context_by_thread_id(state_db_ctx.as_ref(), thread_id).await
+    read_summary_from_state_db_context_by_thread_id(state_db_ctx, thread_id).await
 }
 
 async fn read_summary_from_state_db_context_by_thread_id(
@@ -8278,11 +8359,11 @@ fn map_git_info(git_info: &CoreGitInfo) -> ConversationGitInfo {
 }
 
 async fn load_thread_summary_for_rollout(
-    config: &Config,
     thread_id: ThreadId,
     rollout_path: &Path,
     fallback_provider: &str,
     persisted_metadata: Option<&ThreadMetadata>,
+    state_db_ctx: Option<&StateDbHandle>,
 ) -> std::result::Result<Thread, String> {
     let mut thread = read_summary_from_rollout(rollout_path, fallback_provider)
         .await
@@ -8298,7 +8379,9 @@ async fn load_thread_summary_for_rollout(
             &mut thread,
             summary_to_thread(summary_from_thread_metadata(persisted_metadata)),
         );
-    } else if let Some(summary) = read_summary_from_state_db_by_thread_id(config, thread_id).await {
+    } else if let Some(summary) =
+        read_summary_from_state_db_by_thread_id(state_db_ctx, thread_id).await
+    {
         merge_mutable_thread_metadata(&mut thread, summary_to_thread(summary));
     }
     Ok(thread)
@@ -8452,12 +8535,21 @@ mod tests {
     use anyhow::Result;
     use codex_app_server_protocol::ServerRequestPayload;
     use codex_app_server_protocol::ToolRequestUserInputParams;
+    use codex_arg0::Arg0DispatchPaths;
+    use codex_core::ThreadManager;
+    use codex_core::config::ConfigBuilder;
+    use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+    use codex_feedback::CodexFeedback;
+    use codex_login::AuthManager;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::RwLock;
     use tempfile::TempDir;
 
     #[test]
@@ -8978,6 +9070,62 @@ mod tests {
                 .is_empty()
         );
         assert!(outgoing_rx.try_recv().is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_state_db_caches_successful_retry() -> Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = Arc::new(
+            ConfigBuilder::default()
+                .codex_home(codex_home.path().to_path_buf())
+                .build()
+                .await?,
+        );
+        let auth_manager = AuthManager::shared(
+            config.codex_home.clone(),
+            /*enable_codex_api_key_env*/ false,
+            config.cli_auth_credentials_store_mode,
+        );
+        let thread_manager = Arc::new(ThreadManager::new(
+            config.as_ref(),
+            auth_manager.clone(),
+            SessionSource::Cli,
+            CollaborationModesConfig {
+                default_mode_request_user_input: config
+                    .features
+                    .enabled(Feature::DefaultModeRequestUserInput),
+            },
+        ));
+        let (outgoing_tx, _outgoing_rx) = tokio::sync::mpsc::channel::<OutgoingEnvelope>(1);
+        let outgoing = Arc::new(OutgoingMessageSender::new(outgoing_tx));
+
+        let processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
+            auth_manager,
+            thread_manager,
+            outgoing,
+            arg0_paths: Arg0DispatchPaths::default(),
+            config,
+            cli_overrides: Arc::new(RwLock::new(Vec::new())),
+            runtime_feature_enablement: Arc::new(RwLock::new(BTreeMap::new())),
+            cloud_requirements: Arc::new(RwLock::new(CloudRequirementsLoader::default())),
+            feedback: CodexFeedback::new(),
+            log_db: None,
+            state_db: None,
+        });
+
+        let first = processor
+            .shared_state_db()
+            .await
+            .expect("state db should initialize on retry");
+        let second = processor
+            .shared_state_db()
+            .await
+            .expect("cached state db should be reused");
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(processor.state_db.load_full().is_some());
+
         Ok(())
     }
 

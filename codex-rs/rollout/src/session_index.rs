@@ -139,7 +139,12 @@ pub async fn find_thread_path_by_name_str(
     let Some(thread_id) = find_thread_id_by_name(codex_home, name).await? else {
         return Ok(None);
     };
-    super::list::find_thread_path_by_id_str(codex_home, &thread_id.to_string()).await
+    super::list::find_thread_path_by_id_str(
+        codex_home,
+        &thread_id.to_string(),
+        /*state_db_ctx*/ None,
+    )
+    .await
 }
 
 fn session_index_path(codex_home: &Path) -> PathBuf {

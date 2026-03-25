@@ -58,7 +58,7 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
         rollout_path.display()
     );
     assert!(
-        find_thread_path_by_id_str(codex_home.path(), &thread.id)
+        find_thread_path_by_id_str(codex_home.path(), &thread.id, /*state_db_ctx*/ None)
             .await?
             .is_none(),
         "thread id should not be discoverable before rollout materialization"
@@ -113,9 +113,10 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
         rollout_path.display()
     );
 
-    let discovered_path = find_thread_path_by_id_str(codex_home.path(), &thread.id)
-        .await?
-        .expect("expected rollout path for thread id to exist after materialization");
+    let discovered_path =
+        find_thread_path_by_id_str(codex_home.path(), &thread.id, /*state_db_ctx*/ None)
+            .await?
+            .expect("expected rollout path for thread id to exist after materialization");
     assert_paths_match_on_disk(&discovered_path, &rollout_path)?;
 
     let archive_id = mcp

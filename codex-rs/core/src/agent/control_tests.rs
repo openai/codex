@@ -298,7 +298,12 @@ async fn resume_agent_errors_when_manager_dropped() {
     let control = AgentControl::default();
     let (_home, config) = test_config().await;
     let err = control
-        .resume_agent_from_rollout(config, ThreadId::new(), SessionSource::Exec)
+        .resume_agent_from_rollout(
+            config,
+            ThreadId::new(),
+            SessionSource::Exec,
+            /*state_db_ctx*/ None,
+        )
         .await
         .expect_err("resume_agent should fail without a manager");
     assert_eq!(
@@ -942,7 +947,12 @@ async fn resume_agent_respects_max_threads_limit() {
         .expect("spawn_agent should succeed for active slot");
 
     let err = control
-        .resume_agent_from_rollout(config, resumable_id, SessionSource::Exec)
+        .resume_agent_from_rollout(
+            config,
+            resumable_id,
+            SessionSource::Exec,
+            /*state_db_ctx*/ None,
+        )
         .await
         .expect_err("resume should respect max threads");
     let CodexErr::AgentLimitReached {
@@ -975,7 +985,12 @@ async fn resume_agent_releases_slot_after_resume_failure() {
     let control = manager.agent_control();
 
     let _ = control
-        .resume_agent_from_rollout(config.clone(), ThreadId::new(), SessionSource::Exec)
+        .resume_agent_from_rollout(
+            config.clone(),
+            ThreadId::new(),
+            SessionSource::Exec,
+            /*state_db_ctx*/ None,
+        )
         .await
         .expect_err("resume should fail for missing rollout path");
 
@@ -1454,6 +1469,7 @@ async fn resume_thread_subagent_restores_stored_nickname_and_role() {
                 agent_nickname: None,
                 agent_role: None,
             }),
+            /*state_db_ctx*/ None,
         )
         .await
         .expect("resume should succeed");
@@ -1540,7 +1556,12 @@ async fn resume_agent_from_rollout_reads_archived_rollout_path() {
 
     let resumed_thread_id = harness
         .control
-        .resume_agent_from_rollout(harness.config.clone(), child_thread_id, SessionSource::Exec)
+        .resume_agent_from_rollout(
+            harness.config.clone(),
+            child_thread_id,
+            SessionSource::Exec,
+            /*state_db_ctx*/ None,
+        )
         .await
         .expect("resume should find archived rollout");
     assert_eq!(resumed_thread_id, child_thread_id);
@@ -1799,6 +1820,7 @@ async fn resume_agent_from_rollout_does_not_reopen_closed_descendants() {
             harness.config.clone(),
             parent_thread_id,
             SessionSource::Exec,
+            /*state_db_ctx*/ None,
         )
         .await
         .expect("single-thread resume should succeed");
@@ -1895,6 +1917,7 @@ async fn resume_closed_child_reopens_open_descendants() {
                 agent_nickname: None,
                 agent_role: None,
             }),
+            /*state_db_ctx*/ None,
         )
         .await
         .expect("child resume should succeed");
@@ -1987,6 +2010,7 @@ async fn resume_agent_from_rollout_reopens_open_descendants_after_manager_shutdo
             harness.config.clone(),
             parent_thread_id,
             SessionSource::Exec,
+            /*state_db_ctx*/ None,
         )
         .await
         .expect("tree resume should succeed");
@@ -2100,6 +2124,7 @@ async fn resume_agent_from_rollout_uses_edge_data_when_descendant_metadata_sourc
             harness.config.clone(),
             parent_thread_id,
             SessionSource::Exec,
+            /*state_db_ctx*/ None,
         )
         .await
         .expect("tree resume should succeed");
@@ -2215,6 +2240,7 @@ async fn resume_agent_from_rollout_skips_descendants_when_parent_resume_fails() 
             harness.config.clone(),
             parent_thread_id,
             SessionSource::Exec,
+            /*state_db_ctx*/ None,
         )
         .await
         .expect("root resume should succeed");

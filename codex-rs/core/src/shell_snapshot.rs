@@ -518,7 +518,8 @@ pub async fn cleanup_stale_snapshots(codex_home: &Path, active_session_id: Threa
             continue;
         }
 
-        let rollout_path = find_thread_path_by_id_str(codex_home, session_id).await?;
+        let rollout_path =
+            find_thread_path_by_id_str(codex_home, session_id, /*state_db_ctx*/ None).await?;
         let Some(rollout_path) = rollout_path else {
             remove_snapshot_file(&path).await;
             continue;

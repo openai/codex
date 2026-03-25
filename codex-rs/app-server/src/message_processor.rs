@@ -66,6 +66,7 @@ use codex_core::default_client::get_codex_user_agent;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_core::state_db::StateDbHandle;
 use codex_features::Feature;
 use codex_feedback::CodexFeedback;
 use codex_login::auth::ExternalAuthRefreshContext;
@@ -181,6 +182,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) cloud_requirements: CloudRequirementsLoader,
     pub(crate) feedback: CodexFeedback,
     pub(crate) log_db: Option<LogDbLayer>,
+    pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) config_warnings: Vec<ConfigWarningNotification>,
     pub(crate) session_source: SessionSource,
     pub(crate) enable_codex_api_key_env: bool,
@@ -199,6 +201,7 @@ impl MessageProcessor {
             cloud_requirements,
             feedback,
             log_db,
+            state_db,
             config_warnings,
             session_source,
             enable_codex_api_key_env,
@@ -245,6 +248,7 @@ impl MessageProcessor {
             cloud_requirements: cloud_requirements.clone(),
             feedback,
             log_db,
+            state_db,
         });
         // Keep plugin startup warmups aligned at app-server startup.
         // TODO(xl): Move into PluginManager once this no longer depends on config feature gating.

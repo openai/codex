@@ -1,6 +1,7 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_fake_rollout;
+use app_test_support::fake_rollout_cwd;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
 use codex_app_server_protocol::ConversationSummary;
@@ -29,7 +30,7 @@ fn expected_summary(conversation_id: ThreadId, path: PathBuf) -> ConversationSum
         timestamp: Some(META_RFC3339.to_string()),
         updated_at: Some(META_RFC3339.to_string()),
         model_provider: MODEL_PROVIDER.to_string(),
-        cwd: PathBuf::from("/"),
+        cwd: fake_rollout_cwd(),
         cli_version: "0.0.0".to_string(),
         source: SessionSource::Cli,
         git_info: None,
@@ -91,7 +92,8 @@ async fn get_conversation_summary_by_relative_rollout_path_resolves_from_codex_h
     let thread_id = ThreadId::from_string(&conversation_id)?;
     let rollout_path = rollout_path(codex_home.path(), FILENAME_TS, &conversation_id);
     let relative_path = rollout_path.strip_prefix(codex_home.path())?.to_path_buf();
-    let expected = expected_summary(thread_id, std::fs::canonicalize(rollout_path)?);
+    let mut expected = expected_summary(thread_id, std::fs::canonicalize(rollout_path)?);
+    expected.cwd = PathBuf::from("/");
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;

@@ -231,7 +231,7 @@ async fn find_thread_path_falls_back_when_db_path_is_stale() {
     ));
     insert_state_db_thread(home, thread_id, stale_db_path.as_path(), false).await;
 
-    let found = find_thread_path_by_id_str(home, &uuid.to_string())
+    let found = find_thread_path_by_id_str(home, &uuid.to_string(), /*state_db_ctx*/ None)
         .await
         .expect("lookup should succeed");
     assert_eq!(found, Some(fs_rollout_path.clone()));
@@ -257,7 +257,7 @@ async fn find_thread_path_repairs_missing_db_row_after_filesystem_fallback() {
         .await
         .expect("backfill should be complete");
 
-    let found = find_thread_path_by_id_str(home, &uuid.to_string())
+    let found = find_thread_path_by_id_str(home, &uuid.to_string(), /*state_db_ctx*/ None)
         .await
         .expect("lookup should succeed");
     assert_eq!(found, Some(fs_rollout_path.clone()));

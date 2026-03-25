@@ -8,6 +8,7 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
+use codex_core::state_db::init;
 use codex_utils_cli::CliConfigOverrides;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -489,6 +490,13 @@ pub async fn run_main_with_transport(
     }
 
     let feedback = CodexFeedback::new();
+    let state_db = init(&config).await;
+    if state_db.is_none() {
+        warn!(
+            "sqlite state db unavailable at startup for {}; continuing without sqlite-backed app-server state",
+            config.sqlite_home.display()
+        );
+    }
 
     let otel = codex_core::otel_init::build_provider(
         &config,
@@ -522,13 +530,7 @@ pub async fn run_main_with_transport(
 
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
-    let log_db = codex_state::StateRuntime::init(
-        config.sqlite_home.clone(),
-        config.model_provider_id.clone(),
-    )
-    .await
-    .ok()
-    .map(log_db::start);
+    let log_db = state_db.clone().map(log_db::start);
     let log_db_layer = log_db
         .clone()
         .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
@@ -618,6 +620,7 @@ pub async fn run_main_with_transport(
             cloud_requirements: cloud_requirements.clone(),
             feedback: feedback.clone(),
             log_db,
+            state_db,
             config_warnings,
             session_source,
             enable_codex_api_key_env: false,

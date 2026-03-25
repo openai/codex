@@ -21,6 +21,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+arc-swap = "1.8.2"
 async-trait = { workspace = true }
 base64 = { workspace = true }
 axum = { workspace = true, default-features = false, features = [

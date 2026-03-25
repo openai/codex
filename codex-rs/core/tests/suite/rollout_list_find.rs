@@ -78,9 +78,10 @@ async fn find_locates_rollout_file_by_id() {
     let id = Uuid::new_v4();
     let expected = write_minimal_rollout_with_id(home.path(), id);
 
-    let found = find_thread_path_by_id_str(home.path(), &id.to_string())
-        .await
-        .unwrap();
+    let found =
+        find_thread_path_by_id_str(home.path(), &id.to_string(), /*state_db_ctx*/ None)
+            .await
+            .unwrap();
 
     assert_eq!(found.unwrap(), expected);
 }
@@ -94,9 +95,10 @@ async fn find_handles_gitignore_covering_codex_home_directory() {
     let id = Uuid::new_v4();
     let expected = write_minimal_rollout_with_id(&codex_home, id);
 
-    let found = find_thread_path_by_id_str(&codex_home, &id.to_string())
-        .await
-        .unwrap();
+    let found =
+        find_thread_path_by_id_str(&codex_home, &id.to_string(), /*state_db_ctx*/ None)
+            .await
+            .unwrap();
 
     assert_eq!(found, Some(expected));
 }
@@ -114,9 +116,10 @@ async fn find_prefers_sqlite_path_by_id() {
     write_minimal_rollout_with_id(home.path(), id);
     upsert_thread_metadata(home.path(), thread_id, db_path.clone()).await;
 
-    let found = find_thread_path_by_id_str(home.path(), &id.to_string())
-        .await
-        .unwrap();
+    let found =
+        find_thread_path_by_id_str(home.path(), &id.to_string(), /*state_db_ctx*/ None)
+            .await
+            .unwrap();
 
     assert_eq!(found, Some(db_path));
 }
@@ -133,9 +136,10 @@ async fn find_falls_back_to_filesystem_when_sqlite_has_no_match() {
         .join("sessions/2030/12/30/rollout-2030-12-30T00-00-00-unrelated.jsonl");
     upsert_thread_metadata(home.path(), unrelated_thread_id, unrelated_path).await;
 
-    let found = find_thread_path_by_id_str(home.path(), &id.to_string())
-        .await
-        .unwrap();
+    let found =
+        find_thread_path_by_id_str(home.path(), &id.to_string(), /*state_db_ctx*/ None)
+            .await
+            .unwrap();
 
     assert_eq!(found, Some(expected));
 }
@@ -147,9 +151,10 @@ async fn find_ignores_granular_gitignore_rules() {
     let expected = write_minimal_rollout_with_id(home.path(), id);
     std::fs::write(home.path().join("sessions/.gitignore"), "*.jsonl\n").unwrap();
 
-    let found = find_thread_path_by_id_str(home.path(), &id.to_string())
-        .await
-        .unwrap();
+    let found =
+        find_thread_path_by_id_str(home.path(), &id.to_string(), /*state_db_ctx*/ None)
+            .await
+            .unwrap();
 
     assert_eq!(found, Some(expected));
 }
@@ -210,9 +215,13 @@ async fn find_archived_locates_rollout_file_by_id() {
     let id = Uuid::new_v4();
     let expected = write_minimal_rollout_with_id_in_subdir(home.path(), "archived_sessions", id);
 
-    let found = find_archived_thread_path_by_id_str(home.path(), &id.to_string())
-        .await
-        .unwrap();
+    let found = find_archived_thread_path_by_id_str(
+        home.path(),
+        &id.to_string(),
+        /*state_db_ctx*/ None,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(found, Some(expected));
 }
