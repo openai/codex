@@ -91,6 +91,8 @@ pub struct ReadResponse {
     pub next_seq: u64,
     pub exited: bool,
     pub exit_code: Option<i32>,
+    pub closed: bool,
+    pub failure: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

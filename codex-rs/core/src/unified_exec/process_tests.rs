@@ -4,24 +4,54 @@ use async_trait::async_trait;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::ProcessId;
+use codex_exec_server::ReadResponse;
 use codex_exec_server::StartedExecProcess;
 use codex_exec_server::WriteResponse;
 use codex_exec_server::WriteStatus;
 use codex_sandboxing::SandboxType;
 use pretty_assertions::assert_eq;
+use std::collections::VecDeque;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::Mutex;
+use tokio::sync::watch;
 use tokio::time::Duration;
 
 struct MockExecProcess {
     process_id: ProcessId,
     write_response: WriteResponse,
+    read_responses: Mutex<VecDeque<ReadResponse>>,
+    wake_tx: watch::Sender<u64>,
 }
 
 #[async_trait]
 impl ExecProcess for MockExecProcess {
     fn process_id(&self) -> &ProcessId {
         &self.process_id
+    }
+
+    fn subscribe_wake(&self) -> watch::Receiver<u64> {
+        self.wake_tx.subscribe()
+    }
+
+    async fn read(
+        &self,
+        _after_seq: Option<u64>,
+        _max_bytes: Option<usize>,
+        _wait_ms: Option<u64>,
+    ) -> Result<ReadResponse, ExecServerError> {
+        Ok(self
+            .read_responses
+            .lock()
+            .await
+            .pop_front()
+            .unwrap_or(ReadResponse {
+                chunks: Vec::new(),
+                next_seq: 1,
+                exited: false,
+                exit_code: None,
+                closed: false,
+                failure: None,
+            }))
     }
 
     async fn write(&self, _chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError> {
@@ -34,15 +64,16 @@ impl ExecProcess for MockExecProcess {
 }
 
 async fn remote_process(write_status: WriteStatus) -> UnifiedExecProcess {
-    let (_events_tx, events_rx) = mpsc::channel(1);
+    let (wake_tx, _wake_rx) = watch::channel(0);
     let started = StartedExecProcess {
         process: Arc::new(MockExecProcess {
             process_id: "test-process".to_string().into(),
             write_response: WriteResponse {
                 status: write_status,
             },
+            read_responses: Mutex::new(VecDeque::new()),
+            wake_tx,
         }),
-        events: events_rx,
     };
 
     UnifiedExecProcess::from_remote_started(started, SandboxType::None)
@@ -78,25 +109,28 @@ async fn remote_write_closed_stdin_marks_process_exited() {
 
 #[tokio::test]
 async fn remote_process_waits_for_early_exit_event() {
-    let (events_tx, events_rx) = mpsc::channel(1);
+    let (wake_tx, _wake_rx) = watch::channel(0);
     let started = StartedExecProcess {
         process: Arc::new(MockExecProcess {
             process_id: "test-process".to_string().into(),
             write_response: WriteResponse {
                 status: WriteStatus::Accepted,
             },
+            read_responses: Mutex::new(VecDeque::from([ReadResponse {
+                chunks: Vec::new(),
+                next_seq: 2,
+                exited: true,
+                exit_code: Some(17),
+                closed: true,
+                failure: None,
+            }])),
+            wake_tx: wake_tx.clone(),
         }),
-        events: events_rx,
     };
 
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(10)).await;
-        let _ = events_tx
-            .send(codex_exec_server::ExecSessionEvent::Exited {
-                seq: 1,
-                exit_code: 17,
-            })
-            .await;
+        let _ = wake_tx.send(1);
     });
 
     let process = UnifiedExecProcess::from_remote_started(started, SandboxType::None)

@@ -43,7 +43,6 @@ pub use file_system::ReadDirectoryEntry;
 pub use file_system::RemoveOptions;
 pub use process::ExecBackend;
 pub use process::ExecProcess;
-pub use process::ExecSessionEvent;
 pub use process::ProcessId;
 pub use process::StartedExecProcess;
 pub use protocol::ExecClosedNotification;

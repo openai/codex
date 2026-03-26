@@ -20,17 +20,16 @@ use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::JSONRPCNotification;
 use serde_json::Value;
 use tokio::sync::Mutex;
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::watch;
+
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
 use tracing::debug;
 
+use crate::ProcessId;
 use crate::client_api::ExecServerClientConnectOptions;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
-use crate::process::ExecSessionEvent;
-use crate::process::SESSION_EVENT_CHANNEL_CAPACITY;
 use crate::protocol::EXEC_CLOSED_METHOD;
 use crate::protocol::EXEC_EXITED_METHOD;
 use crate::protocol::EXEC_METHOD;
@@ -96,13 +95,25 @@ impl RemoteExecServerConnectArgs {
     }
 }
 
+pub(crate) struct SessionState {
+    wake_tx: watch::Sender<u64>,
+    failure: Mutex<Option<String>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct Session {
+    client: ExecServerClient,
+    process_id: ProcessId,
+    state: Arc<SessionState>,
+}
+
 struct Inner {
     client: RpcClient,
     // The remote transport delivers one shared notification stream for every
-    // process on the connection. Keep a local process_id -> sender registry so
-    // we can demux those connection-global notifications into the single
-    // process-scoped event channel returned by ExecBackend::start().
-    sessions: ArcSwap<HashMap<String, mpsc::Sender<ExecSessionEvent>>>,
+    // process on the connection. Keep a local process_id -> session registry so
+    // we can turn those connection-global notifications into process wakeups
+    // without making notifications the source of truth for output delivery.
+    sessions: ArcSwap<HashMap<String, Arc<SessionState>>>,
     // ArcSwap makes reads cheap on the hot notification path, but writes still
     // need serialization so concurrent register/remove operations do not
     // overwrite each other's copy-on-write updates.
@@ -320,30 +331,20 @@ impl ExecServerClient {
     pub(crate) async fn register_session(
         &self,
         process_id: &str,
-    ) -> Result<mpsc::Receiver<ExecSessionEvent>, ExecServerError> {
-        let (events_tx, events_rx) = mpsc::channel(SESSION_EVENT_CHANNEL_CAPACITY);
-        let _sessions_write_guard = self.inner.sessions_write_lock.lock().await;
-        let sessions = self.inner.sessions.load();
-        if sessions.contains_key(process_id) {
-            return Err(ExecServerError::Protocol(format!(
-                "session already registered for process {process_id}"
-            )));
-        }
-        let mut next_sessions = sessions.as_ref().clone();
-        next_sessions.insert(process_id.to_string(), events_tx);
-        self.inner.sessions.store(Arc::new(next_sessions));
-        Ok(events_rx)
+    ) -> Result<Session, ExecServerError> {
+        let state = Arc::new(SessionState::new());
+        self.inner
+            .insert_session(process_id, Arc::clone(&state))
+            .await?;
+        Ok(Session {
+            client: self.clone(),
+            process_id: process_id.to_string().into(),
+            state,
+        })
     }
 
     pub(crate) async fn unregister_session(&self, process_id: &str) {
-        let _sessions_write_guard = self.inner.sessions_write_lock.lock().await;
-        let sessions = self.inner.sessions.load();
-        if !sessions.contains_key(process_id) {
-            return;
-        }
-        let mut next_sessions = sessions.as_ref().clone();
-        next_sessions.remove(process_id);
-        self.inner.sessions.store(Arc::new(next_sessions));
+        self.inner.remove_session(process_id).await;
     }
 
     async fn connect(
@@ -415,6 +416,151 @@ impl From<RpcCallError> for ExecServerError {
     }
 }
 
+impl SessionState {
+    fn new() -> Self {
+        let (wake_tx, _wake_rx) = watch::channel(0);
+        Self {
+            wake_tx,
+            failure: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn subscribe(&self) -> watch::Receiver<u64> {
+        self.wake_tx.subscribe()
+    }
+
+    fn note_change(&self, seq: u64) {
+        let next = (*self.wake_tx.borrow()).max(seq);
+        let _ = self.wake_tx.send(next);
+    }
+
+    async fn set_failure(&self, message: String) {
+        let mut failure = self.failure.lock().await;
+        if failure.is_none() {
+            *failure = Some(message);
+        }
+        drop(failure);
+        let next = (*self.wake_tx.borrow()).saturating_add(1);
+        let _ = self.wake_tx.send(next);
+    }
+
+    async fn failed_response(&self) -> Option<ReadResponse> {
+        self.failure
+            .lock()
+            .await
+            .clone()
+            .map(|message| self.synthesized_failure(message))
+    }
+
+    fn synthesized_failure(&self, message: String) -> ReadResponse {
+        let next_seq = (*self.wake_tx.borrow()).saturating_add(1);
+        ReadResponse {
+            chunks: Vec::new(),
+            next_seq,
+            exited: true,
+            exit_code: None,
+            closed: true,
+            failure: Some(message),
+        }
+    }
+}
+
+impl Session {
+    pub(crate) fn process_id(&self) -> &ProcessId {
+        &self.process_id
+    }
+
+    pub(crate) fn subscribe_wake(&self) -> watch::Receiver<u64> {
+        self.state.subscribe()
+    }
+
+    pub(crate) async fn read(
+        &self,
+        after_seq: Option<u64>,
+        max_bytes: Option<usize>,
+        wait_ms: Option<u64>,
+    ) -> Result<ReadResponse, ExecServerError> {
+        if let Some(response) = self.state.failed_response().await {
+            return Ok(response);
+        }
+
+        match self
+            .client
+            .read(ReadParams {
+                process_id: self.process_id.to_string(),
+                after_seq,
+                max_bytes,
+                wait_ms,
+            })
+            .await
+        {
+            Ok(response) => Ok(response),
+            Err(err) if is_transport_closed_error(&err) => {
+                let message = disconnected_message(/*reason*/ None);
+                self.state.set_failure(message.clone()).await;
+                Ok(self.state.synthesized_failure(message))
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    pub(crate) async fn write(&self, chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError> {
+        self.client.write(&self.process_id, chunk).await
+    }
+
+    pub(crate) async fn terminate(&self) -> Result<(), ExecServerError> {
+        self.client.terminate(&self.process_id).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn unregister(&self) {
+        self.client.unregister_session(&self.process_id).await;
+    }
+}
+
+impl Inner {
+    fn get_session(&self, process_id: &str) -> Option<Arc<SessionState>> {
+        self.sessions.load().get(process_id).cloned()
+    }
+
+    async fn insert_session(
+        &self,
+        process_id: &str,
+        session: Arc<SessionState>,
+    ) -> Result<(), ExecServerError> {
+        let _sessions_write_guard = self.sessions_write_lock.lock().await;
+        let sessions = self.sessions.load();
+        if sessions.contains_key(process_id) {
+            return Err(ExecServerError::Protocol(format!(
+                "session already registered for process {process_id}"
+            )));
+        }
+        let mut next_sessions = sessions.as_ref().clone();
+        next_sessions.insert(process_id.to_string(), session);
+        self.sessions.store(Arc::new(next_sessions));
+        Ok(())
+    }
+
+    async fn remove_session(&self, process_id: &str) -> Option<Arc<SessionState>> {
+        let _sessions_write_guard = self.sessions_write_lock.lock().await;
+        let sessions = self.sessions.load();
+        let session = sessions.get(process_id).cloned();
+        session.as_ref()?;
+        let mut next_sessions = sessions.as_ref().clone();
+        next_sessions.remove(process_id);
+        self.sessions.store(Arc::new(next_sessions));
+        session
+    }
+
+    async fn take_all_sessions(&self) -> HashMap<String, Arc<SessionState>> {
+        let _sessions_write_guard = self.sessions_write_lock.lock().await;
+        let sessions = self.sessions.load();
+        let drained_sessions = sessions.as_ref().clone();
+        self.sessions.store(Arc::new(HashMap::new()));
+        drained_sessions
+    }
+}
+
 fn disconnected_message(reason: Option<&str>) -> String {
     match reason {
         Some(reason) => format!("exec-server transport disconnected: {reason}"),
@@ -422,22 +568,22 @@ fn disconnected_message(reason: Option<&str>) -> String {
     }
 }
 
-async fn fail_all_sessions(inner: &Arc<Inner>, message: String) {
-    let sessions = {
-        let _sessions_write_guard = inner.sessions_write_lock.lock().await;
-        let sessions = inner.sessions.load();
-        let drained_sessions = sessions.as_ref().clone();
-        inner.sessions.store(Arc::new(HashMap::new()));
-        drained_sessions
-    };
+fn is_transport_closed_error(error: &ExecServerError) -> bool {
+    matches!(error, ExecServerError::Closed)
+        || matches!(
+            error,
+            ExecServerError::Server {
+                code: -32000,
+                message,
+            } if message == "JSON-RPC transport closed"
+        )
+}
 
-    for (_, events_tx) in sessions {
-        // Do not block disconnect handling behind a full bounded queue. Best
-        // effort deliver a terminal failure event, then drop the sender so
-        // receivers still observe EOF if the queue was already saturated.
-        let _ = events_tx.try_send(ExecSessionEvent::Failed {
-            message: message.clone(),
-        });
+async fn fail_all_sessions(inner: &Arc<Inner>, message: String) {
+    let sessions = inner.take_all_sessions().await;
+
+    for (_, session) in sessions {
+        session.set_failure(message.clone()).await;
     }
 }
 
@@ -449,52 +595,25 @@ async fn handle_server_notification(
         EXEC_OUTPUT_DELTA_METHOD => {
             let params: ExecOutputDeltaNotification =
                 serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
-            // Remote exec-server notifications are connection-global, so route
-            // each event to the single local receiver that owns this process.
-            let events_tx = inner.sessions.load().get(&params.process_id).cloned();
-            if let Some(events_tx) = events_tx {
-                try_forward_session_event(
-                    events_tx,
-                    ExecSessionEvent::Output {
-                        seq: params.seq,
-                        stream: params.stream,
-                        chunk: params.chunk.into_inner(),
-                    },
-                );
+            if let Some(session) = inner.get_session(&params.process_id) {
+                session.note_change(params.seq);
             }
         }
         EXEC_EXITED_METHOD => {
             let params: ExecExitedNotification =
                 serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
-            let events_tx = inner.sessions.load().get(&params.process_id).cloned();
-            if let Some(events_tx) = events_tx {
-                try_forward_session_event(
-                    events_tx,
-                    ExecSessionEvent::Exited {
-                        seq: params.seq,
-                        exit_code: params.exit_code,
-                    },
-                );
+            if let Some(session) = inner.get_session(&params.process_id) {
+                session.note_change(params.seq);
             }
         }
         EXEC_CLOSED_METHOD => {
             let params: ExecClosedNotification =
                 serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
-            let events_tx = {
-                let _sessions_write_guard = inner.sessions_write_lock.lock().await;
-                let sessions = inner.sessions.load();
-                let events_tx = sessions.get(&params.process_id).cloned();
-                if events_tx.is_some() {
-                    // Closed is the terminal lifecycle event for this process,
-                    // so drop the routing entry before forwarding it.
-                    let mut next_sessions = sessions.as_ref().clone();
-                    next_sessions.remove(&params.process_id);
-                    inner.sessions.store(Arc::new(next_sessions));
-                }
-                events_tx
-            };
-            if let Some(events_tx) = events_tx {
-                try_forward_session_event(events_tx, ExecSessionEvent::Closed { seq: params.seq });
+            // Closed is the terminal lifecycle event for this process, so drop
+            // the routing entry before forwarding it.
+            let session = inner.remove_session(&params.process_id).await;
+            if let Some(session) = session {
+                session.note_change(params.seq);
             }
         }
         other => {
@@ -502,24 +621,6 @@ async fn handle_server_notification(
         }
     }
     Ok(())
-}
-
-fn try_forward_session_event(events_tx: mpsc::Sender<ExecSessionEvent>, event: ExecSessionEvent) {
-    match event {
-        ExecSessionEvent::Output { .. } | ExecSessionEvent::Closed { .. } => {
-            let _ = events_tx.try_send(event);
-        }
-        ExecSessionEvent::Exited { .. } | ExecSessionEvent::Failed { .. } => {
-            match events_tx.try_send(event) {
-                Ok(()) | Err(TrySendError::Closed(_)) => {}
-                Err(TrySendError::Full(event)) => {
-                    tokio::spawn(async move {
-                        let _ = events_tx.send(event).await;
-                    });
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -539,9 +640,7 @@ mod tests {
 
     use super::ExecServerClient;
     use super::ExecServerClientConnectOptions;
-    use super::SESSION_EVENT_CHANNEL_CAPACITY;
     use crate::connection::JsonRpcConnection;
-    use crate::process::ExecSessionEvent;
     use crate::protocol::EXEC_EXITED_METHOD;
     use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
     use crate::protocol::ExecExitedNotification;
@@ -575,7 +674,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn full_session_queue_does_not_block_other_notifications() {
+    async fn wake_notifications_do_not_block_other_sessions() {
         let (client_stdin, server_reader) = duplex(1 << 20);
         let (mut server_writer, client_stdout) = duplex(1 << 20);
         let (notifications_tx, mut notifications_rx) = mpsc::channel(16);
@@ -619,16 +718,17 @@ mod tests {
         .await
         .expect("client should connect");
 
-        let _noisy_events = client
+        let _noisy_session = client
             .register_session("noisy")
             .await
             .expect("noisy session should register");
-        let mut quiet_events = client
+        let quiet_session = client
             .register_session("quiet")
             .await
             .expect("quiet session should register");
+        let mut quiet_wake_rx = quiet_session.subscribe_wake();
 
-        for seq in 0..=SESSION_EVENT_CHANNEL_CAPACITY as u64 {
+        for seq in 0..=4096 {
             notifications_tx
                 .send(JSONRPCMessage::Notification(JSONRPCNotification {
                     method: EXEC_OUTPUT_DELTA_METHOD.to_string(),
@@ -661,18 +761,11 @@ mod tests {
             .await
             .expect("exit notification should queue");
 
-        let quiet_event = timeout(Duration::from_secs(1), quiet_events.recv())
+        timeout(Duration::from_secs(1), quiet_wake_rx.changed())
             .await
-            .expect("quiet session should receive notification before timeout")
-            .expect("quiet session channel should stay open");
-
-        assert_eq!(
-            quiet_event,
-            ExecSessionEvent::Exited {
-                seq: 1,
-                exit_code: 17,
-            }
-        );
+            .expect("quiet session should receive wake before timeout")
+            .expect("quiet wake channel should stay open");
+        assert_eq!(*quiet_wake_rx.borrow(), 1);
 
         drop(notifications_tx);
         drop(client);

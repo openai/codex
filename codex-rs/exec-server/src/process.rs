@@ -3,40 +3,18 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::sync::mpsc;
+use tokio::sync::watch;
 
 use crate::ExecServerError;
-use crate::protocol::ExecOutputStream;
 use crate::protocol::ExecParams;
+use crate::protocol::ReadResponse;
 use crate::protocol::WriteResponse;
-
-pub(crate) const SESSION_EVENT_CHANNEL_CAPACITY: usize = 2048;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExecSessionEvent {
-    Output {
-        seq: u64,
-        stream: ExecOutputStream,
-        chunk: Vec<u8>,
-    },
-    Exited {
-        seq: u64,
-        exit_code: i32,
-    },
-    Closed {
-        seq: u64,
-    },
-    Failed {
-        message: String,
-    },
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProcessId(String);
 
 pub struct StartedExecProcess {
     pub process: Arc<dyn ExecProcess>,
-    pub events: mpsc::Receiver<ExecSessionEvent>,
 }
 
 impl ProcessId {
@@ -78,6 +56,15 @@ impl From<String> for ProcessId {
 #[async_trait]
 pub trait ExecProcess: Send + Sync {
     fn process_id(&self) -> &ProcessId;
+
+    fn subscribe_wake(&self) -> watch::Receiver<u64>;
+
+    async fn read(
+        &self,
+        after_seq: Option<u64>,
+        max_bytes: Option<usize>,
+        wait_ms: Option<u64>,
+    ) -> Result<ReadResponse, ExecServerError>;
 
     async fn write(&self, chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError>;
 

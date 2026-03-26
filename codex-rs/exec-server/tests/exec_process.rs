@@ -9,11 +9,11 @@ use codex_exec_server::Environment;
 use codex_exec_server::ExecBackend;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecProcess;
-use codex_exec_server::ExecSessionEvent;
+use codex_exec_server::ReadResponse;
 use codex_exec_server::StartedExecProcess;
 use pretty_assertions::assert_eq;
 use test_case::test_case;
-use tokio::sync::mpsc;
+use tokio::sync::watch;
 use tokio::time::Duration;
 use tokio::time::timeout;
 
@@ -56,58 +56,61 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), "proc-1");
-    let mut events = session.events;
-
-    let mut exit_code = None;
-    loop {
-        match timeout(Duration::from_secs(2), events.recv()).await? {
-            Some(event) => match event {
-                ExecSessionEvent::Exited {
-                    exit_code: code, ..
-                } => exit_code = Some(code),
-                ExecSessionEvent::Closed { .. } => break,
-                ExecSessionEvent::Output { .. } => {}
-                ExecSessionEvent::Failed { message } => {
-                    anyhow::bail!("process failed before Closed event: {message}")
-                }
-            },
-            None => anyhow::bail!("event stream closed before Closed event"),
-        }
-    }
+    let wake_rx = session.process.subscribe_wake();
+    let (_, exit_code, closed) =
+        collect_process_output_from_reads(session.process, wake_rx).await?;
 
     assert_eq!(exit_code, Some(0));
+    assert!(closed);
     Ok(())
 }
 
-async fn collect_process_output_from_events(
+async fn read_process_until_change(
     session: Arc<dyn ExecProcess>,
-    mut events: mpsc::Receiver<ExecSessionEvent>,
-) -> Result<(String, i32, bool)> {
+    wake_rx: &mut watch::Receiver<u64>,
+    after_seq: Option<u64>,
+) -> Result<ReadResponse> {
+    let response = session
+        .read(after_seq, /*max_bytes*/ None, /*wait_ms*/ Some(0))
+        .await?;
+    if !response.chunks.is_empty() || response.closed || response.failure.is_some() {
+        return Ok(response);
+    }
+
+    timeout(Duration::from_secs(2), wake_rx.changed()).await??;
+    session
+        .read(after_seq, /*max_bytes*/ None, /*wait_ms*/ Some(0))
+        .await
+        .map_err(Into::into)
+}
+
+async fn collect_process_output_from_reads(
+    session: Arc<dyn ExecProcess>,
+    mut wake_rx: watch::Receiver<u64>,
+) -> Result<(String, Option<i32>, bool)> {
     let mut output = String::new();
     let mut exit_code = None;
+    let mut after_seq = None;
     loop {
-        match timeout(Duration::from_secs(2), events.recv()).await? {
-            Some(event) => match event {
-                ExecSessionEvent::Output { chunk, .. } => {
-                    output.push_str(&String::from_utf8_lossy(&chunk));
-                }
-                ExecSessionEvent::Exited {
-                    exit_code: code, ..
-                } => exit_code = Some(code),
-                ExecSessionEvent::Closed { .. } => {
-                    break;
-                }
-                ExecSessionEvent::Failed { message } => {
-                    anyhow::bail!("process failed before Closed event: {message}");
-                }
-            },
-            None => {
-                anyhow::bail!("event stream closed before Closed event");
-            }
+        let response =
+            read_process_until_change(Arc::clone(&session), &mut wake_rx, after_seq).await?;
+        if let Some(message) = response.failure {
+            anyhow::bail!("process failed before closed state: {message}");
         }
+        for chunk in response.chunks {
+            output.push_str(&String::from_utf8_lossy(&chunk.chunk.into_inner()));
+            after_seq = Some(chunk.seq);
+        }
+        if response.exited {
+            exit_code = response.exit_code;
+        }
+        if response.closed {
+            break;
+        }
+        after_seq = response.next_seq.checked_sub(1).or(after_seq);
     }
     drop(session);
-    Ok((output, exit_code.unwrap_or(-1), true))
+    Ok((output, exit_code, true))
 }
 
 async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
@@ -130,10 +133,11 @@ async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
 
-    let StartedExecProcess { process, events } = session;
-    let (output, exit_code, closed) = collect_process_output_from_events(process, events).await?;
+    let StartedExecProcess { process } = session;
+    let wake_rx = process.subscribe_wake();
+    let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
     assert_eq!(output, "session output\n");
-    assert_eq!(exit_code, 0);
+    assert_eq!(exit_code, Some(0));
     assert!(closed);
     Ok(())
 }
@@ -160,14 +164,15 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
 
     tokio::time::sleep(Duration::from_millis(200)).await;
     session.process.write(b"hello\n".to_vec()).await?;
-    let StartedExecProcess { process, events } = session;
-    let (output, exit_code, closed) = collect_process_output_from_events(process, events).await?;
+    let StartedExecProcess { process } = session;
+    let wake_rx = process.subscribe_wake();
+    let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
 
     assert!(
         output.contains("from-stdin:hello"),
         "unexpected output: {output:?}"
     );
-    assert_eq!(exit_code, 0);
+    assert_eq!(exit_code, Some(0));
     assert!(closed);
     Ok(())
 }
@@ -194,10 +199,11 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let StartedExecProcess { process, events } = session;
-    let (output, exit_code, closed) = collect_process_output_from_events(process, events).await?;
+    let StartedExecProcess { process } = session;
+    let wake_rx = process.subscribe_wake();
+    let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
     assert_eq!(output, "queued output\n");
-    assert_eq!(exit_code, 0);
+    assert_eq!(exit_code, Some(0));
     assert!(closed);
     Ok(())
 }
@@ -227,23 +233,19 @@ async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
         .expect("remote context should include exec-server harness");
     server.shutdown().await?;
 
-    let mut events = session.events;
-    loop {
-        match timeout(Duration::from_secs(2), events.recv()).await? {
-            Some(ExecSessionEvent::Failed { message }) => {
-                assert!(
-                    message.starts_with("exec-server transport disconnected"),
-                    "unexpected failure message: {message}"
-                );
-                break;
-            }
-            Some(ExecSessionEvent::Output { .. } | ExecSessionEvent::Exited { .. }) => {}
-            Some(ExecSessionEvent::Closed { .. }) => {
-                anyhow::bail!("received Closed instead of transport failure")
-            }
-            None => anyhow::bail!("event stream closed before Failed event"),
-        }
-    }
+    let mut wake_rx = session.process.subscribe_wake();
+    let response = read_process_until_change(session.process, &mut wake_rx, None).await?;
+    let message = response
+        .failure
+        .expect("disconnect should surface as a failure");
+    assert!(
+        message.starts_with("exec-server transport disconnected"),
+        "unexpected failure message: {message}"
+    );
+    assert!(
+        response.closed,
+        "disconnect should close the process session"
+    );
 
     Ok(())
 }

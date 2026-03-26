@@ -16,7 +16,7 @@ use crate::exec::ExecToolCallOutput;
 use crate::exec::StreamOutput;
 use crate::exec::is_likely_sandbox_denied;
 use codex_exec_server::ExecProcess;
-use codex_exec_server::ExecSessionEvent;
+use codex_exec_server::ReadResponse as ExecReadResponse;
 use codex_exec_server::StartedExecProcess;
 use codex_exec_server::WriteStatus;
 use codex_protocol::protocol::TruncationPolicy;
@@ -345,10 +345,18 @@ impl UnifiedExecProcess {
             managed.state_tx.clone(),
         ));
 
-        if tokio::time::timeout(
-            EARLY_EXIT_GRACE_PERIOD,
-            managed.cancellation_token.cancelled(),
-        )
+        let mut state_rx = managed.state_rx.clone();
+        if tokio::time::timeout(EARLY_EXIT_GRACE_PERIOD, async {
+            loop {
+                let state = state_rx.borrow().clone();
+                if state.has_exited || state.failure_message.is_some() {
+                    break;
+                }
+                if state_rx.changed().await.is_err() {
+                    break;
+                }
+            }
+        })
         .await
         .is_ok()
         {
@@ -371,46 +379,77 @@ impl UnifiedExecProcess {
             output_closed_notify,
             cancellation_token,
         } = output_handles;
-        let StartedExecProcess { mut events, .. } = started;
+        let process = started.process;
+        let mut wake_rx = process.subscribe_wake();
         tokio::spawn(async move {
+            let mut after_seq = None;
             loop {
-                match events.recv().await {
-                    Some(ExecSessionEvent::Output { chunk, .. }) => {
-                        let mut guard = output_buffer.lock().await;
-                        guard.push_chunk(chunk.clone());
-                        drop(guard);
-                        let _ = output_tx.send(chunk);
-                        output_notify.notify_waiters();
+                match process
+                    .read(after_seq, /*max_bytes*/ None, /*wait_ms*/ Some(0))
+                    .await
+                {
+                    Ok(response) => {
+                        let ExecReadResponse {
+                            chunks,
+                            next_seq,
+                            exited,
+                            exit_code,
+                            closed,
+                            failure,
+                        } = response;
+
+                        for chunk in chunks {
+                            let bytes = chunk.chunk.into_inner();
+                            let mut guard = output_buffer.lock().await;
+                            guard.push_chunk(bytes.clone());
+                            drop(guard);
+                            let _ = output_tx.send(bytes);
+                            output_notify.notify_waiters();
+                        }
+
+                        if let Some(message) = failure {
+                            let state = state_tx.borrow().clone();
+                            let _ = state_tx.send_replace(state.failed(message));
+                            output_closed.store(true, Ordering::Release);
+                            output_closed_notify.notify_waiters();
+                            cancellation_token.cancel();
+                            break;
+                        }
+
+                        if exited {
+                            let state = state_tx.borrow().clone();
+                            let _ = state_tx.send_replace(state.exited(exit_code));
+                        }
+
+                        if closed {
+                            output_closed.store(true, Ordering::Release);
+                            output_closed_notify.notify_waiters();
+                            cancellation_token.cancel();
+                        }
+
+                        after_seq = next_seq.checked_sub(1);
+                        if output_closed.load(Ordering::Acquire) {
+                            break;
+                        }
                     }
-                    Some(ExecSessionEvent::Exited { exit_code, .. }) => {
+                    Err(err) => {
                         let state = state_tx.borrow().clone();
-                        let _ = state_tx.send_replace(state.exited(Some(exit_code)));
-                        cancellation_token.cancel();
-                    }
-                    Some(ExecSessionEvent::Closed { .. }) => {
-                        let state = state_tx.borrow().clone();
-                        let _ = state_tx.send_replace(state.exited(state.exit_code));
+                        let _ = state_tx.send_replace(state.failed(err.to_string()));
                         output_closed.store(true, Ordering::Release);
                         output_closed_notify.notify_waiters();
                         cancellation_token.cancel();
                         break;
                     }
-                    Some(ExecSessionEvent::Failed { message }) => {
-                        let state = state_tx.borrow().clone();
-                        let _ = state_tx.send_replace(state.failed(message));
-                        output_closed.store(true, Ordering::Release);
-                        output_closed_notify.notify_waiters();
-                        cancellation_token.cancel();
-                        break;
-                    }
-                    None => {
-                        let state = state_tx.borrow().clone();
-                        let _ = state_tx.send_replace(state.exited(state.exit_code));
-                        output_closed.store(true, Ordering::Release);
-                        output_closed_notify.notify_waiters();
-                        cancellation_token.cancel();
-                        break;
-                    }
+                }
+
+                if wake_rx.changed().await.is_err() {
+                    let state = state_tx.borrow().clone();
+                    let _ = state_tx
+                        .send_replace(state.failed("exec-server wake channel closed".to_string()));
+                    output_closed.store(true, Ordering::Release);
+                    output_closed_notify.notify_waiters();
+                    cancellation_token.cancel();
+                    break;
                 }
             }
         })
