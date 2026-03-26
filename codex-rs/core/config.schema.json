@@ -1258,9 +1258,7 @@
       "type": "object"
     },
     "RawMcpServerConfig": {
-      "additionalProperties": {
-        "$ref": "#/definitions/McpServerToolConfig"
-      },
+      "additionalProperties": false,
       "properties": {
         "args": {
           "default": null,
