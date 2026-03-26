@@ -1262,7 +1262,11 @@ fn exec_approval_request_from_params(
 ) -> ExecApprovalRequestEvent {
     ExecApprovalRequestEvent {
         call_id: params.item_id,
-        command: params.command.into_iter().collect(),
+        command: params
+            .command
+            .as_deref()
+            .map(split_command_string)
+            .unwrap_or_default(),
         cwd: params.cwd.unwrap_or_default(),
         reason: params.reason,
         network_approval_context: params

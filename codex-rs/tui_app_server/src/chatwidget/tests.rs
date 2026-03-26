@@ -27,6 +27,7 @@ use codex_app_server_protocol::CollabAgentStatus as AppServerCollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool as AppServerCollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus as AppServerCollabAgentToolCallStatus;
 use codex_app_server_protocol::CommandAction as AppServerCommandAction;
+use codex_app_server_protocol::CommandExecutionRequestApprovalParams as AppServerCommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionSource as AppServerCommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus as AppServerCommandExecutionStatus;
 use codex_app_server_protocol::ErrorNotification;
@@ -3503,6 +3504,40 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
     assert_snapshot!(
         "exec_approval_history_decision_approved_short",
         lines_to_single_string(&decision)
+    );
+}
+
+#[test]
+fn app_server_exec_approval_request_splits_shell_wrapped_command() {
+    let script = r#"python3 -c 'print("Hello, world!")'"#;
+    let request =
+        exec_approval_request_from_params(AppServerCommandExecutionRequestApprovalParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "item-1".to_string(),
+            approval_id: Some("approval-1".to_string()),
+            reason: None,
+            network_approval_context: None,
+            command: Some(
+                shlex::try_join(["/bin/zsh", "-lc", script])
+                    .expect("round-trippable shell wrapper"),
+            ),
+            cwd: Some(PathBuf::from("/tmp")),
+            command_actions: None,
+            additional_permissions: None,
+            skill_metadata: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            available_decisions: None,
+        });
+
+    assert_eq!(
+        request.command,
+        vec![
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            script.to_string(),
+        ]
     );
 }
 
