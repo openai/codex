@@ -1836,6 +1836,7 @@ dependencies = [
  "codex-hooks",
  "codex-instructions",
  "codex-login",
+ "codex-mcp",
  "codex-network-proxy",
  "codex-otel",
  "codex-plugin",
@@ -2244,6 +2245,37 @@ dependencies = [
  "urlencoding",
  "webbrowser",
  "wiremock",
+]
+
+[[package]]
+name = "codex-mcp"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "codex-async-utils",
+ "codex-config",
+ "codex-features",
+ "codex-login",
+ "codex-otel",
+ "codex-plugin",
+ "codex-protocol",
+ "codex-rmcp-client",
+ "codex-utils-pty",
+ "futures",
+ "pretty_assertions",
+ "regex-lite",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "sha1",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "toml 0.9.11+spec-1.1.0",
+ "tracing",
+ "url",
 ]
 
 [[package]]
