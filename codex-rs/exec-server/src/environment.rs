@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use tokio::sync::OnceCell;
+
 use crate::ExecServerClient;
 use crate::ExecServerError;
 use crate::RemoteExecServerConnectArgs;
@@ -10,13 +12,49 @@ use crate::process::ExecBackend;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
 
+pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
+
 pub trait ExecutorEnvironment: Send + Sync {
     fn get_exec_backend(&self) -> Arc<dyn ExecBackend>;
 }
 
+#[derive(Debug, Default)]
+pub struct EnvironmentManager {
+    exec_server_url: Option<String>,
+    current_environment: OnceCell<Arc<Environment>>,
+}
+
+impl EnvironmentManager {
+    pub fn new(exec_server_url: Option<String>) -> Self {
+        Self {
+            exec_server_url: normalize_exec_server_url(exec_server_url),
+            current_environment: OnceCell::new(),
+        }
+    }
+
+    pub fn from_env() -> Self {
+        Self::new(std::env::var(CODEX_EXEC_SERVER_URL_ENV_VAR).ok())
+    }
+
+    pub fn exec_server_url(&self) -> Option<&str> {
+        self.exec_server_url.as_deref()
+    }
+
+    pub async fn current(&self) -> Result<Arc<Environment>, ExecServerError> {
+        self.current_environment
+            .get_or_try_init(|| async {
+                Ok(Arc::new(
+                    Environment::create(self.exec_server_url.clone()).await?,
+                ))
+            })
+            .await
+            .map(Arc::clone)
+    }
+}
+
 #[derive(Clone)]
 pub struct Environment {
-    experimental_exec_server_url: Option<String>,
+    exec_server_url: Option<String>,
     remote_exec_server_client: Option<ExecServerClient>,
     exec_backend: Arc<dyn ExecBackend>,
 }
@@ -32,7 +70,7 @@ impl Default for Environment {
         }
 
         Self {
-            experimental_exec_server_url: None,
+            exec_server_url: None,
             remote_exec_server_client: None,
             exec_backend: Arc::new(local_process),
         }
@@ -42,19 +80,15 @@ impl Default for Environment {
 impl std::fmt::Debug for Environment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Environment")
-            .field(
-                "experimental_exec_server_url",
-                &self.experimental_exec_server_url,
-            )
+            .field("exec_server_url", &self.exec_server_url)
             .finish_non_exhaustive()
     }
 }
 
 impl Environment {
-    pub async fn create(
-        experimental_exec_server_url: Option<String>,
-    ) -> Result<Self, ExecServerError> {
-        let remote_exec_server_client = if let Some(url) = &experimental_exec_server_url {
+    pub async fn create(exec_server_url: Option<String>) -> Result<Self, ExecServerError> {
+        let exec_server_url = normalize_exec_server_url(exec_server_url);
+        let remote_exec_server_client = if let Some(url) = &exec_server_url {
             Some(
                 ExecServerClient::connect_websocket(RemoteExecServerConnectArgs {
                     websocket_url: url.clone(),
@@ -83,14 +117,14 @@ impl Environment {
             };
 
         Ok(Self {
-            experimental_exec_server_url,
+            exec_server_url,
             remote_exec_server_client,
             exec_backend,
         })
     }
 
-    pub fn experimental_exec_server_url(&self) -> Option<&str> {
-        self.experimental_exec_server_url.as_deref()
+    pub fn exec_server_url(&self) -> Option<&str> {
+        self.exec_server_url.as_deref()
     }
 
     pub fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
@@ -106,6 +140,13 @@ impl Environment {
     }
 }
 
+fn normalize_exec_server_url(exec_server_url: Option<String>) -> Option<String> {
+    exec_server_url.and_then(|url| {
+        let url = url.trim();
+        (!url.is_empty()).then(|| url.to_string())
+    })
+}
+
 impl ExecutorEnvironment for Environment {
     fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
         Arc::clone(&self.exec_backend)
@@ -114,15 +155,37 @@ impl ExecutorEnvironment for Environment {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::Environment;
+    use super::EnvironmentManager;
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
     async fn create_without_remote_exec_server_url_does_not_connect() {
-        let environment = Environment::create(None).await.expect("create environment");
+        let environment = Environment::create(/*exec_server_url*/ None)
+            .await
+            .expect("create environment");
 
-        assert_eq!(environment.experimental_exec_server_url(), None);
+        assert_eq!(environment.exec_server_url(), None);
         assert!(environment.remote_exec_server_client.is_none());
+    }
+
+    #[test]
+    fn environment_manager_normalizes_empty_url() {
+        let manager = EnvironmentManager::new(Some(String::new()));
+
+        assert_eq!(manager.exec_server_url(), None);
+    }
+
+    #[tokio::test]
+    async fn environment_manager_current_caches_environment() {
+        let manager = EnvironmentManager::new(/*exec_server_url*/ None);
+
+        let first = manager.current().await.expect("get current environment");
+        let second = manager.current().await.expect("get current environment");
+
+        assert!(Arc::ptr_eq(&first, &second));
     }
 
     #[tokio::test]

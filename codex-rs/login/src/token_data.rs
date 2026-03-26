@@ -72,7 +72,7 @@ impl PlanType {
             "pro" => Self::Known(KnownPlan::Pro),
             "team" => Self::Known(KnownPlan::Team),
             "business" => Self::Known(KnownPlan::Business),
-            "enterprise" => Self::Known(KnownPlan::Enterprise),
+            "enterprise" | "hc" => Self::Known(KnownPlan::Enterprise),
             "education" | "edu" => Self::Known(KnownPlan::Edu),
             _ => Self::Unknown(raw.to_string()),
         }
@@ -88,6 +88,7 @@ pub enum KnownPlan {
     Pro,
     Team,
     Business,
+    #[serde(alias = "hc")]
     Enterprise,
     Edu,
 }

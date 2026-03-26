@@ -5,10 +5,13 @@ use std::time::Instant;
 
 use crate::client_common::tools::ToolSpec;
 use crate::function_tool::FunctionCallError;
+use crate::hook_runtime::record_additional_contexts;
+use crate::hook_runtime::run_post_tool_use_hooks;
 use crate::hook_runtime::run_pre_tool_use_hooks;
 use crate::memories::usage::emit_metric_for_tool_read;
 use crate::protocol::SandboxPolicy;
 use crate::sandbox_tags::sandbox_tag;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -21,10 +24,8 @@ use codex_hooks::HookToolInput;
 use codex_hooks::HookToolInputLocalShell;
 use codex_hooks::HookToolKind;
 use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::ShellCommandToolCallParams;
-use codex_protocol::models::ShellToolCallParams;
 use codex_utils_readiness::Readiness;
-use serde::Deserialize;
+use serde_json::Value;
 use tracing::warn;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -56,6 +57,19 @@ pub trait ToolHandler: Send + Sync {
         false
     }
 
+    fn pre_tool_use_payload(&self, _invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        None
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        _call_id: &str,
+        _payload: &ToolPayload,
+        _result: &dyn ToolOutput,
+    ) -> Option<PostToolUsePayload> {
+        None
+    }
+
     /// Perform the actual [ToolInvocation] and returns a [ToolOutput] containing
     /// the final output to return to the model.
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError>;
@@ -73,6 +87,7 @@ impl AnyToolResult {
             call_id,
             payload,
             result,
+            ..
         } = self;
         result.to_response_item(&call_id, &payload)
     }
@@ -85,11 +100,31 @@ impl AnyToolResult {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PreToolUsePayload {
+    pub(crate) command: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PostToolUsePayload {
+    pub(crate) command: String,
+    pub(crate) tool_response: Value,
+}
+
 #[async_trait]
 trait AnyToolHandler: Send + Sync {
     fn matches_kind(&self, payload: &ToolPayload) -> bool;
 
     async fn is_mutating(&self, invocation: &ToolInvocation) -> bool;
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload>;
+
+    fn post_tool_use_payload(
+        &self,
+        call_id: &str,
+        payload: &ToolPayload,
+        result: &dyn ToolOutput,
+    ) -> Option<PostToolUsePayload>;
 
     async fn handle_any(
         &self,
@@ -108,6 +143,19 @@ where
 
     async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
         ToolHandler::is_mutating(self, invocation).await
+    }
+
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        ToolHandler::pre_tool_use_payload(self, invocation)
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        call_id: &str,
+        payload: &ToolPayload,
+        result: &dyn ToolOutput,
+    ) -> Option<PostToolUsePayload> {
+        ToolHandler::post_tool_use_payload(self, call_id, payload, result)
     }
 
     async fn handle_any(
@@ -247,17 +295,18 @@ impl ToolRegistry {
             return Err(FunctionCallError::Fatal(message));
         }
 
-        if let Some(command) = pre_tool_use_command(tool_name.as_ref(), &invocation.payload)
+        if let Some(pre_tool_use_payload) = handler.pre_tool_use_payload(&invocation)
             && let Some(reason) = run_pre_tool_use_hooks(
                 &invocation.session,
                 &invocation.turn,
                 invocation.call_id.clone(),
-                command.clone(),
+                pre_tool_use_payload.command.clone(),
             )
             .await
         {
             return Err(FunctionCallError::RespondToModel(format!(
-                "Bash command blocked by hook: {reason}. Command: {command}"
+                "Command blocked by PreToolUse hook: {reason}. Command: {}",
+                pre_tool_use_payload.command
             )));
         }
 
@@ -303,6 +352,33 @@ impl ToolRegistry {
             Err(err) => (err.to_string(), false),
         };
         emit_metric_for_tool_read(&invocation, success).await;
+        let post_tool_use_payload = if success {
+            let guard = response_cell.lock().await;
+            guard.as_ref().and_then(|result| {
+                handler.post_tool_use_payload(
+                    &result.call_id,
+                    &result.payload,
+                    result.result.as_ref(),
+                )
+            })
+        } else {
+            None
+        };
+        let post_tool_use_outcome = if let Some(post_tool_use_payload) = post_tool_use_payload {
+            Some(
+                run_post_tool_use_hooks(
+                    &invocation.session,
+                    &invocation.turn,
+                    invocation.call_id.clone(),
+                    post_tool_use_payload.command,
+                    post_tool_use_payload.tool_response,
+                )
+                .await,
+            )
+        } else {
+            None
+        };
+        // Deprecated: this is the legacy AfterToolUse hook. Prefer the new PostToolUse
         let hook_abort_error = dispatch_after_tool_use_hook(AfterToolUseHookDispatch {
             invocation: &invocation,
             output_preview,
@@ -315,6 +391,36 @@ impl ToolRegistry {
 
         if let Some(err) = hook_abort_error {
             return Err(err);
+        }
+
+        if let Some(outcome) = &post_tool_use_outcome {
+            record_additional_contexts(
+                &invocation.session,
+                &invocation.turn,
+                outcome.additional_contexts.clone(),
+            )
+            .await;
+
+            let replacement_text = if outcome.should_stop {
+                Some(
+                    outcome
+                        .feedback_message
+                        .clone()
+                        .or_else(|| outcome.stop_reason.clone())
+                        .unwrap_or_else(|| "PostToolUse hook stopped execution".to_string()),
+                )
+            } else {
+                outcome.feedback_message.clone()
+            };
+            if let Some(replacement_text) = replacement_text {
+                let mut guard = response_cell.lock().await;
+                if let Some(result) = guard.as_mut() {
+                    result.result = Box::new(FunctionToolOutput::from_text(
+                        replacement_text,
+                        /*success*/ None,
+                    ));
+                }
+            }
         }
 
         match result {
@@ -431,35 +537,6 @@ fn sandbox_policy_tag(policy: &SandboxPolicy) -> &'static str {
     }
 }
 
-#[derive(Deserialize)]
-struct PreToolUseExecCommandArgs {
-    cmd: String,
-}
-
-fn pre_tool_use_command(tool_name: &str, payload: &ToolPayload) -> Option<String> {
-    match (tool_name, payload) {
-        ("shell" | "container.exec", ToolPayload::Function { arguments }) => {
-            serde_json::from_str::<ShellToolCallParams>(arguments)
-                .ok()
-                .map(|params| codex_shell_command::parse_command::shlex_join(&params.command))
-        }
-        ("local_shell", ToolPayload::LocalShell { params }) => Some(
-            codex_shell_command::parse_command::shlex_join(&params.command),
-        ),
-        ("shell_command", ToolPayload::Function { arguments }) => {
-            serde_json::from_str::<ShellCommandToolCallParams>(arguments)
-                .ok()
-                .map(|params| params.command)
-        }
-        ("exec_command", ToolPayload::Function { arguments }) => {
-            serde_json::from_str::<PreToolUseExecCommandArgs>(arguments)
-                .ok()
-                .map(|params| params.cmd)
-        }
-        _ => None,
-    }
-}
-
 // Hooks use a separate wire-facing input type so hook payload JSON stays stable
 // and decoupled from core's internal tool runtime representation.
 impl From<&ToolPayload> for HookToolInput {
@@ -530,7 +607,7 @@ async fn dispatch_after_tool_use_hook(
         .hooks()
         .dispatch(HookPayload {
             session_id: session.conversation_id,
-            cwd: turn.cwd.clone(),
+            cwd: turn.cwd.to_path_buf(),
             client: turn.app_server_client_name.clone(),
             triggered_at: chrono::Utc::now(),
             hook_event: HookEvent::AfterToolUse {

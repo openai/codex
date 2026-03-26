@@ -4,6 +4,7 @@ use std::sync::Arc;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_async_utils::OrCancelExt;
+use codex_exec_server::EnvironmentManager;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -22,7 +23,6 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -77,6 +77,9 @@ pub(crate) async fn run_codex_thread_interactive(
         config,
         auth_manager,
         models_manager,
+        environment_manager: Arc::new(EnvironmentManager::new(
+            parent_ctx.environment.exec_server_url().map(str::to_owned),
+        )),
         skills_manager: Arc::clone(&parent_session.services.skills_manager),
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
@@ -518,7 +521,7 @@ async fn handle_patch_approval(
         let change_count = changes.len();
         let maybe_files = changes
             .keys()
-            .map(|path| AbsolutePathBuf::from_absolute_path(parent_ctx.cwd.join(path)).ok())
+            .map(|path| parent_ctx.cwd.join(path).ok())
             .collect::<Option<Vec<_>>>();
         if let Some(files) = maybe_files {
             let review_cancel = cancel_token.child_token();
@@ -554,7 +557,7 @@ async fn handle_patch_approval(
                 Arc::clone(parent_ctx),
                 GuardianApprovalRequest::ApplyPatch {
                     id: approval_id.clone(),
-                    cwd: parent_ctx.cwd.clone(),
+                    cwd: parent_ctx.cwd.to_path_buf(),
                     files,
                     change_count,
                     patch,

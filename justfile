@@ -14,6 +14,11 @@ codex *args:
 exec *args:
     cargo run --bin codex -- exec "$@"
 
+# Start codex-exec-server, enable the app-server TUI, and run codex-tui.
+[no-cd]
+tui-with-exec-server *args:
+    ./scripts/run_tui_with_exec_server.sh "$@"
+
 # Run the CLI version of the file-search crate.
 file-search *args:
     cargo run --bin codex-file-search -- "$@"

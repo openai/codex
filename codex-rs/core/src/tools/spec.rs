@@ -390,8 +390,7 @@ impl ToolsConfig {
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool =
             model_info.supports_search_tool && features.enabled(Feature::ToolSearch);
-        let include_tool_suggest = include_search_tool
-            && features.enabled(Feature::ToolSuggest)
+        let include_tool_suggest = features.enabled(Feature::ToolSuggest)
             && features.enabled(Feature::Apps)
             && features.enabled(Feature::Plugins);
         let include_original_image_detail = can_request_original_image_detail(features, model_info);
@@ -1839,59 +1838,6 @@ fn create_test_sync_tool() -> ToolSpec {
     })
 }
 
-fn create_grep_files_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
-        (
-            "pattern".to_string(),
-            JsonSchema::String {
-                description: Some("Regular expression pattern to search for.".to_string()),
-            },
-        ),
-        (
-            "include".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional glob that limits which files are searched (e.g. \"*.rs\" or \
-                     \"*.{ts,tsx}\")."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "path".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Directory or file path to search. Defaults to the session's working directory."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "limit".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "Maximum number of file paths to return (defaults to 100).".to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "grep_files".to_string(),
-        description: "Finds files whose contents match the pattern and lists them by modification \
-                      time."
-            .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["pattern".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
 fn create_tool_search_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -2097,111 +2043,6 @@ fn format_plugin_summary(plugin: &DiscoverablePluginInfo) -> String {
     } else {
         details.join("; ")
     }
-}
-
-fn create_read_file_tool() -> ToolSpec {
-    let indentation_properties = BTreeMap::from([
-        (
-            "anchor_line".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "Anchor line to center the indentation lookup on (defaults to offset)."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "max_levels".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "How many parent indentation levels (smaller indents) to include.".to_string(),
-                ),
-            },
-        ),
-        (
-            "include_siblings".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "When true, include additional blocks that share the anchor indentation."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "include_header".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "Include doc comments or attributes directly above the selected block."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "max_lines".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "Hard cap on the number of lines returned when using indentation mode."
-                        .to_string(),
-                ),
-            },
-        ),
-    ]);
-
-    let properties = BTreeMap::from([
-        (
-            "file_path".to_string(),
-            JsonSchema::String {
-                description: Some("Absolute path to the file".to_string()),
-            },
-        ),
-        (
-            "offset".to_string(),
-            JsonSchema::Number {
-                description: Some(
-                    "The line number to start reading from. Must be 1 or greater.".to_string(),
-                ),
-            },
-        ),
-        (
-            "limit".to_string(),
-            JsonSchema::Number {
-                description: Some("The maximum number of lines to return.".to_string()),
-            },
-        ),
-        (
-            "mode".to_string(),
-            JsonSchema::String {
-                description: Some(
-                    "Optional mode selector: \"slice\" for simple ranges (default) or \"indentation\" \
-                     to expand around an anchor line."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
-            "indentation".to_string(),
-            JsonSchema::Object {
-                properties: indentation_properties,
-                required: None,
-                additional_properties: Some(false.into()),
-            },
-        ),
-    ]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "read_file".to_string(),
-        description:
-            "Reads a local file with 1-indexed line numbers, supporting slice and indentation-aware block modes."
-                .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["file_path".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
 }
 
 fn create_list_dir_tool() -> ToolSpec {
@@ -2751,14 +2592,12 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::CodeModeExecuteHandler;
     use crate::tools::handlers::CodeModeWaitHandler;
     use crate::tools::handlers::DynamicToolHandler;
-    use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
     use crate::tools::handlers::JsReplResetHandler;
     use crate::tools::handlers::ListDirHandler;
     use crate::tools::handlers::McpHandler;
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::PlanHandler;
-    use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::RequestPermissionsHandler;
     use crate::tools::handlers::RequestUserInputHandler;
     use crate::tools::handlers::ShellCommandHandler;
@@ -3027,34 +2866,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             }
         }
         builder.register_handler("apply_patch", apply_patch_handler);
-    }
-
-    if config
-        .experimental_supported_tools
-        .contains(&"grep_files".to_string())
-    {
-        let grep_files_handler = Arc::new(GrepFilesHandler);
-        push_tool_spec(
-            &mut builder,
-            create_grep_files_tool(),
-            /*supports_parallel_tool_calls*/ true,
-            config.code_mode_enabled,
-        );
-        builder.register_handler("grep_files", grep_files_handler);
-    }
-
-    if config
-        .experimental_supported_tools
-        .contains(&"read_file".to_string())
-    {
-        let read_file_handler = Arc::new(ReadFileHandler);
-        push_tool_spec(
-            &mut builder,
-            create_read_file_tool(),
-            /*supports_parallel_tool_calls*/ true,
-            config.code_mode_enabled,
-        );
-        builder.register_handler("read_file", read_file_handler);
     }
 
     if config

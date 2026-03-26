@@ -140,7 +140,7 @@ impl GuardianReviewSessionReuseKey {
             base_instructions: spawn_config.base_instructions.clone(),
             user_instructions: spawn_config.user_instructions.clone(),
             compact_prompt: spawn_config.compact_prompt.clone(),
-            cwd: spawn_config.cwd.clone(),
+            cwd: spawn_config.cwd.to_path_buf(),
             mcp_servers: spawn_config.mcp_servers.clone(),
             codex_linux_sandbox_exe: spawn_config.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: spawn_config.main_execve_wrapper_exe.clone(),
@@ -512,7 +512,7 @@ async fn run_review_on_session(
                 .codex
                 .submit(Op::UserTurn {
                     items: params.prompt_items.clone(),
-                    cwd: params.parent_turn.cwd.clone(),
+                    cwd: params.parent_turn.cwd.to_path_buf(),
                     approval_policy: AskForApproval::Never,
                     approvals_reviewer: None,
                     sandbox_policy: SandboxPolicy::new_read_only_policy(),

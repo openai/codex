@@ -17,6 +17,8 @@ use crate::chatwidget::realtime::RealtimeConversationPhase;
 use crate::history_cell::UserHistoryCell;
 use crate::model_catalog::ModelCatalog;
 use crate::test_backend::VT100Backend;
+use crate::test_support::PathBufExt;
+use crate::test_support::test_path_display;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
 use codex_app_server_protocol::AppSummary;
@@ -24,6 +26,10 @@ use codex_app_server_protocol::CollabAgentState as AppServerCollabAgentState;
 use codex_app_server_protocol::CollabAgentStatus as AppServerCollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool as AppServerCollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus as AppServerCollabAgentToolCallStatus;
+use codex_app_server_protocol::CommandAction as AppServerCommandAction;
+use codex_app_server_protocol::CommandExecutionRequestApprovalParams as AppServerCommandExecutionRequestApprovalParams;
+use codex_app_server_protocol::CommandExecutionSource as AppServerCommandExecutionSource;
+use codex_app_server_protocol::CommandExecutionStatus as AppServerCommandExecutionStatus;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::GuardianApprovalReview;
@@ -45,6 +51,7 @@ use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginSource;
 use codex_app_server_protocol::PluginSummary;
+use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::SkillSummary;
 use codex_app_server_protocol::ThreadClosedNotification;
@@ -458,10 +465,10 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         .sandbox_policy
         .set(SandboxPolicy::new_workspace_write_policy())
         .expect("set sandbox policy");
-    chat.config.cwd = PathBuf::from("/home/user/main");
+    chat.config.cwd = PathBuf::from("/home/user/main").abs();
 
     let expected_sandbox = SandboxPolicy::new_read_only_policy();
-    let expected_cwd = PathBuf::from("/home/user/sub-agent");
+    let expected_cwd = PathBuf::from("/home/user/sub-agent").abs();
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
         forked_from_id: None,
@@ -472,7 +479,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
         approval_policy: AskForApproval::Never,
         approvals_reviewer: ApprovalsReviewer::User,
         sandbox_policy: expected_sandbox.clone(),
-        cwd: expected_cwd.clone(),
+        cwd: expected_cwd.to_path_buf(),
         reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
@@ -2043,6 +2050,7 @@ async fn make_chatwidget_manual(
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
         last_copyable_output: None,
         running_commands: HashMap::new(),
+        collab_agent_metadata: HashMap::new(),
         pending_collab_spawn_requests: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
         skills_all: Vec::new(),
@@ -3499,6 +3507,40 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
     );
 }
 
+#[test]
+fn app_server_exec_approval_request_splits_shell_wrapped_command() {
+    let script = r#"python3 -c 'print("Hello, world!")'"#;
+    let request =
+        exec_approval_request_from_params(AppServerCommandExecutionRequestApprovalParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "item-1".to_string(),
+            approval_id: Some("approval-1".to_string()),
+            reason: None,
+            network_approval_context: None,
+            command: Some(
+                shlex::try_join(["/bin/zsh", "-lc", script])
+                    .expect("round-trippable shell wrapper"),
+            ),
+            cwd: Some(PathBuf::from("/tmp")),
+            command_actions: None,
+            additional_permissions: None,
+            skill_metadata: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            available_decisions: None,
+        });
+
+    assert_eq!(
+        request.command,
+        vec![
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            script.to_string(),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn exec_approval_uses_approval_id_when_present() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -4646,6 +4688,69 @@ async fn live_app_server_file_change_item_started_preserves_changes() {
     );
 }
 
+#[tokio::test]
+async fn live_app_server_command_execution_strips_shell_wrapper() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let script = r#"python3 -c 'print("Hello, world!")'"#;
+    let command =
+        shlex::try_join(["/bin/zsh", "-lc", script]).expect("round-trippable shell wrapper");
+
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::CommandExecution {
+                id: "cmd-1".to_string(),
+                command: command.clone(),
+                cwd: PathBuf::from("/tmp"),
+                process_id: None,
+                source: AppServerCommandExecutionSource::UserShell,
+                status: AppServerCommandExecutionStatus::InProgress,
+                command_actions: vec![AppServerCommandAction::Unknown {
+                    command: script.to_string(),
+                }],
+                aggregated_output: None,
+                exit_code: None,
+                duration_ms: None,
+            },
+        }),
+        None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::CommandExecution {
+                id: "cmd-1".to_string(),
+                command,
+                cwd: PathBuf::from("/tmp"),
+                process_id: None,
+                source: AppServerCommandExecutionSource::UserShell,
+                status: AppServerCommandExecutionStatus::Completed,
+                command_actions: vec![AppServerCommandAction::Unknown {
+                    command: script.to_string(),
+                }],
+                aggregated_output: Some("Hello, world!\n".to_string()),
+                exit_code: Some(0),
+                duration_ms: Some(5),
+            },
+        }),
+        None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected one completed command history cell"
+    );
+    let blob = lines_to_single_string(cells.first().expect("command cell"));
+    assert_snapshot!(
+        "live_app_server_command_execution_strips_shell_wrapper",
+        blob
+    );
+}
+
 #[test]
 fn app_server_patch_changes_to_core_preserves_diffs() {
     let changes = app_server_patch_changes_to_core(vec![FileUpdateChange {
@@ -4674,6 +4779,16 @@ async fn live_app_server_collab_wait_items_render_history() {
         ThreadId::from_string("019cff70-2599-75e2-af72-b958ce5dc1cc").expect("valid thread id");
     let other_receiver_thread_id =
         ThreadId::from_string("019cff70-2599-75e2-af72-b96db334332d").expect("valid thread id");
+    chat.set_collab_agent_metadata(
+        receiver_thread_id,
+        Some("Robie".to_string()),
+        Some("explorer".to_string()),
+    );
+    chat.set_collab_agent_metadata(
+        other_receiver_thread_id,
+        Some("Ada".to_string()),
+        Some("reviewer".to_string()),
+    );
 
     chat.handle_server_notification(
         ServerNotification::ItemStarted(ItemStartedNotification {
@@ -5131,6 +5246,56 @@ async fn replayed_reasoning_item_shows_raw_reasoning_when_enabled() {
         other => panic!("expected InsertHistoryCell, got {other:?}"),
     };
     assert!(rendered.contains("Raw reasoning"));
+}
+
+#[tokio::test]
+async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.show_welcome_banner = false;
+
+    chat.handle_server_notification(
+        ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: AppServerTurn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: AppServerTurnStatus::InProgress,
+                error: None,
+            },
+        }),
+        None,
+    );
+    let _ = drain_insert_history(&mut rx);
+
+    chat.handle_server_notification(
+        ServerNotification::ReasoningSummaryTextDelta(ReasoningSummaryTextDeltaNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "reasoning-1".to_string(),
+            delta: "Summary only".to_string(),
+            summary_index: 0,
+        }),
+        None,
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                summary: vec!["Summary only".to_string()],
+                content: Vec::new(),
+            },
+        }),
+        None,
+    );
+
+    let rendered = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => lines_to_single_string(&cell.transcript_lines(80)),
+        other => panic!("expected InsertHistoryCell, got {other:?}"),
+    };
+    assert_eq!(rendered.matches("Summary only").count(), 1);
 }
 
 #[test]
@@ -6426,7 +6591,7 @@ async fn slash_init_skips_when_project_doc_exists() {
     let tempdir = tempdir().unwrap();
     let existing_path = tempdir.path().join(DEFAULT_PROJECT_DOC_FILENAME);
     std::fs::write(&existing_path, "existing instructions").unwrap();
-    chat.config.cwd = tempdir.path().to_path_buf();
+    chat.config.cwd = tempdir.path().to_path_buf().abs();
 
     chat.dispatch_command(SlashCommand::Init);
 
@@ -7419,13 +7584,17 @@ async fn custom_prompt_enter_empty_does_not_send() {
 #[tokio::test]
 async fn view_image_tool_call_adds_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let image_path = chat.config.cwd.join("example.png");
+    let image_path = chat
+        .config
+        .cwd
+        .join("example.png")
+        .expect("absolute image path");
 
     chat.handle_codex_event(Event {
         id: "sub-image".into(),
         msg: EventMsg::ViewImageToolCall(ViewImageToolCallEvent {
             call_id: "call-image".into(),
-            path: image_path,
+            path: image_path.to_path_buf(),
         }),
     });
 
@@ -7715,12 +7884,10 @@ fn strip_osc8_for_snapshot(text: &str) -> String {
 }
 
 fn plugins_test_absolute_path(path: &str) -> AbsolutePathBuf {
-    AbsolutePathBuf::try_from(
-        std::env::temp_dir()
-            .join("codex-plugin-menu-tests")
-            .join(path),
-    )
-    .expect("expected absolute test path")
+    std::env::temp_dir()
+        .join("codex-plugin-menu-tests")
+        .join(path)
+        .abs()
 }
 
 fn plugins_test_interface(
@@ -7802,7 +7969,7 @@ fn plugins_test_response(marketplaces: Vec<PluginMarketplaceEntry>) -> PluginLis
 
 fn render_loaded_plugins_popup(chat: &mut ChatWidget, response: PluginListResponse) -> String {
     let cwd = chat.config.cwd.clone();
-    chat.on_plugins_loaded(cwd, Ok(response));
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
     chat.add_plugins_output();
     render_bottom_popup(chat, 100)
 }
@@ -7953,10 +8120,10 @@ async fn plugin_detail_popup_snapshot_shows_install_actions_and_capability_summa
         summary.clone(),
     ])]);
     let cwd = chat.config.cwd.clone();
-    chat.on_plugins_loaded(cwd.clone(), Ok(response));
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
     chat.add_plugins_output();
     chat.on_plugin_detail_loaded(
-        cwd,
+        cwd.to_path_buf(),
         Ok(PluginReadResponse {
             plugin: plugins_test_detail(
                 summary,
@@ -7993,10 +8160,10 @@ async fn plugin_detail_popup_hides_disclosure_for_installed_plugins() {
         summary.clone(),
     ])]);
     let cwd = chat.config.cwd.clone();
-    chat.on_plugins_loaded(cwd.clone(), Ok(response));
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
     chat.add_plugins_output();
     chat.on_plugin_detail_loaded(
-        cwd,
+        cwd.to_path_buf(),
         Ok(PluginReadResponse {
             plugin: plugins_test_detail(
                 summary,
@@ -8083,7 +8250,7 @@ async fn plugins_popup_refresh_replaces_selection_with_first_row() {
         ),
     ])]);
     let cwd = chat.config.cwd.clone();
-    chat.on_plugins_loaded(cwd, Ok(refreshed));
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(refreshed));
 
     let after = render_bottom_popup(&chat, 100);
     assert!(
@@ -8152,7 +8319,7 @@ async fn plugins_popup_refreshes_installed_counts_after_install() {
         ),
     ])]);
     let cwd = chat.config.cwd.clone();
-    chat.on_plugins_loaded(cwd, Ok(refreshed));
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(refreshed));
 
     let after = render_bottom_popup(&chat, 100);
     assert!(
@@ -8824,8 +8991,7 @@ async fn apps_initial_load_applies_enabled_state_from_config() {
     chat.bottom_pane.set_connectors_enabled(true);
 
     let temp = tempdir().expect("tempdir");
-    let config_toml_path =
-        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path");
+    let config_toml_path = temp.path().join("config.toml").abs();
     let user_config = toml::from_str::<TomlValue>(
         "[apps.connector_1]\nenabled = false\ndisabled_reason = \"user\"\n",
     )
@@ -8889,8 +9055,7 @@ async fn apps_initial_load_applies_enabled_state_from_requirements_with_user_ove
         ..Default::default()
     };
     let temp = tempdir().expect("tempdir");
-    let config_toml_path =
-        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path");
+    let config_toml_path = temp.path().join("config.toml").abs();
     chat.config.config_layer_stack =
         ConfigLayerStack::new(Vec::new(), ConfigRequirements::default(), requirements)
             .expect("requirements stack")
@@ -9465,7 +9630,7 @@ async fn preset_matching_accepts_workspace_write_with_extra_roots() {
         .find(|p| p.id == "auto")
         .expect("auto preset exists");
     let current_sandbox = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![AbsolutePathBuf::try_from("C:\\extra").unwrap()],
+        writable_roots: vec![PathBuf::from("C:\\extra").abs()],
         read_only_access: Default::default(),
         network_access: false,
         exclude_tmpdir_env_var: false,
@@ -10265,8 +10430,7 @@ async fn permissions_selection_marks_guardian_approvals_current_with_custom_work
         .features
         .set_enabled(Feature::GuardianApproval, true);
 
-    let extra_root = AbsolutePathBuf::try_from("/tmp/guardian-approvals-extra")
-        .expect("absolute extra writable root");
+    let extra_root = PathBuf::from("/tmp/guardian-approvals-extra").abs();
 
     chat.handle_codex_event(Event {
         id: "session-configured-custom-workspace".to_string(),
@@ -12279,7 +12443,7 @@ async fn status_line_fast_mode_footer_snapshot() {
 #[tokio::test]
 async fn status_line_model_with_reasoning_includes_fast_for_gpt54_only() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    chat.config.cwd = PathBuf::from("/tmp/project");
+    chat.config.cwd = PathBuf::from("/tmp/project").abs();
     chat.config.tui_status_line = Some(vec![
         "model-with-reasoning".to_string(),
         "context-remaining".to_string(),
@@ -12289,10 +12453,11 @@ async fn status_line_model_with_reasoning_includes_fast_for_gpt54_only() {
     chat.set_service_tier(Some(ServiceTier::Fast));
     set_chatgpt_auth(&mut chat);
     chat.refresh_status_line();
+    let test_cwd = test_path_display("/tmp/project");
 
     assert_eq!(
         status_line_text(&chat),
-        Some("gpt-5.4 xhigh fast · 100% left · /tmp/project".to_string())
+        Some(format!("gpt-5.4 xhigh fast · 100% left · {test_cwd}"))
     );
 
     chat.set_model("gpt-5.3-codex");
@@ -12300,18 +12465,22 @@ async fn status_line_model_with_reasoning_includes_fast_for_gpt54_only() {
 
     assert_eq!(
         status_line_text(&chat),
-        Some("gpt-5.3-codex xhigh · 100% left · /tmp/project".to_string())
+        Some(format!("gpt-5.3-codex xhigh · 100% left · {test_cwd}"))
     );
 }
 
 #[tokio::test]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "snapshot path rendering differs on Windows"
+)]
 async fn status_line_model_with_reasoning_fast_footer_snapshot() {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.show_welcome_banner = false;
-    chat.config.cwd = PathBuf::from("/tmp/project");
+    chat.config.cwd = PathBuf::from("/tmp/project").abs();
     chat.config.tui_status_line = Some(vec![
         "model-with-reasoning".to_string(),
         "context-remaining".to_string(),
@@ -12554,6 +12723,17 @@ async fn pre_tool_use_hook_events_render_snapshot() {
         "pre-tool-use:0:/tmp/hooks.json",
         "warming the shell",
         "pre_tool_use_hook_events_render_snapshot",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn post_tool_use_hook_events_render_snapshot() {
+    assert_hook_events_snapshot(
+        codex_protocol::protocol::HookEventName::PostToolUse,
+        "post-tool-use:0:/tmp/hooks.json",
+        "warming the shell",
+        "post_tool_use_hook_events_render_snapshot",
     )
     .await;
 }

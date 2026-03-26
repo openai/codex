@@ -326,7 +326,9 @@ impl ChatWidget {
     }
 
     fn status_line_cwd(&self) -> &Path {
-        self.current_cwd.as_ref().unwrap_or(&self.config.cwd)
+        self.current_cwd
+            .as_deref()
+            .unwrap_or(self.config.cwd.as_path())
     }
 
     /// Resolves the project root associated with `cwd`.

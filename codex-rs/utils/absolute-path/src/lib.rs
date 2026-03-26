@@ -23,21 +23,18 @@ pub struct AbsolutePathBuf(PathBuf);
 
 impl AbsolutePathBuf {
     fn maybe_expand_home_directory(path: &Path) -> PathBuf {
-        let Some(path_str) = path.to_str() else {
-            return path.to_path_buf();
-        };
-        if cfg!(not(target_os = "windows"))
+        if let Some(path_str) = path.to_str()
             && let Some(home) = home_dir()
+            && let Some(rest) = path_str.strip_prefix('~')
         {
-            if path_str == "~" {
+            if rest.is_empty() {
                 return home;
-            }
-            if let Some(rest) = path_str.strip_prefix("~/") {
-                let rest = rest.trim_start_matches('/');
-                if rest.is_empty() {
-                    return home;
-                }
-                return home.join(rest);
+            } else if let Some(rest) = rest.strip_prefix('/') {
+                return home.join(rest.trim_start_matches('/'));
+            } else if cfg!(windows)
+                && let Some(rest) = rest.strip_prefix('\\')
+            {
+                return home.join(rest.trim_start_matches('\\'));
             }
         }
         path.to_path_buf()
@@ -61,6 +58,12 @@ impl AbsolutePathBuf {
     pub fn current_dir() -> std::io::Result<Self> {
         let current_dir = std::env::current_dir()?;
         Self::from_absolute_path(current_dir)
+    }
+
+    /// Construct an absolute path from `path`, resolving relative paths against
+    /// the process current working directory.
+    pub fn relative_to_current_dir<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+        Self::resolve_path_against_base(path, std::env::current_dir()?)
     }
 
     pub fn join<P: AsRef<Path>>(&self, path: P) -> std::io::Result<Self> {
@@ -100,6 +103,14 @@ impl AbsolutePathBuf {
 
 impl AsRef<Path> for AbsolutePathBuf {
     fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for AbsolutePathBuf {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
@@ -217,6 +228,17 @@ mod tests {
     }
 
     #[test]
+    fn relative_to_current_dir_resolves_relative_path() -> std::io::Result<()> {
+        let current_dir = std::env::current_dir()?;
+        let abs_path_buf = AbsolutePathBuf::relative_to_current_dir("file.txt")?;
+        assert_eq!(
+            abs_path_buf.as_path(),
+            current_dir.join("file.txt").as_path()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn guard_used_in_deserialization() {
         let temp_dir = tempdir().expect("base dir");
         let base_dir = temp_dir.path();
@@ -232,9 +254,8 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_os = "windows"))]
     #[test]
-    fn home_directory_root_on_non_windows_is_expanded_in_deserialization() {
+    fn home_directory_root_is_expanded_in_deserialization() {
         let Some(home) = home_dir() else {
             return;
         };
@@ -246,9 +267,8 @@ mod tests {
         assert_eq!(abs_path_buf.as_path(), home.as_path());
     }
 
-    #[cfg(not(target_os = "windows"))]
     #[test]
-    fn home_directory_subpath_on_non_windows_is_expanded_in_deserialization() {
+    fn home_directory_subpath_is_expanded_in_deserialization() {
         let Some(home) = home_dir() else {
             return;
         };
@@ -260,9 +280,8 @@ mod tests {
         assert_eq!(abs_path_buf.as_path(), home.join("code").as_path());
     }
 
-    #[cfg(not(target_os = "windows"))]
     #[test]
-    fn home_directory_double_slash_on_non_windows_is_expanded_in_deserialization() {
+    fn home_directory_double_slash_is_expanded_in_deserialization() {
         let Some(home) = home_dir() else {
             return;
         };
@@ -276,16 +295,17 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn home_directory_on_windows_is_not_expanded_in_deserialization() {
-        let temp_dir = tempdir().expect("base dir");
-        let base_dir = temp_dir.path();
-        let abs_path_buf = {
-            let _guard = AbsolutePathBufGuard::new(base_dir);
-            serde_json::from_str::<AbsolutePathBuf>("\"~/code\"").expect("failed to deserialize")
+    fn home_directory_backslash_subpath_is_expanded_in_deserialization() {
+        let Some(home) = home_dir() else {
+            return;
         };
-        assert_eq!(
-            abs_path_buf.as_path(),
-            base_dir.join("~").join("code").as_path()
-        );
+        let temp_dir = tempdir().expect("base dir");
+        let abs_path_buf = {
+            let _guard = AbsolutePathBufGuard::new(temp_dir.path());
+            let input =
+                serde_json::to_string(r#"~\code"#).expect("string should serialize as JSON");
+            serde_json::from_str::<AbsolutePathBuf>(&input).expect("is valid abs path")
+        };
+        assert_eq!(abs_path_buf.as_path(), home.join("code").as_path());
     }
 }

@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
+use serde_json::Value as JsonValue;
 use std::sync::Arc;
 
 use crate::codex::TurnContext;
@@ -11,11 +12,12 @@ use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
+use crate::maybe_emit_implicit_skill_invocation;
 use crate::protocol::ExecCommandSource;
 use crate::shell::Shell;
-use crate::skills::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
@@ -23,9 +25,12 @@ use crate::tools::handlers::apply_granted_turn_permissions;
 use crate::tools::handlers::apply_patch::intercept_apply_patch;
 use crate::tools::handlers::implicit_granted_permissions;
 use crate::tools::handlers::normalize_and_validate_additional_permissions;
+use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
 use crate::tools::orchestrator::ToolOrchestrator;
+use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::runtimes::shell::ShellRequest;
@@ -46,6 +51,28 @@ enum ShellCommandBackend {
 
 pub struct ShellCommandHandler {
     backend: ShellCommandBackend,
+}
+
+fn shell_payload_command(payload: &ToolPayload) -> Option<String> {
+    match payload {
+        ToolPayload::Function { arguments } => parse_arguments::<ShellToolCallParams>(arguments)
+            .ok()
+            .map(|params| codex_shell_command::parse_command::shlex_join(&params.command)),
+        ToolPayload::LocalShell { params } => Some(codex_shell_command::parse_command::shlex_join(
+            &params.command,
+        )),
+        _ => None,
+    }
+}
+
+fn shell_command_payload_command(payload: &ToolPayload) -> Option<String> {
+    let ToolPayload::Function { arguments } = payload else {
+        return None;
+    };
+
+    parse_arguments::<ShellCommandToolCallParams>(arguments)
+        .ok()
+        .map(|params| params.command)
 }
 
 struct RunExecLikeArgs {
@@ -178,6 +205,23 @@ impl ToolHandler for ShellHandler {
         }
     }
 
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        shell_payload_command(&invocation.payload).map(|command| PreToolUsePayload { command })
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        call_id: &str,
+        payload: &ToolPayload,
+        result: &dyn ToolOutput,
+    ) -> Option<PostToolUsePayload> {
+        let tool_response = result.post_tool_use_response(call_id, payload)?;
+        Some(PostToolUsePayload {
+            command: shell_payload_command(payload)?,
+            tool_response,
+        })
+    }
+
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
@@ -268,6 +312,24 @@ impl ToolHandler for ShellCommandHandler {
             .unwrap_or(true)
     }
 
+    fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        shell_command_payload_command(&invocation.payload)
+            .map(|command| PreToolUsePayload { command })
+    }
+
+    fn post_tool_use_payload(
+        &self,
+        call_id: &str,
+        payload: &ToolPayload,
+        result: &dyn ToolOutput,
+    ) -> Option<PostToolUsePayload> {
+        let tool_response = result.post_tool_use_response(call_id, payload)?;
+        Some(PostToolUsePayload {
+            command: shell_command_payload_command(payload)?,
+            tool_response,
+        })
+    }
+
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
@@ -288,11 +350,12 @@ impl ToolHandler for ShellCommandHandler {
         let cwd = resolve_workdir_base_path(&arguments, turn.cwd.as_path())?;
         let params: ShellCommandToolCallParams =
             parse_arguments_with_base_path(&arguments, cwd.as_path())?;
+        let workdir = turn.resolve_path(params.workdir.clone());
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
             turn.as_ref(),
             &params.command,
-            params.workdir.as_deref(),
+            &workdir,
         )
         .await;
         let prefix_rule = params.prefix_rule.clone();
@@ -492,8 +555,19 @@ impl ShellHandler {
             &call_id,
             /*turn_diff_tracker*/ None,
         );
+        let post_tool_use_response = out
+            .as_ref()
+            .ok()
+            .map(|output| crate::tools::format_exec_output_str(output, turn.truncation_policy))
+            .map(JsonValue::String);
         let content = emitter.finish(event_ctx, out).await?;
-        Ok(FunctionToolOutput::from_text(content, Some(true)))
+        Ok(FunctionToolOutput {
+            body: vec![
+                codex_protocol::models::FunctionCallOutputContentItem::InputText { text: content },
+            ],
+            success: Some(true),
+            post_tool_use_response,
+        })
     }
 }
 

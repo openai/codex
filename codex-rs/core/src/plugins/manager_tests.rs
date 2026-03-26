@@ -7,7 +7,9 @@ use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
+use crate::plugins::LoadedPlugin;
 use crate::plugins::MarketplacePluginInstallPolicy;
+use crate::plugins::PluginLoadOutcome;
 use crate::plugins::test_support::TEST_CURATED_PLUGIN_SHA;
 use crate::plugins::test_support::write_curated_plugin_sha_with as write_curated_plugin_sha;
 use crate::plugins::test_support::write_file;
@@ -25,6 +27,8 @@ use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
+
+const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 1024;
 
 fn write_plugin(root: &Path, dir_name: &str, manifest_name: &str) {
     let plugin_root = root.join(dir_name);
@@ -130,7 +134,7 @@ fn load_plugins_loads_default_skills_and_mcp_servers() {
     let outcome = load_plugins_from_config(&plugin_config_toml(true, true), codex_home.path());
 
     assert_eq!(
-        outcome.plugins,
+        outcome.plugins(),
         vec![LoadedPlugin {
             config_name: "sample@test".to_string(),
             manifest_name: Some("sample".to_string()),
@@ -160,6 +164,7 @@ fn load_plugins_loads_default_skills_and_mcp_servers() {
                     disabled_tools: None,
                     scopes: None,
                     oauth_resource: None,
+                    tools: HashMap::new(),
                 },
             )]),
             apps: vec![AppConnectorId("connector_example".to_string())],
@@ -220,10 +225,10 @@ enabled = true
     let skill_path = dunce::canonicalize(skill_path).expect("skill path should canonicalize");
 
     assert_eq!(
-        outcome.plugins[0].disabled_skill_paths,
+        outcome.plugins()[0].disabled_skill_paths,
         HashSet::from([skill_path])
     );
-    assert!(!outcome.plugins[0].has_enabled_skills);
+    assert!(!outcome.plugins()[0].has_enabled_skills);
     assert!(outcome.capability_summaries().is_empty());
 }
 
@@ -256,8 +261,8 @@ enabled = true
 "#;
     let outcome = load_plugins_from_config(config_toml, codex_home.path());
 
-    assert!(outcome.plugins[0].disabled_skill_paths.is_empty());
-    assert!(outcome.plugins[0].has_enabled_skills);
+    assert!(outcome.plugins()[0].disabled_skill_paths.is_empty());
+    assert!(outcome.plugins()[0].has_enabled_skills);
     assert_eq!(
         outcome.capability_summaries(),
         &[PluginCapabilitySummary {
@@ -338,7 +343,7 @@ fn capability_summary_sanitizes_plugin_descriptions_to_one_line() {
     let outcome = load_plugins_from_config(&plugin_config_toml(true, true), codex_home.path());
 
     assert_eq!(
-        outcome.plugins[0].manifest_description.as_deref(),
+        outcome.plugins()[0].manifest_description.as_deref(),
         Some("Plugin that\n includes   the sample\tserver")
     );
     assert_eq!(
@@ -373,7 +378,7 @@ fn capability_summary_truncates_overlong_plugin_descriptions() {
     let outcome = load_plugins_from_config(&plugin_config_toml(true, true), codex_home.path());
 
     assert_eq!(
-        outcome.plugins[0].manifest_description.as_deref(),
+        outcome.plugins()[0].manifest_description.as_deref(),
         Some(too_long.as_str())
     );
     assert_eq!(
@@ -453,14 +458,14 @@ fn load_plugins_uses_manifest_configured_component_paths() {
     let outcome = load_plugins_from_config(&plugin_config_toml(true, true), codex_home.path());
 
     assert_eq!(
-        outcome.plugins[0].skill_roots,
+        outcome.plugins()[0].skill_roots,
         vec![
             plugin_root.join("custom-skills"),
             plugin_root.join("skills")
         ]
     );
     assert_eq!(
-        outcome.plugins[0].mcp_servers,
+        outcome.plugins()[0].mcp_servers,
         HashMap::from([(
             "custom".to_string(),
             McpServerConfig {
@@ -479,11 +484,12 @@ fn load_plugins_uses_manifest_configured_component_paths() {
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
+                tools: HashMap::new(),
             },
         )])
     );
     assert_eq!(
-        outcome.plugins[0].apps,
+        outcome.plugins()[0].apps,
         vec![AppConnectorId("connector_custom".to_string())]
     );
 }
@@ -559,11 +565,11 @@ fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
     let outcome = load_plugins_from_config(&plugin_config_toml(true, true), codex_home.path());
 
     assert_eq!(
-        outcome.plugins[0].skill_roots,
+        outcome.plugins()[0].skill_roots,
         vec![plugin_root.join("skills")]
     );
     assert_eq!(
-        outcome.plugins[0].mcp_servers,
+        outcome.plugins()[0].mcp_servers,
         HashMap::from([(
             "default".to_string(),
             McpServerConfig {
@@ -582,11 +588,12 @@ fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
+                tools: HashMap::new(),
             },
         )])
     );
     assert_eq!(
-        outcome.plugins[0].apps,
+        outcome.plugins()[0].apps,
         vec![AppConnectorId("connector_default".to_string())]
     );
 }
@@ -618,7 +625,7 @@ fn load_plugins_preserves_disabled_plugins_without_effective_contributions() {
     let outcome = load_plugins_from_config(&plugin_config_toml(false, true), codex_home.path());
 
     assert_eq!(
-        outcome.plugins,
+        outcome.plugins(),
         vec![LoadedPlugin {
             config_name: "sample@test".to_string(),
             manifest_name: None,
@@ -731,6 +738,7 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
         disabled_tools: None,
         scopes: None,
         oauth_resource: None,
+        tools: HashMap::new(),
     };
     let plugin = |config_name: &str, dir_name: &str, manifest_name: &str| LoadedPlugin {
         config_name: config_name.to_string(),
@@ -806,24 +814,6 @@ fn capability_index_filters_inactive_and_zero_capability_plugins() {
 }
 
 #[test]
-fn plugin_namespace_for_skill_path_uses_manifest_name() {
-    let codex_home = TempDir::new().unwrap();
-    let plugin_root = codex_home.path().join("plugins/sample");
-    let skill_path = plugin_root.join("skills/search/SKILL.md");
-
-    write_file(
-        &plugin_root.join(".codex-plugin/plugin.json"),
-        r#"{"name":"sample"}"#,
-    );
-    write_file(&skill_path, "---\ndescription: search\n---\n");
-
-    assert_eq!(
-        plugin_namespace_for_skill_path(&skill_path),
-        Some("sample".to_string())
-    );
-}
-
-#[test]
 fn load_plugins_returns_empty_when_feature_disabled() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home
@@ -880,9 +870,9 @@ fn load_plugins_rejects_invalid_plugin_keys() {
         codex_home.path(),
     );
 
-    assert_eq!(outcome.plugins.len(), 1);
+    assert_eq!(outcome.plugins().len(), 1);
     assert_eq!(
-        outcome.plugins[0].error.as_deref(),
+        outcome.plugins()[0].error.as_deref(),
         Some("invalid plugin key `sample`; expected <plugin>@<marketplace>")
     );
     assert!(outcome.effective_skill_roots().is_empty());
@@ -1400,7 +1390,7 @@ plugins = true
             path: AbsolutePathBuf::try_from(curated_root.join(".agents/plugins/marketplace.json"))
                 .unwrap(),
             interface: Some(MarketplaceInterface {
-                display_name: Some("ChatGPT Official".to_string()),
+                display_name: Some(OPENAI_CURATED_MARKETPLACE_DISPLAY_NAME.to_string()),
             }),
             plugins: vec![ConfiguredMarketplacePlugin {
                 id: "linear@openai-curated".to_string(),

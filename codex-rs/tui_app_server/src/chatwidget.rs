@@ -140,6 +140,7 @@ use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::BackgroundEventEvent;
 #[cfg(test)]
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
+use codex_protocol::protocol::CollabAgentRef;
 #[cfg(test)]
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
 use codex_protocol::protocol::CollabAgentStatusEntry;
@@ -207,6 +208,7 @@ use codex_terminal_detection::Multiplexer;
 use codex_terminal_detection::TerminalInfo;
 use codex_terminal_detection::TerminalName;
 use codex_terminal_detection::terminal_info;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_sleep_inhibitor::SleepInhibitor;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -309,6 +311,7 @@ use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
 use crate::exec_cell::new_active_exec_command;
+use crate::exec_command::split_command_string;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
@@ -756,6 +759,7 @@ pub(crate) struct ChatWidget {
     // Latest completed user-visible Codex output that `/copy` should place on the clipboard.
     last_copyable_output: Option<String>,
     running_commands: HashMap<String, RunningCommand>,
+    collab_agent_metadata: HashMap<ThreadId, CollabAgentMetadata>,
     pending_collab_spawn_requests: HashMap<String, multi_agents::SpawnRequestSummary>,
     suppressed_exec_calls: HashSet<String>,
     skills_all: Vec<ProtocolSkillMetadata>,
@@ -901,6 +905,18 @@ pub(crate) struct ChatWidget {
     realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
     last_non_retry_error: Option<(String, String)>,
+}
+
+/// Cached nickname and role for a collab agent thread, used to attach human-readable labels to
+/// rendered tool-call items.
+///
+/// Populated externally by `App` via `set_collab_agent_metadata` and consulted by the
+/// notification-to-core-event conversion helpers. Defaults to empty so that missing metadata
+/// degrades to the previous behavior of showing raw thread ids.
+#[derive(Clone, Debug, Default)]
+struct CollabAgentMetadata {
+    agent_nickname: Option<String>,
+    agent_role: Option<String>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1246,7 +1262,11 @@ fn exec_approval_request_from_params(
 ) -> ExecApprovalRequestEvent {
     ExecApprovalRequestEvent {
         call_id: params.item_id,
-        command: params.command.into_iter().collect(),
+        command: params
+            .command
+            .as_deref()
+            .map(split_command_string)
+            .unwrap_or_default(),
         cwd: params.cwd.unwrap_or_default(),
         reason: params.reason,
         network_approval_context: params
@@ -1378,9 +1398,12 @@ fn app_server_collab_state_to_core(state: &AppServerCollabAgentState) -> AgentSt
     }
 }
 
+/// Converts app-server collab agent states into the core protocol representation, enriching each
+/// entry with cached nickname and role metadata so rendered items show human-readable names.
 fn app_server_collab_agent_statuses_to_core(
     receiver_thread_ids: &[String],
     agents_states: &HashMap<String, AppServerCollabAgentState>,
+    collab_agent_metadata: &HashMap<ThreadId, CollabAgentMetadata>,
 ) -> (Vec<CollabAgentStatusEntry>, HashMap<ThreadId, AgentStatus>) {
     let mut agent_statuses = Vec::new();
     let mut statuses = HashMap::new();
@@ -1393,16 +1416,45 @@ fn app_server_collab_agent_statuses_to_core(
             continue;
         };
         let status = app_server_collab_state_to_core(agent_state);
+        let metadata = collab_agent_metadata
+            .get(&thread_id)
+            .cloned()
+            .unwrap_or_default();
         agent_statuses.push(CollabAgentStatusEntry {
             thread_id,
-            agent_nickname: None,
-            agent_role: None,
+            agent_nickname: metadata.agent_nickname,
+            agent_role: metadata.agent_role,
             status: status.clone(),
         });
         statuses.insert(thread_id, status);
     }
 
     (agent_statuses, statuses)
+}
+
+/// Builds `CollabAgentRef` entries for every valid receiver thread, attaching cached metadata.
+///
+/// Used when converting collab `Wait` tool-call items so the rendered waiting list shows agent
+/// names instead of bare thread ids.
+fn app_server_collab_receiver_agent_refs(
+    receiver_thread_ids: &[String],
+    collab_agent_metadata: &HashMap<ThreadId, CollabAgentMetadata>,
+) -> Vec<CollabAgentRef> {
+    receiver_thread_ids
+        .iter()
+        .filter_map(|thread_id| {
+            let thread_id = app_server_collab_thread_id_to_core(thread_id)?;
+            let metadata = collab_agent_metadata
+                .get(&thread_id)
+                .cloned()
+                .unwrap_or_default();
+            Some(CollabAgentRef {
+                thread_id,
+                agent_nickname: metadata.agent_nickname,
+                agent_role: metadata.agent_role,
+            })
+        })
+        .collect()
 }
 
 fn request_permissions_from_params(
@@ -1488,6 +1540,35 @@ fn web_search_action_to_core(
 }
 
 impl ChatWidget {
+    /// Stores or overwrites the cached nickname and role for a collab agent thread.
+    ///
+    /// Called by `App::upsert_agent_picker_thread` and `App::replace_chat_widget` to keep the
+    /// rendering metadata in sync with the navigation cache. Must be called before any
+    /// notification referencing this thread is processed, otherwise the rendered item will fall
+    /// back to showing the raw thread id.
+    pub(crate) fn set_collab_agent_metadata(
+        &mut self,
+        thread_id: ThreadId,
+        agent_nickname: Option<String>,
+        agent_role: Option<String>,
+    ) {
+        self.collab_agent_metadata.insert(
+            thread_id,
+            CollabAgentMetadata {
+                agent_nickname,
+                agent_role,
+            },
+        );
+    }
+
+    /// Returns the cached metadata for a thread, defaulting to empty if none has been registered.
+    fn collab_agent_metadata(&self, thread_id: ThreadId) -> CollabAgentMetadata {
+        self.collab_agent_metadata
+            .get(&thread_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     fn realtime_conversation_enabled(&self) -> bool {
         self.config.features.enabled(Feature::RealtimeConversation)
             && cfg!(not(target_os = "linux"))
@@ -1778,7 +1859,12 @@ impl ChatWidget {
         self.forked_from = event.forked_from_id;
         self.current_rollout_path = event.rollout_path.clone();
         self.current_cwd = Some(event.cwd.clone());
-        self.config.cwd = event.cwd.clone();
+        match AbsolutePathBuf::try_from(event.cwd.clone()) {
+            Ok(cwd) => self.config.cwd = cwd,
+            Err(err) => {
+                tracing::warn!(path = %event.cwd.display(), %err, "session cwd should be absolute");
+            }
+        }
         if let Err(err) = self
             .config
             .permissions
@@ -3437,6 +3523,8 @@ impl ChatWidget {
         let first_receiver = receiver_thread_ids
             .first()
             .and_then(|thread_id| app_server_collab_thread_id_to_core(thread_id));
+        let first_receiver_metadata =
+            first_receiver.map(|thread_id| self.collab_agent_metadata(thread_id));
 
         match tool {
             CollabAgentTool::SpawnAgent => {
@@ -3467,8 +3555,12 @@ impl ChatWidget {
                             call_id: id,
                             sender_thread_id,
                             new_thread_id: first_receiver,
-                            new_agent_nickname: None,
-                            new_agent_role: None,
+                            new_agent_nickname: first_receiver_metadata
+                                .as_ref()
+                                .and_then(|metadata| metadata.agent_nickname.clone()),
+                            new_agent_role: first_receiver_metadata
+                                .as_ref()
+                                .and_then(|metadata| metadata.agent_role.clone()),
                             prompt: prompt.unwrap_or_default(),
                             model: String::new(),
                             reasoning_effort: ReasoningEffortConfig::Medium,
@@ -3493,8 +3585,12 @@ impl ChatWidget {
                             call_id: id,
                             sender_thread_id,
                             receiver_thread_id,
-                            receiver_agent_nickname: None,
-                            receiver_agent_role: None,
+                            receiver_agent_nickname: first_receiver_metadata
+                                .as_ref()
+                                .and_then(|metadata| metadata.agent_nickname.clone()),
+                            receiver_agent_role: first_receiver_metadata
+                                .as_ref()
+                                .and_then(|metadata| metadata.agent_role.clone()),
                             prompt: prompt.unwrap_or_default(),
                             status: receiver_thread_ids
                                 .iter()
@@ -3515,8 +3611,12 @@ impl ChatWidget {
                                 call_id: id,
                                 sender_thread_id,
                                 receiver_thread_id,
-                                receiver_agent_nickname: None,
-                                receiver_agent_role: None,
+                                receiver_agent_nickname: first_receiver_metadata
+                                    .as_ref()
+                                    .and_then(|metadata| metadata.agent_nickname.clone()),
+                                receiver_agent_role: first_receiver_metadata
+                                    .as_ref()
+                                    .and_then(|metadata| metadata.agent_role.clone()),
                             },
                         ));
                     } else {
@@ -3525,8 +3625,12 @@ impl ChatWidget {
                                 call_id: id,
                                 sender_thread_id,
                                 receiver_thread_id,
-                                receiver_agent_nickname: None,
-                                receiver_agent_role: None,
+                                receiver_agent_nickname: first_receiver_metadata
+                                    .as_ref()
+                                    .and_then(|metadata| metadata.agent_nickname.clone()),
+                                receiver_agent_role: first_receiver_metadata
+                                    .as_ref()
+                                    .and_then(|metadata| metadata.agent_role.clone()),
                                 status: receiver_thread_ids
                                     .iter()
                                     .find_map(|thread_id| agents_states.get(thread_id))
@@ -3550,7 +3654,10 @@ impl ChatWidget {
                                     app_server_collab_thread_id_to_core(thread_id)
                                 })
                                 .collect(),
-                            receiver_agents: Vec::new(),
+                            receiver_agents: app_server_collab_receiver_agent_refs(
+                                &receiver_thread_ids,
+                                &self.collab_agent_metadata,
+                            ),
                             call_id: id,
                         },
                     ));
@@ -3558,6 +3665,7 @@ impl ChatWidget {
                     let (agent_statuses, statuses) = app_server_collab_agent_statuses_to_core(
                         &receiver_thread_ids,
                         &agents_states,
+                        &self.collab_agent_metadata,
                     );
                     self.on_collab_event(multi_agents::waiting_end(
                         codex_protocol::protocol::CollabWaitingEndEvent {
@@ -3578,8 +3686,12 @@ impl ChatWidget {
                             call_id: id,
                             sender_thread_id,
                             receiver_thread_id,
-                            receiver_agent_nickname: None,
-                            receiver_agent_role: None,
+                            receiver_agent_nickname: first_receiver_metadata
+                                .as_ref()
+                                .and_then(|metadata| metadata.agent_nickname.clone()),
+                            receiver_agent_role: first_receiver_metadata
+                                .as_ref()
+                                .and_then(|metadata| metadata.agent_role.clone()),
                             status: receiver_thread_ids
                                 .iter()
                                 .find_map(|thread_id| agents_states.get(thread_id))
@@ -4026,13 +4138,13 @@ impl ChatWidget {
             id: ev.call_id,
             reason: ev.reason,
             changes: ev.changes.clone(),
-            cwd: self.config.cwd.clone(),
+            cwd: self.config.cwd.to_path_buf(),
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
         self.request_redraw();
         self.notify(Notification::EditApprovalRequested {
-            cwd: self.config.cwd.clone(),
+            cwd: self.config.cwd.to_path_buf(),
             changes: ev.changes.keys().cloned().collect(),
         });
     }
@@ -4274,7 +4386,7 @@ impl ChatWidget {
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
 
-        let current_cwd = Some(config.cwd.clone());
+        let current_cwd = Some(config.cwd.to_path_buf());
         let queued_message_edit_binding = queued_message_edit_binding_for_terminal(terminal_info());
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -4313,6 +4425,7 @@ impl ChatWidget {
             plan_stream_controller: None,
             last_copyable_output: None,
             running_commands: HashMap::new(),
+            collab_agent_metadata: HashMap::new(),
             pending_collab_spawn_requests: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
@@ -4693,7 +4806,15 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::ForkCurrentSession);
             }
             SlashCommand::Init => {
-                let init_target = self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME);
+                let init_target = match self.config.cwd.join(DEFAULT_PROJECT_DOC_FILENAME) {
+                    Ok(path) => path,
+                    Err(err) => {
+                        self.add_error_message(format!(
+                            "Failed to prepare {DEFAULT_PROJECT_DOC_FILENAME}: {err}",
+                        ));
+                        return;
+                    }
+                };
                 if init_target.exists() {
                     let message = format!(
                         "{DEFAULT_PROJECT_DOC_FILENAME} already exists here. Skipping /init to avoid overwriting it."
@@ -5415,7 +5536,7 @@ impl ChatWidget {
         let service_tier = self.config.service_tier.map(Some);
         let op = AppCommand::user_turn(
             items,
-            self.config.cwd.clone(),
+            self.config.cwd.to_path_buf(),
             self.config.permissions.approval_policy.value(),
             self.config.permissions.sandbox_policy.get().clone(),
             effective_mode.model().to_string(),
@@ -5661,12 +5782,14 @@ impl ChatWidget {
             ThreadItem::Reasoning {
                 summary, content, ..
             } => {
-                for delta in summary {
-                    self.on_agent_reasoning_delta(delta);
-                }
-                if self.config.show_raw_agent_reasoning {
-                    for delta in content {
+                if from_replay {
+                    for delta in summary {
                         self.on_agent_reasoning_delta(delta);
+                    }
+                    if self.config.show_raw_agent_reasoning {
+                        for delta in content {
+                            self.on_agent_reasoning_delta(delta);
+                        }
                     }
                 }
                 self.on_agent_reasoning_final();
@@ -5691,7 +5814,7 @@ impl ChatWidget {
                         call_id: id,
                         process_id,
                         turn_id: turn_id.clone(),
-                        command: vec![command],
+                        command: split_command_string(&command),
                         cwd,
                         parsed_cmd: command_actions
                             .into_iter()
@@ -5706,7 +5829,7 @@ impl ChatWidget {
                         call_id: id,
                         process_id,
                         turn_id: turn_id.clone(),
-                        command: vec![command],
+                        command: split_command_string(&command),
                         cwd,
                         parsed_cmd: command_actions
                             .into_iter()
@@ -6273,7 +6396,7 @@ impl ChatWidget {
                     call_id: id,
                     process_id,
                     turn_id: notification.turn_id,
-                    command: vec![command],
+                    command: split_command_string(&command),
                     cwd,
                     parsed_cmd: command_actions
                         .into_iter()
@@ -7022,7 +7145,9 @@ impl ChatWidget {
     }
 
     fn status_line_cwd(&self) -> &Path {
-        self.current_cwd.as_ref().unwrap_or(&self.config.cwd)
+        self.current_cwd
+            .as_deref()
+            .unwrap_or(self.config.cwd.as_path())
     }
 
     fn status_line_project_root(&self) -> Option<PathBuf> {
@@ -9617,7 +9742,7 @@ impl ChatWidget {
             placeholder_style,
             /*reasoning_effort*/ None,
             /*show_fast_status*/ false,
-            config.cwd.clone(),
+            config.cwd.to_path_buf(),
             CODEX_CLI_VERSION,
         ))
     }
@@ -10331,7 +10456,7 @@ impl ChatWidget {
             name: "Review against a base branch".to_string(),
             description: Some("(PR Style)".into()),
             actions: vec![Box::new({
-                let cwd = self.config.cwd.clone();
+                let cwd = self.config.cwd.to_path_buf();
                 move |tx| {
                     tx.send(AppEvent::OpenReviewBranchPicker(cwd.clone()));
                 }
@@ -10356,7 +10481,7 @@ impl ChatWidget {
         items.push(SelectionItem {
             name: "Review a commit".to_string(),
             actions: vec![Box::new({
-                let cwd = self.config.cwd.clone();
+                let cwd = self.config.cwd.to_path_buf();
                 move |tx| {
                     tx.send(AppEvent::OpenReviewCommitPicker(cwd.clone()));
                 }
@@ -10791,6 +10916,7 @@ fn extract_first_bold(s: &str) -> Option<String> {
 fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {
     match event_name {
         codex_protocol::protocol::HookEventName::PreToolUse => "PreToolUse",
+        codex_protocol::protocol::HookEventName::PostToolUse => "PostToolUse",
         codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
         codex_protocol::protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
         codex_protocol::protocol::HookEventName::Stop => "Stop",

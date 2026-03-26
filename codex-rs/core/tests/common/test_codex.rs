@@ -37,7 +37,10 @@ use serde_json::Value;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
+use crate::PathBufExt;
+use crate::PathExt;
 use crate::RemoteEnvConfig;
+use crate::TempDirExt;
 use crate::get_remote_test_env;
 use crate::load_default_config_for_test;
 use crate::responses::WebSocketTestServer;
@@ -102,8 +105,7 @@ impl TestEnv {
     pub async fn local() -> Result<Self> {
         let local_cwd_temp_dir = TempDir::new()?;
         let cwd = local_cwd_temp_dir.path().to_path_buf();
-        let environment =
-            codex_exec_server::Environment::create(/*experimental_exec_server_url*/ None).await?;
+        let environment = codex_exec_server::Environment::create(/*exec_server_url*/ None).await?;
         Ok(Self {
             environment,
             cwd,
@@ -116,8 +118,8 @@ impl TestEnv {
         &self.environment
     }
 
-    pub fn experimental_exec_server_url(&self) -> Option<&str> {
-        self.environment.experimental_exec_server_url()
+    pub fn exec_server_url(&self) -> Option<&str> {
+        self.environment.exec_server_url()
     }
 }
 
@@ -297,8 +299,7 @@ fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<Stri
 }
 
 fn absolute_path(path: &Path) -> Result<AbsolutePathBuf> {
-    AbsolutePathBuf::try_from(path.to_path_buf())
-        .map_err(|err| anyhow!("invalid absolute path {}: {err}", path.display()))
+    Ok(path.abs())
 }
 
 /// A collection of different ways the model can output an apply_patch call
@@ -388,17 +389,17 @@ impl TestCodexBuilder {
         server: &wiremock::MockServer,
     ) -> anyhow::Result<TestCodex> {
         let test_env = test_env().await?;
-        let experimental_exec_server_url =
-            test_env.experimental_exec_server_url().map(str::to_owned);
+        let home = match self.home.clone() {
+            Some(home) => home,
+            None => Arc::new(TempDir::new()?),
+        };
+        let base_url = format!("{}/v1", server.uri());
         let cwd = test_env.cwd.to_path_buf();
         self.config_mutators.push(Box::new(move |config| {
-            config.experimental_exec_server_url = experimental_exec_server_url;
-            config.cwd = cwd;
+            config.cwd = cwd.abs();
         }));
-
-        let mut test = self.build(server).await?;
-        test._test_env = test_env;
-        Ok(test)
+        let (config, cwd) = self.prepare_config(base_url, &home).await?;
+        Box::pin(self.build_from_config(config, cwd, home, /*resume_from*/ None, test_env)).await
     }
 
     pub async fn build_with_streaming_server(
@@ -477,18 +478,23 @@ impl TestCodexBuilder {
         test_env: TestEnv,
     ) -> anyhow::Result<TestCodex> {
         let auth = self.auth.clone();
+        let environment_manager = Arc::new(codex_exec_server::EnvironmentManager::new(
+            test_env.exec_server_url().map(str::to_owned),
+        ));
         let thread_manager = if config.model_catalog.is_some() {
             ThreadManager::new(
                 &config,
                 codex_core::test_support::auth_manager_from_auth(auth.clone()),
                 SessionSource::Exec,
                 CollaborationModesConfig::default(),
+                Arc::clone(&environment_manager),
             )
         } else {
             codex_core::test_support::thread_manager_with_models_provider_and_home(
                 auth.clone(),
                 config.model_provider.clone(),
                 config.codex_home.clone(),
+                Arc::clone(&environment_manager),
             )
         };
         let thread_manager = Arc::new(thread_manager);
@@ -556,21 +562,27 @@ impl TestCodexBuilder {
         };
         let cwd = Arc::new(TempDir::new()?);
         let mut config = load_default_config_for_test(home).await;
-        config.cwd = cwd.path().to_path_buf();
+        config.cwd = cwd.abs();
         config.model_provider = model_provider;
         for hook in self.pre_build_hooks.drain(..) {
             hook(home.path());
         }
         if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
-            config.codex_linux_sandbox_exe = Some(path);
+            config.codex_self_exe = Some(path);
+        } else if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex-exec") {
+            // `codex-exec` also supports `--codex-run-as-apply-patch`, so use it
+            // when the multitool binary is not available in test builds.
+            config.codex_self_exe = Some(path);
         } else if let Ok(exe) = std::env::current_exe()
-            && let Some(path) = exe
-                .parent()
-                .and_then(|parent| parent.parent())
-                .map(|parent| parent.join("codex"))
-            && path.is_file()
+            && let Some(bin_dir) = exe.parent().and_then(|parent| parent.parent())
         {
-            config.codex_linux_sandbox_exe = Some(path);
+            let codex = bin_dir.join("codex");
+            let codex_exec = bin_dir.join("codex-exec");
+            if codex.is_file() {
+                config.codex_self_exe = Some(codex);
+            } else if codex_exec.is_file() {
+                config.codex_self_exe = Some(codex_exec);
+            }
         }
 
         let mut mutators = vec![];
@@ -616,12 +628,7 @@ fn ensure_test_model_catalog(config: &mut Config) -> Result<()> {
         .unwrap_or_else(|| panic!("missing bundled model gpt-5.1-codex"));
     model.slug = TEST_MODEL_WITH_EXPERIMENTAL_TOOLS.to_string();
     model.display_name = TEST_MODEL_WITH_EXPERIMENTAL_TOOLS.to_string();
-    model.experimental_supported_tools = vec![
-        "test_sync_tool".to_string(),
-        "read_file".to_string(),
-        "grep_files".to_string(),
-        "list_dir".to_string(),
-    ];
+    model.experimental_supported_tools = vec!["test_sync_tool".to_string()];
     config.model_catalog = Some(ModelsResponse {
         models: vec![model],
     });
@@ -721,7 +728,7 @@ impl TestCodex {
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
-                cwd: self.config.cwd.clone(),
+                cwd: self.config.cwd.to_path_buf(),
                 approval_policy,
                 approvals_reviewer: None,
                 sandbox_policy,

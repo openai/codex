@@ -1,4 +1,2 @@
-// Default plaintext sigil for tools.
-pub const TOOL_MENTION_SIGIL: char = '$';
-// Plugins use `@` in linked plaintext outside TUI.
-pub const PLUGIN_TEXT_MENTION_SIGIL: char = '@';
+pub use codex_utils_plugins::mention_syntax::PLUGIN_TEXT_MENTION_SIGIL;
+pub use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;

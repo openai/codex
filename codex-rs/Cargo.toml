@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "analytics",
     "backend-client",
     "ansi-escape",
     "async-utils",
@@ -24,7 +25,9 @@ members = [
     "shell-escalation",
     "skills",
     "core",
+    "core-skills",
     "hooks",
+    "instructions",
     "secrets",
     "exec",
     "exec-server",
@@ -68,8 +71,10 @@ members = [
     "utils/oss",
     "utils/output-truncation",
     "utils/path-utils",
+    "utils/plugins",
     "utils/fuzzy-match",
     "utils/stream-parser",
+    "utils/template",
     "codex-client",
     "codex-api",
     "state",
@@ -77,6 +82,7 @@ members = [
     "codex-experimental-api-macros",
     "test-macros",
     "package-manager",
+    "plugin",
     "artifacts",
 ]
 resolver = "2"
@@ -94,6 +100,7 @@ license = "Apache-2.0"
 # Internal
 app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
+codex-analytics = { path = "analytics" }
 codex-api = { path = "codex-api" }
 codex-artifacts = { path = "artifacts" }
 codex-code-mode = { path = "code-mode" }
@@ -113,6 +120,7 @@ codex-cloud-requirements = { path = "cloud-requirements" }
 codex-connectors = { path = "connectors" }
 codex-config = { path = "config" }
 codex-core = { path = "core" }
+codex-core-skills = { path = "core-skills" }
 codex-exec = { path = "exec" }
 codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
@@ -122,6 +130,7 @@ codex-features = { path = "features" }
 codex-file-search = { path = "file-search" }
 codex-git-utils = { path = "git-utils" }
 codex-hooks = { path = "hooks" }
+codex-instructions = { path = "instructions" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
@@ -130,6 +139,7 @@ codex-mcp-server = { path = "mcp-server" }
 codex-network-proxy = { path = "network-proxy" }
 codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
+codex-plugin = { path = "plugin" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-rollout = { path = "rollout" }
@@ -160,12 +170,14 @@ codex-utils-json-to-toml = { path = "utils/json-to-toml" }
 codex-utils-oss = { path = "utils/oss" }
 codex-utils-output-truncation = { path = "utils/output-truncation" }
 codex-utils-path = { path = "utils/path-utils" }
+codex-utils-plugins = { path = "utils/plugins" }
 codex-utils-pty = { path = "utils/pty" }
 codex-utils-readiness = { path = "utils/readiness" }
 codex-utils-rustls-provider = { path = "utils/rustls-provider" }
 codex-utils-sandbox-summary = { path = "utils/sandbox-summary" }
 codex-utils-sleep-inhibitor = { path = "utils/sleep-inhibitor" }
 codex-utils-stream-parser = { path = "utils/stream-parser" }
+codex-utils-template = { path = "utils/template" }
 codex-utils-string = { path = "utils/string" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
@@ -178,7 +190,6 @@ ansi-to-tui = "7.0.0"
 anyhow = "1"
 arboard = { version = "3", features = ["wayland-data-control"] }
 arc-swap = "1.9.0"
-askama = "0.15.4"
 assert_cmd = "2"
 assert_matches = "1.5.0"
 async-channel = "2.3.1"
@@ -193,6 +204,7 @@ chrono = "0.4.43"
 clap = "4"
 clap_complete = "4"
 color-eyre = "0.6.3"
+constant_time_eq = "0.3.1"
 crossbeam-channel = "0.5.15"
 crossterm = "0.28.1"
 csv = "1.3.1"
@@ -211,6 +223,7 @@ flate2 = "1.1.4"
 futures = { version = "0.3", default-features = false }
 gethostname = "1.1.0"
 globset = "0.4"
+hmac = "0.12.1"
 http = "1.3.1"
 icu_decimal = "2.1"
 icu_locale_core = "2.1"
@@ -223,6 +236,7 @@ indexmap = "2.12.0"
 insta = "1.46.3"
 inventory = "0.3.19"
 itertools = "0.14.0"
+jsonwebtoken = "9.3.1"
 keyring = { version = "3.6", default-features = false }
 landlock = "0.4.4"
 lazy_static = "1"
@@ -384,7 +398,7 @@ ignored = [
     "icu_provider",
     "openssl-sys",
     "codex-utils-readiness",
-    "codex-secrets",
+    "codex-utils-template",
     "codex-v8-poc",
 ]
 

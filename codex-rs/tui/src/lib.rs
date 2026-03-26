@@ -251,6 +251,8 @@ mod wrapping;
 
 #[cfg(test)]
 pub mod test_backend;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
@@ -416,6 +418,7 @@ pub async fn run_main(
         cwd,
         model_provider: model_provider_override.clone(),
         config_profile: cli.config_profile.clone(),
+        codex_self_exe: arg0_paths.codex_self_exe.clone(),
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
         show_raw_agent_reasoning: cli.oss.then_some(true),
@@ -843,12 +846,17 @@ async fn run_ratatui_app(
         } else {
             Some(config.cwd.as_path())
         };
+        let allowed_sources = if cli.resume_include_non_interactive {
+            &[][..]
+        } else {
+            INTERACTIVE_SESSION_SOURCES.as_slice()
+        };
         match RolloutRecorder::find_latest_thread_path(
             &config,
             /*page_size*/ 1,
             /*cursor*/ None,
             ThreadSortKey::UpdatedAt,
-            INTERACTIVE_SESSION_SOURCES.as_slice(),
+            allowed_sources,
             Some(provider_filter.as_slice()),
             &config.model_provider_id,
             filter_cwd,
@@ -886,7 +894,19 @@ async fn run_ratatui_app(
             _ => resume_picker::SessionSelection::StartFresh,
         }
     } else if cli.resume_picker {
-        match resume_picker::run_resume_picker(&mut tui, &config, cli.resume_show_all).await? {
+        let source_filter = if cli.resume_include_non_interactive {
+            resume_picker::SessionSourceFilter::IncludeNonInteractive
+        } else {
+            resume_picker::SessionSourceFilter::InteractiveOnly
+        };
+        match resume_picker::run_resume_picker(
+            &mut tui,
+            &config,
+            cli.resume_show_all,
+            source_filter,
+        )
+        .await?
+        {
             resume_picker::SessionSelection::Exit => {
                 terminal_restore_guard.restore_silently();
                 session_log::log_session_end();

@@ -54,6 +54,21 @@ fn id_token_info_parses_go_plan() {
 }
 
 #[test]
+fn id_token_info_parses_hc_plan_as_enterprise() {
+    let fake_jwt = fake_jwt(serde_json::json!({
+        "email": "user@example.com",
+        "https://api.openai.com/auth": {
+            "chatgpt_plan_type": "hc"
+        }
+    }));
+
+    let info = parse_chatgpt_jwt_claims(&fake_jwt).expect("should parse");
+    assert_eq!(info.email.as_deref(), Some("user@example.com"));
+    assert_eq!(info.get_chatgpt_plan_type().as_deref(), Some("Enterprise"));
+    assert_eq!(info.is_workspace_account(), true);
+}
+
+#[test]
 fn id_token_info_handles_missing_fields() {
     let fake_jwt = fake_jwt(serde_json::json!({ "sub": "123" }));
 

@@ -34,7 +34,7 @@ async fn create_process_context(use_remote: bool) -> Result<ProcessContext> {
             server: Some(server),
         })
     } else {
-        let environment = Environment::create(None).await?;
+        let environment = Environment::create(/*exec_server_url*/ None).await?;
         Ok(ProcessContext {
             backend: environment.get_exec_backend(),
             server: None,

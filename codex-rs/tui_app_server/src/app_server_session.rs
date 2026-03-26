@@ -5,6 +5,8 @@ use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ConfigBatchWriteParams;
+use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
@@ -27,6 +29,8 @@ use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadLoadedListParams;
+use codex_app_server_protocol::ThreadLoadedListResponse;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
@@ -354,6 +358,22 @@ impl AppServerSession {
             .wrap_err("thread/list failed during TUI session lookup")
     }
 
+    /// Lists thread ids that the app server currently holds in memory.
+    ///
+    /// Used by `App::backfill_loaded_subagent_threads` to discover subagent threads that were
+    /// spawned before the TUI connected. The caller then fetches full metadata per thread via
+    /// `thread_read` and walks the spawn tree.
+    pub(crate) async fn thread_loaded_list(
+        &mut self,
+        params: ThreadLoadedListParams,
+    ) -> Result<ThreadLoadedListResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadLoadedList { request_id, params })
+            .await
+            .wrap_err("failed to list loaded threads from app server")
+    }
+
     pub(crate) async fn thread_read(
         &mut self,
         thread_id: ThreadId,
@@ -588,6 +608,24 @@ impl AppServerSession {
             .request_typed(ClientRequest::SkillsList { request_id, params })
             .await
             .wrap_err("skills/list failed in app-server TUI")
+    }
+
+    pub(crate) async fn reload_user_config(&mut self) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ConfigWriteResponse = self
+            .client
+            .request_typed(ClientRequest::ConfigBatchWrite {
+                request_id,
+                params: ConfigBatchWriteParams {
+                    edits: Vec::new(),
+                    file_path: None,
+                    expected_version: None,
+                    reload_user_config: true,
+                },
+            })
+            .await
+            .wrap_err("config/batchWrite failed while reloading user config in app-server TUI")?;
+        Ok(())
     }
 
     pub(crate) async fn thread_realtime_start(

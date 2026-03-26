@@ -27,6 +27,8 @@ use crate::render::line_utils::push_owned_lines;
 use crate::render::renderable::Renderable;
 use crate::style::proposed_plan_style;
 use crate::style::user_message_style;
+#[cfg(test)]
+use crate::test_support::PathBufExt;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::text_formatting::truncate_text;
 use crate::tooltips;
@@ -1143,7 +1145,7 @@ pub(crate) fn new_session_info(
         model.clone(),
         reasoning_effort,
         show_fast_status,
-        config.cwd.clone(),
+        config.cwd.to_path_buf(),
         CODEX_CLI_VERSION,
     );
     let mut parts: Vec<Box<dyn HistoryCell>> = vec![Box::new(header)];
@@ -2883,7 +2885,7 @@ mod tests {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
-            cwd: PathBuf::from("/tmp/project"),
+            cwd: PathBuf::from("/tmp/project").abs().to_path_buf(),
             reasoning_effort: None,
             history_log_id: 0,
             history_entry_count: 0,
@@ -2997,9 +2999,13 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "snapshot path rendering differs on Windows"
+    )]
     async fn session_info_availability_nux_tooltip_snapshot() {
         let mut config = test_config().await;
-        config.cwd = PathBuf::from("/tmp/project");
+        config.cwd = PathBuf::from("/tmp/project").abs();
         let cell = new_session_info(
             &config,
             "gpt-5",
@@ -3137,6 +3143,7 @@ mod tests {
             disabled_tools: None,
             scopes: None,
             oauth_resource: None,
+            tools: HashMap::new(),
         };
         let mut servers = config.mcp_servers.get().clone();
         servers.insert("docs".to_string(), stdio_config);
@@ -3161,6 +3168,7 @@ mod tests {
             disabled_tools: None,
             scopes: None,
             oauth_resource: None,
+            tools: HashMap::new(),
         };
         servers.insert("http".to_string(), http_config);
         config
@@ -3231,6 +3239,7 @@ mod tests {
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
+                tools: HashMap::new(),
             },
         )]);
         config

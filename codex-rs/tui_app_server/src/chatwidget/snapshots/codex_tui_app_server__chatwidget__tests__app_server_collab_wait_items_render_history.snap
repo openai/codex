@@ -3,10 +3,10 @@ source: tui_app_server/src/chatwidget/tests.rs
 expression: combined
 ---
 • Waiting for 2 agents
-  └ 019cff70-2599-75e2-af72-b958ce5dc1cc
-    019cff70-2599-75e2-af72-b96db334332d
+  └ Robie [explorer]
+    Ada [reviewer]
 
 
 • Finished waiting
-  └ 019cff70-2599-75e2-af72-b958ce5dc1cc: Completed - Done
-    019cff70-2599-75e2-af72-b96db334332d: Running
+  └ Robie [explorer]: Completed - Done
+    Ada [reviewer]: Running

@@ -1,6 +1,7 @@
 use super::*;
 use codex_protocol::items::HookPromptFragment;
 use codex_protocol::items::build_hook_prompt_message;
+use codex_protocol::models::ResponseItem;
 
 #[test]
 fn detects_environment_context_fragment() {

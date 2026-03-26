@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tracing::trace;
 
 use crate::ExecBackend;
 use crate::ExecProcess;
@@ -23,6 +24,7 @@ struct RemoteExecProcess {
 
 impl RemoteProcess {
     pub(crate) fn new(client: ExecServerClient) -> Self {
+        trace!("remote process new");
         Self { client }
     }
 
@@ -31,10 +33,12 @@ impl RemoteProcess {
         process_id: &str,
         chunk: Vec<u8>,
     ) -> Result<WriteResponse, ExecServerError> {
+        trace!("remote process write");
         self.client.write(process_id, chunk).await
     }
 
     async fn terminate_process(&self, process_id: &str) -> Result<(), ExecServerError> {
+        trace!("remote process terminate");
         self.client.terminate(process_id).await?;
         Ok(())
     }
@@ -67,10 +71,12 @@ impl ExecProcess for RemoteExecProcess {
     }
 
     async fn write(&self, chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError> {
+        trace!("exec process write");
         self.backend.write(&self.process_id, chunk).await
     }
 
     async fn terminate(&self) -> Result<(), ExecServerError> {
+        trace!("exec process terminate");
         self.backend.terminate_process(&self.process_id).await
     }
 }

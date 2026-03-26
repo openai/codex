@@ -13,7 +13,15 @@ use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::shell_snapshot::ShellSnapshot;
+use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolPayload;
 use crate::tools::handlers::ShellCommandHandler;
+use crate::tools::handlers::ShellHandler;
+use crate::tools::registry::ToolHandler;
+use crate::turn_diff_tracker::TurnDiffTracker;
+use serde_json::json;
+use tokio::sync::Mutex;
 use tokio::sync::watch;
 
 /// The logic for is_known_safe_command() has heuristics for known shells,
@@ -176,5 +184,90 @@ fn shell_command_handler_rejects_login_when_disallowed() {
         err.to_string()
             .contains("login shell is disabled by config"),
         "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn shell_pre_tool_use_payload_uses_joined_command() {
+    let payload = ToolPayload::LocalShell {
+        params: codex_protocol::models::ShellToolCallParams {
+            command: vec![
+                "bash".to_string(),
+                "-lc".to_string(),
+                "printf hi".to_string(),
+            ],
+            workdir: None,
+            timeout_ms: None,
+            sandbox_permissions: None,
+            prefix_rule: None,
+            additional_permissions: None,
+            justification: None,
+        },
+    };
+    let (session, turn) = make_session_and_context().await;
+    let handler = ShellHandler;
+
+    assert_eq!(
+        handler.pre_tool_use_payload(&ToolInvocation {
+            session: session.into(),
+            turn: turn.into(),
+            tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+            call_id: "call-41".to_string(),
+            tool_name: "shell".to_string(),
+            tool_namespace: None,
+            payload,
+        }),
+        Some(crate::tools::registry::PreToolUsePayload {
+            command: "bash -lc 'printf hi'".to_string(),
+        })
+    );
+}
+
+#[tokio::test]
+async fn shell_command_pre_tool_use_payload_uses_raw_command() {
+    let payload = ToolPayload::Function {
+        arguments: json!({ "command": "printf shell command" }).to_string(),
+    };
+    let (session, turn) = make_session_and_context().await;
+    let handler = ShellCommandHandler {
+        backend: super::ShellCommandBackend::Classic,
+    };
+
+    assert_eq!(
+        handler.pre_tool_use_payload(&ToolInvocation {
+            session: session.into(),
+            turn: turn.into(),
+            tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+            call_id: "call-42".to_string(),
+            tool_name: "shell_command".to_string(),
+            tool_namespace: None,
+            payload,
+        }),
+        Some(crate::tools::registry::PreToolUsePayload {
+            command: "printf shell command".to_string(),
+        })
+    );
+}
+
+#[test]
+fn build_post_tool_use_payload_uses_tool_output_wire_value() {
+    let payload = ToolPayload::Function {
+        arguments: json!({ "command": "printf shell command" }).to_string(),
+    };
+    let output = FunctionToolOutput {
+        body: vec![],
+        success: Some(true),
+        post_tool_use_response: Some(json!("shell output")),
+    };
+    let handler = ShellCommandHandler {
+        backend: super::ShellCommandBackend::Classic,
+    };
+
+    assert_eq!(
+        handler.post_tool_use_payload("call-42", &payload, &output),
+        Some(crate::tools::registry::PostToolUsePayload {
+            command: "printf shell command".to_string(),
+            tool_response: json!("shell output"),
+        })
     );
 }

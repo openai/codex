@@ -34,6 +34,15 @@ When running with `--listen ws://IP:PORT`, the same listener also serves basic H
 
 Websocket transport is currently experimental and unsupported. Do not rely on it for production workloads.
 
+Security note:
+
+- Loopback websocket listeners (`ws://127.0.0.1:PORT`) remain appropriate for localhost and SSH port-forwarding workflows.
+- Non-loopback websocket listeners currently allow unauthenticated connections by default during rollout. If you expose one remotely, configure websocket auth explicitly now.
+- Supported auth modes are app-server flags:
+  - `--ws-auth capability-token --ws-token-file /absolute/path`
+  - `--ws-auth signed-bearer-token --ws-shared-secret-file /absolute/path` for HMAC-signed JWT/JWS bearer tokens, with optional `--ws-issuer`, `--ws-audience`, `--ws-max-clock-skew-seconds`
+- Clients present the credential as `Authorization: Bearer <token>` during the websocket handshake. Auth is enforced before JSON-RPC `initialize`.
+
 Tracing/log output:
 
 - `RUST_LOG` controls log filtering/verbosity.
@@ -1002,6 +1011,11 @@ Order of messages:
 3. `serverRequest/resolved` — `{ threadId, requestId }` confirms the pending request has been resolved or cleared, including lifecycle cleanup on turn start/complete/interrupt.
 
 `turnId` is best-effort. When the elicitation is correlated with an active turn, the request includes that turn id; otherwise it is `null`.
+
+For MCP tool approval elicitations, form request `meta` includes
+`codex_approval_kind: "mcp_tool_call"` and may include `persist: "session"`,
+`persist: "always"`, or `persist: ["session", "always"]` to advertise whether
+the client can offer session-scoped and/or persistent approval choices.
 
 ### Permission requests
 

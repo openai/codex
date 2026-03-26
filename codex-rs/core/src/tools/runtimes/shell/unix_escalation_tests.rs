@@ -8,6 +8,7 @@ use super::evaluate_intercepted_exec_policy;
 use super::extract_shell_script;
 use super::join_program_and_argv;
 use super::map_exec_result;
+use crate::SkillMetadata;
 #[cfg(target_os = "macos")]
 use crate::config::Constrained;
 #[cfg(target_os = "macos")]
@@ -19,7 +20,6 @@ use crate::protocol::GranularApprovalConfig;
 use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::SandboxPermissions;
-use crate::skills::SkillMetadata;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::PolicyParser;
