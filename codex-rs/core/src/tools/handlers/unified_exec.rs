@@ -84,44 +84,6 @@ fn default_tty() -> bool {
     false
 }
 
-fn exec_command_pre_tool_use_payload(
-    tool_name: &str,
-    payload: &ToolPayload,
-) -> Option<PreToolUsePayload> {
-    if tool_name != "exec_command" {
-        return None;
-    }
-
-    let ToolPayload::Function { arguments } = payload else {
-        return None;
-    };
-
-    parse_arguments::<ExecCommandArgs>(arguments)
-        .ok()
-        .map(|args| PreToolUsePayload { command: args.cmd })
-}
-
-fn exec_command_post_tool_use_payload(
-    call_id: &str,
-    payload: &ToolPayload,
-    result: &dyn ToolOutput,
-) -> Option<PostToolUsePayload> {
-    let ToolPayload::Function { arguments } = payload else {
-        return None;
-    };
-
-    let args = parse_arguments::<ExecCommandArgs>(arguments).ok()?;
-    if args.tty {
-        return None;
-    }
-
-    let tool_response = result.post_tool_use_response(call_id, payload)?;
-    Some(PostToolUsePayload {
-        command: args.cmd,
-        tool_response,
-    })
-}
-
 #[async_trait]
 impl ToolHandler for UnifiedExecHandler {
     type Output = ExecCommandToolOutput;
@@ -159,7 +121,17 @@ impl ToolHandler for UnifiedExecHandler {
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
-        exec_command_pre_tool_use_payload(&invocation.tool_name, &invocation.payload)
+        if invocation.tool_name != "exec_command" {
+            return None;
+        }
+
+        let ToolPayload::Function { arguments } = &invocation.payload else {
+            return None;
+        };
+
+        parse_arguments::<ExecCommandArgs>(arguments)
+            .ok()
+            .map(|args| PreToolUsePayload { command: args.cmd })
     }
 
     fn post_tool_use_payload(
@@ -168,7 +140,20 @@ impl ToolHandler for UnifiedExecHandler {
         payload: &ToolPayload,
         result: &dyn ToolOutput,
     ) -> Option<PostToolUsePayload> {
-        exec_command_post_tool_use_payload(call_id, payload, result)
+        let ToolPayload::Function { arguments } = payload else {
+            return None;
+        };
+
+        let args = parse_arguments::<ExecCommandArgs>(arguments).ok()?;
+        if args.tty {
+            return None;
+        }
+
+        let tool_response = result.post_tool_use_response(call_id, payload)?;
+        Some(PostToolUsePayload {
+            command: args.cmd,
+            tool_response,
+        })
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {

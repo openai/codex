@@ -11,8 +11,13 @@ use std::fs;
 use std::sync::Arc;
 use tempfile::tempdir;
 
+use crate::codex::make_session_and_context;
 use crate::tools::context::ExecCommandToolOutput;
+use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::registry::ToolHandler;
+use crate::turn_diff_tracker::TurnDiffTracker;
+use tokio::sync::Mutex;
 
 #[test]
 fn test_get_command_uses_default_shell_when_unspecified() -> anyhow::Result<()> {
@@ -186,28 +191,48 @@ fn exec_command_args_resolve_relative_additional_permissions_against_workdir() -
     Ok(())
 }
 
-#[test]
-fn exec_command_pre_tool_use_payload_uses_raw_command() {
+#[tokio::test]
+async fn exec_command_pre_tool_use_payload_uses_raw_command() {
     let payload = ToolPayload::Function {
         arguments: serde_json::json!({ "cmd": "printf exec command" }).to_string(),
     };
+    let (session, turn) = make_session_and_context().await;
+    let handler = UnifiedExecHandler;
 
     assert_eq!(
-        super::exec_command_pre_tool_use_payload("exec_command", &payload),
+        handler.pre_tool_use_payload(&ToolInvocation {
+            session: session.into(),
+            turn: turn.into(),
+            tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+            call_id: "call-43".to_string(),
+            tool_name: "exec_command".to_string(),
+            tool_namespace: None,
+            payload,
+        }),
         Some(crate::tools::registry::PreToolUsePayload {
             command: "printf exec command".to_string(),
         })
     );
 }
 
-#[test]
-fn exec_command_pre_tool_use_payload_skips_write_stdin() {
+#[tokio::test]
+async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
     let payload = ToolPayload::Function {
         arguments: serde_json::json!({ "chars": "echo hi" }).to_string(),
     };
+    let (session, turn) = make_session_and_context().await;
+    let handler = UnifiedExecHandler;
 
     assert_eq!(
-        super::exec_command_pre_tool_use_payload("write_stdin", &payload),
+        handler.pre_tool_use_payload(&ToolInvocation {
+            session: session.into(),
+            turn: turn.into(),
+            tracker: Arc::new(Mutex::new(TurnDiffTracker::new())),
+            call_id: "call-44".to_string(),
+            tool_name: "write_stdin".to_string(),
+            tool_namespace: None,
+            payload,
+        }),
         None
     );
 }
@@ -234,7 +259,7 @@ fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_shot_co
     };
 
     assert_eq!(
-        super::exec_command_post_tool_use_payload("call-43", &payload, &output),
+        UnifiedExecHandler.post_tool_use_payload("call-43", &payload, &output),
         Some(crate::tools::registry::PostToolUsePayload {
             command: "echo three".to_string(),
             tool_response: serde_json::json!("three"),
@@ -264,7 +289,7 @@ fn exec_command_post_tool_use_payload_skips_interactive_exec() {
     };
 
     assert_eq!(
-        super::exec_command_post_tool_use_payload("call-44", &payload, &output),
+        UnifiedExecHandler.post_tool_use_payload("call-44", &payload, &output),
         None
     );
 }
@@ -291,7 +316,7 @@ fn exec_command_post_tool_use_payload_skips_running_sessions() {
     };
 
     assert_eq!(
-        super::exec_command_post_tool_use_payload("call-45", &payload, &output),
+        UnifiedExecHandler.post_tool_use_payload("call-45", &payload, &output),
         None
     );
 }

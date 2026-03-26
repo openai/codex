@@ -415,7 +415,10 @@ impl ToolRegistry {
             if let Some(replacement_text) = replacement_text {
                 let mut guard = response_cell.lock().await;
                 if let Some(result) = guard.as_mut() {
-                    replace_result_with_feedback(result, replacement_text);
+                    result.result = Box::new(FunctionToolOutput::from_text(
+                        replacement_text,
+                        /*success*/ None,
+                    ));
                 }
             }
         }
@@ -532,10 +535,6 @@ fn sandbox_policy_tag(policy: &SandboxPolicy) -> &'static str {
         SandboxPolicy::DangerFullAccess => "danger-full-access",
         SandboxPolicy::ExternalSandbox { .. } => "external-sandbox",
     }
-}
-
-fn replace_result_with_feedback(result: &mut AnyToolResult, text: String) {
-    result.result = Box::new(FunctionToolOutput::from_text(text, /*success*/ None));
 }
 
 // Hooks use a separate wire-facing input type so hook payload JSON stays stable
