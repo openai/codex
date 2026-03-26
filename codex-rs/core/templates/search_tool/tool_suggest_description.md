@@ -1,6 +1,6 @@
 # Tool suggestion discovery
 
-Suggests a missing connector in a plugin, or in narrower cases a discoverable plugin, when the user clearly wants a capability that is not currently available in the active `tools` list.
+Suggests a missing connector in an installed plugin, or in narrower cases a not installed but discoverable plugin, when the user clearly wants a capability that is not currently available in the active `tools` list.
 
 Use this ONLY when:
 - You've already tried to find a matching available tool for the user's request but couldn't find a good match. This includes `tool_search` (if available) and other means.

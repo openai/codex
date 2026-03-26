@@ -2090,11 +2090,9 @@ fn tool_suggest_can_be_registered_without_search_tool() {
     let ToolSpec::Function(ResponsesApiTool { description, .. }) = &tool_suggest.spec else {
         panic!("expected function tool");
     };
-    assert!(
-        description.contains(
-            "Suggests a missing connector in an installed plugin, or in narrower cases a discoverable plugin"
-        )
-    );
+    assert!(description.contains(
+        "Suggests a missing connector in an installed plugin, or in narrower cases a not installed but discoverable plugin"
+    ));
     assert!(description.contains(
         "You've already tried to find a matching available tool for the user's request but couldn't find a good match. This includes `tool_search` (if available) and other means."
     ));
@@ -2345,11 +2343,9 @@ fn tool_suggest_description_lists_discoverable_tools() {
     else {
         panic!("expected function tool");
     };
-    assert!(
-        description.contains(
-            "Suggests a missing connector in an installed plugin, or in narrower cases a discoverable plugin"
-        )
-    );
+    assert!(description.contains(
+        "Suggests a missing connector in an installed plugin, or in narrower cases a not installed but discoverable plugin"
+    ));
     assert!(description.contains("Google Calendar"));
     assert!(description.contains("Gmail"));
     assert!(description.contains("Sample Plugin"));
