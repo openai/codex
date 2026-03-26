@@ -78,15 +78,15 @@ fn restricted_read_implicitly_allows_helper_executables() -> std::io::Result<()>
 }
 
 #[test]
-fn network_toml_rejects_legacy_network_list_keys() {
-    let err = toml::from_str::<NetworkToml>(
+fn network_toml_ignores_legacy_network_list_keys() {
+    let parsed = toml::from_str::<NetworkToml>(
         r#"
 allowed_domains = ["openai.com"]
 "#,
     )
-    .expect_err("legacy network list keys should fail");
+    .expect("legacy network list keys should be ignored");
 
-    assert!(err.to_string().contains("unknown field `allowed_domains`"));
+    assert_eq!(parsed, NetworkToml::default());
 }
 
 #[test]
@@ -148,5 +148,64 @@ fn network_permission_containers_project_allowed_and_denied_entries() {
     assert_eq!(
         unix_sockets.allow_unix_sockets(),
         vec!["/tmp/example.sock".to_string()]
+    );
+}
+
+#[test]
+fn network_toml_overlays_unix_socket_permissions_by_path() {
+    let mut config = NetworkProxyConfig::default();
+
+    NetworkToml {
+        unix_sockets: Some(NetworkUnixSocketPermissionsToml {
+            entries: BTreeMap::from([
+                (
+                    "/tmp/base.sock".to_string(),
+                    NetworkUnixSocketPermissionToml::Allow,
+                ),
+                (
+                    "/tmp/override.sock".to_string(),
+                    NetworkUnixSocketPermissionToml::Allow,
+                ),
+            ]),
+        }),
+        ..Default::default()
+    }
+    .apply_to_network_proxy_config(&mut config);
+
+    NetworkToml {
+        unix_sockets: Some(NetworkUnixSocketPermissionsToml {
+            entries: BTreeMap::from([
+                (
+                    "/tmp/extra.sock".to_string(),
+                    NetworkUnixSocketPermissionToml::Allow,
+                ),
+                (
+                    "/tmp/override.sock".to_string(),
+                    NetworkUnixSocketPermissionToml::None,
+                ),
+            ]),
+        }),
+        ..Default::default()
+    }
+    .apply_to_network_proxy_config(&mut config);
+
+    assert_eq!(
+        config.network.unix_sockets,
+        Some(codex_network_proxy::NetworkUnixSocketPermissions {
+            entries: BTreeMap::from([
+                (
+                    "/tmp/base.sock".to_string(),
+                    ProxyNetworkUnixSocketPermission::Allow,
+                ),
+                (
+                    "/tmp/extra.sock".to_string(),
+                    ProxyNetworkUnixSocketPermission::Allow,
+                ),
+                (
+                    "/tmp/override.sock".to_string(),
+                    ProxyNetworkUnixSocketPermission::None,
+                ),
+            ]),
+        })
     );
 }

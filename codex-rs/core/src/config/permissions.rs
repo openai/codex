@@ -9,7 +9,6 @@ use codex_network_proxy::NetworkDomainPermission as ProxyNetworkDomainPermission
 use codex_network_proxy::NetworkMode;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::NetworkUnixSocketPermission as ProxyNetworkUnixSocketPermission;
-use codex_network_proxy::NetworkUnixSocketPermissions as ProxyNetworkUnixSocketPermissions;
 use codex_network_proxy::normalize_host;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -214,8 +213,19 @@ impl NetworkToml {
         if let Some(domains) = self.domains.as_ref() {
             overlay_network_domain_permissions(config, domains);
         }
-        if self.unix_sockets.is_some() {
-            config.network.unix_sockets = self.unix_sockets.as_ref().map(to_proxy_unix_sockets);
+        if let Some(unix_sockets) = self.unix_sockets.as_ref() {
+            let mut proxy_unix_sockets = config.network.unix_sockets.take().unwrap_or_default();
+            for (path, permission) in &unix_sockets.entries {
+                let permission = match permission {
+                    NetworkUnixSocketPermissionToml::Allow => {
+                        ProxyNetworkUnixSocketPermission::Allow
+                    }
+                    NetworkUnixSocketPermissionToml::None => ProxyNetworkUnixSocketPermission::None,
+                };
+                proxy_unix_sockets.entries.insert(path.clone(), permission);
+            }
+            config.network.unix_sockets =
+                (!proxy_unix_sockets.entries.is_empty()).then_some(proxy_unix_sockets);
         }
         if let Some(allow_local_binding) = self.allow_local_binding {
             config.network.allow_local_binding = allow_local_binding;
@@ -242,26 +252,6 @@ pub(crate) fn overlay_network_domain_permissions(
         config
             .network
             .upsert_domain_permission(pattern.clone(), permission, normalize_host);
-    }
-}
-
-fn to_proxy_unix_sockets(
-    unix_sockets: &NetworkUnixSocketPermissionsToml,
-) -> ProxyNetworkUnixSocketPermissions {
-    ProxyNetworkUnixSocketPermissions {
-        entries: unix_sockets
-            .entries
-            .iter()
-            .map(|(path, permission)| {
-                let permission = match permission {
-                    NetworkUnixSocketPermissionToml::Allow => {
-                        ProxyNetworkUnixSocketPermission::Allow
-                    }
-                    NetworkUnixSocketPermissionToml::None => ProxyNetworkUnixSocketPermission::None,
-                };
-                (path.clone(), permission)
-            })
-            .collect(),
     }
 }
 
