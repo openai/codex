@@ -130,7 +130,7 @@ impl ConfigApi {
             .unwrap_or_default()
     }
 
-    async fn load_latest_config(
+    pub(crate) async fn load_latest_config(
         &self,
         fallback_cwd: Option<PathBuf>,
     ) -> Result<Config, JSONRPCErrorError> {

@@ -1012,6 +1012,11 @@ Order of messages:
 
 `turnId` is best-effort. When the elicitation is correlated with an active turn, the request includes that turn id; otherwise it is `null`.
 
+For MCP tool approval elicitations, form request `meta` includes
+`codex_approval_kind: "mcp_tool_call"` and may include `persist: "session"`,
+`persist: "always"`, or `persist: ["session", "always"]` to advertise whether
+the client can offer session-scoped and/or persistent approval choices.
+
 ### Permission requests
 
 The built-in `request_permissions` tool sends an `item/permissions/requestApproval` JSON-RPC request to the client with the requested permission profile. This v2 payload mirrors the standalone tool's narrower permission shape, so it can request network access and additional filesystem access but does not include the broader `macos` branch used by command-execution `additionalPermissions`.

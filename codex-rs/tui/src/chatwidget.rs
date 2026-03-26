@@ -9640,6 +9640,7 @@ fn extract_first_bold(s: &str) -> Option<String> {
 fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {
     match event_name {
         codex_protocol::protocol::HookEventName::PreToolUse => "PreToolUse",
+        codex_protocol::protocol::HookEventName::PostToolUse => "PostToolUse",
         codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
         codex_protocol::protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
         codex_protocol::protocol::HookEventName::Stop => "Stop",

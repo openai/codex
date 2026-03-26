@@ -12,6 +12,16 @@ Codex can connect to MCP servers configured in `~/.codex/config.toml`. See the c
 
 - https://developers.openai.com/codex/config-reference
 
+## MCP tool approvals
+
+Codex stores per-tool approval overrides for custom MCP servers under
+`mcp_servers` in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.docs.tools.search]
+approval_mode = "approve"
+```
+
 ## Apps (Connectors)
 
 Use `$` in the composer to insert a ChatGPT connector; the popover lists accessible

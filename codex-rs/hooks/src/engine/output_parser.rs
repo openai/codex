@@ -20,6 +20,16 @@ pub(crate) struct PreToolUseOutput {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct PostToolUseOutput {
+    pub universal: UniversalOutput,
+    pub should_block: bool,
+    pub reason: Option<String>,
+    pub invalid_block_reason: Option<String>,
+    pub additional_context: Option<String>,
+    pub invalid_reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct UserPromptSubmitOutput {
     pub universal: UniversalOutput,
     pub should_block: bool,
@@ -38,6 +48,7 @@ pub(crate) struct StopOutput {
 
 use crate::schema::BlockDecisionWire;
 use crate::schema::HookUniversalOutputWire;
+use crate::schema::PostToolUseCommandOutputWire;
 use crate::schema::PreToolUseCommandOutputWire;
 use crate::schema::PreToolUseDecisionWire;
 use crate::schema::PreToolUsePermissionDecisionWire;
@@ -100,6 +111,40 @@ pub(crate) fn parse_pre_tool_use(stdout: &str) -> Option<PreToolUseOutput> {
     Some(PreToolUseOutput {
         universal,
         block_reason,
+        invalid_reason,
+    })
+}
+
+pub(crate) fn parse_post_tool_use(stdout: &str) -> Option<PostToolUseOutput> {
+    let wire: PostToolUseCommandOutputWire = parse_json(stdout)?;
+    let universal = UniversalOutput::from(wire.universal);
+    let invalid_reason = unsupported_post_tool_use_universal(&universal).or_else(|| {
+        wire.hook_specific_output
+            .as_ref()
+            .and_then(unsupported_post_tool_use_hook_specific_output)
+    });
+    let should_block = matches!(wire.decision, Some(BlockDecisionWire::Block));
+    let invalid_block_reason = if should_block
+        && match wire.reason.as_deref() {
+            Some(reason) => reason.trim().is_empty(),
+            None => true,
+        } {
+        Some(invalid_block_message("PostToolUse"))
+    } else if !should_block && universal.continue_processing && wire.reason.is_some() {
+        Some("PostToolUse hook returned reason without decision".to_string())
+    } else {
+        None
+    };
+    let additional_context = wire
+        .hook_specific_output
+        .and_then(|output| output.additional_context);
+
+    Some(PostToolUseOutput {
+        universal,
+        should_block: should_block && invalid_reason.is_none() && invalid_block_reason.is_none(),
+        reason: wire.reason,
+        invalid_block_reason,
+        additional_context,
         invalid_reason,
     })
 }
@@ -185,6 +230,24 @@ fn unsupported_pre_tool_use_universal(universal: &UniversalOutput) -> Option<Str
         Some("PreToolUse hook returned unsupported stopReason".to_string())
     } else if universal.suppress_output {
         Some("PreToolUse hook returned unsupported suppressOutput".to_string())
+    } else {
+        None
+    }
+}
+
+fn unsupported_post_tool_use_universal(universal: &UniversalOutput) -> Option<String> {
+    if universal.suppress_output {
+        Some("PostToolUse hook returned unsupported suppressOutput".to_string())
+    } else {
+        None
+    }
+}
+
+fn unsupported_post_tool_use_hook_specific_output(
+    output: &crate::schema::PostToolUseHookSpecificOutputWire,
+) -> Option<String> {
+    if output.updated_mcp_tool_output.is_some() {
+        Some("PostToolUse hook returned unsupported updatedMCPToolOutput".to_string())
     } else {
         None
     }

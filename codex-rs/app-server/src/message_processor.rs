@@ -20,6 +20,7 @@ use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::RequestContext;
 use crate::transport::AppServerTransport;
 use async_trait::async_trait;
+use codex_app_server_protocol::AppListUpdatedNotification;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
@@ -53,6 +54,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
+use codex_chatgpt::connectors;
 use codex_core::AnalyticsEventsClient;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
@@ -880,13 +882,87 @@ impl MessageProcessor {
         request_id: ConnectionRequestId,
         params: ExperimentalFeatureEnablementSetParams,
     ) {
-        self.handle_config_mutation_result(
-            request_id,
-            self.config_api
-                .set_experimental_feature_enablement(params)
-                .await,
-        )
-        .await;
+        let should_refresh_apps_list = params.enablement.get("apps").copied() == Some(true);
+        match self
+            .config_api
+            .set_experimental_feature_enablement(params)
+            .await
+        {
+            Ok(response) => {
+                self.codex_message_processor.clear_plugin_related_caches();
+                self.codex_message_processor
+                    .maybe_start_plugin_startup_tasks_for_latest_config()
+                    .await;
+                self.outgoing.send_response(request_id, response).await;
+                if should_refresh_apps_list {
+                    self.refresh_apps_list_after_experimental_feature_enablement_set()
+                        .await;
+                }
+            }
+            Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn refresh_apps_list_after_experimental_feature_enablement_set(&self) {
+        let config = match self
+            .config_api
+            .load_latest_config(/*fallback_cwd*/ None)
+            .await
+        {
+            Ok(config) => config,
+            Err(error) => {
+                tracing::warn!(
+                    "failed to load config for apps list refresh after experimental feature enablement: {}",
+                    error.message
+                );
+                return;
+            }
+        };
+        if !config.features.apps_enabled(Some(&self.auth_manager)).await {
+            return;
+        }
+
+        let outgoing = Arc::clone(&self.outgoing);
+        tokio::spawn(async move {
+            let (all_connectors_result, accessible_connectors_result) = tokio::join!(
+                connectors::list_all_connectors_with_options(&config, /*force_refetch*/ true),
+                connectors::list_accessible_connectors_from_mcp_tools_with_options(
+                    &config, /*force_refetch*/ true,
+                ),
+            );
+            let all_connectors = match all_connectors_result {
+                Ok(connectors) => connectors,
+                Err(err) => {
+                    tracing::warn!(
+                        "failed to force-refresh directory apps after experimental feature enablement: {err:#}"
+                    );
+                    return;
+                }
+            };
+            let accessible_connectors = match accessible_connectors_result {
+                Ok(connectors) => connectors,
+                Err(err) => {
+                    tracing::warn!(
+                        "failed to force-refresh accessible apps after experimental feature enablement: {err:#}"
+                    );
+                    return;
+                }
+            };
+
+            let data = connectors::with_app_enabled_state(
+                connectors::merge_connectors_with_accessible(
+                    all_connectors,
+                    accessible_connectors,
+                    /*all_connectors_loaded*/ true,
+                ),
+                &config,
+            );
+            outgoing
+                .send_server_notification(ServerNotification::AppListUpdated(
+                    AppListUpdatedNotification { data },
+                ))
+                .await;
+        });
     }
 
     async fn handle_config_mutation_result<T: serde::Serialize>(

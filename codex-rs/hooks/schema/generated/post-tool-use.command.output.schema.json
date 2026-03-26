@@ -18,7 +18,7 @@
       ],
       "type": "string"
     },
-    "UserPromptSubmitHookSpecificOutputWire": {
+    "PostToolUseHookSpecificOutputWire": {
       "additionalProperties": false,
       "properties": {
         "additionalContext": {
@@ -27,6 +27,9 @@
         },
         "hookEventName": {
           "$ref": "#/definitions/HookEventNameWire"
+        },
+        "updatedMCPToolOutput": {
+          "default": null
         }
       },
       "required": [
@@ -51,7 +54,7 @@
     "hookSpecificOutput": {
       "allOf": [
         {
-          "$ref": "#/definitions/UserPromptSubmitHookSpecificOutputWire"
+          "$ref": "#/definitions/PostToolUseHookSpecificOutputWire"
         }
       ],
       "default": null
@@ -73,6 +76,6 @@
       "type": "string"
     }
   },
-  "title": "user-prompt-submit.command.output",
+  "title": "post-tool-use.command.output",
   "type": "object"
 }

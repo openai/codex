@@ -179,9 +179,15 @@ trust_level = "trusted"
         }
     };
     let output_text = String::from_utf8_lossy(&output);
-    let interrupted_startup = exit_code == 1 && output_text.trim() == "^C";
+    let interrupt_only_output = {
+        let trimmed_output = output_text.trim();
+        !trimmed_output.is_empty()
+            && trimmed_output
+                .chars()
+                .all(|character| character == '^' || character == 'C' || character.is_whitespace())
+    };
     anyhow::ensure!(
-        exit_code == 0 || exit_code == 130 || interrupted_startup,
+        exit_code == 0 || exit_code == 130 || (exit_code == 1 && interrupt_only_output),
         "unexpected exit code from codex resume: {exit_code}; output: {output_text}",
     );
 
