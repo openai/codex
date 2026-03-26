@@ -6454,7 +6454,9 @@ impl ChatWidget {
                 agents_states,
             }),
             ThreadItem::EnteredReviewMode { review, .. } => {
-                self.enter_review_mode_with_hint(review, from_replay);
+                if !from_replay {
+                    self.enter_review_mode_with_hint(review, /*from_replay*/ false);
+                }
             }
             _ => {}
         }
