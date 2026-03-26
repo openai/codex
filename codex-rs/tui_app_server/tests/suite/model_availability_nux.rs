@@ -10,7 +10,7 @@ use tokio::time::sleep;
 use tokio::time::timeout;
 
 #[tokio::test]
-async fn resume_startup_does_not_consume_model_availability_nux_count() -> Result<()> {
+async fn resume_startup_ignores_deprecated_tui_app_server_disable_flag() -> Result<()> {
     // run_codex_cli() does not work on Windows due to PTY limitations.
     if cfg!(windows) {
         return Ok(());
@@ -112,7 +112,7 @@ trust_level = "trusted"
         "resume".to_string(),
         "--last".to_string(),
         "--no-alt-screen".to_string(),
-        "--enable".to_string(),
+        "--disable".to_string(),
         "tui_app_server".to_string(),
         "-C".to_string(),
         repo_root.display().to_string(),

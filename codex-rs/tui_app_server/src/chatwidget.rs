@@ -246,7 +246,7 @@ const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
 const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
 const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
-const APP_SERVER_TUI_STUB_MESSAGE: &str = "Not available in app-server TUI yet.";
+const TUI_STUB_MESSAGE: &str = "Not available in TUI yet.";
 
 /// Choose the keybinding used to edit the most-recently queued message.
 ///
@@ -6097,7 +6097,7 @@ impl ChatWidget {
             | ServerRequest::ApplyPatchApproval { .. }
             | ServerRequest::ExecCommandApproval { .. } => {
                 if replay_kind.is_none() {
-                    self.add_error_message(APP_SERVER_TUI_STUB_MESSAGE.to_string());
+                    self.add_error_message(TUI_STUB_MESSAGE.to_string());
                 }
             }
         }
@@ -6766,9 +6766,7 @@ impl ChatWidget {
             EventMsg::GetHistoryEntryResponse(ev) => self.handle_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListCustomPromptsResponse(_) => {
-                tracing::warn!(
-                    "ignoring unsupported custom prompt list response in app-server TUI"
-                );
+                tracing::warn!("ignoring unsupported custom prompt list response in TUI");
             }
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
             EventMsg::SkillsUpdateAvailable => {
@@ -9681,8 +9679,8 @@ impl ChatWidget {
     }
 
     fn add_app_server_stub_message(&mut self, feature: &str) {
-        warn!(feature, "stubbed unsupported app-server TUI feature");
-        self.add_error_message(format!("{feature}: {APP_SERVER_TUI_STUB_MESSAGE}"));
+        warn!(feature, "stubbed unsupported TUI feature");
+        self.add_error_message(format!("{feature}: {TUI_STUB_MESSAGE}"));
     }
 
     fn rename_confirmation_cell(name: &str, thread_id: Option<ThreadId>) -> PlainHistoryCell {

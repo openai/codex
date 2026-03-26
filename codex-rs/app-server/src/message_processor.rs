@@ -88,7 +88,7 @@ use toml::Value as TomlValue;
 use tracing::Instrument;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
-const TUI_APP_SERVER_CLIENT_NAME: &str = "codex-tui";
+const TUI_CLIENT_NAME: &str = "codex-tui";
 
 #[derive(Clone)]
 struct ExternalAuthRefreshBridge {
@@ -569,9 +569,9 @@ impl MessageProcessor {
                 } = params.client_info;
                 session.app_server_client_name = Some(name.clone());
                 session.client_version = Some(version.clone());
-                let originator = if name == TUI_APP_SERVER_CLIENT_NAME {
-                    // TODO: Remove this temporary workaround once app-server clients no longer
-                    // need to retain the legacy TUI `codex_cli_rs` originator behavior.
+                let originator = if name == TUI_CLIENT_NAME {
+                    // TODO: Remove this temporary workaround once the TUI no longer
+                    // needs to retain the `codex_cli_rs` originator behavior.
                     DEFAULT_ORIGINATOR.to_string()
                 } else {
                     name.clone()

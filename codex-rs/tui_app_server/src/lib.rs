@@ -548,7 +548,7 @@ async fn lookup_session_target_with_app_server(
                 warn!(
                     session = id_or_name,
                     %err,
-                    "Failed to parse session id during app-server TUI lookup"
+                    "Failed to parse session id during TUI lookup"
                 );
                 return Ok(None);
             }
@@ -562,7 +562,7 @@ async fn lookup_session_target_with_app_server(
                 warn!(
                     session = id_or_name,
                     %err,
-                    "thread/read failed during app-server TUI session lookup"
+                    "thread/read failed during TUI session lookup"
                 );
                 Ok(None)
             }
@@ -576,12 +576,14 @@ async fn lookup_latest_session_target_with_app_server(
     app_server: &mut AppServerSession,
     config: &Config,
     cwd_filter: Option<&Path>,
+    include_non_interactive: bool,
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
     let response = app_server
         .thread_list(latest_session_lookup_params(
             app_server.is_remote(),
             config,
             cwd_filter,
+            include_non_interactive,
         ))
         .await?;
     Ok(response
@@ -594,6 +596,7 @@ fn latest_session_lookup_params(
     is_remote: bool,
     config: &Config,
     cwd_filter: Option<&Path>,
+    include_non_interactive: bool,
 ) -> ThreadListParams {
     ThreadListParams {
         cursor: None,
@@ -604,7 +607,8 @@ fn latest_session_lookup_params(
         } else {
             Some(vec![config.model_provider_id.clone()])
         },
-        source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
+        source_kinds: (!include_non_interactive)
+            .then_some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
         archived: Some(false),
         cwd: if is_remote {
             None
@@ -1161,6 +1165,7 @@ async fn run_ratatui_app(
             };
             match lookup_latest_session_target_with_app_server(
                 app_server, &config, /*cwd_filter*/ None,
+                /*include_non_interactive*/ false,
             )
             .await?
             {
@@ -1215,7 +1220,14 @@ async fn run_ratatui_app(
         let Some(app_server) = session_lookup_app_server.as_mut() else {
             unreachable!("session lookup app server should be initialized for --resume --last");
         };
-        match lookup_latest_session_target_with_app_server(app_server, &config, filter_cwd).await? {
+        match lookup_latest_session_target_with_app_server(
+            app_server,
+            &config,
+            filter_cwd,
+            cli.resume_include_non_interactive,
+        )
+        .await?
+        {
             Some(target_session) => resume_picker::SessionSelection::Resume(target_session),
             None => resume_picker::SessionSelection::StartFresh,
         }
@@ -1227,6 +1239,7 @@ async fn run_ratatui_app(
             &mut tui,
             &config,
             cli.resume_show_all,
+            cli.resume_include_non_interactive,
             app_server,
         )
         .await?
@@ -1798,7 +1811,12 @@ mod tests {
         let config = build_config(&temp_dir).await?;
         let cwd = temp_dir.path().join("project");
 
-        let params = latest_session_lookup_params(false, &config, Some(cwd.as_path()));
+        let params = latest_session_lookup_params(
+            false,
+            &config,
+            Some(cwd.as_path()),
+            /*include_non_interactive*/ false,
+        );
 
         assert_eq!(params.model_providers, Some(vec![config.model_provider_id]));
         assert_eq!(params.cwd, Some(cwd.to_string_lossy().to_string()));
@@ -1812,7 +1830,12 @@ mod tests {
         let config = build_config(&temp_dir).await?;
         let cwd = temp_dir.path().join("project");
 
-        let params = latest_session_lookup_params(true, &config, Some(cwd.as_path()));
+        let params = latest_session_lookup_params(
+            true,
+            &config,
+            Some(cwd.as_path()),
+            /*include_non_interactive*/ false,
+        );
 
         assert_eq!(params.model_providers, None);
         assert_eq!(params.cwd, None);

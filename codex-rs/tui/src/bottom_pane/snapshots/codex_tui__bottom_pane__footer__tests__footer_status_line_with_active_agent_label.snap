@@ -1,6 +1,0 @@
----
-source: tui/src/bottom_pane/footer.rs
-assertion_line: 1210
-expression: terminal.backend()
----
-"  Status line content · Robie [explorer]                                        "

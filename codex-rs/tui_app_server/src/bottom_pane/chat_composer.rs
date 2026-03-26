@@ -93,7 +93,7 @@
 //! machine and treats the key stream as normal typing. When toggling from enabled → disabled, the
 //! composer flushes/clears any in-flight burst state so it cannot leak into subsequent input.
 //!
-//! For the detailed burst state machine, see `codex-rs/tui/src/bottom_pane/paste_burst.rs`.
+//! For the detailed burst state machine, see `codex-rs/tui_app_server/src/bottom_pane/paste_burst.rs`.
 //! For a narrative overview of the combined state machine, see `docs/tui-chat-composer.md`.
 //!
 //! # PasteBurst Integration Points
@@ -2339,10 +2339,8 @@ impl ChatComposer {
                     .unwrap_or(false);
                 if !is_builtin && !is_known_prompt {
                     let message = if is_custom_prompt_command && self.custom_prompts.is_empty() {
-                        tracing::warn!(
-                            "custom prompt listing/picker is not available in app-server TUI yet"
-                        );
-                        "Not available in app-server TUI yet.".to_string()
+                        tracing::warn!("custom prompt listing/picker is not available in TUI yet");
+                        "Not available in TUI yet.".to_string()
                     } else {
                         format!(
                             r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
@@ -8900,7 +8898,7 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(message.contains("Not available in app-server TUI yet."));
+        assert!(message.contains("Not available in TUI yet."));
     }
 
     #[test]

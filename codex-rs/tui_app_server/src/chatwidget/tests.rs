@@ -75,6 +75,7 @@ use codex_core::config_loader::AppsRequirementsToml;
 use codex_core::config_loader::ConfigLayerStack;
 use codex_core::config_loader::ConfigRequirements;
 use codex_core::config_loader::ConfigRequirementsToml;
+use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::RequirementSource;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
@@ -192,6 +193,12 @@ async fn test_config() -> Config {
     let codex_home = std::env::temp_dir();
     ConfigBuilder::default()
         .codex_home(codex_home.clone())
+        .loader_overrides(LoaderOverrides {
+            managed_config_path: Some(codex_home.join("chatwidget-test-managed-config.toml")),
+            #[cfg(target_os = "macos")]
+            managed_preferences_base64: Some(String::new()),
+            macos_managed_config_requirements_base64: Some(String::new()),
+        })
         .build()
         .await
         .expect("config")
@@ -7293,7 +7300,7 @@ async fn slash_memory_drop_reports_stubbed_feature() {
     match event {
         AppEvent::InsertHistoryCell(cell) => {
             let rendered = lines_to_single_string(&cell.display_lines(80));
-            assert!(rendered.contains("Memory maintenance: Not available in app-server TUI yet."));
+            assert!(rendered.contains("Memory maintenance: Not available in TUI yet."));
         }
         other => panic!("expected InsertHistoryCell error, got {other:?}"),
     }
@@ -7324,7 +7331,7 @@ async fn slash_memory_update_reports_stubbed_feature() {
     match event {
         AppEvent::InsertHistoryCell(cell) => {
             let rendered = lines_to_single_string(&cell.display_lines(80));
-            assert!(rendered.contains("Memory maintenance: Not available in app-server TUI yet."));
+            assert!(rendered.contains("Memory maintenance: Not available in TUI yet."));
         }
         other => panic!("expected InsertHistoryCell error, got {other:?}"),
     }

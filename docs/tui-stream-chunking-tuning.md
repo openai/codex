@@ -6,8 +6,8 @@ changing the underlying policy shape.
 ## Scope
 
 Use this guide when adjusting queue-pressure thresholds and hysteresis windows in
-`codex-rs/tui/src/streaming/chunking.rs`, and baseline commit cadence in
-`codex-rs/tui/src/app.rs`.
+`codex-rs/tui_app_server/src/streaming/chunking.rs`, and baseline commit cadence in
+`codex-rs/tui_app_server/src/app.rs`.
 
 This guide is about tuning behavior, not redesigning the policy.
 

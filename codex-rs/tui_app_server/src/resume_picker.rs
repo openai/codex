@@ -167,6 +167,7 @@ pub async fn run_resume_picker_with_app_server(
     tui: &mut Tui,
     config: &Config,
     show_all: bool,
+    include_non_interactive: bool,
     app_server: AppServerSession,
 ) -> Result<SessionSelection> {
     let (bg_tx, bg_rx) = mpsc::unbounded_channel();
@@ -177,7 +178,7 @@ pub async fn run_resume_picker_with_app_server(
         show_all,
         SessionPickerAction::Resume,
         is_remote,
-        spawn_app_server_page_loader(app_server, bg_tx),
+        spawn_app_server_page_loader(app_server, include_non_interactive, bg_tx),
         bg_rx,
     )
     .await
@@ -197,7 +198,7 @@ pub async fn run_fork_picker_with_app_server(
         show_all,
         SessionPickerAction::Fork,
         is_remote,
-        spawn_app_server_page_loader(app_server, bg_tx),
+        spawn_app_server_page_loader(app_server, /*include_non_interactive*/ false, bg_tx),
         bg_rx,
     )
     .await
@@ -340,6 +341,7 @@ fn spawn_rollout_page_loader(
 
 fn spawn_app_server_page_loader(
     app_server: AppServerSession,
+    include_non_interactive: bool,
     bg_tx: mpsc::UnboundedSender<BackgroundEvent>,
 ) -> PageLoader {
     let (request_tx, mut request_rx) = mpsc::unbounded_channel::<PageLoadRequest>();
@@ -357,6 +359,7 @@ fn spawn_app_server_page_loader(
                 cursor,
                 request.provider_filter,
                 request.sort_key,
+                include_non_interactive,
             )
             .await;
             let _ = bg_tx.send(BackgroundEvent::PageLoaded {
@@ -466,9 +469,15 @@ async fn load_app_server_page(
     cursor: Option<String>,
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
+    include_non_interactive: bool,
 ) -> std::io::Result<PickerPage> {
     let response = app_server
-        .thread_list(thread_list_params(cursor, provider_filter, sort_key))
+        .thread_list(thread_list_params(
+            cursor,
+            provider_filter,
+            sort_key,
+            include_non_interactive,
+        ))
         .await
         .map_err(std::io::Error::other)?;
     let num_scanned_files = response.data.len();
@@ -1094,6 +1103,7 @@ fn thread_list_params(
     cursor: Option<String>,
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
+    include_non_interactive: bool,
 ) -> ThreadListParams {
     ThreadListParams {
         cursor,
@@ -1106,7 +1116,8 @@ fn thread_list_params(
             ProviderFilter::Any => None,
             ProviderFilter::MatchDefault(default_provider) => Some(vec![default_provider]),
         },
-        source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
+        source_kinds: (!include_non_interactive)
+            .then_some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
         archived: Some(false),
         cwd: None,
         search_term: None,
@@ -1828,6 +1839,7 @@ mod tests {
             Some(String::from("cursor-1")),
             ProviderFilter::Any,
             ThreadSortKey::UpdatedAt,
+            /*include_non_interactive*/ false,
         );
 
         assert_eq!(params.cursor, Some(String::from("cursor-1")));
@@ -1836,6 +1848,20 @@ mod tests {
             params.source_kinds,
             Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode])
         );
+    }
+
+    #[test]
+    fn remote_thread_list_params_can_include_non_interactive_sources() {
+        let params = thread_list_params(
+            Some(String::from("cursor-1")),
+            ProviderFilter::Any,
+            ThreadSortKey::UpdatedAt,
+            /*include_non_interactive*/ true,
+        );
+
+        assert_eq!(params.cursor, Some(String::from("cursor-1")));
+        assert_eq!(params.model_providers, None);
+        assert_eq!(params.source_kinds, None);
     }
 
     #[test]

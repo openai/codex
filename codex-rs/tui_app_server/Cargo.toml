@@ -10,6 +10,10 @@ name = "codex-tui-app-server"
 path = "src/main.rs"
 
 [[bin]]
+name = "codex-tui"
+path = "src/bin/codex-tui.rs"
+
+[[bin]]
 name = "md-events-app-server"
 path = "src/bin/md-events.rs"
 

@@ -1,9 +1,0 @@
----
-source: tui/src/chatwidget/tests.rs
-expression: combined
----
-• Running PreToolUse hook: warming the shell
-
-PreToolUse hook (completed)
-  warning: Heads up from the hook
-  hook context: Remember the startup checklist.
