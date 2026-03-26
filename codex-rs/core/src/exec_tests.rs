@@ -595,16 +595,18 @@ fn windows_restricted_token_supports_full_read_split_write_read_carveouts() {
         },
     ]);
 
-    let mut expected_deny_write_paths = Vec::new();
     #[cfg(windows)]
-    expected_deny_write_paths.push(
+    let expected_deny_write_paths = vec![
         codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(cwd.join(".codex"))
             .expect("absolute .codex"),
-    );
-    expected_deny_write_paths.push(
         codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
             .expect("absolute docs"),
-    );
+    ];
+    #[cfg(not(windows))]
+    let expected_deny_write_paths = vec![
+        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&docs)
+            .expect("absolute docs"),
+    ];
 
     assert_eq!(
         resolve_windows_restricted_token_filesystem_overlay(
