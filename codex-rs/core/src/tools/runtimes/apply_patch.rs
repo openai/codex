@@ -140,7 +140,7 @@ impl ApplyPatchRuntime {
         Self::cargo_bin_env_keys(name)
             .into_iter()
             .filter_map(|key| std::env::var_os(key).map(PathBuf::from))
-            .find_map(|path| Self::resolve_test_binary_path(path))
+            .find_map(Self::resolve_test_binary_path)
     }
 
     #[cfg(not(target_os = "windows"))]
