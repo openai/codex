@@ -698,9 +698,8 @@ async fn host_resolves_to_non_public_ip(host: &str, port: u16) -> bool {
         return is_non_public_ip(ip);
     }
 
-    // If DNS lookup fails, fail closed rather than allowing the request. The eventual connect path
-    // performs its own resolution, so a transient pre-check failure cannot be treated as proof that
-    // the destination is public.
+    // Block the request if this DNS lookup fails. We resolve the hostname again when we connect,
+    // so a failed check here does not prove the destination is public.
     let addrs = match timeout(DNS_LOOKUP_TIMEOUT, lookup_host((host, port))).await {
         Ok(Ok(addrs)) => addrs,
         Ok(Err(err)) => {
