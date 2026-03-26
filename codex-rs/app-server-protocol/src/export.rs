@@ -1381,15 +1381,6 @@ where
 }
 
 fn enforce_numbered_definition_collision_overrides(schema_name: &str, schema: &mut Value) {
-    if schema_name == "ClientResponse" {
-        // `ClientResponse` unions many concrete response payloads into one
-        // schema, so schemars can legitimately emit numbered local helper
-        // definitions like `SessionSource2` alongside `SessionSource`.
-        // Those definitions remain valid and stable for JSON/TS export; the
-        // collision guard is mainly to catch accidental flattening issues in
-        // simpler top-level schemas.
-        return;
-    }
     for defs_key in ["definitions", "$defs"] {
         let Some(defs) = schema.get(defs_key).and_then(Value::as_object) else {
             continue;
@@ -1541,6 +1532,9 @@ fn detect_numbered_definition_collisions(
     for generated_name in defs.keys() {
         let base_name = generated_name.trim_end_matches(|c: char| c.is_ascii_digit());
         if base_name == generated_name || !defs.contains_key(base_name) {
+            continue;
+        }
+        if defs.get(generated_name) != defs.get(base_name) {
             continue;
         }
 
@@ -2496,6 +2490,47 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn numbered_definition_collision_guard_allows_distinct_generated_helpers() {
+        let defs = serde_json::json!({
+            "SessionSource": {
+                "type": "string",
+                "enum": ["exec"]
+            },
+            "SessionSource2": {
+                "type": "object",
+                "properties": {
+                    "custom": {
+                        "type": "string"
+                    }
+                }
+            }
+        });
+        let defs = defs.as_object().expect("defs should be an object");
+
+        detect_numbered_definition_collisions("ClientResponse", "definitions", defs);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Numbered definition naming collision detected: schema=ClientResponse|container=definitions|generated=SessionSource2|base=SessionSource"
+    )]
+    fn numbered_definition_collision_guard_rejects_duplicate_generated_helpers() {
+        let defs = serde_json::json!({
+            "SessionSource": {
+                "type": "string",
+                "enum": ["exec"]
+            },
+            "SessionSource2": {
+                "type": "string",
+                "enum": ["exec"]
+            }
+        });
+        let defs = defs.as_object().expect("defs should be an object");
+
+        detect_numbered_definition_collisions("ClientResponse", "definitions", defs);
     }
 
     #[test]
