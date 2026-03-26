@@ -311,6 +311,7 @@ use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
 use crate::exec_cell::new_active_exec_command;
+use crate::exec_command::split_command_string;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
@@ -5809,7 +5810,7 @@ impl ChatWidget {
                         call_id: id,
                         process_id,
                         turn_id: turn_id.clone(),
-                        command: vec![command],
+                        command: split_command_string(&command),
                         cwd,
                         parsed_cmd: command_actions
                             .into_iter()
@@ -5824,7 +5825,7 @@ impl ChatWidget {
                         call_id: id,
                         process_id,
                         turn_id: turn_id.clone(),
-                        command: vec![command],
+                        command: split_command_string(&command),
                         cwd,
                         parsed_cmd: command_actions
                             .into_iter()
@@ -6391,7 +6392,7 @@ impl ChatWidget {
                     call_id: id,
                     process_id,
                     turn_id: notification.turn_id,
-                    command: vec![command],
+                    command: split_command_string(&command),
                     cwd,
                     parsed_cmd: command_actions
                         .into_iter()

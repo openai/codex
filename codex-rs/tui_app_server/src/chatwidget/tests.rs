@@ -26,6 +26,9 @@ use codex_app_server_protocol::CollabAgentState as AppServerCollabAgentState;
 use codex_app_server_protocol::CollabAgentStatus as AppServerCollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool as AppServerCollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus as AppServerCollabAgentToolCallStatus;
+use codex_app_server_protocol::CommandAction as AppServerCommandAction;
+use codex_app_server_protocol::CommandExecutionSource as AppServerCommandExecutionSource;
+use codex_app_server_protocol::CommandExecutionStatus as AppServerCommandExecutionStatus;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::GuardianApprovalReview;
@@ -4647,6 +4650,69 @@ async fn live_app_server_file_change_item_started_preserves_changes() {
     assert!(
         transcript.contains("Added foo.txt") || transcript.contains("Edited foo.txt"),
         "expected patch summary to include foo.txt, got: {transcript}"
+    );
+}
+
+#[tokio::test]
+async fn live_app_server_command_execution_strips_shell_wrapper() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let script = r#"python3 -c 'print("Hello, world!")'"#;
+    let command =
+        shlex::try_join(["/bin/zsh", "-lc", script]).expect("round-trippable shell wrapper");
+
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::CommandExecution {
+                id: "cmd-1".to_string(),
+                command: command.clone(),
+                cwd: PathBuf::from("/tmp"),
+                process_id: None,
+                source: AppServerCommandExecutionSource::UserShell,
+                status: AppServerCommandExecutionStatus::InProgress,
+                command_actions: vec![AppServerCommandAction::Unknown {
+                    command: script.to_string(),
+                }],
+                aggregated_output: None,
+                exit_code: None,
+                duration_ms: None,
+            },
+        }),
+        None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::CommandExecution {
+                id: "cmd-1".to_string(),
+                command,
+                cwd: PathBuf::from("/tmp"),
+                process_id: None,
+                source: AppServerCommandExecutionSource::UserShell,
+                status: AppServerCommandExecutionStatus::Completed,
+                command_actions: vec![AppServerCommandAction::Unknown {
+                    command: script.to_string(),
+                }],
+                aggregated_output: Some("Hello, world!\n".to_string()),
+                exit_code: Some(0),
+                duration_ms: Some(5),
+            },
+        }),
+        None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected one completed command history cell"
+    );
+    let blob = lines_to_single_string(cells.first().expect("command cell"));
+    assert_snapshot!(
+        "live_app_server_command_execution_strips_shell_wrapper",
+        blob
     );
 }
 

@@ -22,6 +22,7 @@ use crate::chatwidget::ReplayKind;
 use crate::chatwidget::ThreadInputState;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
+use crate::exec_command::split_command_string;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::external_editor;
 use crate::file_search::FileSearchManager;
@@ -1701,7 +1702,11 @@ impl App {
                         .approval_id
                         .clone()
                         .unwrap_or_else(|| params.item_id.clone()),
-                    command: params.command.clone().into_iter().collect(),
+                    command: params
+                        .command
+                        .as_deref()
+                        .map(split_command_string)
+                        .unwrap_or_default(),
                     reason: params.reason.clone(),
                     available_decisions: params
                         .available_decisions
@@ -7550,6 +7555,36 @@ guardian_approval = true
                     },
                 },
                 codex_protocol::protocol::ReviewDecision::Abort,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn inactive_thread_exec_approval_splits_shell_wrapped_command() {
+        let app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let script = r#"python3 -c 'print("Hello, world!")'"#;
+        let mut request = exec_approval_request(thread_id, "turn-approval", "call-approval", None);
+        let ServerRequest::CommandExecutionRequestApproval { params, .. } = &mut request else {
+            panic!("expected exec approval request");
+        };
+        params.command = Some(
+            shlex::try_join(["/bin/zsh", "-lc", script]).expect("round-trippable shell wrapper"),
+        );
+
+        let Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Exec { command, .. })) = app
+            .interactive_request_for_thread_request(thread_id, &request)
+            .await
+        else {
+            panic!("expected exec approval request");
+        };
+
+        assert_eq!(
+            command,
+            vec![
+                "/bin/zsh".to_string(),
+                "-lc".to_string(),
+                script.to_string(),
             ]
         );
     }
