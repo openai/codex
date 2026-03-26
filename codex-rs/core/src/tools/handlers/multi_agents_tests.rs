@@ -577,6 +577,12 @@ async fn multi_agent_v2_list_agents_returns_completed_status_and_last_task_messa
         .map(|agent| agent.agent_name.as_str())
         .collect::<Vec<_>>();
     assert_eq!(agent_names, vec!["/root", "/root/worker"]);
+    let root_agent = result
+        .agents
+        .iter()
+        .find(|agent| agent.agent_name == "/root")
+        .expect("root agent should be listed");
+    assert_eq!(root_agent.last_task_message.as_deref(), Some("Main thread"));
     let worker = result
         .agents
         .iter()
@@ -733,6 +739,10 @@ async fn multi_agent_v2_list_agents_omits_closed_agents() {
 
     assert_eq!(result.agents.len(), 1);
     assert_eq!(result.agents[0].agent_name, "/root");
+    assert_eq!(
+        result.agents[0].last_task_message.as_deref(),
+        Some("Main thread")
+    );
 }
 
 #[tokio::test]
