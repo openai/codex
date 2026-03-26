@@ -650,12 +650,6 @@ impl AgentControl {
         let agent_path = current_agent_path
             .resolve(agent_reference)
             .map_err(CodexErr::UnsupportedOperation)?;
-        if agent_path.is_root() {
-            return Err(CodexErr::UnsupportedOperation(
-                "root is not a spawned agent".to_string(),
-            ));
-        }
-
         if let Some(thread_id) = self.state.agent_id_for_path(&agent_path) {
             return Ok(thread_id);
         }
