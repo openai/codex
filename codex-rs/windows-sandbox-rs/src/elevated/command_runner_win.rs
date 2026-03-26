@@ -31,6 +31,7 @@ use codex_windows_sandbox::create_workspace_write_token_with_caps_from;
 use codex_windows_sandbox::decode_bytes;
 use codex_windows_sandbox::encode_bytes;
 use codex_windows_sandbox::get_current_token_for_restriction;
+use codex_windows_sandbox::hide_current_user_profile_dir;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::parse_policy;
 use codex_windows_sandbox::read_frame;
@@ -39,6 +40,7 @@ use codex_windows_sandbox::spawn_process_with_pipes;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::write_frame;
 use codex_windows_sandbox::LaunchDesktop;
+use codex_windows_sandbox::ResizePayload;
 use std::ffi::c_void;
 use std::fs::File;
 use std::os::windows::io::FromRawHandle;
@@ -167,7 +169,15 @@ fn read_spawn_request(reader: &mut File) -> Result<SpawnRequest> {
 fn effective_cwd(req_cwd: &Path, log_dir: Option<&Path>) -> PathBuf {
     let use_junction = match read_acl_mutex::read_acl_mutex_exists() {
         Ok(exists) => exists,
-        Err(_) => true,
+        Err(err) => {
+            log_note(
+                &format!(
+                    "junction: failed to probe ACL mutex state: {err}; defaulting to junction cwd"
+                ),
+                log_dir,
+            );
+            true
+        }
     };
     if use_junction {
         cwd_junction::create_cwd_junction(req_cwd, log_dir).unwrap_or_else(|| req_cwd.to_path_buf())

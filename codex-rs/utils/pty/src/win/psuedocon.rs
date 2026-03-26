@@ -118,6 +118,8 @@ fn windows_build_number() -> Option<u32> {
 
 pub struct PsuedoCon {
     con: HPCON,
+    // CreatePseudoConsole borrows these pipe handles for the lifetime of the
+    // pseudoconsole, so we must keep owning them until ClosePseudoConsole.
     _input: FileDescriptor,
     _output: FileDescriptor,
 }

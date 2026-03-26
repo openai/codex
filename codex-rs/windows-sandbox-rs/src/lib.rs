@@ -55,6 +55,10 @@ mod elevated_impl;
 mod runner_pipe;
 
 #[cfg(target_os = "windows")]
+#[path = "elevated/runner_client.rs"]
+mod runner_client;
+
+#[cfg(target_os = "windows")]
 mod setup_error;
 
 #[cfg(target_os = "windows")]
@@ -124,6 +128,8 @@ pub use ipc_framed::Message;
 pub use ipc_framed::OutputPayload;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::OutputStream;
+#[cfg(target_os = "windows")]
+pub use ipc_framed::ResizePayload;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::SpawnReady;
 #[cfg(target_os = "windows")]
