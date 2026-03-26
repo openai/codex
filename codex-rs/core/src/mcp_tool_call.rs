@@ -268,32 +268,33 @@ pub(crate) async fn handle_mcp_tool_call(
         };
 
         let status = if result.is_ok() { "ok" } else { "error" };
-        let tags = mcp_call_metric_tags(
-            status,
-            &tool_name,
-            connector_id.as_deref(),
-            connector_name.as_deref(),
-        );
-        let tag_refs: Vec<(&str, &str)> = tags
-            .iter()
-            .map(|(key, value)| (*key, value.as_str()))
-            .collect();
+        let status_only_tags = [("status", status)];
+        let tags = call_duration.is_some().then(|| {
+            mcp_call_metric_tags(
+                status,
+                &tool_name,
+                connector_id.as_deref(),
+                connector_name.as_deref(),
+            )
+        });
+        let tag_refs: Vec<(&str, &str)> = tags.as_ref().map_or_else(Vec::new, |tags| {
+            tags.iter()
+                .map(|(key, value)| (*key, value.as_str()))
+                .collect()
+        });
+        let count_tags = if call_duration.is_some() {
+            tag_refs.as_slice()
+        } else {
+            status_only_tags.as_slice()
+        };
+        turn_context
+            .session_telemetry
+            .counter(MCP_CALL_COUNT_METRIC, /*inc*/ 1, count_tags);
         if let Some(duration) = call_duration {
-            turn_context.session_telemetry.counter(
-                MCP_CALL_COUNT_METRIC,
-                /*inc*/ 1,
-                &tag_refs,
-            );
             turn_context.session_telemetry.record_duration(
                 MCP_CALL_DURATION_METRIC,
                 duration,
                 &tag_refs,
-            );
-        } else {
-            turn_context.session_telemetry.counter(
-                MCP_CALL_COUNT_METRIC,
-                /*inc*/ 1,
-                &[("status", status)],
             );
         }
 
