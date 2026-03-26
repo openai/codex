@@ -812,30 +812,38 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         }
     }
 
-    // Protect the current workspace's `.codex` and `.agents` directories from tampering
-    // (write/delete) by using a workspace-specific capability SID. If a directory doesn't exist
-    // yet, skip it (it will be picked up on the next refresh).
-    match unsafe { protect_workspace_codex_dir(&payload.command_cwd, workspace_psid) } {
-        Ok(true) => {
-            let cwd_codex = payload.command_cwd.join(".codex");
-            log_line(
-                log,
-                &format!(
-                    "applied deny ACE to protect workspace .codex {}",
-                    cwd_codex.display()
-                ),
-            )?;
-        }
-        Ok(false) => {}
-        Err(err) => {
-            let cwd_codex = payload.command_cwd.join(".codex");
-            refresh_errors.push(format!("deny ACE failed on {}: {err}", cwd_codex.display()));
-            log_line(
-                log,
-                &format!("deny ACE failed on {}: {err}", cwd_codex.display()),
-            )?;
+    // Protect top-level `.codex` inside every writable root. Windows deny ACEs require an
+    // existing path, so reserve the directory when it has not been created yet.
+    for root in &payload.write_roots {
+        let deny_sid = if is_command_cwd_root(root, &canonical_command_cwd) {
+            workspace_psid
+        } else {
+            cap_psid
+        };
+        match unsafe { protect_workspace_codex_dir(root, deny_sid) } {
+            Ok(true) => {
+                let codex_dir = root.join(".codex");
+                log_line(
+                    log,
+                    &format!(
+                        "applied deny ACE to protect writable-root .codex {}",
+                        codex_dir.display()
+                    ),
+                )?;
+            }
+            Ok(false) => {}
+            Err(err) => {
+                let codex_dir = root.join(".codex");
+                refresh_errors.push(format!("deny ACE failed on {}: {err}", codex_dir.display()));
+                log_line(
+                    log,
+                    &format!("deny ACE failed on {}: {err}", codex_dir.display()),
+                )?;
+            }
         }
     }
+
+    // Protect the current workspace's `.agents` directory from tampering when it already exists.
     match unsafe { protect_workspace_agents_dir(&payload.command_cwd, workspace_psid) } {
         Ok(true) => {
             let cwd_agents = payload.command_cwd.join(".agents");

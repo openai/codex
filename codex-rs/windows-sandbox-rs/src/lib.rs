@@ -215,6 +215,11 @@ mod windows_impl {
 
     type PipeHandles = ((HANDLE, HANDLE), (HANDLE, HANDLE), (HANDLE, HANDLE));
 
+    fn is_reserved_codex_dir(path: &Path) -> bool {
+        path.file_name()
+            .is_some_and(|file_name| file_name == ".codex")
+    }
+
     fn should_apply_network_block(policy: &SandboxPolicy) -> bool {
         !policy.has_full_network_access()
     }
@@ -391,9 +396,24 @@ mod windows_impl {
                 }
             }
             for p in &deny {
-                if let Ok(added) = add_deny_write_ace(p, psid_generic) {
+                let deny_sid = if is_workspace_write
+                    && p.parent()
+                        .is_some_and(|parent| is_command_cwd_root(parent, &canonical_cwd))
+                {
+                    psid_workspace.unwrap_or(psid_generic)
+                } else {
+                    psid_generic
+                };
+                let deny_result = if is_reserved_codex_dir(p) {
+                    p.parent().map_or(Ok(false), |root| {
+                        protect_workspace_codex_dir(root, deny_sid)
+                    })
+                } else {
+                    add_deny_write_ace(p, deny_sid)
+                };
+                if let Ok(added) = deny_result {
                     if added && !persist_aces {
-                        guards.push((p.clone(), psid_generic));
+                        guards.push((p.clone(), deny_sid));
                     }
                 }
             }
@@ -578,7 +598,21 @@ mod windows_impl {
                 let _ = add_allow_ace(p, psid);
             }
             for p in &deny {
-                let _ = add_deny_write_ace(p, psid_generic);
+                let deny_sid = if p
+                    .parent()
+                    .is_some_and(|parent| is_command_cwd_root(parent, &canonical_cwd))
+                {
+                    psid_workspace
+                } else {
+                    psid_generic
+                };
+                if is_reserved_codex_dir(p) {
+                    if let Some(root) = p.parent() {
+                        let _ = protect_workspace_codex_dir(root, deny_sid);
+                    }
+                } else {
+                    let _ = add_deny_write_ace(p, deny_sid);
+                }
             }
             allow_null_device(psid_generic);
             allow_null_device(psid_workspace);
