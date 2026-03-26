@@ -28,10 +28,30 @@ use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::ReviewDecision;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxablePreference;
+#[cfg(not(target_os = "windows"))]
+use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
+#[cfg(not(target_os = "windows"))]
+use std::fs::File;
+#[cfg(not(target_os = "windows"))]
+use std::io::BufRead;
+#[cfg(not(target_os = "windows"))]
+use std::io::BufReader;
+#[cfg(not(target_os = "windows"))]
+use std::path::Path;
 use std::path::PathBuf;
+
+#[cfg(not(target_os = "windows"))]
+const APPLY_PATCH_SELF_EXEC_BIN_CANDIDATES: &[&str] = &[
+    "codex",
+    "codex-exec",
+    "codex-app-server",
+    "codex-mcp-server",
+    "codex-tui",
+    "codex-tui-app-server",
+];
 
 #[derive(Debug)]
 pub struct ApplyPatchRequest {
@@ -81,13 +101,101 @@ impl ApplyPatchRuntime {
         req: &ApplyPatchRequest,
         configured_codex_exe: Option<&PathBuf>,
     ) -> Result<SandboxCommand, ToolError> {
-        let exe = if let Some(path) = configured_codex_exe {
-            path.clone()
-        } else {
-            std::env::current_exe()
-                .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))?
-        };
+        let exe = Self::resolve_apply_patch_program(configured_codex_exe)?;
         Ok(Self::build_sandbox_command_with_program(req, exe))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn resolve_apply_patch_program(
+        configured_codex_exe: Option<&PathBuf>,
+    ) -> Result<PathBuf, ToolError> {
+        if let Some(path) =
+            configured_codex_exe.filter(|path| !Self::is_linux_sandbox_helper_path(path))
+        {
+            return Ok(path.clone());
+        }
+
+        if let Some(path) = Self::resolve_apply_patch_program_from_test_env() {
+            return Ok(path);
+        }
+
+        std::env::current_exe()
+            .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn is_linux_sandbox_helper_path(path: &Path) -> bool {
+        path.file_name().and_then(|name| name.to_str()) == Some(CODEX_LINUX_SANDBOX_ARG0)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn resolve_apply_patch_program_from_test_env() -> Option<PathBuf> {
+        APPLY_PATCH_SELF_EXEC_BIN_CANDIDATES
+            .iter()
+            .find_map(|name| Self::resolve_test_binary(name))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn resolve_test_binary(name: &str) -> Option<PathBuf> {
+        Self::cargo_bin_env_keys(name)
+            .into_iter()
+            .filter_map(|key| std::env::var_os(key).map(PathBuf::from))
+            .find_map(|path| Self::resolve_test_binary_path(path))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn cargo_bin_env_keys(name: &str) -> Vec<String> {
+        let mut env_keys = vec![format!("CARGO_BIN_EXE_{name}")];
+        let underscored_name = name.replace('-', "_");
+        if underscored_name != name {
+            env_keys.push(format!("CARGO_BIN_EXE_{underscored_name}"));
+        }
+
+        env_keys
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn resolve_test_binary_path(path: PathBuf) -> Option<PathBuf> {
+        if path.is_absolute() && path.exists() {
+            return Some(path);
+        }
+
+        Self::resolve_runfile_path(&path)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn resolve_runfile_path(path: &Path) -> Option<PathBuf> {
+        if let Some(runfiles_dir) = std::env::var_os("RUNFILES_DIR") {
+            let resolved = PathBuf::from(runfiles_dir).join(path);
+            if resolved.exists() {
+                return Some(resolved);
+            }
+        }
+
+        let manifest = std::env::var_os("RUNFILES_MANIFEST_FILE")?;
+        Self::lookup_runfiles_manifest(Path::new(&manifest), path)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn lookup_runfiles_manifest(manifest: &Path, path: &Path) -> Option<PathBuf> {
+        let path = path.to_string_lossy();
+        let reader = BufReader::new(File::open(manifest).ok()?);
+        for line in reader.lines() {
+            let Ok(line) = line else {
+                continue;
+            };
+            let Some((runfile, resolved_path)) = line.split_once(' ') else {
+                continue;
+            };
+            if runfile == path {
+                let resolved_path = PathBuf::from(resolved_path);
+                if resolved_path.exists() {
+                    return Some(resolved_path);
+                }
+            }
+        }
+
+        None
     }
 
     fn build_sandbox_command_with_program(req: &ApplyPatchRequest, exe: PathBuf) -> SandboxCommand {
