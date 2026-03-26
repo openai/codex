@@ -1593,12 +1593,17 @@ fn prompt_with_stdin_context(prompt: &str, stdin_text: &str) -> String {
 fn resolve_prompt(prompt_arg: Option<String>) -> String {
     match prompt_arg {
         Some(p) if p != "-" => p,
-        maybe_dash => read_prompt_from_stdin(if matches!(maybe_dash.as_deref(), Some("-")) {
-            StdinPromptBehavior::Forced
-        } else {
-            StdinPromptBehavior::RequiredIfPiped
-        })
-        .expect("required stdin prompt should produce content"),
+        maybe_dash => {
+            let behavior = if matches!(maybe_dash.as_deref(), Some("-")) {
+                StdinPromptBehavior::Forced
+            } else {
+                StdinPromptBehavior::RequiredIfPiped
+            };
+            let Some(prompt) = read_prompt_from_stdin(behavior) else {
+                unreachable!("required stdin prompt should produce content");
+            };
+            prompt
+        }
     }
 }
 
