@@ -64,69 +64,9 @@ pub fn quote_windows_arg(arg: &str) -> String {
     quoted
 }
 
-fn is_cmd_executable(program: &str) -> bool {
-    let lower = std::path::Path::new(program)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(program)
-        .to_ascii_lowercase();
-    matches!(lower.as_str(), "cmd" | "cmd.exe")
-}
-
-fn cmd_single_suffix_looks_precomposed(arg: &str) -> bool {
-    arg.contains('"')
-        || arg.contains('&')
-        || arg.contains('|')
-        || arg.contains('<')
-        || arg.contains('>')
-        || arg.contains('(')
-        || arg.contains(')')
-}
-
 /// Build a Windows command line for CreateProcess-style APIs.
-///
-/// Most programs should receive CRT-style quoted arguments. `cmd.exe` is the exception:
-/// the tokens after the executable are part of cmd's own command string, so escaping inner
-/// quotes with CRT rules breaks `cmd /c "<program with spaces>" ...`.
 #[cfg(target_os = "windows")]
 pub fn argv_to_command_line(argv: &[String]) -> String {
-    let Some((program, args)) = argv.split_first() else {
-        return String::new();
-    };
-
-    if is_cmd_executable(program) {
-        if args.is_empty() {
-            return quote_windows_arg(program);
-        }
-
-        let cmd_switch_index = args
-            .iter()
-            .position(|arg| arg.eq_ignore_ascii_case("/c") || arg.eq_ignore_ascii_case("/k"));
-        let rendered_args = if let Some(index) = cmd_switch_index {
-            let mut rendered = args[..=index]
-                .iter()
-                .map(|arg| quote_windows_arg(arg))
-                .collect::<Vec<_>>();
-            let suffix = &args[index + 1..];
-            if suffix.len() == 1 {
-                if cmd_single_suffix_looks_precomposed(&suffix[0]) {
-                    rendered.push(suffix[0].clone());
-                } else {
-                    rendered.push(quote_windows_arg(&suffix[0]));
-                }
-            } else {
-                rendered.extend(suffix.iter().map(|arg| quote_windows_arg(arg)));
-            }
-            rendered.join(" ")
-        } else {
-            args.iter()
-                .map(|arg| quote_windows_arg(arg))
-                .collect::<Vec<_>>()
-                .join(" ")
-        };
-        return format!("{} {rendered_args}", quote_windows_arg(program));
-    }
-
     argv.iter()
         .map(|arg| quote_windows_arg(arg))
         .collect::<Vec<_>>()
@@ -186,11 +126,9 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn argv_to_command_line_preserves_raw_cmd_suffix() {
+    fn argv_to_command_line_quotes_each_argument_independently() {
         let argv = vec![
             "cmd.exe".to_string(),
-            "/d".to_string(),
-            "/s".to_string(),
             "/c".to_string(),
             "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -EncodedCommand abc=="
                 .to_string(),
@@ -198,7 +136,7 @@ mod tests {
 
         assert_eq!(
             argv_to_command_line(&argv),
-            "cmd.exe /d /s /c \"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -EncodedCommand abc=="
+            "cmd.exe /c \"\\\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\\\" -NoProfile -EncodedCommand abc==\""
         );
     }
 
@@ -213,35 +151,6 @@ mod tests {
         assert_eq!(
             argv_to_command_line(&argv),
             "pwsh.exe -Command \"Write-Output \\\"hello world\\\"\""
-        );
-    }
-
-    #[test]
-    fn argv_to_command_line_quotes_cmd_suffix_tokens_with_spaces() {
-        let argv = vec![
-            "cmd.exe".to_string(),
-            "/c".to_string(),
-            "type".to_string(),
-            "C:\\Program Files\\a.txt".to_string(),
-        ];
-
-        assert_eq!(
-            argv_to_command_line(&argv),
-            "cmd.exe /c type \"C:\\Program Files\\a.txt\""
-        );
-    }
-
-    #[test]
-    fn argv_to_command_line_quotes_single_cmd_suffix_with_spaces() {
-        let argv = vec![
-            "cmd.exe".to_string(),
-            "/c".to_string(),
-            "C:\\Program Files\\tool.exe".to_string(),
-        ];
-
-        assert_eq!(
-            argv_to_command_line(&argv),
-            "cmd.exe /c \"C:\\Program Files\\tool.exe\""
         );
     }
 }

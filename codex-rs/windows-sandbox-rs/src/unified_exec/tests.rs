@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 use tempfile::TempDir;
 use tokio::runtime::Builder;
 use tokio::sync::broadcast;
@@ -58,6 +59,38 @@ fn sandbox_log(codex_home: &Path) -> String {
     let log_path = codex_home.join(".sandbox").join("sandbox.log");
     fs::read_to_string(&log_path)
         .unwrap_or_else(|err| format!("failed to read {}: {err}", log_path.display()))
+}
+
+fn wait_for_frame_count(frames_path: &Path, expected_frames: usize) -> Vec<Message> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let mut reader = OpenOptions::new()
+            .read(true)
+            .open(frames_path)
+            .expect("open frame file for read");
+        reader
+            .seek(SeekFrom::Start(0))
+            .expect("seek to start of frame file");
+
+        let mut frames = Vec::new();
+        loop {
+            match read_frame(&mut reader) {
+                Ok(Some(frame)) => frames.push(frame.message),
+                Ok(None) => break,
+                Err(_) => break,
+            }
+        }
+
+        if frames.len() >= expected_frames {
+            return frames;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {expected_frames} frames, saw {}",
+            frames.len()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 async fn collect_stdout_and_exit(
@@ -263,18 +296,9 @@ fn runner_stdin_writer_sends_close_stdin_after_input_eof() {
         drop(writer_tx);
         writer_handle.await.expect("join stdin writer");
 
-        let mut reader = OpenOptions::new()
-            .read(true)
-            .open(&frames_path)
-            .expect("open frame file for read");
-        reader
-            .seek(SeekFrom::Start(0))
-            .expect("seek to start of frame file");
+        let frames = wait_for_frame_count(&frames_path, 2);
 
-        let stdin_frame = read_frame(&mut reader)
-            .expect("read stdin frame")
-            .expect("stdin frame should be present");
-        match stdin_frame.message {
+        match &frames[0] {
             Message::Stdin { payload } => {
                 let bytes = decode_bytes(&payload.data_b64).expect("decode stdin payload");
                 assert_eq!(bytes, b"hello".to_vec());
@@ -282,10 +306,7 @@ fn runner_stdin_writer_sends_close_stdin_after_input_eof() {
             other => panic!("expected stdin frame, got {other:?}"),
         }
 
-        let close_frame = read_frame(&mut reader)
-            .expect("read close-stdin frame")
-            .expect("close-stdin frame should be present");
-        match close_frame.message {
+        match &frames[1] {
             Message::CloseStdin { .. } => {}
             other => panic!("expected close-stdin frame, got {other:?}"),
         }
@@ -314,18 +335,8 @@ fn runner_resizer_sends_resize_frame() {
         })
         .expect("send resize frame");
 
-        let mut reader = OpenOptions::new()
-            .read(true)
-            .open(&frames_path)
-            .expect("open frame file for read");
-        reader
-            .seek(SeekFrom::Start(0))
-            .expect("seek to start of frame file");
-
-        let resize_frame = read_frame(&mut reader)
-            .expect("read resize frame")
-            .expect("resize frame should be present");
-        match resize_frame.message {
+        let frames = wait_for_frame_count(&frames_path, 1);
+        match &frames[0] {
             Message::Resize { payload } => {
                 assert_eq!(payload.rows, 45);
                 assert_eq!(payload.cols, 132);

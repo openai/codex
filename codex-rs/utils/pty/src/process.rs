@@ -70,6 +70,8 @@ impl fmt::Debug for PtyHandles {
     }
 }
 
+/// Callback used by driver-backed sessions to resize a PTY-like backend when
+/// there is no local `PtyHandles` instance to resize directly.
 type ResizeFn = Box<dyn FnMut(TerminalSize) -> anyhow::Result<()> + Send>;
 
 /// Handle for driving an interactive process (PTY or pipe).
@@ -85,6 +87,8 @@ pub struct ProcessHandle {
     // PtyHandles must be preserved because the process will receive Control+C if the
     // slave is closed
     _pty_handles: StdMutex<Option<PtyHandles>>,
+    // Optional resize hook for driver-backed sessions that proxy PTY control to
+    // another backend instead of owning local PTY handles.
     resizer: StdMutex<Option<ResizeFn>>,
 }
 
@@ -147,18 +151,19 @@ impl ProcessHandle {
 
     /// Resize the PTY in character cells.
     pub fn resize(&self, size: TerminalSize) -> anyhow::Result<()> {
-        let handles = self
-            ._pty_handles
-            .lock()
-            .map_err(|_| anyhow!("failed to lock PTY handles"))?;
-        if let Some(handles) = handles.as_ref() {
-            return match &handles._master {
-                PtyMasterHandle::Resizable(master) => master.resize(size.into()),
-                #[cfg(unix)]
-                PtyMasterHandle::Opaque { raw_fd, .. } => resize_raw_pty(*raw_fd, size),
-            };
+        {
+            let handles = self
+                ._pty_handles
+                .lock()
+                .map_err(|_| anyhow!("failed to lock PTY handles"))?;
+            if let Some(handles) = handles.as_ref() {
+                return match &handles._master {
+                    PtyMasterHandle::Resizable(master) => master.resize(size.into()),
+                    #[cfg(unix)]
+                    PtyMasterHandle::Opaque { raw_fd, .. } => resize_raw_pty(*raw_fd, size),
+                };
+            }
         }
-        drop(handles);
 
         let mut resizer = self
             .resizer
