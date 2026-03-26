@@ -94,11 +94,18 @@ pub(crate) fn compose_account_display(
         CoreAuthMode::ApiKey => Some(StatusAccountDisplay::ApiKey),
         CoreAuthMode::Chatgpt | CoreAuthMode::ChatgptAuthTokens => {
             let email = auth.get_account_email();
-            let plan = plan
-                .map(|plan_type| title_case(format!("{plan_type:?}").as_str()))
-                .or_else(|| Some("Unknown".to_string()));
+            let plan = plan.map(plan_type_display_name);
+            let plan = plan.or_else(|| Some("Unknown".to_string()));
             Some(StatusAccountDisplay::ChatGpt { email, plan })
         }
+    }
+}
+
+pub(crate) fn plan_type_display_name(plan_type: PlanType) -> String {
+    match plan_type {
+        PlanType::Team => "Business".to_string(),
+        PlanType::Business => "Enterprise".to_string(),
+        _ => title_case(format!("{plan_type:?}").as_str()),
     }
 }
 
@@ -186,4 +193,45 @@ pub(crate) fn title_case(s: &str) -> String {
     };
     let rest: String = chars.as_str().to_ascii_lowercase();
     first.to_uppercase().collect::<String>() + &rest
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_core::auth::CodexAuth;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn plan_type_display_name_remaps_display_labels() {
+        let cases = [
+            (PlanType::Free, "Free"),
+            (PlanType::Go, "Go"),
+            (PlanType::Plus, "Plus"),
+            (PlanType::Pro, "Pro"),
+            (PlanType::Team, "Business"),
+            (PlanType::Business, "Enterprise"),
+            (PlanType::Enterprise, "Enterprise"),
+            (PlanType::Edu, "Edu"),
+            (PlanType::Unknown, "Unknown"),
+        ];
+
+        for (plan_type, expected) in cases {
+            assert_eq!(plan_type_display_name(plan_type), expected);
+        }
+    }
+
+    #[test]
+    fn compose_account_display_uses_remapped_plan_label() {
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+
+        let display = compose_account_display(auth_manager.as_ref(), Some(PlanType::Team));
+        assert!(matches!(
+            display,
+            Some(StatusAccountDisplay::ChatGpt {
+                email: None,
+                plan: Some(ref plan),
+            }) if plan == "Business"
+        ));
+    }
 }
