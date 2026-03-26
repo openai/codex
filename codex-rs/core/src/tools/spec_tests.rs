@@ -2092,7 +2092,7 @@ fn tool_suggest_can_be_registered_without_search_tool() {
     };
     assert!(
         description.contains(
-            "Suggests a discoverable connector, or in narrower cases a discoverable plugin"
+            "Suggests a missing connector in an installed plugin, or in narrower cases a discoverable plugin"
         )
     );
     assert!(description.contains(
@@ -2347,7 +2347,7 @@ fn tool_suggest_description_lists_discoverable_tools() {
     };
     assert!(
         description.contains(
-            "Suggests a discoverable connector, or in narrower cases a discoverable plugin"
+            "Suggests a missing connector in an installed plugin, or in narrower cases a discoverable plugin"
         )
     );
     assert!(description.contains("Google Calendar"));
@@ -2366,14 +2366,16 @@ fn tool_suggest_description_lists_discoverable_tools() {
         )
     );
     assert!(description.contains(
-        "only suggest discoverable and installable plugins when the user's intent very explicitly and unambiguously matches that plugin itself"
+        "For connectors/apps that are not installed but needed for an installed plugin, suggest to install them if the task requirements match precisely."
+    ));
+    assert!(description.contains(
+        "For plugins that are not installed but discoverable, only suggest discoverable and installable plugins when the user's intent very explicitly and unambiguously matches that plugin itself."
     ));
     assert!(description.contains(
         "Do not suggest a plugin just because one of its connectors or capabilities seems relevant."
     ));
-    assert!(description.contains("This stricter rule does not apply to connector suggestions."));
     assert!(description.contains(
-        "Apply the stricter explicit-and-unambiguous rule only for `plugin` suggestions"
+        "Apply the stricter explicit-and-unambiguous rule for *discoverable tools* like plugin install suggestions; *missing tools* like connector install suggestions continue to use the normal clear-fit standard."
     ));
     assert!(description.contains("DO NOT explore or recommend tools that are not on this list."));
     assert!(!description.contains("tool_search fails to find a good match"));
