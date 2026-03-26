@@ -37,28 +37,29 @@ mode = "full" # default when unset; use "limited" for read-only mode
 mitm = false
 # CA cert/key are managed internally under $CODEX_HOME/proxy/ (ca.pem + ca.key).
 
+# If false, local/private networking is rejected. Explicit allowlisting of local IP literals
+# (or `localhost`) is required to permit them.
+# Hostnames that resolve to local/private IPs are still blocked even if allowlisted.
+allow_local_binding = false
+
+# DANGEROUS (macOS-only): bypasses unix socket allowlisting and permits any
+# absolute socket path from `x-unix-socket`.
+dangerously_allow_all_unix_sockets = false
+
 # Hosts must match the allowlist (unless denied).
 # Use exact hosts or scoped wildcards like `*.openai.com` or `**.openai.com`.
 # The global `*` wildcard is rejected.
 # If no domain entries are marked `allow`, the proxy blocks requests until an allowlist is configured.
-[domains]
+[permissions.workspace.network.domains]
 "*.openai.com" = "allow"
 "localhost" = "allow"
 "127.0.0.1" = "allow"
 "::1" = "allow"
 "evil.example" = "deny"
 
-# If false, local/private networking is rejected. Explicit allowlisting of local IP literals
-# (or `localhost`) is required to permit them.
-# Hostnames that resolve to local/private IPs are still blocked even if allowlisted.
-allow_local_binding = false
-
 # macOS-only: allows proxying to a unix socket when request includes `x-unix-socket: /path`.
-[unix_sockets]
+[permissions.workspace.network.unix_sockets]
 "/tmp/example.sock" = "allow"
-# DANGEROUS (macOS-only): bypasses unix socket allowlisting and permits any
-# absolute socket path from `x-unix-socket`.
-dangerously_allow_all_unix_sockets = false
 ```
 
 ### 2) Run the proxy

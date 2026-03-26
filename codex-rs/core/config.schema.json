@@ -916,8 +916,7 @@
     "NetworkDomainPermissionToml": {
       "enum": [
         "allow",
-        "deny",
-        "none"
+        "deny"
       ],
       "type": "string"
     },
