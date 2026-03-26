@@ -156,7 +156,6 @@ fn apply_read_acls(
             None,
             access_mask,
             access_label,
-            refresh_errors,
             log,
         )?;
         if builtin_has {
@@ -168,7 +167,6 @@ fn apply_read_acls(
             Some("sandbox_group"),
             access_mask,
             access_label,
-            refresh_errors,
             log,
         )?;
         if sandbox_has {
@@ -212,7 +210,6 @@ fn read_mask_allows_or_log(
     label: Option<&str>,
     read_mask: u32,
     access_label: &str,
-    refresh_errors: &mut Vec<String>,
     log: &mut File,
 ) -> Result<bool> {
     match path_mask_allows(root, psids, read_mask, true) {
@@ -221,16 +218,10 @@ fn read_mask_allows_or_log(
             let label_suffix = label
                 .map(|value| format!(" for {value}"))
                 .unwrap_or_default();
-            refresh_errors.push(format!(
-                "{access_label} mask check failed on {}{}: {}",
-                root.display(),
-                label_suffix,
-                e
-            ));
             log_line(
                 log,
                 &format!(
-                    "{access_label} mask check failed on {}{}: {}; continuing",
+                    "{access_label} mask check failed on {}{}: {}; treating as missing access and continuing",
                     root.display(),
                     label_suffix,
                     e
@@ -656,15 +647,10 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             let has = match path_mask_allows(root, &[psid], write_mask, true) {
                 Ok(h) => h,
                 Err(e) => {
-                    refresh_errors.push(format!(
-                        "write mask check failed on {} for {label}: {}",
-                        root.display(),
-                        e
-                    ));
                     log_line(
                         log,
                         &format!(
-                            "write mask check failed on {} for {label}: {}; continuing",
+                            "write mask check failed on {} for {label}: {}; treating as missing access and continuing",
                             root.display(),
                             e
                         ),
