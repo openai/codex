@@ -240,14 +240,9 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .await?
             {
                 Some(prepared) => {
-                    if ctx
-                        .turn
-                        .environment
-                        .experimental_exec_server_url()
-                        .is_some()
-                    {
+                    if ctx.turn.environment.exec_server_url().is_some() {
                         return Err(ToolError::Rejected(
-                            "unified_exec zsh-fork is not supported when experimental_exec_server_url is configured".to_string(),
+                            "unified_exec zsh-fork is not supported when exec_server_url is configured".to_string(),
                         ));
                     }
                     return self
