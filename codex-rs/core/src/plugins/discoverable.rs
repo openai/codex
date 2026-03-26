@@ -16,10 +16,9 @@ const TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST: &[&str] = &[
     "slack@openai-curated",
     "gmail@openai-curated",
     "google-calendar@openai-curated",
-    "google-docs@openai-curated",
+    "linear@openai-curated",
+    "figma@openai-curated",
     "google-drive@openai-curated",
-    "google-sheets@openai-curated",
-    "google-slides@openai-curated",
 ];
 
 pub(crate) fn list_tool_suggest_discoverable_plugins(
