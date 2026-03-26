@@ -776,28 +776,6 @@ fn view_image_tool_includes_detail_with_original_detail_feature() {
 }
 
 #[test]
-fn test_build_specs_artifact_tool_enabled() {
-    let mut config = test_config();
-    let runtime_root = tempfile::TempDir::new().expect("create temp codex home");
-    config.codex_home = runtime_root.path().to_path_buf();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    let mut features = Features::with_defaults();
-    features.enable(Feature::Artifact);
-    let available_models = Vec::new();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-    assert_contains_tool_names(&tools, &["artifacts"]);
-}
-
-#[test]
 fn test_build_specs_agent_job_worker_tools_enabled() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);

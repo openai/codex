@@ -1843,7 +1843,6 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-arg0",
- "codex-artifacts",
  "codex-async-utils",
  "codex-code-mode",
  "codex-config",

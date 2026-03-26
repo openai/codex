@@ -397,6 +397,7 @@ unwrap_used = "deny"
 ignored = [
     "icu_provider",
     "openssl-sys",
+    "codex-artifacts",
     "codex-utils-readiness",
     "codex-utils-template",
     "codex-v8-poc",

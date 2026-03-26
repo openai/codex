@@ -338,9 +338,6 @@
             "apps": {
               "type": "boolean"
             },
-            "artifact": {
-              "type": "boolean"
-            },
             "child_agents_md": {
               "type": "boolean"
             },
@@ -1978,9 +1975,6 @@
           "type": "boolean"
         },
         "apps": {
-          "type": "boolean"
-        },
-        "artifact": {
           "type": "boolean"
         },
         "child_agents_md": {
