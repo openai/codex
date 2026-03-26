@@ -1366,6 +1366,13 @@
           "format": "double",
           "type": "number"
         },
+        "tools": {
+          "additionalProperties": {
+            "$ref": "#/definitions/McpServerToolConfig"
+          },
+          "default": null,
+          "type": "object"
+        },
         "url": {
           "type": "string"
         }

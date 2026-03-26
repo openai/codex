@@ -1350,6 +1350,7 @@ async fn persist_custom_mcp_tool_approval(
             segments: vec![
                 "mcp_servers".to_string(),
                 server.to_string(),
+                "tools".to_string(),
                 tool_name.to_string(),
                 "approval_mode".to_string(),
             ],

@@ -688,7 +688,7 @@ fn blocking_replace_mcp_servers_serializes_tool_approval_overrides() {
 [mcp_servers.docs]
 command = \"docs-server\"
 
-[mcp_servers.docs.search]
+[mcp_servers.docs.tools.search]
 approval_mode = \"approve\"
 ";
     assert_eq!(raw, expected);

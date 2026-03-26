@@ -962,7 +962,7 @@ async fn persist_custom_mcp_tool_approval_writes_tool_override() {
             approval_mode: Some(AppToolApproval::Approve),
         }
     );
-    assert!(contents.contains("[mcp_servers.docs.search]"));
+    assert!(contents.contains("[mcp_servers.docs.tools.search]"));
 }
 
 #[tokio::test]
@@ -1098,7 +1098,7 @@ async fn maybe_persist_mcp_tool_approval_writes_project_config_for_project_serve
             approval_mode: Some(AppToolApproval::Approve),
         }
     );
-    assert!(contents.contains("[mcp_servers.docs.search]"));
+    assert!(contents.contains("[mcp_servers.docs.tools.search]"));
     assert_eq!(mcp_tool_approval_is_remembered(&session, &key).await, true);
 }
 

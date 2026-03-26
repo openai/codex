@@ -18,7 +18,7 @@ Codex stores per-tool approval overrides for custom MCP servers under
 `mcp_servers` in `~/.codex/config.toml`:
 
 ```toml
-[mcp_servers.docs.search]
+[mcp_servers.docs.tools.search]
 approval_mode = "approve"
 ```
 

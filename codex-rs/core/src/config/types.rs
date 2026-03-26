@@ -110,7 +110,7 @@ pub struct McpServerConfig {
     pub oauth_resource: Option<String>,
 
     /// Per-tool approval settings keyed by tool name.
-    #[serde(default, flatten, skip_serializing_if = "HashMap::is_empty")]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub tools: HashMap<String, McpServerToolConfig>,
 }
 
@@ -162,8 +162,11 @@ pub(crate) struct RawMcpServerConfig {
     #[serde(default, rename = "name")]
     pub _name: Option<String>,
     #[serde(default)]
+    pub tools: Option<HashMap<String, McpServerToolConfig>>,
+    /// Legacy flattened per-tool approval settings accepted for backward compatibility.
+    #[serde(default)]
     #[serde(flatten)]
-    pub tools: HashMap<String, McpServerToolConfig>,
+    pub legacy_tools: HashMap<String, McpServerToolConfig>,
 }
 
 impl<'de> Deserialize<'de> for McpServerConfig {
@@ -188,7 +191,10 @@ impl<'de> Deserialize<'de> for McpServerConfig {
         let disabled_tools = raw.disabled_tools.clone();
         let scopes = raw.scopes.clone();
         let oauth_resource = raw.oauth_resource.clone();
-        let tools = raw.tools.clone();
+        let mut tools = raw.legacy_tools.clone();
+        if let Some(nested_tools) = raw.tools.clone() {
+            tools.extend(nested_tools);
+        }
 
         fn throw_if_set<E, T>(transport: &str, field: &str, value: Option<&T>) -> Result<(), E>
         where

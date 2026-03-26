@@ -251,11 +251,13 @@ mod document_helpers {
             entry["oauth_resource"] = value(resource.clone());
         }
         if !config.tools.is_empty() {
+            let mut tools = new_implicit_table();
             let mut tool_entries: Vec<_> = config.tools.iter().collect();
             tool_entries.sort_by(|(left, _), (right, _)| left.cmp(right));
             for (name, tool_config) in tool_entries {
-                entry.insert(name, serialize_mcp_server_tool(tool_config));
+                tools.insert(name, serialize_mcp_server_tool(tool_config));
             }
+            entry.insert("tools", TomlItem::Table(tools));
         }
 
         entry

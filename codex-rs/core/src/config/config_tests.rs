@@ -1971,7 +1971,7 @@ fn mcp_servers_toml_parses_per_tool_approval_overrides() {
 command = "docs-server"
 name = "Docs"
 
-[mcp_servers.docs.search]
+[mcp_servers.docs.tools.search]
 approval_mode = "approve"
 "#,
     )
@@ -1981,6 +1981,58 @@ approval_mode = "approve"
         .get("docs")
         .and_then(|server| server.tools.get("search"))
         .expect("docs/search tool config exists");
+
+    assert_eq!(
+        tool,
+        &McpServerToolConfig {
+            approval_mode: Some(AppToolApproval::Approve),
+        }
+    );
+}
+
+#[test]
+fn mcp_servers_toml_parses_legacy_flattened_per_tool_approval_overrides() {
+    let config = toml::from_str::<ConfigToml>(
+        r#"
+[mcp_servers.docs]
+command = "docs-server"
+
+[mcp_servers.docs.search]
+approval_mode = "approve"
+"#,
+    )
+    .expect("legacy TOML deserialization should succeed");
+    let tool = config
+        .mcp_servers
+        .get("docs")
+        .and_then(|server| server.tools.get("search"))
+        .expect("docs/search tool config exists");
+
+    assert_eq!(
+        tool,
+        &McpServerToolConfig {
+            approval_mode: Some(AppToolApproval::Approve),
+        }
+    );
+}
+
+#[test]
+fn mcp_servers_toml_parses_tool_approval_override_for_reserved_name() {
+    let config = toml::from_str::<ConfigToml>(
+        r#"
+[mcp_servers.docs]
+command = "docs-server"
+
+[mcp_servers.docs.tools.command]
+approval_mode = "approve"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+    let tool = config
+        .mcp_servers
+        .get("docs")
+        .and_then(|server| server.tools.get("command"))
+        .expect("docs/command tool config exists");
 
     assert_eq!(
         tool,
