@@ -43,7 +43,7 @@ async fn spawn_command_under_sandbox(
     env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
     use codex_core::landlock::spawn_command_under_linux_sandbox;
-    let codex_linux_sandbox_exe = codex_utils_cargo_bin::cargo_bin("codex-exec")
+    let codex_linux_sandbox_exe = core_test_support::find_codex_linux_sandbox_exe()
         .map_err(|err| io::Error::new(io::ErrorKind::NotFound, err))?;
     spawn_command_under_linux_sandbox(
         codex_linux_sandbox_exe,
