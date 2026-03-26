@@ -455,6 +455,10 @@ pub struct Config {
     /// output will be hyperlinked using the specified URI scheme.
     pub file_opener: UriBasedFileOpener,
 
+    /// Path to the current Codex executable. This cannot be set in the config
+    /// file: it must be set in code via [`ConfigOverrides`].
+    pub codex_self_exe: Option<PathBuf>,
+
     /// Path to the `codex-linux-sandbox` executable. This must be set if
     /// [`codex_sandboxing::SandboxType::LinuxSeccomp`] is used. Note that this
     /// cannot be set in the config file: it must be set in code via
@@ -743,7 +747,7 @@ impl Config {
     /// designed to use [AskForApproval::Never] exclusively.
     ///
     /// Further, [ConfigOverrides] contains some options that are not supported
-    /// in [ConfigToml], such as `cwd`, `codex_linux_sandbox_exe`, and
+    /// in [ConfigToml], such as `cwd`, `codex_self_exe`, `codex_linux_sandbox_exe`, and
     /// `main_execve_wrapper_exe`.
     pub async fn load_with_cli_overrides_and_harness_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
@@ -1825,6 +1829,7 @@ pub struct ConfigOverrides {
     pub model_provider: Option<String>,
     pub service_tier: Option<Option<ServiceTier>>,
     pub config_profile: Option<String>,
+    pub codex_self_exe: Option<PathBuf>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub main_execve_wrapper_exe: Option<PathBuf>,
     pub js_repl_node_path: Option<PathBuf>,
@@ -2023,6 +2028,7 @@ impl Config {
             model_provider,
             service_tier: service_tier_override,
             config_profile: config_profile_key,
+            codex_self_exe,
             codex_linux_sandbox_exe,
             main_execve_wrapper_exe,
             js_repl_node_path: js_repl_node_path_override,
@@ -2629,6 +2635,7 @@ impl Config {
             history,
             ephemeral: ephemeral.unwrap_or_default(),
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
+            codex_self_exe,
             codex_linux_sandbox_exe,
             main_execve_wrapper_exe,
             js_repl_node_path,

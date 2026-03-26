@@ -19,6 +19,7 @@ const TOKIO_WORKER_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Arg0DispatchPaths {
+    pub codex_self_exe: Option<PathBuf>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub main_execve_wrapper_exe: Option<PathBuf>,
 }
@@ -133,9 +134,10 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
 ///
 /// 1.  Load `.env` values from `~/.codex/.env` before creating any threads.
 /// 2.  Construct a Tokio multi-thread runtime.
-/// 3.  Derive the `codex-linux-sandbox` helper path (falling back to the
-///     current executable if needed) so children can re-invoke the sandbox when
-///     running on Linux.
+/// 3.  Capture the current executable path and derive the
+///     `codex-linux-sandbox` helper path (falling back to the current
+///     executable if needed) so children can re-invoke the sandbox when running
+///     on Linux.
 /// 4.  Execute the provided async `main_fn` inside that runtime, forwarding any
 ///     error. Note that `main_fn` receives [`Arg0DispatchPaths`], which
 ///     contains the helper executable paths needed to construct
@@ -159,6 +161,7 @@ where
     runtime.block_on(async move {
         let current_exe = std::env::current_exe().ok();
         let paths = Arg0DispatchPaths {
+            codex_self_exe: current_exe.clone(),
             codex_linux_sandbox_exe: if cfg!(target_os = "linux") {
                 linux_sandbox_exe_path(path_entry_guard.as_ref(), current_exe)
             } else {
@@ -335,6 +338,7 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
     }
 
     let paths = Arg0DispatchPaths {
+        codex_self_exe: std::env::current_exe().ok(),
         codex_linux_sandbox_exe: {
             #[cfg(target_os = "linux")]
             {
@@ -436,6 +440,7 @@ mod tests {
             temp_dir,
             lock_file,
             Arg0DispatchPaths {
+                codex_self_exe: Some(PathBuf::from("/usr/bin/codex")),
                 codex_linux_sandbox_exe: Some(alias_path.clone()),
                 main_execve_wrapper_exe: None,
             },
