@@ -235,6 +235,7 @@ async fn effective_mcp_servers_include_plugins_without_overriding_user_config() 
             disabled_tools: None,
             scopes: None,
             oauth_resource: None,
+            tools: HashMap::new(),
         },
     );
     config
