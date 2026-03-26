@@ -131,8 +131,7 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
     )
     .into_iter()
     .map(DiscoverableTool::from);
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(config, auth)
-        .await?
+    let discoverable_plugins = list_tool_suggest_discoverable_plugins(config)?
         .into_iter()
         .map(DiscoverablePluginInfo::from)
         .map(DiscoverableTool::from);

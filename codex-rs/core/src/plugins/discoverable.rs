@@ -6,14 +6,23 @@ use super::OPENAI_CURATED_MARKETPLACE_NAME;
 use super::PluginCapabilitySummary;
 use super::PluginReadRequest;
 use super::PluginsManager;
-use crate::CodexAuth;
 use crate::config::Config;
 use crate::config::types::ToolSuggestDiscoverableType;
 use codex_features::Feature;
 
-pub(crate) async fn list_tool_suggest_discoverable_plugins(
+const TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST: &[&str] = &[
+    "github@openai-curated",
+    "notion@openai-curated",
+    "slack@openai-curated",
+    "gmail@openai-curated",
+    "google-calendar@openai-curated",
+    "google-drive@openai-curated",
+    "linear@openai-curated",
+    "figma@openai-curated",
+];
+
+pub(crate) fn list_tool_suggest_discoverable_plugins(
     config: &Config,
-    auth: Option<&CodexAuth>,
 ) -> anyhow::Result<Vec<PluginCapabilitySummary>> {
     if !config.features.enabled(Feature::Plugins) {
         return Ok(Vec::new());
@@ -27,16 +36,6 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
         .filter(|discoverable| discoverable.kind == ToolSuggestDiscoverableType::Plugin)
         .map(|discoverable| discoverable.id.as_str())
         .collect::<HashSet<_>>();
-    let featured_plugin_ids = match plugins_manager
-        .featured_plugin_ids_for_config(config, auth)
-        .await
-    {
-        Ok(featured_plugin_ids) => featured_plugin_ids.into_iter().collect::<HashSet<_>>(),
-        Err(err) => {
-            warn!("failed to load featured plugin suggestions: {err:#}");
-            HashSet::new()
-        }
-    };
     let marketplaces = plugins_manager
         .list_marketplaces_for_config(config, &[])
         .context("failed to list plugin marketplaces for tool suggestions")?
@@ -51,7 +50,7 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
     let mut discoverable_plugins = Vec::<PluginCapabilitySummary>::new();
     for plugin in curated_marketplace.plugins {
         if plugin.installed
-            || (!featured_plugin_ids.contains(plugin.id.as_str())
+            || (!TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST.contains(&plugin.id.as_str())
                 && !configured_plugin_ids.contains(plugin.id.as_str()))
         {
             continue;
