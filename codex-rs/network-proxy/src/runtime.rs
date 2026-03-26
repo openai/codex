@@ -913,17 +913,18 @@ mod tests {
         });
 
         assert_eq!(
-            state.host_blocked("evil.example", 80).await.unwrap(),
+            // Use a public IP literal to avoid relying on ambient DNS behavior.
+            state.host_blocked("8.8.8.8", 80).await.unwrap(),
             HostBlockDecision::Allowed
         );
 
-        state.add_denied_domain("evil.example").await.unwrap();
+        state.add_denied_domain("8.8.8.8").await.unwrap();
 
         let (allowed, denied) = state.current_patterns().await.unwrap();
         assert_eq!(allowed, vec!["*".to_string()]);
-        assert_eq!(denied, vec!["evil.example".to_string()]);
+        assert_eq!(denied, vec!["8.8.8.8".to_string()]);
         assert_eq!(
-            state.host_blocked("evil.example", 80).await.unwrap(),
+            state.host_blocked("8.8.8.8", 80).await.unwrap(),
             HostBlockDecision::Blocked(HostBlockReason::Denied)
         );
     }
