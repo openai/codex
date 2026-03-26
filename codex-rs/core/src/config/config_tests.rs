@@ -14,7 +14,6 @@ use crate::config::types::ModelAvailabilityNuxConfig;
 use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
 use crate::config::types::ToolSuggestDiscoverableType;
-use crate::config_loader::LoaderOverrides;
 use crate::config_loader::RequirementSource;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
@@ -5700,128 +5699,6 @@ shell_tool = true
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
-#[test]
-fn system_bwrap_warning_reports_missing_system_bwrap() {
-    let warning =
-        system_bwrap_warning_for_lookup(None).expect("missing system bwrap should emit a warning");
-
-    assert!(warning.contains("could not find system bubblewrap"));
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn system_bwrap_warning_skips_too_old_system_bwrap() {
-    let fake_bwrap = write_fake_bwrap(
-        r#"#!/bin/sh
-if [ "$1" = "--help" ]; then
-  echo 'usage: bwrap [OPTION...] COMMAND'
-  exit 0
-fi
-exit 1
-"#,
-    );
-    let fake_bwrap_path: &Path = fake_bwrap.as_ref();
-
-    assert_eq!(
-        system_bwrap_warning_for_lookup(Some(fake_bwrap_path.to_path_buf())),
-        None,
-        "Do not warn even if bwrap does not support `--argv0`",
-    );
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn finds_first_executable_bwrap_in_search_paths() {
-    let temp_dir = tempdir().expect("temp dir");
-    let cwd = temp_dir.path().join("cwd");
-    let first_dir = temp_dir.path().join("first");
-    let second_dir = temp_dir.path().join("second");
-    std::fs::create_dir_all(&cwd).expect("create cwd");
-    std::fs::create_dir_all(&first_dir).expect("create first dir");
-    std::fs::create_dir_all(&second_dir).expect("create second dir");
-    std::fs::write(first_dir.join("bwrap"), "not executable").expect("write non-executable bwrap");
-    let expected_bwrap = write_named_fake_bwrap_in(&second_dir);
-
-    assert_eq!(
-        find_system_bwrap_in_search_paths(vec![first_dir, second_dir], &cwd),
-        Some(expected_bwrap)
-    );
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn skips_workspace_local_bwrap_in_search_paths() {
-    let temp_dir = tempdir().expect("temp dir");
-    let cwd = temp_dir.path().join("cwd");
-    let trusted_dir = temp_dir.path().join("trusted");
-    std::fs::create_dir_all(&cwd).expect("create cwd");
-    std::fs::create_dir_all(&trusted_dir).expect("create trusted dir");
-    let _workspace_bwrap = write_named_fake_bwrap_in(&cwd);
-    let expected_bwrap = write_named_fake_bwrap_in(&trusted_dir);
-
-    assert_eq!(
-        find_system_bwrap_in_search_paths(vec![cwd.clone(), trusted_dir], &cwd),
-        Some(expected_bwrap)
-    );
-}
-
-#[cfg(not(target_os = "linux"))]
-#[test]
-fn system_bwrap_warning_is_disabled_off_linux() {
-    assert!(system_bwrap_warning().is_none());
-}
-
-#[cfg(target_os = "linux")]
-fn write_fake_bwrap(contents: &str) -> tempfile::TempPath {
-    write_fake_bwrap_in(
-        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        contents,
-    )
-}
-
-#[cfg(target_os = "linux")]
-fn write_fake_bwrap_in(dir: &Path, contents: &str) -> tempfile::TempPath {
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
-    use tempfile::NamedTempFile;
-
-    // Bazel can mount the OS temp directory `noexec`, so prefer the current
-    // working directory for fake executables and fall back to the default temp
-    // dir outside that environment.
-    let temp_file = NamedTempFile::new_in(dir)
-        .ok()
-        .unwrap_or_else(|| NamedTempFile::new().expect("temp file"));
-    // Linux rejects exec-ing a file that is still open for writing.
-    let path = temp_file.into_temp_path();
-    fs::write(&path, contents).expect("write fake bwrap");
-    let permissions = fs::Permissions::from_mode(0o755);
-    fs::set_permissions(&path, permissions).expect("chmod fake bwrap");
-    path
-}
-
-#[cfg(target_os = "linux")]
-fn write_named_fake_bwrap_in(dir: &Path) -> PathBuf {
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
-
-    let path = dir.join("bwrap");
-    fs::write(&path, "#!/bin/sh\n").expect("write fake bwrap");
-    let permissions = fs::Permissions::from_mode(0o755);
-    fs::set_permissions(&path, permissions).expect("chmod fake bwrap");
-    path
-}
-
-// Keep these tests independent from any managed/admin config on the host
-// machine so they only exercise the config written under the test codex home.
-fn isolated_loader_overrides(codex_home: &Path) -> LoaderOverrides {
-    LoaderOverrides {
-        managed_config_path: Some(codex_home.join("config-tests-managed-config.toml")),
-        #[cfg(target_os = "macos")]
-        managed_preferences_base64: Some(String::new()),
-        macos_managed_config_requirements_base64: Some(String::new()),
-    }
-}
 #[tokio::test]
 async fn approvals_reviewer_defaults_to_manual_only_without_guardian_feature() -> std::io::Result<()>
 {
@@ -5829,7 +5706,6 @@ async fn approvals_reviewer_defaults_to_manual_only_without_guardian_feature() -
 
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .loader_overrides(isolated_loader_overrides(codex_home.path()))
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
         .await?;
@@ -5851,7 +5727,6 @@ guardian_approval = true
 
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .loader_overrides(isolated_loader_overrides(codex_home.path()))
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
         .await?;
@@ -5872,7 +5747,6 @@ async fn approvals_reviewer_can_be_set_in_config_without_guardian_approval() -> 
 
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .loader_overrides(isolated_loader_overrides(codex_home.path()))
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
         .await?;
@@ -5896,7 +5770,6 @@ approvals_reviewer = "guardian_subagent"
 
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .loader_overrides(isolated_loader_overrides(codex_home.path()))
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
         .await?;
@@ -5920,7 +5793,6 @@ smart_approvals = true
 
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .loader_overrides(isolated_loader_overrides(codex_home.path()))
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
         .await?;
@@ -5950,7 +5822,6 @@ smart_approvals = true
 
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .loader_overrides(isolated_loader_overrides(codex_home.path()))
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
         .await?;
