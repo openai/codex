@@ -5,17 +5,23 @@
 
 use super::*;
 
+/// Items shown in the terminal title when the user has not configured a
+/// custom selection. Intentionally minimal: spinner + project name.
 pub(super) const DEFAULT_TERMINAL_TITLE_ITEMS: [&str; 2] = ["spinner", "project"];
+
+/// Braille-pattern dot-spinner frames for the terminal title animation.
 pub(super) const TERMINAL_TITLE_SPINNER_FRAMES: [&str; 10] =
     ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Time between spinner frame advances in the terminal title.
 pub(super) const TERMINAL_TITLE_SPINNER_INTERVAL: Duration = Duration::from_millis(100);
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 /// Compact runtime states that can be rendered into the terminal title.
 ///
 /// This is intentionally smaller than the full status-header vocabulary. The
 /// title needs short, stable labels, so callers map richer lifecycle events
 /// onto one of these buckets before rendering.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum TerminalTitleStatusKind {
     Working,
     WaitingForBackgroundTerminal,
@@ -47,12 +53,12 @@ impl StatusSurfaceSelections {
     }
 }
 
-#[derive(Clone, Debug)]
 /// Cached project-root display name keyed by the cwd used for the last lookup.
 ///
 /// Terminal-title refreshes can happen very frequently, so the title path avoids
 /// repeatedly walking up the filesystem to rediscover the same project root name
 /// while the working directory is unchanged.
+#[derive(Clone, Debug)]
 pub(super) struct CachedProjectRootName {
     pub(super) cwd: PathBuf,
     pub(super) root_name: Option<String>,

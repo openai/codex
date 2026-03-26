@@ -25,6 +25,10 @@ use crate::bottom_pane::multi_select_picker::MultiSelectPicker;
 use crate::render::renderable::Renderable;
 
 /// Available items that can be displayed in the terminal title.
+///
+/// Variants serialize to kebab-case identifiers (e.g. `AppName` -> `"app-name"`)
+/// via strum. These identifiers are persisted in user config files, so renaming
+/// or removing a variant is a breaking config change.
 #[derive(EnumIter, EnumString, Display, Debug, Clone, Copy, Eq, PartialEq, Hash)]
 #[strum(serialize_all = "kebab_case")]
 pub(crate) enum TerminalTitleItem {
@@ -81,6 +85,11 @@ impl TerminalTitleItem {
         }
     }
 
+    /// Returns the separator to place before this item in a rendered title.
+    ///
+    /// The spinner gets a plain space on either side so it reads as
+    /// `my-project <spinner> Working` rather than `my-project | <spinner> | Working`.
+    /// All other adjacent items are joined with ` | `.
     pub(crate) fn separator_from_previous(self, previous: Option<Self>) -> &'static str {
         match previous {
             None => "",

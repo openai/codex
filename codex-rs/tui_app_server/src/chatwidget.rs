@@ -913,7 +913,13 @@ pub(crate) struct ChatWidget {
     terminal_title_invalid_items_warned: Arc<AtomicBool>,
     // Last terminal title emitted, to avoid writing duplicate OSC updates.
     pub(crate) last_terminal_title: Option<String>,
-    // Original terminal-title config captured when opening the setup UI.
+    // Original terminal-title config captured when the setup UI opens.
+    //
+    // The outer `Option` tracks whether a setup session is active (`Some`)
+    // or not (`None`). The inner `Option<Vec<String>>` mirrors the shape
+    // of `config.tui_terminal_title` (which is `None` when using defaults).
+    // On cancel or persist-failure the inner value is restored to config;
+    // on confirm the outer is set to `None` to end the session.
     terminal_title_setup_original_items: Option<Option<Vec<String>>>,
     // Baseline instant used to animate spinner-prefixed title statuses.
     terminal_title_animation_origin: Instant,
@@ -1797,6 +1803,8 @@ impl ChatWidget {
         self.refresh_terminal_title();
     }
 
+    /// Restores the terminal-title config that was active before the setup UI
+    /// opened, undoing any preview changes. No-op if no setup session is active.
     pub(crate) fn revert_terminal_title_setup_preview(&mut self) {
         let Some(original_items) = self.terminal_title_setup_original_items.take() else {
             return;
@@ -1806,11 +1814,16 @@ impl ChatWidget {
         self.refresh_terminal_title();
     }
 
+    /// Dismisses the terminal-title setup UI and reverts to the pre-setup config.
     pub(crate) fn cancel_terminal_title_setup(&mut self) {
         tracing::info!("Terminal title setup canceled by user");
         self.revert_terminal_title_setup_preview();
     }
 
+    /// Commits a confirmed terminal-title selection, ending the setup session.
+    ///
+    /// After this call, `revert_terminal_title_setup_preview` becomes a no-op
+    /// because the original config snapshot is discarded.
     pub(crate) fn setup_terminal_title(&mut self, items: Vec<TerminalTitleItem>) {
         tracing::info!("terminal title setup confirmed with items: {items:#?}");
         let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();

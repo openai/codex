@@ -23,8 +23,14 @@ use std::io::stdout;
 use crossterm::Command;
 use ratatui::crossterm::execute;
 
+/// Practical upper bound on title length, measured in Rust `char`s.
+///
+/// Most terminals silently truncate titles beyond a few hundred characters.
+/// 240 leaves headroom for the OSC framing bytes while keeping titles
+/// readable in tab bars and window managers.
 const MAX_TERMINAL_TITLE_CHARS: usize = 240;
 
+/// Outcome of a [`set_terminal_title`] call.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum SetTerminalTitleResult {
     /// A sanitized title was written, or stdout is not a terminal so no write was needed.
@@ -108,6 +114,8 @@ fn sanitize_terminal_title(title: &str) -> String {
 
     for ch in title.chars() {
         if ch.is_whitespace() {
+            // Only set pending if we've already written content; this
+            // strips leading whitespace without an extra trim pass.
             pending_space = !sanitized.is_empty();
             continue;
         }
