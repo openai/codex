@@ -4,4 +4,24 @@
 import type { NetworkDomainPermission } from "./NetworkDomainPermission";
 import type { NetworkUnixSocketPermission } from "./NetworkUnixSocketPermission";
 
-export type NetworkRequirements = { enabled: boolean | null, httpPort: number | null, socksPort: number | null, allowUpstreamProxy: boolean | null, dangerouslyAllowNonLoopbackProxy: boolean | null, dangerouslyAllowAllUnixSockets: boolean | null, domains: { [key in string]?: NetworkDomainPermission } | null, unixSockets: { [key in string]?: NetworkUnixSocketPermission } | null, allowLocalBinding: boolean | null, };
+export type NetworkRequirements = { enabled: boolean | null, httpPort: number | null, socksPort: number | null, allowUpstreamProxy: boolean | null, dangerouslyAllowNonLoopbackProxy: boolean | null, dangerouslyAllowAllUnixSockets: boolean | null, 
+/**
+ * Canonical network permission map for `experimental_network`.
+ */
+domains: { [key in string]?: NetworkDomainPermission } | null, 
+/**
+ * Legacy compatibility view derived from `domains`.
+ */
+allowedDomains: Array<string> | null, 
+/**
+ * Legacy compatibility view derived from `domains`.
+ */
+deniedDomains: Array<string> | null, 
+/**
+ * Canonical unix socket permission map for `experimental_network`.
+ */
+unixSockets: { [key in string]?: NetworkUnixSocketPermission } | null, 
+/**
+ * Legacy compatibility view derived from `unix_sockets`.
+ */
+allowUnixSockets: Array<string> | null, allowLocalBinding: boolean | null, };

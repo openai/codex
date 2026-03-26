@@ -77,6 +77,7 @@ fn restricted_read_implicitly_allows_helper_executables() -> std::io::Result<()>
     Ok(())
 }
 
+#[test]
 fn network_toml_rejects_legacy_network_list_keys() {
     let err = toml::from_str::<NetworkToml>(
         r#"

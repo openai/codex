@@ -412,6 +412,20 @@ fn map_residency_requirement_to_api(
 fn map_network_requirements_to_api(
     network: codex_core::config_loader::NetworkRequirementsToml,
 ) -> NetworkRequirements {
+    let allowed_domains = network
+        .domains
+        .as_ref()
+        .and_then(codex_core::config_loader::NetworkDomainPermissionsToml::allowed_domains);
+    let denied_domains = network
+        .domains
+        .as_ref()
+        .and_then(codex_core::config_loader::NetworkDomainPermissionsToml::denied_domains);
+    let allow_unix_sockets = network
+        .unix_sockets
+        .as_ref()
+        .map(codex_core::config_loader::NetworkUnixSocketPermissionsToml::allow_unix_sockets)
+        .filter(|entries| !entries.is_empty());
+
     NetworkRequirements {
         enabled: network.enabled,
         http_port: network.http_port,
@@ -428,6 +442,8 @@ fn map_network_requirements_to_api(
                 })
                 .collect()
         }),
+        allowed_domains,
+        denied_domains,
         unix_sockets: network.unix_sockets.map(|unix_sockets| {
             unix_sockets
                 .entries
@@ -437,6 +453,7 @@ fn map_network_requirements_to_api(
                 })
                 .collect()
         }),
+        allow_unix_sockets,
         allow_local_binding: network.allow_local_binding,
     }
 }
@@ -619,11 +636,77 @@ mod tests {
                     ("api.openai.com".to_string(), NetworkDomainPermission::Allow,),
                     ("example.com".to_string(), NetworkDomainPermission::Deny),
                 ])),
+                allowed_domains: Some(vec!["api.openai.com".to_string()]),
+                denied_domains: Some(vec!["example.com".to_string()]),
                 unix_sockets: Some(std::collections::BTreeMap::from([(
                     "/tmp/proxy.sock".to_string(),
                     NetworkUnixSocketPermission::Allow,
                 )])),
+                allow_unix_sockets: Some(vec!["/tmp/proxy.sock".to_string()]),
                 allow_local_binding: Some(true),
+            }),
+        );
+    }
+
+    #[test]
+    fn map_requirements_toml_to_api_omits_none_entries_from_legacy_network_fields() {
+        let requirements = ConfigRequirementsToml {
+            allowed_approval_policies: None,
+            allowed_sandbox_modes: None,
+            allowed_web_search_modes: None,
+            guardian_developer_instructions: None,
+            feature_requirements: None,
+            mcp_servers: None,
+            apps: None,
+            rules: None,
+            enforce_residency: None,
+            network: Some(CoreNetworkRequirementsToml {
+                enabled: None,
+                http_port: None,
+                socks_port: None,
+                allow_upstream_proxy: None,
+                dangerously_allow_non_loopback_proxy: None,
+                dangerously_allow_all_unix_sockets: None,
+                domains: Some(CoreNetworkDomainPermissionsToml {
+                    entries: std::collections::BTreeMap::from([(
+                        "ignored.example.com".to_string(),
+                        CoreNetworkDomainPermissionToml::None,
+                    )]),
+                }),
+                managed_allowed_domains_only: None,
+                unix_sockets: Some(CoreNetworkUnixSocketPermissionsToml {
+                    entries: std::collections::BTreeMap::from([(
+                        "/tmp/ignored.sock".to_string(),
+                        CoreNetworkUnixSocketPermissionToml::None,
+                    )]),
+                }),
+                allow_local_binding: None,
+            }),
+        };
+
+        let mapped = map_requirements_toml_to_api(requirements);
+
+        assert_eq!(
+            mapped.network,
+            Some(NetworkRequirements {
+                enabled: None,
+                http_port: None,
+                socks_port: None,
+                allow_upstream_proxy: None,
+                dangerously_allow_non_loopback_proxy: None,
+                dangerously_allow_all_unix_sockets: None,
+                domains: Some(std::collections::BTreeMap::from([(
+                    "ignored.example.com".to_string(),
+                    NetworkDomainPermission::None,
+                )])),
+                allowed_domains: None,
+                denied_domains: None,
+                unix_sockets: Some(std::collections::BTreeMap::from([(
+                    "/tmp/ignored.sock".to_string(),
+                    NetworkUnixSocketPermission::None,
+                )])),
+                allow_unix_sockets: None,
+                allow_local_binding: None,
             }),
         );
     }

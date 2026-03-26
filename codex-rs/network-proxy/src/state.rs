@@ -114,10 +114,7 @@ pub fn validate_policy_against_constraints(
         .map(|entry| entry.to_ascii_lowercase())
         .collect();
     let config_allow_unix_sockets = config.network.allow_unix_sockets();
-    validate_non_global_wildcard_domain_patterns(
-        "network.denied_domains",
-        &config_denied_domains,
-    )?;
+    validate_non_global_wildcard_domain_patterns("network.denied_domains", &config_denied_domains)?;
     if let Some(max_enabled) = constraints.enabled {
         validate(enabled, move |candidate| {
             if *candidate && !max_enabled {

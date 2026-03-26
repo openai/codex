@@ -5,6 +5,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
+use serde::de::Error as _;
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -220,7 +221,7 @@ impl std::fmt::Display for NetworkUnixSocketPermissionToml {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Serialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct NetworkRequirementsToml {
     pub enabled: Option<bool>,
     pub http_port: Option<u16>,
@@ -234,6 +235,108 @@ pub struct NetworkRequirementsToml {
     pub managed_allowed_domains_only: Option<bool>,
     pub unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
     pub allow_local_binding: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct RawNetworkRequirementsToml {
+    enabled: Option<bool>,
+    http_port: Option<u16>,
+    socks_port: Option<u16>,
+    allow_upstream_proxy: Option<bool>,
+    dangerously_allow_non_loopback_proxy: Option<bool>,
+    dangerously_allow_all_unix_sockets: Option<bool>,
+    domains: Option<NetworkDomainPermissionsToml>,
+    #[serde(default)]
+    allowed_domains: Option<Vec<String>>,
+    /// When true, only managed `allowed_domains` are respected while managed
+    /// network enforcement is active. User allowlist entries are ignored.
+    managed_allowed_domains_only: Option<bool>,
+    #[serde(default)]
+    denied_domains: Option<Vec<String>>,
+    unix_sockets: Option<NetworkUnixSocketPermissionsToml>,
+    #[serde(default)]
+    allow_unix_sockets: Option<Vec<String>>,
+    allow_local_binding: Option<bool>,
+}
+
+impl<'de> Deserialize<'de> for NetworkRequirementsToml {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawNetworkRequirementsToml::deserialize(deserializer)?;
+        let RawNetworkRequirementsToml {
+            enabled,
+            http_port,
+            socks_port,
+            allow_upstream_proxy,
+            dangerously_allow_non_loopback_proxy,
+            dangerously_allow_all_unix_sockets,
+            domains,
+            allowed_domains,
+            managed_allowed_domains_only,
+            denied_domains,
+            unix_sockets,
+            allow_unix_sockets,
+            allow_local_binding,
+        } = raw;
+
+        if domains.is_some() && (allowed_domains.is_some() || denied_domains.is_some()) {
+            return Err(D::Error::custom(
+                "`experimental_network.domains` cannot be combined with legacy `allowed_domains` or `denied_domains`",
+            ));
+        }
+
+        if unix_sockets.is_some() && allow_unix_sockets.is_some() {
+            return Err(D::Error::custom(
+                "`experimental_network.unix_sockets` cannot be combined with legacy `allow_unix_sockets`",
+            ));
+        }
+
+        Ok(Self {
+            enabled,
+            http_port,
+            socks_port,
+            allow_upstream_proxy,
+            dangerously_allow_non_loopback_proxy,
+            dangerously_allow_all_unix_sockets,
+            domains: domains
+                .or_else(|| legacy_domain_permissions_from_lists(allowed_domains, denied_domains)),
+            managed_allowed_domains_only,
+            unix_sockets: unix_sockets
+                .or_else(|| legacy_unix_socket_permissions_from_list(allow_unix_sockets)),
+            allow_local_binding,
+        })
+    }
+}
+
+fn legacy_domain_permissions_from_lists(
+    allowed_domains: Option<Vec<String>>,
+    denied_domains: Option<Vec<String>>,
+) -> Option<NetworkDomainPermissionsToml> {
+    let mut entries = BTreeMap::new();
+
+    for pattern in allowed_domains.unwrap_or_default() {
+        entries.insert(pattern, NetworkDomainPermissionToml::Allow);
+    }
+
+    for pattern in denied_domains.unwrap_or_default() {
+        entries.insert(pattern, NetworkDomainPermissionToml::Deny);
+    }
+
+    (!entries.is_empty()).then_some(NetworkDomainPermissionsToml { entries })
+}
+
+fn legacy_unix_socket_permissions_from_list(
+    allow_unix_sockets: Option<Vec<String>>,
+) -> Option<NetworkUnixSocketPermissionsToml> {
+    let entries = allow_unix_sockets
+        .unwrap_or_default()
+        .into_iter()
+        .map(|path| (path, NetworkUnixSocketPermissionToml::Allow))
+        .collect::<BTreeMap<_, _>>();
+
+    (!entries.is_empty()).then_some(NetworkUnixSocketPermissionsToml { entries })
 }
 
 /// Normalized network constraints derived from requirements TOML.
@@ -1632,6 +1735,110 @@ guardian_developer_instructions = """
         assert_eq!(sourced_network.value.allow_local_binding, Some(false));
 
         Ok(())
+    }
+
+    #[test]
+    fn legacy_network_requirements_are_preserved_as_constraints_with_source() -> Result<()> {
+        let toml_str = r#"
+            [experimental_network]
+            enabled = true
+            allow_upstream_proxy = false
+            dangerously_allow_all_unix_sockets = true
+            allowed_domains = ["api.example.com", "*.openai.com"]
+            managed_allowed_domains_only = true
+            denied_domains = ["blocked.example.com"]
+            allow_unix_sockets = ["/tmp/example.sock"]
+            allow_local_binding = false
+        "#;
+
+        let source = RequirementSource::CloudRequirements;
+        let mut requirements_with_sources = ConfigRequirementsWithSources::default();
+        requirements_with_sources.merge_unset_fields(source.clone(), from_str(toml_str)?);
+
+        let requirements = ConfigRequirements::try_from(requirements_with_sources)?;
+        let sourced_network = requirements
+            .network
+            .expect("network requirements should be preserved as constraints");
+
+        assert_eq!(sourced_network.source, source);
+        assert_eq!(sourced_network.value.enabled, Some(true));
+        assert_eq!(sourced_network.value.allow_upstream_proxy, Some(false));
+        assert_eq!(
+            sourced_network.value.dangerously_allow_all_unix_sockets,
+            Some(true)
+        );
+        assert_eq!(
+            sourced_network.value.domains.as_ref(),
+            Some(&NetworkDomainPermissionsToml {
+                entries: BTreeMap::from([
+                    (
+                        "*.openai.com".to_string(),
+                        NetworkDomainPermissionToml::Allow,
+                    ),
+                    (
+                        "api.example.com".to_string(),
+                        NetworkDomainPermissionToml::Allow,
+                    ),
+                    (
+                        "blocked.example.com".to_string(),
+                        NetworkDomainPermissionToml::Deny,
+                    ),
+                ]),
+            })
+        );
+        assert_eq!(
+            sourced_network.value.managed_allowed_domains_only,
+            Some(true)
+        );
+        assert_eq!(
+            sourced_network.value.unix_sockets.as_ref(),
+            Some(&NetworkUnixSocketPermissionsToml {
+                entries: BTreeMap::from([(
+                    "/tmp/example.sock".to_string(),
+                    NetworkUnixSocketPermissionToml::Allow,
+                )]),
+            })
+        );
+        assert_eq!(sourced_network.value.allow_local_binding, Some(false));
+
+        Ok(())
+    }
+
+    #[test]
+    fn mixed_legacy_and_canonical_network_requirements_are_rejected() {
+        let err = from_str::<ConfigRequirementsToml>(
+            r#"
+                [experimental_network]
+                allowed_domains = ["api.example.com"]
+
+                [experimental_network.domains]
+                "*.openai.com" = "allow"
+            "#,
+        )
+        .expect_err("mixed network domain shapes should fail");
+
+        assert!(
+            err.to_string()
+                .contains("`experimental_network.domains` cannot be combined"),
+            "unexpected error: {err:#}"
+        );
+
+        let err = from_str::<ConfigRequirementsToml>(
+            r#"
+                [experimental_network]
+                allow_unix_sockets = ["/tmp/example.sock"]
+
+                [experimental_network.unix_sockets]
+                "/tmp/another.sock" = "allow"
+            "#,
+        )
+        .expect_err("mixed network unix socket shapes should fail");
+
+        assert!(
+            err.to_string()
+                .contains("`experimental_network.unix_sockets` cannot be combined"),
+            "unexpected error: {err:#}"
+        );
     }
 
     #[test]

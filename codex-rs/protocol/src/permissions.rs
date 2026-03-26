@@ -34,41 +34,6 @@ impl NetworkSandboxPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, JsonSchema, TS)]
-#[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
-pub enum NetworkDomainRuleAction {
-    Allow,
-    Deny,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
-pub struct NetworkDomainRuleEntry {
-    pub pattern: String,
-    pub action: NetworkDomainRuleAction,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, JsonSchema, TS)]
-#[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
-pub enum NetworkUnixSocketRuleAction {
-    Allow,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
-pub struct NetworkUnixSocketRuleEntry {
-    pub path: AbsolutePathBuf,
-    pub action: NetworkUnixSocketRuleAction,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
-pub struct NetworkRulePolicy {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub domains: Vec<NetworkDomainRuleEntry>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub unix_sockets: Vec<NetworkUnixSocketRuleEntry>,
-}
-
 /// Access mode for a filesystem entry.
 ///
 /// When two equally specific entries target the same path, we compare these by

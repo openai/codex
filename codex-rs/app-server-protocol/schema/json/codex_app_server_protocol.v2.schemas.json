@@ -1682,7 +1682,6 @@
           "type": "object"
         },
         {
-<<<<<<< HEAD
           "properties": {
             "id": {
               "$ref": "#/definitions/RequestId"
@@ -1707,8 +1706,6 @@
           "type": "object"
         },
         {
-=======
->>>>>>> 4c42cf4a4 (changes)
           "properties": {
             "id": {
               "$ref": "#/definitions/RequestId"
@@ -6036,9 +6033,29 @@
             "null"
           ]
         },
+        "allowUnixSockets": {
+          "description": "Legacy compatibility view derived from `unix_sockets`.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "allowUpstreamProxy": {
           "type": [
             "boolean",
+            "null"
+          ]
+        },
+        "allowedDomains": {
+          "description": "Legacy compatibility view derived from `domains`.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
             "null"
           ]
         },
@@ -6054,10 +6071,21 @@
             "null"
           ]
         },
+        "deniedDomains": {
+          "description": "Legacy compatibility view derived from `domains`.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "domains": {
           "additionalProperties": {
             "$ref": "#/definitions/NetworkDomainPermission"
           },
+          "description": "Canonical network permission map for `experimental_network`.",
           "type": [
             "object",
             "null"
@@ -6089,6 +6117,7 @@
           "additionalProperties": {
             "$ref": "#/definitions/NetworkUnixSocketPermission"
           },
+          "description": "Canonical unix socket permission map for `experimental_network`.",
           "type": [
             "object",
             "null"
@@ -11115,7 +11144,6 @@
       "title": "ThreadRealtimeStartedNotification",
       "type": "object"
     },
-<<<<<<< HEAD
     "ThreadRealtimeTranscriptUpdatedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "EXPERIMENTAL - flat transcript delta emitted whenever realtime transcript text changes.",
@@ -11138,8 +11166,6 @@
       "title": "ThreadRealtimeTranscriptUpdatedNotification",
       "type": "object"
     },
-=======
->>>>>>> 4c42cf4a4 (changes)
     "ThreadResumeParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "There are three ways to resume a thread: 1. By thread_id: load the thread from disk by thread_id and resume it. 2. By history: instantiate the thread from memory and resume it. 3. By path: load the thread from disk by path and resume it.\n\nThe precedence is: history > path > thread_id. If using history or path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",

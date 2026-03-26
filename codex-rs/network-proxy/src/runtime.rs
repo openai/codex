@@ -921,10 +921,7 @@ mod tests {
 
     #[tokio::test]
     async fn add_denied_domain_forces_block_with_global_wildcard_allowlist() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["*".to_string()],
-            ..NetworkProxySettings::default()
-        });
+        let state = network_proxy_state_for_policy(network_settings(&["*"], &[]));
 
         assert_eq!(
             state.host_blocked("evil.example", 80).await.unwrap(),
@@ -1136,11 +1133,7 @@ mod tests {
 
     #[tokio::test]
     async fn host_blocked_global_wildcard_allowlist_allows_public_hosts_except_denylist() {
-        let state = network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["*".to_string()],
-            denied_domains: vec!["evil.example".to_string()],
-            ..NetworkProxySettings::default()
-        });
+        let state = network_proxy_state_for_policy(network_settings(&["*"], &["evil.example"]));
 
         assert_eq!(
             state.host_blocked("example.com", 80).await.unwrap(),
