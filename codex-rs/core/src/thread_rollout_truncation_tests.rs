@@ -208,6 +208,28 @@ fn truncates_rollout_to_last_n_fork_turns_applies_thread_rollback_markers() {
 }
 
 #[test]
+fn truncates_rollout_to_last_n_fork_turns_discards_trigger_boundaries_in_rolled_back_suffix() {
+    let rollout = vec![
+        RolloutItem::ResponseItem(user_msg("u1")),
+        RolloutItem::ResponseItem(user_msg("u2")),
+        RolloutItem::ResponseItem(inter_agent_msg("triggered task", true)),
+        RolloutItem::ResponseItem(assistant_msg("a1")),
+        RolloutItem::EventMsg(EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+        })),
+        RolloutItem::ResponseItem(user_msg("u3")),
+        RolloutItem::ResponseItem(assistant_msg("a2")),
+    ];
+
+    let truncated = truncate_rollout_to_last_n_fork_turns(&rollout, 2);
+
+    assert_eq!(
+        serde_json::to_value(&truncated).unwrap(),
+        serde_json::to_value(&rollout).unwrap()
+    );
+}
+
+#[test]
 fn truncates_rollout_to_last_n_fork_turns_keeps_full_rollout_when_n_is_large() {
     let rollout = vec![
         RolloutItem::ResponseItem(user_msg("u1")),

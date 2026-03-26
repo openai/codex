@@ -48,18 +48,34 @@ pub(crate) fn user_message_positions_in_rollout(items: &[RolloutItem]) -> Vec<us
 /// - an assistant inter-agent envelope whose parsed `trigger_turn` is `true`.
 ///
 /// Like `user_message_positions_in_rollout`, this applies `ThreadRolledBack` markers so indexing
-/// reflects the effective post-rollback history.
+/// reflects the effective post-rollback history. Rollback counts real user turns only, so a
+/// rollback removes the stale suffix starting at the earliest rolled-back user boundary instead of
+/// simply truncating the mixed fork-boundary list.
 pub(crate) fn fork_turn_positions_in_rollout(items: &[RolloutItem]) -> Vec<usize> {
+    let mut user_positions = Vec::new();
     let mut fork_turn_positions = Vec::new();
     for (idx, item) in items.iter().enumerate() {
         match item {
-            RolloutItem::ResponseItem(item) if is_fork_turn_boundary(item) => {
+            RolloutItem::ResponseItem(item) if is_real_user_message_boundary(item) => {
+                user_positions.push(idx);
+                fork_turn_positions.push(idx);
+            }
+            RolloutItem::ResponseItem(item) if is_trigger_turn_boundary(item) => {
                 fork_turn_positions.push(idx);
             }
             RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
                 let num_turns = usize::try_from(rollback.num_turns).unwrap_or(usize::MAX);
-                let new_len = fork_turn_positions.len().saturating_sub(num_turns);
-                fork_turn_positions.truncate(new_len);
+                let Some(rollback_start_idx) = user_positions
+                    .len()
+                    .checked_sub(num_turns)
+                    .map(|rollback_start| user_positions[rollback_start])
+                    .or_else(|| user_positions.first().copied())
+                else {
+                    continue;
+                };
+                let new_user_len = user_positions.len().saturating_sub(num_turns);
+                user_positions.truncate(new_user_len);
+                fork_turn_positions.retain(|position| *position < rollback_start_idx);
             }
             _ => {}
         }
@@ -115,14 +131,14 @@ pub(crate) fn truncate_rollout_to_last_n_fork_turns(
     items[keep_idx..].to_vec()
 }
 
-fn is_fork_turn_boundary(item: &ResponseItem) -> bool {
-    if matches!(
+fn is_real_user_message_boundary(item: &ResponseItem) -> bool {
+    matches!(
         event_mapping::parse_turn_item(item),
         Some(TurnItem::UserMessage(_))
-    ) {
-        return true;
-    }
+    )
+}
 
+fn is_trigger_turn_boundary(item: &ResponseItem) -> bool {
     let ResponseItem::Message { role, content, .. } = item else {
         return false;
     };
