@@ -279,26 +279,14 @@ pub(crate) async fn handle_mcp_tool_call(
         };
 
         let status = if result.is_ok() { "ok" } else { "error" };
-        let tags = mcp_call_metric_tags(
+        emit_mcp_call_metrics(
+            turn_context.as_ref(),
             status,
             &tool_name,
             connector_id.as_deref(),
             connector_name.as_deref(),
+            call_duration,
         );
-        let tag_refs: Vec<(&str, &str)> = tags
-            .iter()
-            .map(|(key, value)| (*key, value.as_str()))
-            .collect();
-        turn_context
-            .session_telemetry
-            .counter(MCP_CALL_COUNT_METRIC, /*inc*/ 1, &tag_refs);
-        if let Some(duration) = call_duration {
-            turn_context.session_telemetry.record_duration(
-                MCP_CALL_DURATION_METRIC,
-                duration,
-                &tag_refs,
-            );
-        }
 
         return CallToolResult::from_result(result);
     }
@@ -352,12 +340,27 @@ pub(crate) async fn handle_mcp_tool_call(
     maybe_track_codex_app_used(sess.as_ref(), turn_context.as_ref(), &server, &tool_name).await;
 
     let status = if result.is_ok() { "ok" } else { "error" };
-    let tags = mcp_call_metric_tags(
+    emit_mcp_call_metrics(
+        turn_context.as_ref(),
         status,
         &tool_name,
         connector_id.as_deref(),
         connector_name.as_deref(),
+        Some(duration),
     );
+
+    CallToolResult::from_result(result)
+}
+
+fn emit_mcp_call_metrics(
+    turn_context: &TurnContext,
+    status: &str,
+    tool_name: &str,
+    connector_id: Option<&str>,
+    connector_name: Option<&str>,
+    duration: Option<Duration>,
+) {
+    let tags = mcp_call_metric_tags(status, tool_name, connector_id, connector_name);
     let tag_refs: Vec<(&str, &str)> = tags
         .iter()
         .map(|(key, value)| (*key, value.as_str()))
@@ -365,11 +368,13 @@ pub(crate) async fn handle_mcp_tool_call(
     turn_context
         .session_telemetry
         .counter(MCP_CALL_COUNT_METRIC, /*inc*/ 1, &tag_refs);
-    turn_context
-        .session_telemetry
-        .record_duration(MCP_CALL_DURATION_METRIC, duration, &tag_refs);
-
-    CallToolResult::from_result(result)
+    if let Some(duration) = duration {
+        turn_context.session_telemetry.record_duration(
+            MCP_CALL_DURATION_METRIC,
+            duration,
+            &tag_refs,
+        );
+    }
 }
 
 fn mcp_call_metric_tags(
