@@ -176,7 +176,7 @@ pub enum Feature {
     VoiceTranscription,
     /// Enable experimental realtime voice conversation mode in the TUI.
     RealtimeConversation,
-    /// Deprecated compatibility flag. The TUI now always uses the app-server implementation.
+    /// Removed compatibility flag. The TUI now always uses the app-server implementation.
     TuiAppServer,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
@@ -828,7 +828,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::TuiAppServer,
         key: "tui_app_server",
-        stage: Stage::Deprecated,
+        stage: Stage::Removed,
         default_enabled: true,
     },
     FeatureSpec {
