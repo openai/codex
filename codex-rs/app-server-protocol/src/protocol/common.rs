@@ -68,15 +68,6 @@ macro_rules! experimental_type_entry {
     };
 }
 
-macro_rules! client_method_entry {
-    ($variant:ident => $wire:literal) => {
-        $wire
-    };
-    ($variant:ident) => {
-        stringify!($variant)
-    };
-}
-
 /// Generates an `enum ClientRequest` where each variant is a request that the
 /// client can send to the server. Each variant has associated `params` and
 /// `response` types. Also generates a `export_client_responses()` function to
@@ -151,10 +142,16 @@ macro_rules! client_request_definitions {
                 }
             }
 
-            pub fn request_method(&self) -> &'static str {
-                match self {
-                    $(Self::$variant { .. } => client_method_entry!($variant $(=> $wire)?),)*
-                }
+            pub fn request_method(&self) -> String {
+                serde_json::to_value(self)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("method")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_else(|| "<unknown>".to_string())
             }
         }
 
@@ -232,7 +229,7 @@ macro_rules! client_request_definitions {
 }
 
 client_request_definitions! {
-    Initialize => "initialize" {
+    Initialize {
         params: v1::InitializeParams,
         response: v1::InitializeResponse,
     },
@@ -547,20 +544,20 @@ client_request_definitions! {
     },
 
     /// DEPRECATED APIs below
-    GetConversationSummary => "getConversationSummary" {
+    GetConversationSummary {
         params: v1::GetConversationSummaryParams,
         response: v1::GetConversationSummaryResponse,
     },
-    GitDiffToRemote => "gitDiffToRemote" {
+    GitDiffToRemote {
         params: v1::GitDiffToRemoteParams,
         response: v1::GitDiffToRemoteResponse,
     },
     /// DEPRECATED in favor of GetAccount
-    GetAuthStatus => "getAuthStatus" {
+    GetAuthStatus {
         params: v1::GetAuthStatusParams,
         response: v1::GetAuthStatusResponse,
     },
-    FuzzyFileSearch => "fuzzyFileSearch" {
+    FuzzyFileSearch {
         params: FuzzyFileSearchParams,
         response: FuzzyFileSearchResponse,
     },
