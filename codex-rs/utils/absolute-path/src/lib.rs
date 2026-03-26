@@ -29,11 +29,9 @@ impl AbsolutePathBuf {
         {
             if rest.is_empty() {
                 return home;
-            }
-            if let Some(rest) = rest.strip_prefix('/') {
+            } else if let Some(rest) = rest.strip_prefix('/') {
                 return home.join(rest.trim_start_matches('/'));
-            }
-            if cfg!(windows)
+            } else if cfg!(windows)
                 && let Some(rest) = rest.strip_prefix('\\')
             {
                 return home.join(rest.trim_start_matches('\\'));
