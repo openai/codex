@@ -6,6 +6,7 @@ use pretty_assertions::assert_eq;
 use tokio::sync::mpsc;
 
 use super::ExecServerHandler;
+use crate::ProcessId;
 use crate::protocol::ExecParams;
 use crate::protocol::InitializeResponse;
 use crate::protocol::TerminateParams;
@@ -18,7 +19,7 @@ fn exec_params(process_id: &str) -> ExecParams {
         env.insert("PATH".to_string(), path.to_string_lossy().into_owned());
     }
     ExecParams {
-        process_id: process_id.to_string(),
+        process_id: ProcessId::from(process_id),
         argv: vec![
             "bash".to_string(),
             "-lc".to_string(),
@@ -84,7 +85,7 @@ async fn terminate_reports_false_after_process_exit() {
     loop {
         let response = handler
             .terminate(TerminateParams {
-                process_id: "proc-1".to_string(),
+                process_id: ProcessId::from("proc-1"),
             })
             .await
             .expect("terminate response");

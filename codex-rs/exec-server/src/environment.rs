@@ -159,6 +159,7 @@ mod tests {
 
     use super::Environment;
     use super::EnvironmentManager;
+    use crate::ProcessId;
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
@@ -195,7 +196,7 @@ mod tests {
         let response = environment
             .get_exec_backend()
             .start(crate::ExecParams {
-                process_id: "default-env-proc".to_string(),
+                process_id: ProcessId::from("default-env-proc"),
                 argv: vec!["true".to_string()],
                 cwd: std::env::current_dir().expect("read current dir"),
                 env: Default::default(),

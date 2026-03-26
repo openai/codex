@@ -603,7 +603,7 @@ impl UnifiedExecProcessManager {
             let started = environment
                 .get_exec_backend()
                 .start(codex_exec_server::ExecParams {
-                    process_id: exec_server_process_id(process_id),
+                    process_id: exec_server_process_id(process_id).into(),
                     argv: env.command.clone(),
                     cwd: env.cwd.clone(),
                     env: env.env.clone(),

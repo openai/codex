@@ -113,7 +113,7 @@ struct Inner {
     // process on the connection. Keep a local process_id -> session registry so
     // we can turn those connection-global notifications into process wakeups
     // without making notifications the source of truth for output delivery.
-    sessions: ArcSwap<HashMap<String, Arc<SessionState>>>,
+    sessions: ArcSwap<HashMap<ProcessId, Arc<SessionState>>>,
     // ArcSwap makes reads cheap on the hot notification path, but writes still
     // need serialization so concurrent register/remove operations do not
     // overwrite each other's copy-on-write updates.
@@ -225,7 +225,7 @@ impl ExecServerClient {
 
     pub async fn write(
         &self,
-        process_id: &str,
+        process_id: &ProcessId,
         chunk: Vec<u8>,
     ) -> Result<WriteResponse, ExecServerError> {
         self.inner
@@ -233,7 +233,7 @@ impl ExecServerClient {
             .call(
                 EXEC_WRITE_METHOD,
                 &WriteParams {
-                    process_id: process_id.to_string(),
+                    process_id: process_id.clone(),
                     chunk: chunk.into(),
                 },
             )
@@ -241,13 +241,16 @@ impl ExecServerClient {
             .map_err(Into::into)
     }
 
-    pub async fn terminate(&self, process_id: &str) -> Result<TerminateResponse, ExecServerError> {
+    pub async fn terminate(
+        &self,
+        process_id: &ProcessId,
+    ) -> Result<TerminateResponse, ExecServerError> {
         self.inner
             .client
             .call(
                 EXEC_TERMINATE_METHOD,
                 &TerminateParams {
-                    process_id: process_id.to_string(),
+                    process_id: process_id.clone(),
                 },
             )
             .await
@@ -330,7 +333,7 @@ impl ExecServerClient {
 
     pub(crate) async fn register_session(
         &self,
-        process_id: &str,
+        process_id: &ProcessId,
     ) -> Result<Session, ExecServerError> {
         let state = Arc::new(SessionState::new());
         self.inner
@@ -338,12 +341,12 @@ impl ExecServerClient {
             .await?;
         Ok(Session {
             client: self.clone(),
-            process_id: process_id.to_string().into(),
+            process_id: process_id.clone(),
             state,
         })
     }
 
-    pub(crate) async fn unregister_session(&self, process_id: &str) {
+    pub(crate) async fn unregister_session(&self, process_id: &ProcessId) {
         self.inner.remove_session(process_id).await;
     }
 
@@ -487,7 +490,7 @@ impl Session {
         match self
             .client
             .read(ReadParams {
-                process_id: self.process_id.to_string(),
+                process_id: self.process_id.clone(),
                 after_seq,
                 max_bytes,
                 wait_ms,
@@ -519,13 +522,13 @@ impl Session {
 }
 
 impl Inner {
-    fn get_session(&self, process_id: &str) -> Option<Arc<SessionState>> {
+    fn get_session(&self, process_id: &ProcessId) -> Option<Arc<SessionState>> {
         self.sessions.load().get(process_id).cloned()
     }
 
     async fn insert_session(
         &self,
-        process_id: &str,
+        process_id: &ProcessId,
         session: Arc<SessionState>,
     ) -> Result<(), ExecServerError> {
         let _sessions_write_guard = self.sessions_write_lock.lock().await;
@@ -536,12 +539,12 @@ impl Inner {
             )));
         }
         let mut next_sessions = sessions.as_ref().clone();
-        next_sessions.insert(process_id.to_string(), session);
+        next_sessions.insert(process_id.clone(), session);
         self.sessions.store(Arc::new(next_sessions));
         Ok(())
     }
 
-    async fn remove_session(&self, process_id: &str) -> Option<Arc<SessionState>> {
+    async fn remove_session(&self, process_id: &ProcessId) -> Option<Arc<SessionState>> {
         let _sessions_write_guard = self.sessions_write_lock.lock().await;
         let sessions = self.sessions.load();
         let session = sessions.get(process_id).cloned();
@@ -552,7 +555,7 @@ impl Inner {
         session
     }
 
-    async fn take_all_sessions(&self) -> HashMap<String, Arc<SessionState>> {
+    async fn take_all_sessions(&self) -> HashMap<ProcessId, Arc<SessionState>> {
         let _sessions_write_guard = self.sessions_write_lock.lock().await;
         let sessions = self.sessions.load();
         let drained_sessions = sessions.as_ref().clone();
@@ -640,6 +643,7 @@ mod tests {
 
     use super::ExecServerClient;
     use super::ExecServerClientConnectOptions;
+    use crate::ProcessId;
     use crate::connection::JsonRpcConnection;
     use crate::protocol::EXEC_EXITED_METHOD;
     use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
@@ -718,12 +722,14 @@ mod tests {
         .await
         .expect("client should connect");
 
+        let noisy_process_id = ProcessId::from("noisy");
+        let quiet_process_id = ProcessId::from("quiet");
         let _noisy_session = client
-            .register_session("noisy")
+            .register_session(&noisy_process_id)
             .await
             .expect("noisy session should register");
         let quiet_session = client
-            .register_session("quiet")
+            .register_session(&quiet_process_id)
             .await
             .expect("quiet session should register");
         let mut quiet_wake_rx = quiet_session.subscribe_wake();
@@ -734,7 +740,7 @@ mod tests {
                     method: EXEC_OUTPUT_DELTA_METHOD.to_string(),
                     params: Some(
                         serde_json::to_value(ExecOutputDeltaNotification {
-                            process_id: "noisy".to_string(),
+                            process_id: noisy_process_id.clone(),
                             seq,
                             stream: ExecOutputStream::Stdout,
                             chunk: b"x".to_vec().into(),
@@ -751,7 +757,7 @@ mod tests {
                 method: EXEC_EXITED_METHOD.to_string(),
                 params: Some(
                     serde_json::to_value(ExecExitedNotification {
-                        process_id: "quiet".to_string(),
+                        process_id: quiet_process_id,
                         seq: 1,
                         exit_code: 17,
                     })

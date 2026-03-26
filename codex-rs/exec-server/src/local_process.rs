@@ -75,7 +75,7 @@ enum ProcessEntry {
 
 struct Inner {
     notifications: RpcNotificationSender,
-    processes: Mutex<HashMap<String, ProcessEntry>>,
+    processes: Mutex<HashMap<ProcessId, ProcessEntry>>,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
 }
@@ -420,7 +420,7 @@ impl ExecBackend for LocalProcess {
             .map_err(map_handler_error)?;
         Ok(StartedExecProcess {
             process: Arc::new(LocalExecProcess {
-                process_id: response.process_id.into(),
+                process_id: response.process_id,
                 backend: self.clone(),
                 wake_tx,
             }),
@@ -461,13 +461,13 @@ impl ExecProcess for LocalExecProcess {
 impl LocalProcess {
     async fn read(
         &self,
-        process_id: &str,
+        process_id: &ProcessId,
         after_seq: Option<u64>,
         max_bytes: Option<usize>,
         wait_ms: Option<u64>,
     ) -> Result<ReadResponse, ExecServerError> {
         self.exec_read(ReadParams {
-            process_id: process_id.to_string(),
+            process_id: process_id.clone(),
             after_seq,
             max_bytes,
             wait_ms,
@@ -478,20 +478,20 @@ impl LocalProcess {
 
     async fn write(
         &self,
-        process_id: &str,
+        process_id: &ProcessId,
         chunk: Vec<u8>,
     ) -> Result<WriteResponse, ExecServerError> {
         self.exec_write(WriteParams {
-            process_id: process_id.to_string(),
+            process_id: process_id.clone(),
             chunk: chunk.into(),
         })
         .await
         .map_err(map_handler_error)
     }
 
-    async fn terminate(&self, process_id: &str) -> Result<(), ExecServerError> {
+    async fn terminate(&self, process_id: &ProcessId) -> Result<(), ExecServerError> {
         self.terminate_process(TerminateParams {
-            process_id: process_id.to_string(),
+            process_id: process_id.clone(),
         })
         .await
         .map_err(map_handler_error)?;
@@ -507,7 +507,7 @@ fn map_handler_error(error: JSONRPCErrorError) -> ExecServerError {
 }
 
 async fn stream_output(
-    process_id: String,
+    process_id: ProcessId,
     stream: ExecOutputStream,
     mut receiver: tokio::sync::mpsc::Receiver<Vec<u8>>,
     inner: Arc<Inner>,
@@ -560,7 +560,7 @@ async fn stream_output(
 }
 
 async fn watch_exit(
-    process_id: String,
+    process_id: ProcessId,
     exit_rx: tokio::sync::oneshot::Receiver<i32>,
     inner: Arc<Inner>,
     output_notify: Arc<Notify>,
@@ -605,7 +605,7 @@ async fn watch_exit(
     }
 }
 
-async fn finish_output_stream(process_id: String, inner: Arc<Inner>) {
+async fn finish_output_stream(process_id: ProcessId, inner: Arc<Inner>) {
     {
         let mut processes = inner.processes.lock().await;
         let Some(ProcessEntry::Running(process)) = processes.get_mut(&process_id) else {
@@ -620,7 +620,7 @@ async fn finish_output_stream(process_id: String, inner: Arc<Inner>) {
     maybe_emit_closed(process_id, inner).await;
 }
 
-async fn maybe_emit_closed(process_id: String, inner: Arc<Inner>) {
+async fn maybe_emit_closed(process_id: ProcessId, inner: Arc<Inner>) {
     let notification = {
         let mut processes = inner.processes.lock().await;
         let Some(ProcessEntry::Running(process)) = processes.get_mut(&process_id) else {
