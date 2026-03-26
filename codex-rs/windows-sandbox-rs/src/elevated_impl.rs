@@ -218,7 +218,9 @@ mod windows_impl {
 
     /// Launches the command runner under the sandbox user and captures its output.
     #[allow(clippy::too_many_arguments)]
-    pub fn run_windows_sandbox_capture(request: ElevatedSandboxCaptureRequest<'_>) -> Result<CaptureResult> {
+    pub fn run_windows_sandbox_capture(
+        request: ElevatedSandboxCaptureRequest<'_>,
+    ) -> Result<CaptureResult> {
         let ElevatedSandboxCaptureRequest {
             policy_json_or_preset,
             sandbox_policy_cwd,
@@ -518,7 +520,9 @@ mod stub {
 
     /// Stub implementation for non-Windows targets; sandboxing only works on Windows.
     #[allow(clippy::too_many_arguments)]
-    pub fn run_windows_sandbox_capture(_request: ElevatedSandboxCaptureRequest<'_>) -> Result<CaptureResult> {
+    pub fn run_windows_sandbox_capture(
+        _request: ElevatedSandboxCaptureRequest<'_>,
+    ) -> Result<CaptureResult> {
         bail!("Windows sandbox is only available on Windows")
     }
 }
