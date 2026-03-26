@@ -79,7 +79,7 @@ async fn exec_command_with_tty(
 ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
     let manager = &session.services.unified_exec_manager;
     let process_id = manager.allocate_process_id().await;
-    let cwd = workdir.unwrap_or_else(|| turn.cwd.clone());
+    let cwd = workdir.unwrap_or_else(|| turn.cwd.clone().to_path_buf());
     let command = vec!["bash".to_string(), "-lc".to_string(), cmd.to_string()];
     let request = test_exec_request(turn, command.clone(), cwd.clone(), shell_env());
 
