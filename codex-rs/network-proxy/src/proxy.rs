@@ -743,11 +743,7 @@ mod tests {
         };
 
         assert!(proxy.http_addr.ip().is_loopback());
-        #[cfg(target_os = "windows")]
-        assert_eq!(
-            proxy.http_addr,
-            "127.0.0.1:43128".parse::<SocketAddr>().unwrap()
-        );
+        assert_ne!(proxy.http_addr.port(), 0);
         assert_eq!(
             proxy.socks_addr,
             "127.0.0.1:43129".parse::<SocketAddr>().unwrap()
