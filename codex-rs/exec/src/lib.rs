@@ -120,6 +120,12 @@ enum InitialOperation {
     },
 }
 
+enum StdinPromptBehavior {
+    RequiredIfPiped,
+    Forced,
+    OptionalAppend,
+}
+
 struct RequestIdSequencer {
     next: i64,
 }
@@ -615,7 +621,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             )
         }
         (None, root_prompt, imgs) => {
-            let prompt_text = resolve_prompt(root_prompt);
+            let prompt_text = resolve_root_prompt(root_prompt);
             let mut items: Vec<UserInput> = imgs
                 .into_iter()
                 .map(|path| UserInput::LocalImage { path })
@@ -1528,43 +1534,84 @@ fn decode_utf16(
     String::from_utf16(&units).map_err(|_| PromptDecodeError::InvalidUtf16 { encoding })
 }
 
-fn resolve_prompt(prompt_arg: Option<String>) -> String {
-    match prompt_arg {
-        Some(p) if p != "-" => p,
-        maybe_dash => {
-            let force_stdin = matches!(maybe_dash.as_deref(), Some("-"));
+fn read_prompt_from_stdin(behavior: StdinPromptBehavior) -> Option<String> {
+    let stdin_is_terminal = std::io::stdin().is_terminal();
 
-            if std::io::stdin().is_terminal() && !force_stdin {
-                eprintln!(
-                    "No prompt provided. Either specify one as an argument or pipe the prompt into stdin."
-                );
-                std::process::exit(1);
-            }
+    match behavior {
+        StdinPromptBehavior::RequiredIfPiped if stdin_is_terminal => {
+            eprintln!(
+                "No prompt provided. Either specify one as an argument or pipe the prompt into stdin."
+            );
+            std::process::exit(1);
+        }
+        StdinPromptBehavior::RequiredIfPiped => {
+            eprintln!("Reading prompt from stdin...");
+        }
+        StdinPromptBehavior::Forced => {}
+        StdinPromptBehavior::OptionalAppend if stdin_is_terminal => return None,
+        StdinPromptBehavior::OptionalAppend => {
+            eprintln!("Reading additional input from stdin...");
+        }
+    }
 
-            if !force_stdin {
-                eprintln!("Reading prompt from stdin...");
-            }
+    let mut bytes = Vec::new();
+    if let Err(e) = std::io::stdin().read_to_end(&mut bytes) {
+        eprintln!("Failed to read prompt from stdin: {e}");
+        std::process::exit(1);
+    }
 
-            let mut bytes = Vec::new();
-            if let Err(e) = std::io::stdin().read_to_end(&mut bytes) {
-                eprintln!("Failed to read prompt from stdin: {e}");
-                std::process::exit(1);
-            }
+    let buffer = match decode_prompt_bytes(&bytes) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to read prompt from stdin: {e}");
+            std::process::exit(1);
+        }
+    };
 
-            let buffer = match decode_prompt_bytes(&bytes) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("Failed to read prompt from stdin: {e}");
-                    std::process::exit(1);
-                }
-            };
-
-            if buffer.trim().is_empty() {
+    if buffer.trim().is_empty() {
+        return match behavior {
+            StdinPromptBehavior::OptionalAppend => None,
+            StdinPromptBehavior::RequiredIfPiped | StdinPromptBehavior::Forced => {
                 eprintln!("No prompt provided via stdin.");
                 std::process::exit(1);
             }
-            buffer
+        };
+    }
+
+    Some(buffer)
+}
+
+fn prompt_with_stdin_context(prompt: &str, stdin_text: &str) -> String {
+    let mut combined = format!("{prompt}\n\n<stdin>\n{stdin_text}");
+    if !stdin_text.ends_with('\n') {
+        combined.push('\n');
+    }
+    combined.push_str("</stdin>");
+    combined
+}
+
+fn resolve_prompt(prompt_arg: Option<String>) -> String {
+    match prompt_arg {
+        Some(p) if p != "-" => p,
+        maybe_dash => read_prompt_from_stdin(if matches!(maybe_dash.as_deref(), Some("-")) {
+            StdinPromptBehavior::Forced
+        } else {
+            StdinPromptBehavior::RequiredIfPiped
+        })
+        .expect("required stdin prompt should produce content"),
+    }
+}
+
+fn resolve_root_prompt(prompt_arg: Option<String>) -> String {
+    match prompt_arg {
+        Some(prompt) if prompt != "-" => {
+            if let Some(stdin_text) = read_prompt_from_stdin(StdinPromptBehavior::OptionalAppend) {
+                prompt_with_stdin_context(&prompt, &stdin_text)
+            } else {
+                prompt
+            }
         }
+        maybe_dash => resolve_prompt(maybe_dash),
     }
 }
 
@@ -1776,6 +1823,26 @@ mod tests {
         let err = decode_prompt_bytes(&input).expect_err("invalid utf-8 should fail");
 
         assert_eq!(err, PromptDecodeError::InvalidUtf8 { valid_up_to: 0 });
+    }
+
+    #[test]
+    fn prompt_with_stdin_context_wraps_stdin_block() {
+        let combined = prompt_with_stdin_context("Summarize this concisely", "my output");
+
+        assert_eq!(
+            combined,
+            "Summarize this concisely\n\n<stdin>\nmy output\n</stdin>"
+        );
+    }
+
+    #[test]
+    fn prompt_with_stdin_context_preserves_trailing_newline() {
+        let combined = prompt_with_stdin_context("Summarize this concisely", "my output\n");
+
+        assert_eq!(
+            combined,
+            "Summarize this concisely\n\n<stdin>\nmy output\n</stdin>"
+        );
     }
 
     #[test]
