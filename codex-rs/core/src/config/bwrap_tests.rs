@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(target_os = "linux")]
 use pretty_assertions::assert_eq;
 #[cfg(target_os = "linux")]
 use std::path::Path;
