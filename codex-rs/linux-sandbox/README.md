@@ -8,23 +8,24 @@ This crate is responsible for producing:
   - this should also be true of the `codex` multitool CLI
 
 On Linux, the bubblewrap pipeline prefers the system `/usr/bin/bwrap` whenever
-it is available and supports the required argv-rewrite flags. If `/usr/bin/bwrap`
-is missing or too old to support the required flags, the helper falls back to
-the vendored bubblewrap path compiled into this binary.
-Codex also surfaces a startup warning when `/usr/bin/bwrap` is missing or too
-old to support the required flags so users know it is falling back to the
-vendored helper.
+it is available. If `/usr/bin/bwrap` is present but too old to support
+`--argv0`, the helper keeps using system bubblewrap and switches to a
+no-`--argv0` compatibility path for the inner re-exec. If `/usr/bin/bwrap` is
+missing, the helper falls back to the vendored bubblewrap path compiled into
+this binary.
+Codex also surfaces a startup warning when `/usr/bin/bwrap` is missing so users
+know it is falling back to the vendored helper.
 
 **Current Behavior**
 - Legacy `SandboxPolicy` / `sandbox_mode` configs remain supported.
 - Bubblewrap is the default filesystem sandbox pipeline.
-- If `/usr/bin/bwrap` is present and supports the required argv-rewrite flags,
-  the helper uses it.
-- If `/usr/bin/bwrap` is missing or too old to support the required flags, the
-  helper falls back to the vendored bubblewrap path.
-- If `/usr/bin/bwrap` is missing or too old to support the required flags,
-  Codex also surfaces a startup warning instead of printing directly from the
-  sandbox helper.
+- If `/usr/bin/bwrap` is present, the helper uses it.
+- If `/usr/bin/bwrap` is present but too old to support `--argv0`, the helper
+  uses a no-`--argv0` compatibility path for the inner re-exec.
+- If `/usr/bin/bwrap` is missing, the helper falls back to the vendored
+  bubblewrap path.
+- If `/usr/bin/bwrap` is missing, Codex also surfaces a startup warning instead
+  of printing directly from the sandbox helper.
 - Legacy Landlock + mount protections remain available as an explicit legacy
   fallback path.
 - Set `features.use_legacy_landlock = true` (or CLI `-c use_legacy_landlock=true`)

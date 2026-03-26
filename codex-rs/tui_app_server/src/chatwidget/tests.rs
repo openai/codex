@@ -26,6 +26,10 @@ use codex_app_server_protocol::CollabAgentState as AppServerCollabAgentState;
 use codex_app_server_protocol::CollabAgentStatus as AppServerCollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool as AppServerCollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus as AppServerCollabAgentToolCallStatus;
+use codex_app_server_protocol::CommandAction as AppServerCommandAction;
+use codex_app_server_protocol::CommandExecutionRequestApprovalParams as AppServerCommandExecutionRequestApprovalParams;
+use codex_app_server_protocol::CommandExecutionSource as AppServerCommandExecutionSource;
+use codex_app_server_protocol::CommandExecutionStatus as AppServerCommandExecutionStatus;
 use codex_app_server_protocol::ErrorNotification;
 use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::GuardianApprovalReview;
@@ -2046,6 +2050,7 @@ async fn make_chatwidget_manual(
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
         last_copyable_output: None,
         running_commands: HashMap::new(),
+        collab_agent_metadata: HashMap::new(),
         pending_collab_spawn_requests: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
         skills_all: Vec::new(),
@@ -3502,6 +3507,40 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
     );
 }
 
+#[test]
+fn app_server_exec_approval_request_splits_shell_wrapped_command() {
+    let script = r#"python3 -c 'print("Hello, world!")'"#;
+    let request =
+        exec_approval_request_from_params(AppServerCommandExecutionRequestApprovalParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "item-1".to_string(),
+            approval_id: Some("approval-1".to_string()),
+            reason: None,
+            network_approval_context: None,
+            command: Some(
+                shlex::try_join(["/bin/zsh", "-lc", script])
+                    .expect("round-trippable shell wrapper"),
+            ),
+            cwd: Some(PathBuf::from("/tmp")),
+            command_actions: None,
+            additional_permissions: None,
+            skill_metadata: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            available_decisions: None,
+        });
+
+    assert_eq!(
+        request.command,
+        vec![
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            script.to_string(),
+        ]
+    );
+}
+
 #[tokio::test]
 async fn exec_approval_uses_approval_id_when_present() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -4649,6 +4688,69 @@ async fn live_app_server_file_change_item_started_preserves_changes() {
     );
 }
 
+#[tokio::test]
+async fn live_app_server_command_execution_strips_shell_wrapper() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    let script = r#"python3 -c 'print("Hello, world!")'"#;
+    let command =
+        shlex::try_join(["/bin/zsh", "-lc", script]).expect("round-trippable shell wrapper");
+
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::CommandExecution {
+                id: "cmd-1".to_string(),
+                command: command.clone(),
+                cwd: PathBuf::from("/tmp"),
+                process_id: None,
+                source: AppServerCommandExecutionSource::UserShell,
+                status: AppServerCommandExecutionStatus::InProgress,
+                command_actions: vec![AppServerCommandAction::Unknown {
+                    command: script.to_string(),
+                }],
+                aggregated_output: None,
+                exit_code: None,
+                duration_ms: None,
+            },
+        }),
+        None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item: AppServerThreadItem::CommandExecution {
+                id: "cmd-1".to_string(),
+                command,
+                cwd: PathBuf::from("/tmp"),
+                process_id: None,
+                source: AppServerCommandExecutionSource::UserShell,
+                status: AppServerCommandExecutionStatus::Completed,
+                command_actions: vec![AppServerCommandAction::Unknown {
+                    command: script.to_string(),
+                }],
+                aggregated_output: Some("Hello, world!\n".to_string()),
+                exit_code: Some(0),
+                duration_ms: Some(5),
+            },
+        }),
+        None,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected one completed command history cell"
+    );
+    let blob = lines_to_single_string(cells.first().expect("command cell"));
+    assert_snapshot!(
+        "live_app_server_command_execution_strips_shell_wrapper",
+        blob
+    );
+}
+
 #[test]
 fn app_server_patch_changes_to_core_preserves_diffs() {
     let changes = app_server_patch_changes_to_core(vec![FileUpdateChange {
@@ -4677,6 +4779,16 @@ async fn live_app_server_collab_wait_items_render_history() {
         ThreadId::from_string("019cff70-2599-75e2-af72-b958ce5dc1cc").expect("valid thread id");
     let other_receiver_thread_id =
         ThreadId::from_string("019cff70-2599-75e2-af72-b96db334332d").expect("valid thread id");
+    chat.set_collab_agent_metadata(
+        receiver_thread_id,
+        Some("Robie".to_string()),
+        Some("explorer".to_string()),
+    );
+    chat.set_collab_agent_metadata(
+        other_receiver_thread_id,
+        Some("Ada".to_string()),
+        Some("reviewer".to_string()),
+    );
 
     chat.handle_server_notification(
         ServerNotification::ItemStarted(ItemStartedNotification {
@@ -12611,6 +12723,17 @@ async fn pre_tool_use_hook_events_render_snapshot() {
         "pre-tool-use:0:/tmp/hooks.json",
         "warming the shell",
         "pre_tool_use_hook_events_render_snapshot",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn post_tool_use_hook_events_render_snapshot() {
+    assert_hook_events_snapshot(
+        codex_protocol::protocol::HookEventName::PostToolUse,
+        "post-tool-use:0:/tmp/hooks.json",
+        "warming the shell",
+        "post_tool_use_hook_events_render_snapshot",
     )
     .await;
 }

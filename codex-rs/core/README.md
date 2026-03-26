@@ -59,10 +59,11 @@ only when the split filesystem policy round-trips through the legacy
 cases like `/repo = write`, `/repo/a = none`, `/repo/a/b = write`, where the
 more specific writable child must reopen under a denied parent.
 
-The Linux sandbox helper prefers `/usr/bin/bwrap` whenever it is available and
-supports the required argv-rewrite flags, and falls back to the vendored
-bubblewrap path compiled into the binary otherwise. When `/usr/bin/bwrap` is
-missing or too old to support the required flags, Codex also surfaces a startup
+The Linux sandbox helper prefers `/usr/bin/bwrap` whenever it is available. If
+`/usr/bin/bwrap` is present but too old to support `--argv0`, the helper keeps
+using system bubblewrap and switches to a no-`--argv0` compatibility path for
+the inner re-exec. If `/usr/bin/bwrap` is missing, it falls back to the
+vendored bubblewrap path compiled into the binary and Codex surfaces a startup
 warning through its normal notification path instead of printing directly from
 the sandbox helper.
 

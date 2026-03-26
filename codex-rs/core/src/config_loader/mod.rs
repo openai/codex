@@ -52,10 +52,12 @@ pub use codex_config::TextRange;
 pub use codex_config::WebSearchModeRequirement;
 pub(crate) use codex_config::build_cli_overrides_layer;
 pub(crate) use codex_config::config_error_from_toml;
+pub use codex_config::default_project_root_markers;
 pub use codex_config::format_config_error;
 pub use codex_config::format_config_error_with_source;
 pub(crate) use codex_config::io_error_from_config_error;
 pub use codex_config::merge_toml_values;
+pub use codex_config::project_root_markers_from_config;
 #[cfg(test)]
 pub(crate) use codex_config::version_for_toml;
 
@@ -66,8 +68,6 @@ pub const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/codex/config.toml";
 
 #[cfg(windows)]
 const DEFAULT_PROGRAM_DATA_DIR_WINDOWS: &str = r"C:\ProgramData";
-
-const DEFAULT_PROJECT_ROOT_MARKERS: &[&str] = &[".git"];
 
 pub(crate) async fn first_layer_config_error(layers: &ConfigLayerStack) -> Option<ConfigError> {
     codex_config::first_layer_config_error::<ConfigToml>(layers, CONFIG_TOML_FILE).await
@@ -285,6 +285,11 @@ pub async fn load_config_layers_state(
         ));
     }
     if let Some(config) = managed_config_from_mdm {
+        // As a general rule, config from MDM should _not_ include relative
+        // paths, starting with `./`, but a path starting with `~/` _is_ a
+        // supported use case. Because resolve_relative_paths_in_config_toml()
+        // relies on AbsolutePathBufGuard to resolve `~/`, we must supply a
+        // value for base_dir, so codex_home is as good a value as any.
         let managed_config =
             resolve_relative_paths_in_config_toml(config.managed_config, codex_home)?;
         layers.push(ConfigLayerEntry::new_with_raw_toml(
@@ -522,55 +527,6 @@ async fn load_requirements_from_legacy_scheme(
     }
 
     Ok(())
-}
-
-/// Reads `project_root_markers` from the [toml::Value] produced by merging
-/// `config.toml` from the config layers in the stack preceding
-/// [ConfigLayerSource::Project].
-///
-/// Invariants:
-/// - If `project_root_markers` is not specified, returns `Ok(None)`.
-/// - If `project_root_markers` is specified, returns `Ok(Some(markers))` where
-///   `markers` is a `Vec<String>` (including `Ok(Some(Vec::new()))` for an
-///   empty array, which indicates that root detection should be disabled).
-/// - Returns an error if `project_root_markers` is specified but is not an
-///   array of strings.
-pub(crate) fn project_root_markers_from_config(
-    config: &TomlValue,
-) -> io::Result<Option<Vec<String>>> {
-    let Some(table) = config.as_table() else {
-        return Ok(None);
-    };
-    let Some(markers_value) = table.get("project_root_markers") else {
-        return Ok(None);
-    };
-    let TomlValue::Array(entries) = markers_value else {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "project_root_markers must be an array of strings",
-        ));
-    };
-    if entries.is_empty() {
-        return Ok(Some(Vec::new()));
-    }
-    let mut markers = Vec::new();
-    for entry in entries {
-        let Some(marker) = entry.as_str() else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "project_root_markers must be an array of strings",
-            ));
-        };
-        markers.push(marker.to_string());
-    }
-    Ok(Some(markers))
-}
-
-pub(crate) fn default_project_root_markers() -> Vec<String> {
-    DEFAULT_PROJECT_ROOT_MARKERS
-        .iter()
-        .map(ToString::to_string)
-        .collect()
 }
 
 struct ProjectTrustContext {

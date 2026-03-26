@@ -1,5 +1,5 @@
 use super::*;
-use crate::skills::model::SkillDependencies;
+use crate::model::SkillDependencies;
 use codex_protocol::protocol::SkillScope;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
@@ -48,6 +48,7 @@ fn collect_missing_respects_canonical_installed_key() {
             disabled_tools: None,
             scopes: None,
             oauth_resource: None,
+            tools: HashMap::new(),
         },
     )]);
 
@@ -97,6 +98,7 @@ fn collect_missing_dedupes_by_canonical_key_but_preserves_original_name() {
             disabled_tools: None,
             scopes: None,
             oauth_resource: None,
+            tools: HashMap::new(),
         },
     )]);
 

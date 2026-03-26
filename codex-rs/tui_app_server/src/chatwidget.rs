@@ -140,6 +140,7 @@ use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::BackgroundEventEvent;
 #[cfg(test)]
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
+use codex_protocol::protocol::CollabAgentRef;
 #[cfg(test)]
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
 use codex_protocol::protocol::CollabAgentStatusEntry;
@@ -310,6 +311,7 @@ use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
 use crate::exec_cell::ExecCell;
 use crate::exec_cell::new_active_exec_command;
+use crate::exec_command::split_command_string;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
@@ -757,6 +759,7 @@ pub(crate) struct ChatWidget {
     // Latest completed user-visible Codex output that `/copy` should place on the clipboard.
     last_copyable_output: Option<String>,
     running_commands: HashMap<String, RunningCommand>,
+    collab_agent_metadata: HashMap<ThreadId, CollabAgentMetadata>,
     pending_collab_spawn_requests: HashMap<String, multi_agents::SpawnRequestSummary>,
     suppressed_exec_calls: HashSet<String>,
     skills_all: Vec<ProtocolSkillMetadata>,
@@ -847,7 +850,6 @@ pub(crate) struct ChatWidget {
     quit_shortcut_key: Option<KeyBinding>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
-    #[cfg(test)]
     // Snapshot of token usage to restore after review mode exits.
     pre_review_token_info: Option<Option<TokenUsageInfo>>,
     // Whether the next streamed assistant content should be preceded by a final message separator.
@@ -902,6 +904,18 @@ pub(crate) struct ChatWidget {
     realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_event: Option<RenderedUserMessageEvent>,
     last_non_retry_error: Option<(String, String)>,
+}
+
+/// Cached nickname and role for a collab agent thread, used to attach human-readable labels to
+/// rendered tool-call items.
+///
+/// Populated externally by `App` via `set_collab_agent_metadata` and consulted by the
+/// notification-to-core-event conversion helpers. Defaults to empty so that missing metadata
+/// degrades to the previous behavior of showing raw thread ids.
+#[derive(Clone, Debug, Default)]
+struct CollabAgentMetadata {
+    agent_nickname: Option<String>,
+    agent_role: Option<String>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1247,7 +1261,11 @@ fn exec_approval_request_from_params(
 ) -> ExecApprovalRequestEvent {
     ExecApprovalRequestEvent {
         call_id: params.item_id,
-        command: params.command.into_iter().collect(),
+        command: params
+            .command
+            .as_deref()
+            .map(split_command_string)
+            .unwrap_or_default(),
         cwd: params.cwd.unwrap_or_default(),
         reason: params.reason,
         network_approval_context: params
@@ -1379,9 +1397,12 @@ fn app_server_collab_state_to_core(state: &AppServerCollabAgentState) -> AgentSt
     }
 }
 
+/// Converts app-server collab agent states into the core protocol representation, enriching each
+/// entry with cached nickname and role metadata so rendered items show human-readable names.
 fn app_server_collab_agent_statuses_to_core(
     receiver_thread_ids: &[String],
     agents_states: &HashMap<String, AppServerCollabAgentState>,
+    collab_agent_metadata: &HashMap<ThreadId, CollabAgentMetadata>,
 ) -> (Vec<CollabAgentStatusEntry>, HashMap<ThreadId, AgentStatus>) {
     let mut agent_statuses = Vec::new();
     let mut statuses = HashMap::new();
@@ -1394,16 +1415,45 @@ fn app_server_collab_agent_statuses_to_core(
             continue;
         };
         let status = app_server_collab_state_to_core(agent_state);
+        let metadata = collab_agent_metadata
+            .get(&thread_id)
+            .cloned()
+            .unwrap_or_default();
         agent_statuses.push(CollabAgentStatusEntry {
             thread_id,
-            agent_nickname: None,
-            agent_role: None,
+            agent_nickname: metadata.agent_nickname,
+            agent_role: metadata.agent_role,
             status: status.clone(),
         });
         statuses.insert(thread_id, status);
     }
 
     (agent_statuses, statuses)
+}
+
+/// Builds `CollabAgentRef` entries for every valid receiver thread, attaching cached metadata.
+///
+/// Used when converting collab `Wait` tool-call items so the rendered waiting list shows agent
+/// names instead of bare thread ids.
+fn app_server_collab_receiver_agent_refs(
+    receiver_thread_ids: &[String],
+    collab_agent_metadata: &HashMap<ThreadId, CollabAgentMetadata>,
+) -> Vec<CollabAgentRef> {
+    receiver_thread_ids
+        .iter()
+        .filter_map(|thread_id| {
+            let thread_id = app_server_collab_thread_id_to_core(thread_id)?;
+            let metadata = collab_agent_metadata
+                .get(&thread_id)
+                .cloned()
+                .unwrap_or_default();
+            Some(CollabAgentRef {
+                thread_id,
+                agent_nickname: metadata.agent_nickname,
+                agent_role: metadata.agent_role,
+            })
+        })
+        .collect()
 }
 
 fn request_permissions_from_params(
@@ -1489,6 +1539,35 @@ fn web_search_action_to_core(
 }
 
 impl ChatWidget {
+    /// Stores or overwrites the cached nickname and role for a collab agent thread.
+    ///
+    /// Called by `App::upsert_agent_picker_thread` and `App::replace_chat_widget` to keep the
+    /// rendering metadata in sync with the navigation cache. Must be called before any
+    /// notification referencing this thread is processed, otherwise the rendered item will fall
+    /// back to showing the raw thread id.
+    pub(crate) fn set_collab_agent_metadata(
+        &mut self,
+        thread_id: ThreadId,
+        agent_nickname: Option<String>,
+        agent_role: Option<String>,
+    ) {
+        self.collab_agent_metadata.insert(
+            thread_id,
+            CollabAgentMetadata {
+                agent_nickname,
+                agent_role,
+            },
+        );
+    }
+
+    /// Returns the cached metadata for a thread, defaulting to empty if none has been registered.
+    fn collab_agent_metadata(&self, thread_id: ThreadId) -> CollabAgentMetadata {
+        self.collab_agent_metadata
+            .get(&thread_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     fn realtime_conversation_enabled(&self) -> bool {
         self.config.features.enabled(Feature::RealtimeConversation)
             && cfg!(not(target_os = "linux"))
@@ -2429,7 +2508,6 @@ impl ChatWidget {
         Some(info.total_token_usage.tokens_in_context_window())
     }
 
-    #[cfg(test)]
     fn restore_pre_review_token_info(&mut self) {
         if let Some(saved) = self.pre_review_token_info.take() {
             match saved {
@@ -3443,6 +3521,8 @@ impl ChatWidget {
         let first_receiver = receiver_thread_ids
             .first()
             .and_then(|thread_id| app_server_collab_thread_id_to_core(thread_id));
+        let first_receiver_metadata =
+            first_receiver.map(|thread_id| self.collab_agent_metadata(thread_id));
 
         match tool {
             CollabAgentTool::SpawnAgent => {
@@ -3473,8 +3553,12 @@ impl ChatWidget {
                             call_id: id,
                             sender_thread_id,
                             new_thread_id: first_receiver,
-                            new_agent_nickname: None,
-                            new_agent_role: None,
+                            new_agent_nickname: first_receiver_metadata
+                                .as_ref()
+                                .and_then(|metadata| metadata.agent_nickname.clone()),
+                            new_agent_role: first_receiver_metadata
+                                .as_ref()
+                                .and_then(|metadata| metadata.agent_role.clone()),
                             prompt: prompt.unwrap_or_default(),
                             model: String::new(),
                             reasoning_effort: ReasoningEffortConfig::Medium,
@@ -3499,8 +3583,12 @@ impl ChatWidget {
                             call_id: id,
                             sender_thread_id,
                             receiver_thread_id,
-                            receiver_agent_nickname: None,
-                            receiver_agent_role: None,
+                            receiver_agent_nickname: first_receiver_metadata
+                                .as_ref()
+                                .and_then(|metadata| metadata.agent_nickname.clone()),
+                            receiver_agent_role: first_receiver_metadata
+                                .as_ref()
+                                .and_then(|metadata| metadata.agent_role.clone()),
                             prompt: prompt.unwrap_or_default(),
                             status: receiver_thread_ids
                                 .iter()
@@ -3521,8 +3609,12 @@ impl ChatWidget {
                                 call_id: id,
                                 sender_thread_id,
                                 receiver_thread_id,
-                                receiver_agent_nickname: None,
-                                receiver_agent_role: None,
+                                receiver_agent_nickname: first_receiver_metadata
+                                    .as_ref()
+                                    .and_then(|metadata| metadata.agent_nickname.clone()),
+                                receiver_agent_role: first_receiver_metadata
+                                    .as_ref()
+                                    .and_then(|metadata| metadata.agent_role.clone()),
                             },
                         ));
                     } else {
@@ -3531,8 +3623,12 @@ impl ChatWidget {
                                 call_id: id,
                                 sender_thread_id,
                                 receiver_thread_id,
-                                receiver_agent_nickname: None,
-                                receiver_agent_role: None,
+                                receiver_agent_nickname: first_receiver_metadata
+                                    .as_ref()
+                                    .and_then(|metadata| metadata.agent_nickname.clone()),
+                                receiver_agent_role: first_receiver_metadata
+                                    .as_ref()
+                                    .and_then(|metadata| metadata.agent_role.clone()),
                                 status: receiver_thread_ids
                                     .iter()
                                     .find_map(|thread_id| agents_states.get(thread_id))
@@ -3556,7 +3652,10 @@ impl ChatWidget {
                                     app_server_collab_thread_id_to_core(thread_id)
                                 })
                                 .collect(),
-                            receiver_agents: Vec::new(),
+                            receiver_agents: app_server_collab_receiver_agent_refs(
+                                &receiver_thread_ids,
+                                &self.collab_agent_metadata,
+                            ),
                             call_id: id,
                         },
                     ));
@@ -3564,6 +3663,7 @@ impl ChatWidget {
                     let (agent_statuses, statuses) = app_server_collab_agent_statuses_to_core(
                         &receiver_thread_ids,
                         &agents_states,
+                        &self.collab_agent_metadata,
                     );
                     self.on_collab_event(multi_agents::waiting_end(
                         codex_protocol::protocol::CollabWaitingEndEvent {
@@ -3584,8 +3684,12 @@ impl ChatWidget {
                             call_id: id,
                             sender_thread_id,
                             receiver_thread_id,
-                            receiver_agent_nickname: None,
-                            receiver_agent_role: None,
+                            receiver_agent_nickname: first_receiver_metadata
+                                .as_ref()
+                                .and_then(|metadata| metadata.agent_nickname.clone()),
+                            receiver_agent_role: first_receiver_metadata
+                                .as_ref()
+                                .and_then(|metadata| metadata.agent_role.clone()),
                             status: receiver_thread_ids
                                 .iter()
                                 .find_map(|thread_id| agents_states.get(thread_id))
@@ -4319,6 +4423,7 @@ impl ChatWidget {
             plan_stream_controller: None,
             last_copyable_output: None,
             running_commands: HashMap::new(),
+            collab_agent_metadata: HashMap::new(),
             pending_collab_spawn_requests: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
@@ -4360,7 +4465,6 @@ impl ChatWidget {
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,
             is_review_mode: false,
-            #[cfg(test)]
             pre_review_token_info: None,
             needs_final_message_separator: false,
             had_work_activity: false,
@@ -5707,7 +5811,7 @@ impl ChatWidget {
                         call_id: id,
                         process_id,
                         turn_id: turn_id.clone(),
-                        command: vec![command],
+                        command: split_command_string(&command),
                         cwd,
                         parsed_cmd: command_actions
                             .into_iter()
@@ -5722,7 +5826,7 @@ impl ChatWidget {
                         call_id: id,
                         process_id,
                         turn_id: turn_id.clone(),
-                        command: vec![command],
+                        command: split_command_string(&command),
                         cwd,
                         parsed_cmd: command_actions
                             .into_iter()
@@ -5855,17 +5959,12 @@ impl ChatWidget {
                 });
             }
             ThreadItem::EnteredReviewMode { review, .. } => {
-                self.add_to_history(history_cell::new_review_status_line(format!(
-                    ">> Code review started: {review} <<"
-                )));
-                if !self.bottom_pane.is_task_running() {
-                    self.bottom_pane.set_task_running(/*running*/ true);
+                if from_replay {
+                    self.enter_review_mode_with_hint(review, /*from_replay*/ true);
                 }
-                self.is_review_mode = true;
             }
-            ThreadItem::ExitedReviewMode { review, .. } => {
-                self.on_agent_message(review);
-                self.is_review_mode = false;
+            ThreadItem::ExitedReviewMode { .. } => {
+                self.exit_review_mode_after_item();
             }
             ThreadItem::ContextCompaction { .. } => {
                 self.on_agent_message("Context compacted".to_owned());
@@ -5990,7 +6089,7 @@ impl ChatWidget {
                 self.handle_turn_completed_notification(notification, replay_kind);
             }
             ServerNotification::ItemStarted(notification) => {
-                self.handle_item_started_notification(notification);
+                self.handle_item_started_notification(notification, replay_kind.is_some());
             }
             ServerNotification::ItemCompleted(notification) => {
                 self.handle_item_completed_notification(notification, replay_kind);
@@ -6274,7 +6373,11 @@ impl ChatWidget {
         }
     }
 
-    fn handle_item_started_notification(&mut self, notification: ItemStartedNotification) {
+    fn handle_item_started_notification(
+        &mut self,
+        notification: ItemStartedNotification,
+        from_replay: bool,
+    ) {
         match notification.item {
             ThreadItem::CommandExecution {
                 id,
@@ -6289,7 +6392,7 @@ impl ChatWidget {
                     call_id: id,
                     process_id,
                     turn_id: notification.turn_id,
-                    command: vec![command],
+                    command: split_command_string(&command),
                     cwd,
                     parsed_cmd: command_actions
                         .into_iter()
@@ -6351,10 +6454,9 @@ impl ChatWidget {
                 agents_states,
             }),
             ThreadItem::EnteredReviewMode { review, .. } => {
-                self.add_to_history(history_cell::new_review_status_line(format!(
-                    ">> Code review started: {review} <<"
-                )));
-                self.is_review_mode = true;
+                if !from_replay {
+                    self.enter_review_mode_with_hint(review, /*from_replay*/ false);
+                }
             }
             _ => {}
         }
@@ -6754,28 +6856,41 @@ impl ChatWidget {
         }
     }
 
-    #[cfg(test)]
-    fn on_entered_review_mode(&mut self, review: ReviewRequest, from_replay: bool) {
-        // Enter review mode and emit a concise banner
+    fn enter_review_mode_with_hint(&mut self, hint: String, from_replay: bool) {
         if self.pre_review_token_info.is_none() {
             self.pre_review_token_info = Some(self.token_info.clone());
         }
-        // Avoid toggling running state for replayed history events on resume.
         if !from_replay && !self.bottom_pane.is_task_running() {
             self.bottom_pane.set_task_running(/*running*/ true);
         }
         self.is_review_mode = true;
-        let hint = review
-            .user_facing_hint
-            .unwrap_or_else(|| codex_core::review_prompts::user_facing_hint(&review.target));
         let banner = format!(">> Code review started: {hint} <<");
         self.add_to_history(history_cell::new_review_status_line(banner));
         self.request_redraw();
     }
 
+    fn exit_review_mode_after_item(&mut self) {
+        self.flush_answer_stream_with_separator();
+        self.flush_interrupt_queue();
+        self.flush_active_cell();
+        self.is_review_mode = false;
+        self.restore_pre_review_token_info();
+        self.add_to_history(history_cell::new_review_status_line(
+            "<< Code review finished >>".to_string(),
+        ));
+        self.request_redraw();
+    }
+
+    #[cfg(test)]
+    fn on_entered_review_mode(&mut self, review: ReviewRequest, from_replay: bool) {
+        let hint = review
+            .user_facing_hint
+            .unwrap_or_else(|| codex_core::review_prompts::user_facing_hint(&review.target));
+        self.enter_review_mode_with_hint(hint, from_replay);
+    }
+
     #[cfg(test)]
     fn on_exited_review_mode(&mut self, review: ExitedReviewModeEvent) {
-        // Leave review mode; if output is present, flush pending stream + show results.
         if let Some(output) = review.review_output {
             self.flush_answer_stream_with_separator();
             self.flush_interrupt_queue();
@@ -6804,14 +6919,7 @@ impl ChatWidget {
             }
             // Final message is rendered as part of the AgentMessage.
         }
-
-        self.is_review_mode = false;
-        self.restore_pre_review_token_info();
-        // Append a finishing banner at the end of this turn.
-        self.add_to_history(history_cell::new_review_status_line(
-            "<< Code review finished >>".to_string(),
-        ));
-        self.request_redraw();
+        self.exit_review_mode_after_item();
     }
 
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
@@ -10809,6 +10917,7 @@ fn extract_first_bold(s: &str) -> Option<String> {
 fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'static str {
     match event_name {
         codex_protocol::protocol::HookEventName::PreToolUse => "PreToolUse",
+        codex_protocol::protocol::HookEventName::PostToolUse => "PostToolUse",
         codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
         codex_protocol::protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
         codex_protocol::protocol::HookEventName::Stop => "Stop",

@@ -19,7 +19,6 @@ use crate::protocol::GranularApprovalConfig;
 use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::SandboxPermissions;
-use crate::skills::SkillMetadata;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::PolicyParser;
@@ -36,7 +35,6 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::SkillScope;
 use codex_sandboxing::SandboxType;
 #[cfg(target_os = "macos")]
 use codex_sandboxing::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
@@ -81,55 +79,6 @@ fn read_only_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
 #[cfg(target_os = "macos")]
 fn unrestricted_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
     FileSystemSandboxPolicy::unrestricted()
-}
-
-fn test_skill_metadata(permission_profile: Option<PermissionProfile>) -> SkillMetadata {
-    SkillMetadata {
-        name: "skill".to_string(),
-        description: "description".to_string(),
-        short_description: None,
-        interface: None,
-        dependencies: None,
-        policy: None,
-        permission_profile,
-        managed_network_override: None,
-        path_to_skills_md: PathBuf::from("/tmp/skill/SKILL.md"),
-        scope: SkillScope::User,
-    }
-}
-
-#[test]
-fn execve_prompt_rejection_uses_skill_approval_for_skill_scripts() {
-    let decision_source = super::DecisionSource::SkillScript {
-        skill: test_skill_metadata(None),
-    };
-
-    assert_eq!(
-        super::execve_prompt_is_rejected_by_policy(
-            AskForApproval::Granular(GranularApprovalConfig {
-                sandbox_approval: true,
-                rules: true,
-                skill_approval: true,
-                request_permissions: true,
-                mcp_elicitations: true,
-            }),
-            &decision_source,
-        ),
-        None,
-    );
-    assert_eq!(
-        super::execve_prompt_is_rejected_by_policy(
-            AskForApproval::Granular(GranularApprovalConfig {
-                sandbox_approval: true,
-                rules: true,
-                skill_approval: false,
-                request_permissions: true,
-                mcp_elicitations: true,
-            }),
-            &decision_source,
-        ),
-        Some("approval required by skill, but AskForApproval::Granular.skill_approval is false"),
-    );
 }
 
 #[test]
@@ -389,42 +338,6 @@ fn shell_request_escalation_execution_is_explicit() {
                 macos_seatbelt_profile_extensions: Some(macos_seatbelt_profile_extensions),
             },
         )),
-    );
-}
-
-#[test]
-fn skill_escalation_execution_uses_additional_permissions() {
-    let requested_permissions = PermissionProfile {
-        file_system: Some(FileSystemPermissions {
-            read: None,
-            write: Some(vec![
-                AbsolutePathBuf::from_absolute_path("/tmp/output").unwrap(),
-            ]),
-        }),
-        ..Default::default()
-    };
-
-    assert_eq!(
-        CoreShellActionProvider::skill_escalation_execution(&test_skill_metadata(Some(
-            requested_permissions.clone(),
-        ))),
-        EscalationExecution::Permissions(EscalationPermissions::PermissionProfile(
-            requested_permissions,
-        )),
-    );
-}
-
-#[test]
-fn skill_escalation_execution_ignores_empty_permissions() {
-    assert_eq!(
-        CoreShellActionProvider::skill_escalation_execution(&test_skill_metadata(Some(
-            PermissionProfile::default(),
-        ))),
-        EscalationExecution::TurnDefault,
-    );
-    assert_eq!(
-        CoreShellActionProvider::skill_escalation_execution(&test_skill_metadata(None)),
-        EscalationExecution::TurnDefault,
     );
 }
 

@@ -1154,6 +1154,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fetch_cloud_requirements_allows_hc_plan_as_enterprise() {
+        let codex_home = tempdir().expect("tempdir");
+        let service = CloudRequirementsService::new(
+            auth_manager_with_plan("hc"),
+            Arc::new(StaticFetcher {
+                contents: Some("allowed_approval_policies = [\"never\"]".to_string()),
+            }),
+            codex_home.path().to_path_buf(),
+            CLOUD_REQUIREMENTS_TIMEOUT,
+        );
+        assert_eq!(
+            service.fetch().await,
+            Ok(Some(ConfigRequirementsToml {
+                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_sandbox_modes: None,
+                allowed_web_search_modes: None,
+                guardian_developer_instructions: None,
+                feature_requirements: None,
+                mcp_servers: None,
+                apps: None,
+                rules: None,
+                enforce_residency: None,
+                network: None,
+            }))
+        );
+    }
+
+    #[tokio::test]
     async fn fetch_cloud_requirements_handles_missing_contents() {
         let result = parse_for_fetch(None);
         assert!(result.is_none());

@@ -1,35 +1,37 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
-use tokio::sync::broadcast;
+use tokio::sync::watch;
 
 use crate::ExecServerError;
-use crate::protocol::ExecExitedNotification;
-use crate::protocol::ExecOutputDeltaNotification;
+use crate::ProcessId;
 use crate::protocol::ExecParams;
-use crate::protocol::ExecResponse;
-use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
-use crate::protocol::TerminateResponse;
 use crate::protocol::WriteResponse;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExecServerEvent {
-    OutputDelta(ExecOutputDeltaNotification),
-    Exited(ExecExitedNotification),
+pub struct StartedExecProcess {
+    pub process: Arc<dyn ExecProcess>,
 }
 
 #[async_trait]
 pub trait ExecProcess: Send + Sync {
-    async fn start(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError>;
+    fn process_id(&self) -> &ProcessId;
 
-    async fn read(&self, params: ReadParams) -> Result<ReadResponse, ExecServerError>;
+    fn subscribe_wake(&self) -> watch::Receiver<u64>;
 
-    async fn write(
+    async fn read(
         &self,
-        process_id: &str,
-        chunk: Vec<u8>,
-    ) -> Result<WriteResponse, ExecServerError>;
+        after_seq: Option<u64>,
+        max_bytes: Option<usize>,
+        wait_ms: Option<u64>,
+    ) -> Result<ReadResponse, ExecServerError>;
 
-    async fn terminate(&self, process_id: &str) -> Result<TerminateResponse, ExecServerError>;
+    async fn write(&self, chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError>;
 
-    fn subscribe_events(&self) -> broadcast::Receiver<ExecServerEvent>;
+    async fn terminate(&self) -> Result<(), ExecServerError>;
+}
+
+#[async_trait]
+pub trait ExecBackend: Send + Sync {
+    async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError>;
 }

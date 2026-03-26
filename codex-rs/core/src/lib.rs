@@ -5,7 +5,6 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
-mod analytics_client;
 pub mod api_bridge;
 mod apply_patch;
 mod apps;
@@ -54,7 +53,6 @@ pub mod models_manager;
 mod network_policy_decision;
 pub mod network_proxy_loader;
 mod original_image_detail;
-mod packages;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_CAPABILITY;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_METHOD;
 pub use mcp_connection_manager::SandboxState;
@@ -62,18 +60,44 @@ pub use text_encoding::bytes_to_string_smart;
 mod mcp_tool_call;
 mod memories;
 pub mod mention_syntax;
-mod mentions;
 pub mod message_history;
 mod model_provider_info;
 pub mod utils;
 pub use utils::path_utils;
 pub mod personality_migration;
 pub mod plugins;
+pub(crate) mod mentions {
+    pub(crate) use crate::plugins::build_connector_slug_counts;
+    pub(crate) use crate::plugins::build_skill_name_counts;
+    pub(crate) use crate::plugins::collect_explicit_app_ids;
+    pub(crate) use crate::plugins::collect_explicit_plugin_mentions;
+    pub(crate) use crate::plugins::collect_tool_mentions_from_messages;
+}
 mod sandbox_tags;
 pub mod sandboxing;
 mod session_prefix;
 mod session_startup_prewarm;
 mod shell_detect;
+pub mod skills;
+pub(crate) use skills::SkillError;
+pub(crate) use skills::SkillInjections;
+pub(crate) use skills::SkillLoadOutcome;
+pub(crate) use skills::SkillMetadata;
+pub(crate) use skills::SkillsLoadInput;
+pub(crate) use skills::SkillsManager;
+pub(crate) use skills::build_skill_injections;
+pub(crate) use skills::build_skill_name_counts;
+pub(crate) use skills::collect_env_var_dependencies;
+pub(crate) use skills::collect_explicit_skill_mentions;
+pub(crate) use skills::config_rules;
+pub(crate) use skills::injection;
+pub(crate) use skills::loader;
+pub(crate) use skills::manager;
+pub(crate) use skills::maybe_emit_implicit_skill_invocation;
+pub(crate) use skills::model;
+pub(crate) use skills::render_skills_section;
+pub(crate) use skills::resolve_skill_dependencies_for_turn;
+pub(crate) use skills::skills_load_input_from_config;
 mod skills_watcher;
 mod stream_events_utils;
 pub mod test_support;
@@ -108,9 +132,9 @@ pub type NewConversation = NewThread;
 #[deprecated(note = "use CodexThread")]
 pub type CodexConversation = CodexThread;
 // Re-export common auth types for workspace consumers
-pub use analytics_client::AnalyticsEventsClient;
 pub use auth::AuthManager;
 pub use auth::CodexAuth;
+pub use codex_analytics::AnalyticsEventsClient;
 mod default_client_forwarding;
 
 /// Default Codex HTTP client headers and reqwest construction.
@@ -127,7 +151,6 @@ pub mod seatbelt;
 mod session_rollout_init_error;
 pub mod shell;
 pub mod shell_snapshot;
-pub mod skills;
 pub mod spawn;
 pub mod state_db_bridge;
 pub use codex_rollout::state_db;

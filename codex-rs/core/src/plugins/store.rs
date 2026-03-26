@@ -1,6 +1,8 @@
 use super::load_plugin_manifest;
-use super::manifest::PLUGIN_MANIFEST_PATH;
+use codex_plugin::PluginId;
+use codex_plugin::validate_plugin_segment;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_plugins::PLUGIN_MANIFEST_PATH;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -8,53 +10,6 @@ use std::path::PathBuf;
 
 pub(crate) const DEFAULT_PLUGIN_VERSION: &str = "local";
 pub(crate) const PLUGINS_CACHE_DIR: &str = "plugins/cache";
-
-#[derive(Debug, thiserror::Error)]
-pub enum PluginIdError {
-    #[error("{0}")]
-    Invalid(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginId {
-    pub plugin_name: String,
-    pub marketplace_name: String,
-}
-
-impl PluginId {
-    pub fn new(plugin_name: String, marketplace_name: String) -> Result<Self, PluginIdError> {
-        validate_plugin_segment(&plugin_name, "plugin name").map_err(PluginIdError::Invalid)?;
-        validate_plugin_segment(&marketplace_name, "marketplace name")
-            .map_err(PluginIdError::Invalid)?;
-        Ok(Self {
-            plugin_name,
-            marketplace_name,
-        })
-    }
-
-    pub fn parse(plugin_key: &str) -> Result<Self, PluginIdError> {
-        let Some((plugin_name, marketplace_name)) = plugin_key.rsplit_once('@') else {
-            return Err(PluginIdError::Invalid(format!(
-                "invalid plugin key `{plugin_key}`; expected <plugin>@<marketplace>"
-            )));
-        };
-        if plugin_name.is_empty() || marketplace_name.is_empty() {
-            return Err(PluginIdError::Invalid(format!(
-                "invalid plugin key `{plugin_key}`; expected <plugin>@<marketplace>"
-            )));
-        }
-
-        Self::new(plugin_name.to_string(), marketplace_name.to_string()).map_err(|err| match err {
-            PluginIdError::Invalid(message) => {
-                PluginIdError::Invalid(format!("{message} in `{plugin_key}`"))
-            }
-        })
-    }
-
-    pub fn as_key(&self) -> String {
-        format!("{}@{}", self.plugin_name, self.marketplace_name)
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInstallResult {
@@ -219,21 +174,6 @@ fn plugin_name_for_source(source_path: &Path) -> Result<String, PluginStoreError
     validate_plugin_segment(&plugin_name, "plugin name")
         .map_err(PluginStoreError::Invalid)
         .map(|_| plugin_name)
-}
-
-fn validate_plugin_segment(segment: &str, kind: &str) -> Result<(), String> {
-    if segment.is_empty() {
-        return Err(format!("invalid {kind}: must not be empty"));
-    }
-    if !segment
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
-    {
-        return Err(format!(
-            "invalid {kind}: only ASCII letters, digits, `_`, and `-` are allowed"
-        ));
-    }
-    Ok(())
 }
 
 fn remove_existing_target(path: &Path) -> Result<(), PluginStoreError> {

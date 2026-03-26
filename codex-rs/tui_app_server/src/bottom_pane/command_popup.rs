@@ -68,6 +68,7 @@ impl CommandPopup {
             slash_commands::builtins_for_input(flags.into())
                 .into_iter()
                 .filter(|(name, _)| !name.starts_with("debug"))
+                .filter(|(_, cmd)| *cmd != SlashCommand::Apps)
                 .collect();
         // Exclude prompts that collide with builtin command names and sort by name.
         let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();

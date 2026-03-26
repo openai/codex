@@ -1,3 +1,4 @@
+use crate::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use crate::landlock::allow_network_for_proxy;
 use crate::landlock::create_linux_sandbox_command_args_for_policies;
 use crate::policy_transforms::EffectiveSandboxPermissions;
@@ -247,7 +248,10 @@ impl SandboxManager {
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(exe.to_string_lossy().to_string());
                 full_command.append(&mut args);
-                (full_command, Some("codex-linux-sandbox".to_string()))
+                (
+                    full_command,
+                    Some(linux_sandbox_arg0_override(exe.as_path())),
+                )
             }
             #[cfg(target_os = "windows")]
             SandboxType::WindowsRestrictedToken => (argv, None),
@@ -268,6 +272,14 @@ impl SandboxManager {
             network_sandbox_policy: effective_network_policy,
             arg0: arg0_override,
         })
+    }
+}
+
+fn linux_sandbox_arg0_override(exe: &Path) -> String {
+    if exe.file_name().and_then(|name| name.to_str()) == Some(CODEX_LINUX_SANDBOX_ARG0) {
+        exe.to_string_lossy().into_owned()
+    } else {
+        CODEX_LINUX_SANDBOX_ARG0.to_string()
     }
 }
 

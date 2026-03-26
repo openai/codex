@@ -12,6 +12,7 @@ use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::FunctionToolOutput;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_exec_server::EnvironmentManager;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::RuleMatch;
@@ -429,11 +430,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         CollaborationModesConfig::default(),
     ));
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
-    let skills_manager = Arc::new(SkillsManager::new(
-        config.codex_home.clone(),
-        Arc::clone(&plugins_manager),
-        true,
-    ));
+    let skills_manager = Arc::new(SkillsManager::new(config.codex_home.clone(), true));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
     let skills_watcher = Arc::new(SkillsWatcher::noop());
 
@@ -441,6 +438,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         config,
         auth_manager,
         models_manager,
+        environment_manager: Arc::new(EnvironmentManager::new(/*exec_server_url*/ None)),
         skills_manager,
         plugins_manager,
         mcp_manager,

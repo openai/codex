@@ -22,6 +22,9 @@ pub(crate) fn features_schema(schema_gen: &mut SchemaGenerator) -> Schema {
 
     let mut validation = ObjectValidation::default();
     for feature in FEATURES {
+        if feature.id == codex_features::Feature::Artifact {
+            continue;
+        }
         validation
             .properties
             .insert(feature.key.to_string(), schema_gen.subschema_for::<bool>());

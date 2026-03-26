@@ -12,11 +12,13 @@ use crate::bwrap::BwrapOptions;
 use crate::bwrap::create_bwrap_command_args;
 use crate::landlock::apply_sandbox_policy_to_current_thread;
 use crate::launcher::exec_bwrap;
+use crate::launcher::preferred_bwrap_supports_argv0;
 use crate::proxy_routing::activate_proxy_routes_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 
 #[derive(Debug, Parser)]
 /// CLI surface for the Linux sandbox helper.
@@ -426,13 +428,14 @@ fn run_bwrap_with_proc_fallback(
         mount_proc,
         network_mode,
     };
-    let bwrap_args = build_bwrap_argv(
+    let mut bwrap_args = build_bwrap_argv(
         inner,
         file_system_sandbox_policy,
         sandbox_policy_cwd,
         command_cwd,
         options,
     );
+    apply_inner_command_argv0(&mut bwrap_args.args);
     exec_bwrap(bwrap_args.args, bwrap_args.preserved_files);
 }
 
@@ -456,7 +459,7 @@ fn build_bwrap_argv(
     command_cwd: &Path,
     options: BwrapOptions,
 ) -> crate::bwrap::BwrapArgs {
-    let mut bwrap_args = create_bwrap_command_args(
+    let bwrap_args = create_bwrap_command_args(
         inner,
         file_system_sandbox_policy,
         sandbox_policy_cwd,
@@ -465,21 +468,51 @@ fn build_bwrap_argv(
     )
     .unwrap_or_else(|err| panic!("error building bubblewrap command: {err:?}"));
 
-    let command_separator_index = bwrap_args
-        .args
-        .iter()
-        .position(|arg| arg == "--")
-        .unwrap_or_else(|| panic!("bubblewrap argv is missing command separator '--'"));
-    bwrap_args.args.splice(
-        command_separator_index..command_separator_index,
-        ["--argv0".to_string(), "codex-linux-sandbox".to_string()],
-    );
-
     let mut argv = vec!["bwrap".to_string()];
     argv.extend(bwrap_args.args);
     crate::bwrap::BwrapArgs {
         args: argv,
         preserved_files: bwrap_args.preserved_files,
+    }
+}
+
+fn apply_inner_command_argv0(argv: &mut Vec<String>) {
+    apply_inner_command_argv0_for_launcher(
+        argv,
+        preferred_bwrap_supports_argv0(),
+        current_process_argv0(),
+    );
+}
+
+fn apply_inner_command_argv0_for_launcher(
+    argv: &mut Vec<String>,
+    supports_argv0: bool,
+    argv0_fallback_command: String,
+) {
+    let command_separator_index = argv
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or_else(|| panic!("bubblewrap argv is missing command separator '--'"));
+
+    if supports_argv0 {
+        argv.splice(
+            command_separator_index..command_separator_index,
+            ["--argv0".to_string(), CODEX_LINUX_SANDBOX_ARG0.to_string()],
+        );
+        return;
+    }
+
+    let command_index = command_separator_index + 1;
+    let Some(command) = argv.get_mut(command_index) else {
+        panic!("bubblewrap argv is missing inner command after '--'");
+    };
+    *command = argv0_fallback_command;
+}
+
+fn current_process_argv0() -> String {
+    match std::env::args_os().next() {
+        Some(argv0) => argv0.to_string_lossy().into_owned(),
+        None => panic!("failed to resolve current process argv[0]"),
     }
 }
 

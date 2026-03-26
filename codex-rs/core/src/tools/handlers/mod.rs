@@ -1,6 +1,5 @@
 pub(crate) mod agent_jobs;
 pub mod apply_patch;
-mod artifacts;
 mod dynamic;
 mod js_repl;
 mod list_dir;
@@ -35,7 +34,6 @@ use crate::sandboxing::SandboxPermissions;
 pub(crate) use crate::tools::code_mode::CodeModeExecuteHandler;
 pub(crate) use crate::tools::code_mode::CodeModeWaitHandler;
 pub use apply_patch::ApplyPatchHandler;
-pub use artifacts::ArtifactsHandler;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 pub use dynamic::DynamicToolHandler;
