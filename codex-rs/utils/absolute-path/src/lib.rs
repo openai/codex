@@ -304,8 +304,8 @@ mod tests {
         let temp_dir = tempdir().expect("base dir");
         let abs_path_buf = {
             let _guard = AbsolutePathBufGuard::new(temp_dir.path());
-            let input = serde_json::to_string(r#"~\code"#).expect("failed to serialize input");
-            serde_json::from_str::<AbsolutePathBuf>(&input).expect("failed to deserialize")
+            let input = serde_json::to_string(r#"~\code"#).expect("string should serialize as JSON");
+            serde_json::from_str::<AbsolutePathBuf>(&input).expect("is valid abs path")
         };
         assert_eq!(abs_path_buf.as_path(), home.join("code").as_path());
     }
