@@ -334,7 +334,6 @@ pub(crate) struct ToolsConfig {
     pub can_request_original_image_detail: bool,
     pub collab_tools: bool,
     pub multi_agent_v2: bool,
-    pub artifact_tools: bool,
     pub request_user_input: bool,
     pub default_mode_request_user_input: bool,
     pub experimental_supported_tools: Vec<String>,
@@ -394,8 +393,6 @@ impl ToolsConfig {
             && features.enabled(Feature::Apps)
             && features.enabled(Feature::Plugins);
         let include_original_image_detail = can_request_original_image_detail(features, model_info);
-        let include_artifact_tools =
-            features.enabled(Feature::Artifact) && codex_artifacts::can_manage_artifact_runtime();
         let include_image_gen_tool =
             features.enabled(Feature::ImageGeneration) && supports_image_generation(model_info);
         let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals);
@@ -471,7 +468,6 @@ impl ToolsConfig {
             can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
             multi_agent_v2: include_multi_agent_v2,
-            artifact_tools: include_artifact_tools,
             request_user_input: include_request_user_input,
             default_mode_request_user_input: include_default_mode_request_user_input,
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
@@ -2125,33 +2121,6 @@ JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
     })
 }
 
-fn create_artifacts_tool() -> ToolSpec {
-    const ARTIFACTS_FREEFORM_GRAMMAR: &str = r#"
-start: pragma_source | plain_source
-
-pragma_source: PRAGMA_LINE NEWLINE js_source
-plain_source: PLAIN_JS_SOURCE
-
-js_source: JS_SOURCE
-
-PRAGMA_LINE: /[ \t]*\/\/ codex-artifact-tool:[^\r\n]*/
-NEWLINE: /\r?\n/
-PLAIN_JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
-JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
-"#;
-
-    ToolSpec::Freeform(FreeformTool {
-        name: "artifacts".to_string(),
-        description: "Runs raw JavaScript against the installed `@oai/artifact-tool` package for creating presentations or spreadsheets. This is plain JavaScript executed by a local Node-compatible runtime with top-level await, not TypeScript: do not use type annotations, `interface`, `type`, or `import type`. Author code the same way you would for `import { Presentation, Workbook, PresentationFile, SpreadsheetFile, FileBlob, ... } from \"@oai/artifact-tool\"`, but omit that import line because the package is preloaded before your code runs. Named exports are copied onto `globalThis`, and the full module namespace is available as `globalThis.artifactTool`. This matches the upstream library-first API: create with `Presentation.create()` / `Workbook.create()`, preview with `presentation.export(...)` or `slide.export(...)`, and save files with `PresentationFile.exportPptx(...)` or `SpreadsheetFile.exportXlsx(...)`. Node built-ins such as `node:fs/promises` may still be imported when needed for saving preview bytes. This is a freeform tool: send raw JavaScript source text, optionally with a first-line pragma like `// codex-artifact-tool: timeout_ms=15000`; do not send JSON/quotes/markdown fences."
-            .to_string(),
-        format: FreeformToolFormat {
-            r#type: "grammar".to_string(),
-            syntax: "lark".to_string(),
-            definition: ARTIFACTS_FREEFORM_GRAMMAR.to_string(),
-        },
-    })
-}
-
 fn create_js_repl_reset_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "js_repl_reset".to_string(),
@@ -2588,7 +2557,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
-    use crate::tools::handlers::ArtifactsHandler;
     use crate::tools::handlers::CodeModeExecuteHandler;
     use crate::tools::handlers::CodeModeWaitHandler;
     use crate::tools::handlers::DynamicToolHandler;
@@ -2639,7 +2607,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     let code_mode_wait_handler = Arc::new(CodeModeWaitHandler);
     let js_repl_handler = Arc::new(JsReplHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
-    let artifacts_handler = Arc::new(ArtifactsHandler);
     let exec_permission_approvals_enabled = config.exec_permission_approvals_enabled;
 
     if config.code_mode_enabled {
@@ -2955,16 +2922,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
         config.code_mode_enabled,
     );
     builder.register_handler("view_image", view_image_handler);
-
-    if config.artifact_tools {
-        push_tool_spec(
-            &mut builder,
-            create_artifacts_tool(),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        builder.register_handler("artifacts", artifacts_handler);
-    }
 
     if config.collab_tools {
         push_tool_spec(
