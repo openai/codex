@@ -1,3 +1,6 @@
+//! Compatibility binary that preserves the `codex-tui` entrypoint while the crate
+//! directory and package name remain `tui_app_server` for now.
+
 use clap::Parser;
 use codex_arg0::Arg0DispatchPaths;
 use codex_arg0::arg0_dispatch_or_else;

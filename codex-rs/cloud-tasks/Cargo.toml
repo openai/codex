@@ -24,7 +24,7 @@ codex-client = { workspace = true }
 codex-core = { path = "../core" }
 codex-git-utils = { workspace = true }
 codex-login = { path = "../login" }
-codex-tui = { workspace = true }
+codex_tui = { package = "codex-tui", path = "../tui_app_server" }
 codex-utils-cli = { workspace = true }
 crossterm = { workspace = true, features = ["event-stream"] }
 ratatui = { workspace = true }

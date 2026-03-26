@@ -40,7 +40,7 @@ codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
 codex-stdio-to-uds = { workspace = true }
 codex-terminal-detection = { workspace = true }
-codex-tui = { workspace = true }
+codex_tui = { package = "codex-tui", path = "../tui_app_server" }
 libc = { workspace = true }
 owo-colors = { workspace = true }
 regex-lite = { workspace = true }

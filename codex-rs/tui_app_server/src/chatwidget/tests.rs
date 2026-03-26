@@ -75,7 +75,6 @@ use codex_core::config_loader::AppsRequirementsToml;
 use codex_core::config_loader::ConfigLayerStack;
 use codex_core::config_loader::ConfigRequirements;
 use codex_core::config_loader::ConfigRequirementsToml;
-use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::RequirementSource;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::plugins::OPENAI_CURATED_MARKETPLACE_NAME;
@@ -190,15 +189,8 @@ use toml::Value as TomlValue;
 
 async fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
-    let codex_home = std::env::temp_dir();
     ConfigBuilder::default()
-        .codex_home(codex_home.clone())
-        .loader_overrides(LoaderOverrides {
-            managed_config_path: Some(codex_home.join("chatwidget-test-managed-config.toml")),
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: Some(String::new()),
-            macos_managed_config_requirements_base64: Some(String::new()),
-        })
+        .codex_home(std::env::temp_dir())
         .build()
         .await
         .expect("config")

@@ -1,5 +1,5 @@
 [package]
-name = "codex-tui-app-server"
+name = "codex-tui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
