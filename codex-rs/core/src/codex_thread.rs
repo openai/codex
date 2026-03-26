@@ -74,6 +74,16 @@ impl CodexThread {
         self.codex.shutdown_and_wait().await
     }
 
+    #[doc(hidden)]
+    pub async fn ensure_rollout_materialized(&self) {
+        self.codex.session.ensure_rollout_materialized().await;
+    }
+
+    #[doc(hidden)]
+    pub async fn flush_rollout(&self) {
+        self.codex.session.flush_rollout().await;
+    }
+
     pub async fn submit_with_trace(
         &self,
         op: Op,
