@@ -1,14 +1,9 @@
 use super::*;
-#[cfg(target_os = "linux")]
 use pretty_assertions::assert_eq;
-#[cfg(target_os = "linux")]
 use std::path::Path;
-#[cfg(target_os = "linux")]
 use std::path::PathBuf;
-#[cfg(target_os = "linux")]
 use tempfile::tempdir;
 
-#[cfg(target_os = "linux")]
 #[test]
 fn system_bwrap_warning_reports_missing_system_bwrap() {
     let warning =
@@ -17,7 +12,6 @@ fn system_bwrap_warning_reports_missing_system_bwrap() {
     assert!(warning.contains("could not find system bubblewrap"));
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn system_bwrap_warning_skips_too_old_system_bwrap() {
     let fake_bwrap = write_fake_bwrap(
@@ -38,7 +32,6 @@ exit 1
     );
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn finds_first_executable_bwrap_in_search_paths() {
     let temp_dir = tempdir().expect("temp dir");
@@ -57,7 +50,6 @@ fn finds_first_executable_bwrap_in_search_paths() {
     );
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn skips_workspace_local_bwrap_in_search_paths() {
     let temp_dir = tempdir().expect("temp dir");
@@ -74,13 +66,6 @@ fn skips_workspace_local_bwrap_in_search_paths() {
     );
 }
 
-#[cfg(not(target_os = "linux"))]
-#[test]
-fn system_bwrap_warning_is_disabled_off_linux() {
-    assert!(system_bwrap_warning().is_none());
-}
-
-#[cfg(target_os = "linux")]
 fn write_fake_bwrap(contents: &str) -> tempfile::TempPath {
     write_fake_bwrap_in(
         &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -88,7 +73,6 @@ fn write_fake_bwrap(contents: &str) -> tempfile::TempPath {
     )
 }
 
-#[cfg(target_os = "linux")]
 fn write_fake_bwrap_in(dir: &Path, contents: &str) -> tempfile::TempPath {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
@@ -108,7 +92,6 @@ fn write_fake_bwrap_in(dir: &Path, contents: &str) -> tempfile::TempPath {
     path
 }
 
-#[cfg(target_os = "linux")]
 fn write_named_fake_bwrap_in(dir: &Path) -> PathBuf {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;

@@ -1,22 +1,12 @@
-#[cfg(target_os = "linux")]
 use std::path::Path;
-#[cfg(target_os = "linux")]
 use std::path::PathBuf;
 
-#[cfg(target_os = "linux")]
 const SYSTEM_BWRAP_PROGRAM: &str = "bwrap";
 
-#[cfg(target_os = "linux")]
 pub fn system_bwrap_warning() -> Option<String> {
     system_bwrap_warning_for_lookup(find_system_bwrap_in_path())
 }
 
-#[cfg(not(target_os = "linux"))]
-pub fn system_bwrap_warning() -> Option<String> {
-    None
-}
-
-#[cfg(target_os = "linux")]
 fn system_bwrap_warning_for_lookup(system_bwrap_path: Option<PathBuf>) -> Option<String> {
     match system_bwrap_path {
         Some(_) => None,
@@ -27,14 +17,12 @@ fn system_bwrap_warning_for_lookup(system_bwrap_path: Option<PathBuf>) -> Option
     }
 }
 
-#[cfg(target_os = "linux")]
 pub fn find_system_bwrap_in_path() -> Option<PathBuf> {
     let search_path = std::env::var_os("PATH")?;
     let cwd = std::env::current_dir().ok()?;
     find_system_bwrap_in_search_paths(std::iter::once(PathBuf::from(search_path)), &cwd)
 }
 
-#[cfg(target_os = "linux")]
 fn find_system_bwrap_in_search_paths(
     search_paths: impl IntoIterator<Item = PathBuf>,
     cwd: &Path,

@@ -21,6 +21,7 @@ libc = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 url = { workspace = true }
+which = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

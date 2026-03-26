@@ -2509,6 +2509,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "url",
+ "which 8.0.0",
 ]
 
 [[package]]
