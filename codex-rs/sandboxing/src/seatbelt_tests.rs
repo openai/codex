@@ -887,7 +887,7 @@ fn create_seatbelt_args_block_first_time_dot_codex_creation_with_exact_and_desce
         &policy,
         repo_root.as_path(),
         /*enforce_managed_network*/ false,
-        None,
+        /*network*/ None,
         /*extensions*/ None,
     );
 

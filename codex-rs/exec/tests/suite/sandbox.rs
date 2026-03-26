@@ -118,6 +118,7 @@ async fn python_multiprocessing_lock_works_under_sandbox() {
     #[cfg(target_os = "linux")]
     let sandbox_env = match linux_sandbox_test_env().await {
         Some(env) => env,
+        // Skip on Linux hosts where Landlock cannot actually be enforced.
         None => return,
     };
     #[cfg(not(target_os = "linux"))]
