@@ -170,7 +170,6 @@ impl NetworkDomainPermissionsToml {
 pub enum NetworkDomainPermissionToml {
     Allow,
     Deny,
-    None,
 }
 
 impl std::fmt::Display for NetworkDomainPermissionToml {
@@ -178,7 +177,6 @@ impl std::fmt::Display for NetworkDomainPermissionToml {
         let permission = match self {
             Self::Allow => "allow",
             Self::Deny => "deny",
-            Self::None => "none",
         };
         f.write_str(permission)
     }
@@ -1856,10 +1854,6 @@ guardian_developer_instructions = """
                 (
                     "blocked.example.com".to_string(),
                     NetworkDomainPermissionToml::Deny,
-                ),
-                (
-                    "ignored.example.com".to_string(),
-                    NetworkDomainPermissionToml::None,
                 ),
             ]),
         };

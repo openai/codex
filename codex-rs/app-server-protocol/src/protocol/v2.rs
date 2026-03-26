@@ -890,7 +890,6 @@ pub struct NetworkRequirements {
 pub enum NetworkDomainPermission {
     Allow,
     Deny,
-    None,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -7743,10 +7742,6 @@ mod tests {
                     "blocked.example.com".to_string(),
                     NetworkDomainPermission::Deny,
                 ),
-                (
-                    "ignored.example.com".to_string(),
-                    NetworkDomainPermission::None,
-                ),
             ])),
             allowed_domains: Some(vec!["api.openai.com".to_string()]),
             denied_domains: Some(vec!["blocked.example.com".to_string()]),
@@ -7775,8 +7770,7 @@ mod tests {
                 "dangerouslyAllowAllUnixSockets": true,
                 "domains": {
                     "api.openai.com": "allow",
-                    "blocked.example.com": "deny",
-                    "ignored.example.com": "none"
+                    "blocked.example.com": "deny"
                 },
                 "allowedDomains": ["api.openai.com"],
                 "deniedDomains": ["blocked.example.com"],

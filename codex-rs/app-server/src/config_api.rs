@@ -468,9 +468,6 @@ fn map_network_domain_permission_to_api(
         codex_core::config_loader::NetworkDomainPermissionToml::Deny => {
             NetworkDomainPermission::Deny
         }
-        codex_core::config_loader::NetworkDomainPermissionToml::None => {
-            NetworkDomainPermission::None
-        }
     }
 }
 
@@ -649,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn map_requirements_toml_to_api_omits_none_entries_from_legacy_network_fields() {
+    fn map_requirements_toml_to_api_omits_unix_socket_none_entries_from_legacy_network_fields() {
         let requirements = ConfigRequirementsToml {
             allowed_approval_policies: None,
             allowed_sandbox_modes: None,
@@ -667,12 +664,7 @@ mod tests {
                 allow_upstream_proxy: None,
                 dangerously_allow_non_loopback_proxy: None,
                 dangerously_allow_all_unix_sockets: None,
-                domains: Some(CoreNetworkDomainPermissionsToml {
-                    entries: std::collections::BTreeMap::from([(
-                        "ignored.example.com".to_string(),
-                        CoreNetworkDomainPermissionToml::None,
-                    )]),
-                }),
+                domains: None,
                 managed_allowed_domains_only: None,
                 unix_sockets: Some(CoreNetworkUnixSocketPermissionsToml {
                     entries: std::collections::BTreeMap::from([(
@@ -695,10 +687,7 @@ mod tests {
                 allow_upstream_proxy: None,
                 dangerously_allow_non_loopback_proxy: None,
                 dangerously_allow_all_unix_sockets: None,
-                domains: Some(std::collections::BTreeMap::from([(
-                    "ignored.example.com".to_string(),
-                    NetworkDomainPermission::None,
-                )])),
+                domains: None,
                 allowed_domains: None,
                 denied_domains: None,
                 unix_sockets: Some(std::collections::BTreeMap::from([(

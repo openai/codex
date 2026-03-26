@@ -105,10 +105,6 @@ fn network_permission_containers_project_allowed_and_denied_entries() {
                 "blocked.example.com".to_string(),
                 NetworkDomainPermissionToml::Deny,
             ),
-            (
-                "ignored.example.com".to_string(),
-                NetworkDomainPermissionToml::None,
-            ),
         ]),
     };
     let unix_sockets = NetworkUnixSocketPermissionsToml {

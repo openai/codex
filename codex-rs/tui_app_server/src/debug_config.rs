@@ -405,7 +405,6 @@ fn format_network_domain_permission(permission: NetworkDomainPermissionToml) -> 
     match permission {
         NetworkDomainPermissionToml::Allow => "allow",
         NetworkDomainPermissionToml::Deny => "deny",
-        NetworkDomainPermissionToml::None => "none",
     }
 }
 

@@ -180,7 +180,6 @@ default_permissions = "workspace"
 
 [permissions.workspace.network.domains]
 "managed.example.com" = "allow"
-"ignored.example.com" = "none"
 "#,
     )
     .expect("permissions profile should parse");
@@ -248,48 +247,4 @@ default_permissions = "workspace"
         constraints.denied_domains,
         Some(vec!["blocked.example.com".to_string()])
     );
-}
-
-#[test]
-fn apply_network_constraints_none_clears_matching_domain_entry() {
-    let lower_network: toml::Value = toml::from_str(
-        r#"
-default_permissions = "workspace"
-
-[permissions.workspace.network]
-
-[permissions.workspace.network.domains]
-"blocked.example.com" = "deny"
-"#,
-    )
-    .expect("lower layer should parse");
-    let higher_network: toml::Value = toml::from_str(
-        r#"
-default_permissions = "workspace"
-
-[permissions.workspace.network]
-
-[permissions.workspace.network.domains]
-"blocked.example.com" = "none"
-"#,
-    )
-    .expect("higher layer should parse");
-
-    let lower_network = selected_network_from_tables(
-        network_tables_from_toml(&lower_network).expect("lower layer should deserialize"),
-    )
-    .expect("lower layer should select a network table")
-    .expect("lower network table should be present");
-    let higher_network = selected_network_from_tables(
-        network_tables_from_toml(&higher_network).expect("higher layer should deserialize"),
-    )
-    .expect("higher layer should select a network table")
-    .expect("higher network table should be present");
-
-    let mut constraints = NetworkProxyConstraints::default();
-    apply_network_constraints(lower_network, &mut constraints);
-    apply_network_constraints(higher_network, &mut constraints);
-
-    assert_eq!(constraints.allowed_domains, None);
-    assert_eq!(constraints.denied_domains, None);
 }

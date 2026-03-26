@@ -100,7 +100,6 @@ impl NetworkDomainPermissionsToml {
 pub enum NetworkDomainPermissionToml {
     Allow,
     Deny,
-    None,
 }
 
 impl std::fmt::Display for NetworkDomainPermissionToml {
@@ -108,7 +107,6 @@ impl std::fmt::Display for NetworkDomainPermissionToml {
         let permission = match self {
             Self::Allow => "allow",
             Self::Deny => "deny",
-            Self::None => "none",
         };
         f.write_str(permission)
     }
@@ -247,7 +245,6 @@ pub(crate) fn overlay_network_domain_permissions(
         let permission = match permission {
             NetworkDomainPermissionToml::Allow => ProxyNetworkDomainPermission::Allow,
             NetworkDomainPermissionToml::Deny => ProxyNetworkDomainPermission::Deny,
-            NetworkDomainPermissionToml::None => ProxyNetworkDomainPermission::None,
         };
         config
             .network
