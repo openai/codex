@@ -23,10 +23,8 @@ pub struct AbsolutePathBuf(PathBuf);
 
 impl AbsolutePathBuf {
     fn maybe_expand_home_directory(path: &Path) -> PathBuf {
-        let Some(path_str) = path.to_str() else {
-            return path.to_path_buf();
-        };
-        if let Some(home) = home_dir()
+        if let Some(path_str) = path.to_str()
+            && let Some(home) = home_dir()
             && let Some(rest) = path_str.strip_prefix('~')
         {
             if rest.is_empty() {
