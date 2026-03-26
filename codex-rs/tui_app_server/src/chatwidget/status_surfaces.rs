@@ -276,20 +276,7 @@ impl ChatWidget {
     ///
     /// Unknown ids are deduplicated in insertion order for warning messages.
     fn status_line_items_with_invalids(&self) -> (Vec<StatusLineItem>, Vec<String>) {
-        let mut invalid = Vec::new();
-        let mut invalid_seen = HashSet::new();
-        let mut items = Vec::new();
-        for id in self.configured_status_line_items() {
-            match id.parse::<StatusLineItem>() {
-                Ok(item) => items.push(item),
-                Err(_) => {
-                    if invalid_seen.insert(id.clone()) {
-                        invalid.push(format!(r#""{id}""#));
-                    }
-                }
-            }
-        }
-        (items, invalid)
+        parse_items_with_invalids(self.configured_status_line_items())
     }
 
     pub(super) fn configured_status_line_items(&self) -> Vec<String> {
@@ -305,20 +292,7 @@ impl ChatWidget {
     ///
     /// Unknown ids are deduplicated in insertion order for warning messages.
     fn terminal_title_items_with_invalids(&self) -> (Vec<TerminalTitleItem>, Vec<String>) {
-        let mut invalid = Vec::new();
-        let mut invalid_seen = HashSet::new();
-        let mut items = Vec::new();
-        for id in self.configured_terminal_title_items() {
-            match id.parse::<TerminalTitleItem>() {
-                Ok(item) => items.push(item),
-                Err(_) => {
-                    if invalid_seen.insert(id.clone()) {
-                        invalid.push(format!(r#""{id}""#));
-                    }
-                }
-            }
-        }
-        (items, invalid)
+        parse_items_with_invalids(self.configured_terminal_title_items())
     }
 
     /// Returns the configured terminal-title ids, or the default ordering when unset.
@@ -665,4 +639,24 @@ impl ChatWidget {
         truncated.push_str("...");
         truncated
     }
+}
+
+fn parse_items_with_invalids<T>(ids: impl IntoIterator<Item = String>) -> (Vec<T>, Vec<String>)
+where
+    T: std::str::FromStr,
+{
+    let mut invalid = Vec::new();
+    let mut invalid_seen = HashSet::new();
+    let mut items = Vec::new();
+    for id in ids {
+        match id.parse::<T>() {
+            Ok(item) => items.push(item),
+            Err(_) => {
+                if invalid_seen.insert(id.clone()) {
+                    invalid.push(format!(r#""{id}""#));
+                }
+            }
+        }
+    }
+    (items, invalid)
 }

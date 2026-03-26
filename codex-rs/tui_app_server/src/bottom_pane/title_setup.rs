@@ -30,7 +30,7 @@ use crate::render::renderable::Renderable;
 /// via strum. These identifiers are persisted in user config files, so renaming
 /// or removing a variant is a breaking config change.
 #[derive(EnumIter, EnumString, Display, Debug, Clone, Copy, Eq, PartialEq, Hash)]
-#[strum(serialize_all = "kebab_case")]
+#[strum(serialize_all = "kebab-case")]
 pub(crate) enum TerminalTitleItem {
     /// Codex app name.
     AppName,
@@ -303,5 +303,17 @@ mod tests {
     fn parse_terminal_title_items_rejects_invalid_ids() {
         let items = parse_terminal_title_items(["project", "not-a-title-item"].into_iter());
         assert_eq!(items, None);
+    }
+
+    #[test]
+    fn parse_terminal_title_items_accepts_kebab_case_variants() {
+        let items = parse_terminal_title_items(["app-name", "git-branch"].into_iter());
+        assert_eq!(
+            items,
+            Some(vec![
+                TerminalTitleItem::AppName,
+                TerminalTitleItem::GitBranch,
+            ])
+        );
     }
 }

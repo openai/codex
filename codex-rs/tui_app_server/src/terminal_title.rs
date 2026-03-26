@@ -124,10 +124,13 @@ fn sanitize_terminal_title(title: &str) -> String {
             continue;
         }
 
-        if pending_space && chars_written < MAX_TERMINAL_TITLE_CHARS {
-            sanitized.push(' ');
-            chars_written += 1;
-            pending_space = false;
+        if pending_space {
+            let remaining = MAX_TERMINAL_TITLE_CHARS.saturating_sub(chars_written);
+            if remaining > 1 {
+                sanitized.push(' ');
+                chars_written += 1;
+                pending_space = false;
+            }
         }
 
         if chars_written >= MAX_TERMINAL_TITLE_CHARS {
@@ -200,6 +203,14 @@ mod tests {
         let input = "a".repeat(MAX_TERMINAL_TITLE_CHARS + 10);
         let sanitized = sanitize_terminal_title(&input);
         assert_eq!(sanitized.len(), MAX_TERMINAL_TITLE_CHARS);
+    }
+
+    #[test]
+    fn truncation_prefers_visible_char_over_pending_space() {
+        let input = format!("{} b", "a".repeat(MAX_TERMINAL_TITLE_CHARS - 1));
+        let sanitized = sanitize_terminal_title(&input);
+        assert_eq!(sanitized.len(), MAX_TERMINAL_TITLE_CHARS);
+        assert_eq!(sanitized.chars().last(), Some('b'));
     }
 
     #[test]

@@ -1844,7 +1844,7 @@ impl ChatWidget {
         self.status_line_branch = branch;
         self.status_line_branch_pending = false;
         self.status_line_branch_lookup_complete = true;
-        self.refresh_terminal_title();
+        self.refresh_status_surfaces();
     }
 
     fn collect_runtime_metrics_delta(&mut self) {
@@ -1932,6 +1932,7 @@ impl ChatWidget {
             mask.reasoning_effort = Some(event.reasoning_effort);
         }
         self.refresh_model_display();
+        self.refresh_status_surfaces();
         self.sync_fast_command_enabled();
         self.sync_personality_command_enabled();
         self.sync_plugins_command_enabled();
