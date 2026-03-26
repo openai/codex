@@ -1160,15 +1160,6 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
             },
         ),
         (
-            "fork_context".to_string(),
-            JsonSchema::Boolean {
-                description: Some(
-                    "When true, fork the current thread history into the new agent before sending the initial prompt. This must be used when you want the new agent to have exactly the same context as you."
-                        .to_string(),
-                ),
-            },
-        ),
-        (
             "model".to_string(),
             JsonSchema::String {
                 description: Some(
@@ -1187,6 +1178,27 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
             },
         ),
     ]);
+    if config.multi_agent_v2 {
+        properties.insert(
+            "fork_turns".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional MultiAgentV2 fork mode. Use `none`, `all`, or a positive integer string such as `3` to fork only the most recent turns."
+                        .to_string(),
+                ),
+            },
+        );
+    } else {
+        properties.insert(
+            "fork_context".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true, fork the current thread history into the new agent before sending the initial prompt. This must be used when you want the new agent to have exactly the same context as you."
+                        .to_string(),
+                ),
+            },
+        );
+    }
     properties.insert(
         "task_name".to_string(),
         JsonSchema::String {

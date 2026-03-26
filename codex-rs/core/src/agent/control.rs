@@ -17,6 +17,7 @@ use crate::session_prefix::format_subagent_notification_message;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::state_db;
 use crate::thread_manager::ThreadManagerState;
+use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
 use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -45,9 +46,16 @@ use tracing::warn;
 const AGENT_NAMES: &str = include_str!("agent_names.txt");
 const FORKED_SPAWN_AGENT_OUTPUT_MESSAGE: &str = "You are the newly spawned agent. The prior conversation history was forked from your parent agent. Treat the next user message as your new task, and use the forked history only as background context.";
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SpawnAgentForkMode {
+    FullHistory,
+    LastNTurns(usize),
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SpawnAgentOptions {
     pub(crate) fork_parent_spawn_call_id: Option<String>,
+    pub(crate) fork_mode: Option<SpawnAgentForkMode>,
 }
 
 #[derive(Clone, Debug)]
@@ -176,83 +184,32 @@ impl AgentControl {
         let notification_source = session_source.clone();
 
         // The same `AgentControl` is sent to spawn the thread.
-        let new_thread = match session_source {
-            Some(session_source) => {
-                if let Some(call_id) = options.fork_parent_spawn_call_id.as_ref() {
-                    let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                        parent_thread_id,
-                        ..
-                    }) = session_source.clone()
-                    else {
-                        return Err(CodexErr::Fatal(
-                            "spawn_agent fork requires a thread-spawn session source".to_string(),
-                        ));
-                    };
-                    let parent_thread = state.get_thread(parent_thread_id).await.ok();
-                    if let Some(parent_thread) = parent_thread.as_ref() {
-                        // `record_conversation_items` only queues rollout writes asynchronously.
-                        // Flush/materialize the live parent before snapshotting JSONL for a fork.
-                        parent_thread
-                            .codex
-                            .session
-                            .ensure_rollout_materialized()
-                            .await;
-                        parent_thread.codex.session.flush_rollout().await;
-                    }
-                    let rollout_path = parent_thread
-                        .as_ref()
-                        .and_then(|parent_thread| parent_thread.rollout_path())
-                        .or(find_thread_path_by_id_str(
-                            config.codex_home.as_path(),
-                            &parent_thread_id.to_string(),
-                        )
-                        .await?)
-                        .ok_or_else(|| {
-                            CodexErr::Fatal(format!(
-                                "parent thread rollout unavailable for fork: {parent_thread_id}"
-                            ))
-                        })?;
-                    let mut forked_rollout_items: Vec<RolloutItem> =
-                        RolloutRecorder::get_rollout_history(&rollout_path)
-                            .await?
-                            .get_rollout_items();
-                    let mut output = FunctionCallOutputPayload::from_text(
-                        FORKED_SPAWN_AGENT_OUTPUT_MESSAGE.to_string(),
-                    );
-                    output.success = Some(true);
-                    forked_rollout_items.push(RolloutItem::ResponseItem(
-                        ResponseItem::FunctionCallOutput {
-                            call_id: call_id.clone(),
-                            output,
-                        },
-                    ));
-                    let initial_history = InitialHistory::Forked(forked_rollout_items);
-                    state
-                        .fork_thread_with_source(
-                            config,
-                            initial_history,
-                            self.clone(),
-                            session_source,
-                            /*persist_extended_history*/ false,
-                            inherited_shell_snapshot,
-                            inherited_exec_policy,
-                        )
-                        .await?
-                } else {
-                    state
-                        .spawn_new_thread_with_source(
-                            config,
-                            self.clone(),
-                            session_source,
-                            /*persist_extended_history*/ false,
-                            /*metrics_service_name*/ None,
-                            inherited_shell_snapshot,
-                            inherited_exec_policy,
-                        )
-                        .await?
-                }
+        let new_thread = match (session_source, options.fork_mode.as_ref()) {
+            (Some(session_source), Some(_)) => {
+                self.spawn_forked_thread(
+                    &state,
+                    config,
+                    session_source,
+                    &options,
+                    inherited_shell_snapshot,
+                    inherited_exec_policy,
+                )
+                .await?
             }
-            None => state.spawn_new_thread(config, self.clone()).await?,
+            (Some(session_source), None) => {
+                state
+                    .spawn_new_thread_with_source(
+                        config,
+                        self.clone(),
+                        session_source,
+                        /*persist_extended_history*/ false,
+                        /*metrics_service_name*/ None,
+                        inherited_shell_snapshot,
+                        inherited_exec_policy,
+                    )
+                    .await?
+            }
+            (None, _) => state.spawn_new_thread(config, self.clone()).await?,
         };
         agent_metadata.agent_id = Some(new_thread.thread_id);
         reservation.commit(agent_metadata.clone());
@@ -287,6 +244,92 @@ impl AgentControl {
             metadata: agent_metadata,
             status: self.get_status(new_thread.thread_id).await,
         })
+    }
+
+    async fn spawn_forked_thread(
+        &self,
+        state: &Arc<ThreadManagerState>,
+        config: crate::config::Config,
+        session_source: SessionSource,
+        options: &SpawnAgentOptions,
+        inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+        inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+    ) -> CodexResult<crate::thread_manager::NewThread> {
+        let Some(call_id) = options.fork_parent_spawn_call_id.as_deref() else {
+            return Err(CodexErr::Fatal(
+                "spawn_agent fork requires a parent spawn call id".to_string(),
+            ));
+        };
+        let Some(fork_mode) = options.fork_mode.as_ref() else {
+            return Err(CodexErr::Fatal(
+                "spawn_agent fork requires a fork mode".to_string(),
+            ));
+        };
+        let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id, ..
+        }) = &session_source
+        else {
+            return Err(CodexErr::Fatal(
+                "spawn_agent fork requires a thread-spawn session source".to_string(),
+            ));
+        };
+
+        let parent_thread_id = *parent_thread_id;
+        let parent_thread = state.get_thread(parent_thread_id).await.ok();
+        if let Some(parent_thread) = parent_thread.as_ref() {
+            // `record_conversation_items` only queues rollout writes asynchronously.
+            // Flush/materialize the live parent before snapshotting JSONL for a fork.
+            parent_thread
+                .codex
+                .session
+                .ensure_rollout_materialized()
+                .await;
+            parent_thread.codex.session.flush_rollout().await;
+        }
+
+        let rollout_path = parent_thread
+            .as_ref()
+            .and_then(|parent_thread| parent_thread.rollout_path())
+            .or(find_thread_path_by_id_str(
+                config.codex_home.as_path(),
+                &parent_thread_id.to_string(),
+            )
+            .await?)
+            .ok_or_else(|| {
+                CodexErr::Fatal(format!(
+                    "parent thread rollout unavailable for fork: {parent_thread_id}"
+                ))
+            })?;
+
+        let mut forked_rollout_items = RolloutRecorder::get_rollout_history(&rollout_path)
+            .await?
+            .get_rollout_items();
+        if let SpawnAgentForkMode::LastNTurns(last_n_turns) = fork_mode {
+            forked_rollout_items =
+                truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
+        }
+
+        let mut output =
+            FunctionCallOutputPayload::from_text(FORKED_SPAWN_AGENT_OUTPUT_MESSAGE.to_string());
+        output.success = Some(true);
+        forked_rollout_items.push(RolloutItem::ResponseItem(
+            ResponseItem::FunctionCallOutput {
+                call_id: call_id.to_string(),
+                output,
+            },
+        ));
+
+        state
+            .fork_thread_with_source(
+                config,
+                InitialHistory::Forked(forked_rollout_items),
+                self.clone(),
+                session_source,
+                /*persist_extended_history*/ false,
+                inherited_shell_snapshot,
+                inherited_exec_policy,
+            )
+            .await
     }
 
     /// Resume an existing agent thread from a recorded rollout file.
