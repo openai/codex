@@ -2092,10 +2092,12 @@ fn tool_suggest_can_be_registered_without_search_tool() {
     };
     assert!(
         description.contains(
-            "You've already tried to find a matching available tool for the user's request"
+            "Suggests a discoverable connector, or in narrower cases a discoverable plugin"
         )
     );
-    assert!(description.contains("This includes `tool_search` (if available) and other means."));
+    assert!(description.contains(
+        "You've already tried to find a matching available tool for the user's request but couldn't find a good match. This includes `tool_search` (if available) and other means."
+    ));
 }
 
 #[test]
@@ -2343,6 +2345,11 @@ fn tool_suggest_description_lists_discoverable_tools() {
     else {
         panic!("expected function tool");
     };
+    assert!(
+        description.contains(
+            "Suggests a discoverable connector, or in narrower cases a discoverable plugin"
+        )
+    );
     assert!(description.contains("Google Calendar"));
     assert!(description.contains("Gmail"));
     assert!(description.contains("Sample Plugin"));
@@ -2355,10 +2362,19 @@ fn tool_suggest_description_lists_discoverable_tools() {
     );
     assert!(
         description.contains(
-            "You've already tried to find a matching available tool for the user's request"
+            "You've already tried to find a matching available tool for the user's request but couldn't find a good match. This includes `tool_search` (if available) and other means."
         )
     );
-    assert!(description.contains("This includes `tool_search` (if available) and other means."));
+    assert!(description.contains(
+        "only suggest discoverable and installable plugins when the user's intent very explicitly and unambiguously matches that plugin itself"
+    ));
+    assert!(description.contains(
+        "Do not suggest a plugin just because one of its connectors or capabilities seems relevant."
+    ));
+    assert!(description.contains("This stricter rule does not apply to connector suggestions."));
+    assert!(description.contains(
+        "Apply the stricter explicit-and-unambiguous rule only for `plugin` suggestions"
+    ));
     assert!(description.contains("DO NOT explore or recommend tools that are not on this list."));
     assert!(!description.contains("tool_search fails to find a good match"));
     let JsonSchema::Object { required, .. } = parameters else {
