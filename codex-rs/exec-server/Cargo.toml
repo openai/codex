@@ -15,7 +15,7 @@ path = "src/bin/codex-exec-server.rs"
 workspace = true
 
 [dependencies]
-arc-swap = "1.8.2"
+arc-swap = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
