@@ -81,7 +81,9 @@ async fn exec_command_with_tty(
     let process_id = manager.allocate_process_id().await;
     let cwd = workdir.unwrap_or_else(|| turn.cwd.clone().to_path_buf());
     let command = vec!["bash".to_string(), "-lc".to_string(), cmd.to_string()];
-    let request = test_exec_request(turn, command.clone(), cwd.clone(), shell_env());
+    let mut env = shell_env();
+    env.extend(session.dependency_env().await);
+    let request = test_exec_request(turn, command.clone(), cwd.clone(), env);
 
     let process = Arc::new(
         manager
@@ -298,6 +300,34 @@ async fn multi_unified_exec_sessions() -> anyhow::Result<()> {
     assert!(
         out_3.truncated_output().contains("codex"),
         "session should preserve state"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_inherits_dependency_env() -> anyhow::Result<()> {
+    skip_if_sandbox!(Ok(()));
+
+    let (session, turn) = test_session_and_turn().await;
+    session
+        .set_dependency_env(HashMap::from([(
+            "OPENAI_API_KEY".to_string(),
+            "session-api-key".to_string(),
+        )]))
+        .await;
+
+    let output = exec_command(
+        &session,
+        &turn,
+        "printf '%s' \"$OPENAI_API_KEY\"",
+        2_500,
+        None,
+    )
+    .await?;
+    assert!(
+        output.truncated_output().contains("session-api-key"),
+        "expected exec_command to inherit dependency env"
     );
 
     Ok(())

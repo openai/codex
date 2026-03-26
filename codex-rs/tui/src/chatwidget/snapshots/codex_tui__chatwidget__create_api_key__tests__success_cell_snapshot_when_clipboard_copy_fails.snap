@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/create_api_key.rs
+expression: render_cell(&cell)
+---
+• Created an API key for org-default / proj-default: sk-proj-123.
+  Could not copy the key to your clipboard: clipboard unavailable Could not set OPENAI_API_KEY in this Codex session: dependency env unavailable
+
+  To create more keys or monitor usage, go to platform.openai.com.
+
+  You can start building with the OpenAI API with limited usage of gpt-5.4-nano. To use more models, add credits on platform.openai.com.

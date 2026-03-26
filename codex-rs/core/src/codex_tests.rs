@@ -4214,6 +4214,56 @@ async fn build_initial_context_prepends_model_switch_message() {
 }
 
 #[tokio::test]
+async fn build_initial_context_only_mentions_create_api_key_for_legacy_tui() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    {
+        let mut state = session.state.lock().await;
+        state.session_configuration.session_source = SessionSource::Cli;
+    }
+
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_text = initial_context
+        .iter()
+        .filter_map(|item| match item {
+            ResponseItem::Message { role, content, .. } if role == "developer" => {
+                Some(content.as_slice())
+            }
+            _ => None,
+        })
+        .flat_map(|content| content.iter())
+        .filter_map(|content| match content {
+            ContentItem::InputText { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!developer_text.contains("/create-api-key"));
+
+    turn_context
+        .features
+        .disable(Feature::TuiAppServer)
+        .expect("disable tui_app_server");
+    assert!(!turn_context.features.enabled(Feature::TuiAppServer));
+    let initial_context = session.build_initial_context(&turn_context).await;
+    let developer_text = initial_context
+        .iter()
+        .filter_map(|item| match item {
+            ResponseItem::Message { role, content, .. } if role == "developer" => {
+                Some(content.as_slice())
+            }
+            _ => None,
+        })
+        .flat_map(|content| content.iter())
+        .filter_map(|content| match content {
+            ContentItem::InputText { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(developer_text.contains("/create-api-key"));
+}
+
+#[tokio::test]
 async fn record_context_updates_and_set_reference_context_item_persists_full_reinjection_to_rollout()
  {
     let (session, previous_context) = make_session_and_context().await;

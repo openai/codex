@@ -291,6 +291,7 @@ use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
+mod create_api_key;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
@@ -4732,6 +4733,9 @@ impl ChatWidget {
                     };
                     tx.send(AppEvent::DiffResult(text));
                 });
+            }
+            SlashCommand::CreateApiKey => {
+                self.start_create_api_key();
             }
             SlashCommand::Copy => {
                 let Some(text) = self.last_copyable_output.as_deref() else {

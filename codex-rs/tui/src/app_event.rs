@@ -8,6 +8,7 @@
 //! Exit is modelled explicitly via `AppEvent::Exit(ExitMode)` so callers can request shutdown-first
 //! quits without reaching into the app loop or coupling to shutdown/exit sequencing.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use codex_app_server_protocol::PluginInstallResponse;
@@ -37,6 +38,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use tokio::sync::oneshot;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RealtimeAudioDeviceKind {
@@ -166,6 +168,19 @@ pub(crate) enum AppEvent {
     /// Refresh app connector state and mention bindings.
     RefreshConnectors {
         force_refetch: bool,
+    },
+
+    /// Add environment variables to the specified thread's dependency env override.
+    SetDependencyEnv {
+        thread_id: ThreadId,
+        values: HashMap<String, String>,
+        result_tx: oneshot::Sender<Result<(), String>>,
+    },
+
+    /// Read the specified thread's dependency env override.
+    GetDependencyEnv {
+        thread_id: ThreadId,
+        result_tx: oneshot::Sender<Result<HashMap<String, String>, String>>,
     },
 
     /// Fetch plugin marketplace state for the provided working directory.

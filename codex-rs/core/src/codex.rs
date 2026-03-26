@@ -424,6 +424,7 @@ pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
 const DIRECT_APP_TOOL_EXPOSURE_THRESHOLD: usize = 100;
+const CLI_CREATE_API_KEY_INSTRUCTION: &str = "If a command fails because `OPENAI_API_KEY` is unset, tell the user to set `OPENAI_API_KEY` in this shell or pass `api_key=...` explicitly, and mention that they can run `/create-api-key` to create an OpenAI API key for the current Codex session.";
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
@@ -3494,6 +3495,11 @@ impl Session {
             )
             .into_text(),
         );
+        if matches!(session_source, SessionSource::Cli)
+            && !turn_context.features.enabled(Feature::TuiAppServer)
+        {
+            developer_sections.push(CLI_CREATE_API_KEY_INSTRUCTION.to_string());
+        }
         let separate_guardian_developer_message =
             crate::guardian::is_guardian_reviewer_source(&session_source);
         // Keep the guardian policy prompt out of the aggregated developer bundle so it

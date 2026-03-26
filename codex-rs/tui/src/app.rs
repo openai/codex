@@ -3117,6 +3117,34 @@ impl App {
             AppEvent::RefreshConnectors { force_refetch } => {
                 self.chat_widget.refresh_connectors(force_refetch);
             }
+            AppEvent::SetDependencyEnv {
+                thread_id,
+                values,
+                result_tx,
+            } => {
+                let result = match self.server.get_thread(thread_id).await {
+                    Ok(thread) => {
+                        thread.set_dependency_env(values).await;
+                        Ok(())
+                    }
+                    Err(err) => Err(format!(
+                        "failed to load Codex thread {thread_id} for dependency env update: {err}"
+                    )),
+                };
+                let _ = result_tx.send(result);
+            }
+            AppEvent::GetDependencyEnv {
+                thread_id,
+                result_tx,
+            } => {
+                let result = match self.server.get_thread(thread_id).await {
+                    Ok(thread) => Ok(thread.dependency_env().await),
+                    Err(err) => Err(format!(
+                        "failed to load Codex thread {thread_id} for dependency env read: {err}"
+                    )),
+                };
+                let _ = result_tx.send(result);
+            }
             AppEvent::PluginInstallAuthAdvance { refresh_connectors } => {
                 if refresh_connectors {
                     self.chat_widget.refresh_connectors(/*force_refetch*/ true);

@@ -11,17 +11,9 @@
 //! This module therefore keeps the user-facing error path and the structured-log path separate.
 //! Returned `io::Error` values still carry the detail needed by CLI/browser callers, while
 //! structured logs only emit explicitly reviewed fields plus redacted URL/error values.
-use std::io::Cursor;
-use std::io::Read;
-use std::io::Write;
 use std::io::{self};
-use std::net::SocketAddr;
-use std::net::TcpStream;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
 
 use crate::auth::AuthCredentialsStoreMode;
 use crate::auth::AuthDotJson;
@@ -35,16 +27,20 @@ use base64::Engine;
 use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
 use codex_client::build_reqwest_client_with_custom_ca;
-use rand::RngCore;
 use serde_json::Value as JsonValue;
 use tiny_http::Header;
-use tiny_http::Request;
 use tiny_http::Response;
-use tiny_http::Server;
 use tiny_http::StatusCode;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
+
+use crate::oauth_callback_server::HandledRequest;
+use crate::oauth_callback_server::PortConflictStrategy;
+use crate::oauth_callback_server::ShutdownHandle;
+use crate::oauth_callback_server::bind_server_with_request_channel;
+use crate::oauth_callback_server::generate_state;
+use crate::oauth_callback_server::spawn_callback_server_loop;
 
 const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 const DEFAULT_PORT: u16 = 1455;
@@ -110,36 +106,13 @@ impl LoginServer {
     }
 }
 
-/// Handle used to signal the login server loop to exit.
-#[derive(Clone, Debug)]
-pub struct ShutdownHandle {
-    shutdown_notify: Arc<tokio::sync::Notify>,
-}
-
-impl ShutdownHandle {
-    /// Signals the login loop to terminate.
-    pub fn shutdown(&self) {
-        self.shutdown_notify.notify_waiters();
-    }
-}
-
 /// Starts a local callback server and returns the browser auth URL.
 pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     let pkce = generate_pkce();
     let state = opts.force_state.clone().unwrap_or_else(generate_state);
 
-    let server = bind_server(opts.port)?;
-    let actual_port = match server.server_addr().to_ip() {
-        Some(addr) => addr.port(),
-        None => {
-            return Err(io::Error::new(
-                io::ErrorKind::AddrInUse,
-                "Unable to determine the server port",
-            ));
-        }
-    };
-    let server = Arc::new(server);
-
+    let (server, actual_port, rx) =
+        bind_server_with_request_channel(opts.port, PortConflictStrategy::CancelPrevious)?;
     let redirect_uri = format!("http://localhost:{actual_port}/auth/callback");
     let auth_url = build_authorize_url(
         &opts.issuer,
@@ -153,98 +126,23 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     if opts.open_browser {
         let _ = webbrowser::open(&auth_url);
     }
-
-    // Map blocking reads from server.recv() to an async channel.
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<Request>(16);
-    let _server_handle = {
-        let server = server.clone();
-        thread::spawn(move || -> io::Result<()> {
-            while let Ok(request) = server.recv() {
-                match tx.blocking_send(request) {
-                    Ok(()) => {}
-                    Err(error) => {
-                        eprintln!("Failed to send request to channel: {error}");
-                        return Err(io::Error::other("Failed to send request to channel"));
-                    }
-                }
+    let (server_handle, shutdown_handle) =
+        spawn_callback_server_loop(server, rx, "Login was not completed", move |url_raw| {
+            let redirect_uri = redirect_uri.clone();
+            let state = state.clone();
+            let opts = opts.clone();
+            let pkce = pkce.clone();
+            async move {
+                process_request(&url_raw, &opts, &redirect_uri, &pkce, actual_port, &state).await
             }
-            Ok(())
-        })
-    };
-
-    let shutdown_notify = Arc::new(tokio::sync::Notify::new());
-    let server_handle = {
-        let shutdown_notify = shutdown_notify.clone();
-        let server = server;
-        tokio::spawn(async move {
-            let result = loop {
-                tokio::select! {
-                    _ = shutdown_notify.notified() => {
-                        break Err(io::Error::other("Login was not completed"));
-                    }
-                    maybe_req = rx.recv() => {
-                        let Some(req) = maybe_req else {
-                            break Err(io::Error::other("Login was not completed"));
-                        };
-
-                        let url_raw = req.url().to_string();
-                        let response =
-                            process_request(&url_raw, &opts, &redirect_uri, &pkce, actual_port, &state).await;
-
-                        let exit_result = match response {
-                            HandledRequest::Response(response) => {
-                                let _ = tokio::task::spawn_blocking(move || req.respond(response)).await;
-                                None
-                            }
-                            HandledRequest::ResponseAndExit {
-                                headers,
-                                body,
-                                result,
-                            } => {
-                                let _ = tokio::task::spawn_blocking(move || {
-                                    send_response_with_disconnect(req, headers, body)
-                                })
-                                .await;
-                                Some(result)
-                            }
-                            HandledRequest::RedirectWithHeader(header) => {
-                                let redirect = Response::empty(302).with_header(header);
-                                let _ = tokio::task::spawn_blocking(move || req.respond(redirect)).await;
-                                None
-                            }
-                        };
-
-                        if let Some(result) = exit_result {
-                            break result;
-                        }
-                    }
-                }
-            };
-
-            // Ensure that the server is unblocked so the thread dedicated to
-            // running `server.recv()` in a loop exits cleanly.
-            server.unblock();
-            result
-        })
-    };
+        });
 
     Ok(LoginServer {
         auth_url,
         actual_port,
         server_handle,
-        shutdown_handle: ShutdownHandle { shutdown_notify },
+        shutdown_handle,
     })
-}
-
-/// Internal callback handling outcome.
-enum HandledRequest {
-    Response(Response<Cursor<Vec<u8>>>),
-    RedirectWithHeader(Header),
-    ResponseAndExit {
-        headers: Vec<Header>,
-        body: Vec<u8>,
-        result: io::Result<()>,
-    },
 }
 
 async fn process_request(
@@ -254,7 +152,7 @@ async fn process_request(
     pkce: &PkceCodes,
     actual_port: u16,
     state: &str,
-) -> HandledRequest {
+) -> HandledRequest<()> {
     let parsed_url = match url::Url::parse(&format!("http://localhost{url_raw}")) {
         Ok(u) => u,
         Err(e) => {
@@ -392,6 +290,7 @@ async fn process_request(
         "/success" => {
             let body = include_str!("assets/success.html");
             HandledRequest::ResponseAndExit {
+                status: StatusCode(200),
                 headers: match Header::from_bytes(
                     &b"Content-Type"[..],
                     &b"text/html; charset=utf-8"[..],
@@ -404,6 +303,7 @@ async fn process_request(
             }
         }
         "/cancel" => HandledRequest::ResponseAndExit {
+            status: StatusCode(200),
             headers: Vec::new(),
             body: b"Login cancelled".to_vec(),
             result: Err(io::Error::new(
@@ -413,50 +313,6 @@ async fn process_request(
         },
         _ => HandledRequest::Response(Response::from_string("Not Found").with_status_code(404)),
     }
-}
-
-/// tiny_http filters `Connection` headers out of `Response` objects, so using
-/// `req.respond` never informs the client (or the library) that a keep-alive
-/// socket should be closed. That leaves the per-connection worker parked in a
-/// loop waiting for more requests, which in turn causes the next login attempt
-/// to hang on the old connection. This helper bypasses tiny_http’s response
-/// machinery: it extracts the raw writer, prints the HTTP response manually,
-/// and always appends `Connection: close`, ensuring the socket is closed from
-/// the server side. Ideally, tiny_http would provide an API to control
-/// server-side connection persistence, but it does not.
-fn send_response_with_disconnect(
-    req: Request,
-    mut headers: Vec<Header>,
-    body: Vec<u8>,
-) -> io::Result<()> {
-    let status = StatusCode(200);
-    let mut writer = req.into_writer();
-    let reason = status.default_reason_phrase();
-    write!(writer, "HTTP/1.1 {} {}\r\n", status.0, reason)?;
-    headers.retain(|h| !h.field.equiv("Connection"));
-    if let Ok(close_header) = Header::from_bytes(&b"Connection"[..], &b"close"[..]) {
-        headers.push(close_header);
-    }
-
-    let content_length_value = format!("{}", body.len());
-    if let Ok(content_length_header) =
-        Header::from_bytes(&b"Content-Length"[..], content_length_value.as_bytes())
-    {
-        headers.push(content_length_header);
-    }
-
-    for header in headers {
-        write!(
-            writer,
-            "{}: {}\r\n",
-            header.field.as_str(),
-            header.value.as_str()
-        )?;
-    }
-
-    writer.write_all(b"\r\n")?;
-    writer.write_all(&body)?;
-    writer.flush()
 }
 
 fn build_authorize_url(
@@ -495,74 +351,6 @@ fn build_authorize_url(
         .collect::<Vec<_>>()
         .join("&");
     format!("{issuer}/oauth/authorize?{qs}")
-}
-
-fn generate_state() -> String {
-    let mut bytes = [0u8; 32];
-    rand::rng().fill_bytes(&mut bytes);
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
-}
-
-fn send_cancel_request(port: u16) -> io::Result<()> {
-    let addr: SocketAddr = format!("127.0.0.1:{port}")
-        .parse()
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))?;
-    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-
-    stream.write_all(b"GET /cancel HTTP/1.1\r\n")?;
-    stream.write_all(format!("Host: 127.0.0.1:{port}\r\n").as_bytes())?;
-    stream.write_all(b"Connection: close\r\n\r\n")?;
-
-    let mut buf = [0u8; 64];
-    let _ = stream.read(&mut buf);
-    Ok(())
-}
-
-fn bind_server(port: u16) -> io::Result<Server> {
-    let bind_address = format!("127.0.0.1:{port}");
-    let mut cancel_attempted = false;
-    let mut attempts = 0;
-    const MAX_ATTEMPTS: u32 = 10;
-    const RETRY_DELAY: Duration = Duration::from_millis(200);
-
-    loop {
-        match Server::http(&bind_address) {
-            Ok(server) => return Ok(server),
-            Err(err) => {
-                attempts += 1;
-                let is_addr_in_use = err
-                    .downcast_ref::<io::Error>()
-                    .map(|io_err| io_err.kind() == io::ErrorKind::AddrInUse)
-                    .unwrap_or(false);
-
-                // If the address is in use, there is probably another instance of the login server
-                // running. Attempt to cancel it and retry.
-                if is_addr_in_use {
-                    if !cancel_attempted {
-                        cancel_attempted = true;
-                        if let Err(cancel_err) = send_cancel_request(port) {
-                            eprintln!("Failed to cancel previous login server: {cancel_err}");
-                        }
-                    }
-
-                    thread::sleep(RETRY_DELAY);
-
-                    if attempts >= MAX_ATTEMPTS {
-                        return Err(io::Error::new(
-                            io::ErrorKind::AddrInUse,
-                            format!("Port {bind_address} is already in use"),
-                        ));
-                    }
-
-                    continue;
-                }
-
-                return Err(io::Error::other(err));
-            }
-        }
-    }
 }
 
 /// Tokens returned by the OAuth authorization-code exchange.
@@ -888,13 +676,14 @@ fn login_error_response(
     kind: io::ErrorKind,
     error_code: Option<&str>,
     error_description: Option<&str>,
-) -> HandledRequest {
+) -> HandledRequest<()> {
     let mut headers = Vec::new();
     if let Ok(header) = Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]) {
         headers.push(header);
     }
     let body = render_login_error_page(message, error_code, error_description);
     HandledRequest::ResponseAndExit {
+        status: StatusCode(200),
         headers,
         body,
         result: Err(io::Error::new(kind, message.to_string())),

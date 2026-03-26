@@ -34,6 +34,7 @@ pub enum SlashCommand {
     Agent,
     // Undo,
     Diff,
+    CreateApiKey,
     Copy,
     Mention,
     Status,
@@ -82,6 +83,7 @@ impl SlashCommand {
             // SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
+            SlashCommand::CreateApiKey => "create an API key and copy it to your clipboard",
             SlashCommand::Copy => "copy the latest Codex output to your clipboard",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
@@ -155,6 +157,7 @@ impl SlashCommand {
             | SlashCommand::Experimental
             | SlashCommand::Review
             | SlashCommand::Plan
+            | SlashCommand::CreateApiKey
             | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
@@ -219,5 +222,16 @@ mod tests {
     #[test]
     fn clean_alias_parses_to_stop_command() {
         assert_eq!(SlashCommand::from_str("clean"), Ok(SlashCommand::Stop));
+    }
+
+    #[test]
+    fn create_api_key_command_metadata() {
+        assert_eq!(
+            SlashCommand::from_str("create-api-key"),
+            Ok(SlashCommand::CreateApiKey)
+        );
+        assert_eq!(SlashCommand::CreateApiKey.command(), "create-api-key");
+        assert!(!SlashCommand::CreateApiKey.supports_inline_args());
+        assert!(!SlashCommand::CreateApiKey.available_during_task());
     }
 }

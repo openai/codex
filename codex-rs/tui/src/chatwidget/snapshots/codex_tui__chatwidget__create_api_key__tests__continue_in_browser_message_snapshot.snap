@@ -1,0 +1,16 @@
+---
+source: tui/src/chatwidget/create_api_key.rs
+assertion_line: 260
+expression: render_cell(&cell)
+---
+• Finish API key creation via your browser.
+
+  Codex couldn't auto-open your browser, but the API key creation flow is still waiting.
+
+  Open the following link to authenticate:
+
+  https://auth.openai.com/oauth/authorize?client_id=abc
+
+  Codex will display the new OPENAI_API_KEY here and copy it to your clipboard.
+
+  On a remote or headless machine, forward localhost:5000 back to this Codex host before opening the link.

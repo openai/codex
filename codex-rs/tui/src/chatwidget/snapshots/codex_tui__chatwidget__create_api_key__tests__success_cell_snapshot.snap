@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/create_api_key.rs
+expression: render_cell(&cell)
+---
+• Created an API key for Default Org / Default Project: sk-proj-123.
+  I copied the full key to your clipboard. I also set OPENAI_API_KEY in this Codex session for future commands.
+
+  To create more keys or monitor usage, go to platform.openai.com.
+
+  You can start building with the OpenAI API with limited usage of gpt-5.4-nano. To use more models, add credits on platform.openai.com.

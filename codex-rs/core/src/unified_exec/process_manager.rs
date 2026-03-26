@@ -649,10 +649,20 @@ impl UnifiedExecProcessManager {
         cwd: PathBuf,
         context: &UnifiedExecContext,
     ) -> Result<(UnifiedExecProcess, Option<DeferredNetworkApproval>), UnifiedExecError> {
-        let env = apply_unified_exec_env(create_env(
+        let dependency_env = context.session.dependency_env().await;
+        let mut env = apply_unified_exec_env(create_env(
             &context.turn.shell_environment_policy,
             Some(context.session.conversation_id),
         ));
+        if !dependency_env.is_empty() {
+            env.extend(dependency_env.clone());
+        }
+        let mut explicit_env_overrides = context.turn.shell_environment_policy.r#set.clone();
+        for key in dependency_env.keys() {
+            if let Some(value) = env.get(key) {
+                explicit_env_overrides.insert(key.clone(), value.clone());
+            }
+        }
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(
             self,
@@ -680,7 +690,7 @@ impl UnifiedExecProcessManager {
             process_id: request.process_id,
             cwd,
             env,
-            explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),
+            explicit_env_overrides,
             network: request.network.clone(),
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,
