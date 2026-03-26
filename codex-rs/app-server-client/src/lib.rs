@@ -1510,6 +1510,7 @@ mod tests {
         .await;
         let mut client = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
             websocket_url,
+            auth_token: None,
             client_name: "codex-app-server-client-test".to_string(),
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
