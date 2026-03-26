@@ -531,9 +531,10 @@ struct InteractiveRemoteOptions {
     #[arg(long = "remote", value_name = "ADDR")]
     remote: Option<String>,
 
-    /// Bearer token to send to a remote app server websocket.
-    #[arg(long = "remote-auth-token", value_name = "TOKEN")]
-    remote_auth_token: Option<String>,
+    /// Name of the environment variable containing the bearer token to send to
+    /// a remote app server websocket.
+    #[arg(long = "remote-auth-token-env", value_name = "ENV_VAR")]
+    remote_auth_token_env: Option<String>,
 }
 
 impl FeatureToggles {
@@ -611,7 +612,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let toggle_overrides = feature_toggles.to_overrides()?;
     root_config_overrides.raw_overrides.extend(toggle_overrides);
     let root_remote = remote.remote;
-    let root_remote_auth_token = remote.remote_auth_token;
+    let root_remote_auth_token_env = remote.remote_auth_token_env;
 
     match subcommand {
         None => {
@@ -622,7 +623,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             let exit_info = run_interactive_tui(
                 interactive,
                 root_remote.clone(),
-                root_remote_auth_token.clone(),
+                root_remote_auth_token_env.clone(),
                 arg0_paths.clone(),
             )
             .await?;
@@ -631,7 +632,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         Some(Subcommand::Exec(mut exec_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
-                root_remote_auth_token.as_deref(),
+                root_remote_auth_token_env.as_deref(),
                 "exec",
             )?;
             prepend_config_flags(
@@ -643,7 +644,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         Some(Subcommand::Review(review_args)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
-                root_remote_auth_token.as_deref(),
+                root_remote_auth_token_env.as_deref(),
                 "review",
             )?;
             let mut exec_cli = ExecCli::try_parse_from(["codex", "exec"])?;
@@ -657,7 +658,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         Some(Subcommand::McpServer) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
-                root_remote_auth_token.as_deref(),
+                root_remote_auth_token_env.as_deref(),
                 "mcp-server",
             )?;
             codex_mcp_server::run_main(arg0_paths.clone(), root_config_overrides).await?;
@@ -665,7 +666,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         Some(Subcommand::Mcp(mut mcp_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
-                root_remote_auth_token.as_deref(),
+                root_remote_auth_token_env.as_deref(),
                 "mcp",
             )?;
             // Propagate any root-level config overrides (e.g. `-c key=value`).
@@ -681,7 +682,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             } = app_server_cli;
             reject_remote_mode_for_app_server_subcommand(
                 root_remote.as_deref(),
-                root_remote_auth_token.as_deref(),
+                root_remote_auth_token_env.as_deref(),
                 subcommand.as_ref(),
             )?;
             match subcommand {
@@ -725,7 +726,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         Some(Subcommand::App(app_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
-                root_remote_auth_token.as_deref(),
+                root_remote_auth_token_env.as_deref(),
                 "app",
             )?;
             app_cmd::run_app(app_cli).await?;
@@ -750,7 +751,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             let exit_info = run_interactive_tui(
                 interactive,
                 remote.remote.or(root_remote.clone()),
-                remote.remote_auth_token.or(root_remote_auth_token.clone()),
+                remote
+                    .remote_auth_token_env
+                    .or(root_remote_auth_token_env.clone()),
                 arg0_paths.clone(),
             )
             .await?;
@@ -774,7 +777,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             let exit_info = run_interactive_tui(
                 interactive,
                 remote.remote.or(root_remote.clone()),
-                remote.remote_auth_token.or(root_remote_auth_token.clone()),
+                remote
+                    .remote_auth_token_env
+                    .or(root_remote_auth_token_env.clone()),
                 arg0_paths.clone(),
             )
             .await?;
@@ -783,7 +788,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         Some(Subcommand::Login(mut login_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
-                root_remote_auth_token.as_deref(),
+                root_remote_auth_token_env.as_deref(),
                 "login",
             )?;
             prepend_config_flags(
@@ -819,7 +824,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         Some(Subcommand::Logout(mut logout_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
-                root_remote_auth_token.as_deref(),
+                root_remote_auth_token_env.as_deref(),
                 "logout",
             )?;
             prepend_config_flags(
@@ -831,7 +836,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         Some(Subcommand::Completion(completion_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
-                root_remote_auth_token.as_deref(),
+                root_remote_auth_token_env.as_deref(),
                 "completion",
             )?;
             print_completion(completion_cli);
@@ -839,7 +844,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         Some(Subcommand::Cloud(mut cloud_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
-                root_remote_auth_token.as_deref(),
+                root_remote_auth_token_env.as_deref(),
                 "cloud",
             )?;
             prepend_config_flags(
@@ -853,7 +858,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             SandboxCommand::Macos(mut seatbelt_cli) => {
                 reject_remote_mode_for_subcommand(
                     root_remote.as_deref(),
-                    root_remote_auth_token.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
                     "sandbox macos",
                 )?;
                 prepend_config_flags(
@@ -869,7 +874,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             SandboxCommand::Linux(mut landlock_cli) => {
                 reject_remote_mode_for_subcommand(
                     root_remote.as_deref(),
-                    root_remote_auth_token.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
                     "sandbox linux",
                 )?;
                 prepend_config_flags(
@@ -885,7 +890,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             SandboxCommand::Windows(mut windows_cli) => {
                 reject_remote_mode_for_subcommand(
                     root_remote.as_deref(),
-                    root_remote_auth_token.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
                     "sandbox windows",
                 )?;
                 prepend_config_flags(
@@ -903,7 +908,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             DebugSubcommand::AppServer(cmd) => {
                 reject_remote_mode_for_subcommand(
                     root_remote.as_deref(),
-                    root_remote_auth_token.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
                     "debug app-server",
                 )?;
                 run_debug_app_server_command(cmd).await?;
@@ -911,7 +916,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             DebugSubcommand::ClearMemories => {
                 reject_remote_mode_for_subcommand(
                     root_remote.as_deref(),
-                    root_remote_auth_token.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
                     "debug clear-memories",
                 )?;
                 run_debug_clear_memories_command(&root_config_overrides, &interactive).await?;
@@ -921,7 +926,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             ExecpolicySubcommand::Check(cmd) => {
                 reject_remote_mode_for_subcommand(
                     root_remote.as_deref(),
-                    root_remote_auth_token.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
                     "execpolicy check",
                 )?;
                 run_execpolicycheck(cmd)?
@@ -930,7 +935,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         Some(Subcommand::Apply(mut apply_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
-                root_remote_auth_token.as_deref(),
+                root_remote_auth_token_env.as_deref(),
                 "apply",
             )?;
             prepend_config_flags(
@@ -942,7 +947,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         Some(Subcommand::ResponsesApiProxy(args)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
-                root_remote_auth_token.as_deref(),
+                root_remote_auth_token_env.as_deref(),
                 "responses-api-proxy",
             )?;
             tokio::task::spawn_blocking(move || codex_responses_api_proxy::run_main(args))
@@ -951,7 +956,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         Some(Subcommand::StdioToUds(cmd)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
-                root_remote_auth_token.as_deref(),
+                root_remote_auth_token_env.as_deref(),
                 "stdio-to-uds",
             )?;
             let socket_path = cmd.socket_path;
@@ -962,7 +967,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             FeaturesSubcommand::List => {
                 reject_remote_mode_for_subcommand(
                     root_remote.as_deref(),
-                    root_remote_auth_token.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
                     "features list",
                 )?;
                 // Respect root-level `-c` overrides plus top-level flags like `--profile`.
@@ -1009,7 +1014,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             FeaturesSubcommand::Enable(FeatureSetArgs { feature }) => {
                 reject_remote_mode_for_subcommand(
                     root_remote.as_deref(),
-                    root_remote_auth_token.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
                     "features enable",
                 )?;
                 enable_feature_in_config(&interactive, &feature).await?;
@@ -1017,7 +1022,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             FeaturesSubcommand::Disable(FeatureSetArgs { feature }) => {
                 reject_remote_mode_for_subcommand(
                     root_remote.as_deref(),
-                    root_remote_auth_token.as_deref(),
+                    root_remote_auth_token_env.as_deref(),
                     "features disable",
                 )?;
                 disable_feature_in_config(&interactive, &feature).await?;
@@ -1140,7 +1145,7 @@ fn prepend_config_flags(
 
 fn reject_remote_mode_for_subcommand(
     remote: Option<&str>,
-    remote_auth_token: Option<&str>,
+    remote_auth_token_env: Option<&str>,
     subcommand: &str,
 ) -> anyhow::Result<()> {
     if let Some(remote) = remote {
@@ -1148,9 +1153,9 @@ fn reject_remote_mode_for_subcommand(
             "`--remote {remote}` is only supported for interactive TUI commands, not `codex {subcommand}`"
         );
     }
-    if remote_auth_token.is_some() {
+    if remote_auth_token_env.is_some() {
         anyhow::bail!(
-            "`--remote-auth-token` is only supported for interactive TUI commands, not `codex {subcommand}`"
+            "`--remote-auth-token-env` is only supported for interactive TUI commands, not `codex {subcommand}`"
         );
     }
     Ok(())
@@ -1158,7 +1163,7 @@ fn reject_remote_mode_for_subcommand(
 
 fn reject_remote_mode_for_app_server_subcommand(
     remote: Option<&str>,
-    remote_auth_token: Option<&str>,
+    remote_auth_token_env: Option<&str>,
     subcommand: Option<&AppServerSubcommand>,
 ) -> anyhow::Result<()> {
     let subcommand_name = match subcommand {
@@ -1169,13 +1174,33 @@ fn reject_remote_mode_for_app_server_subcommand(
             "app-server generate-internal-json-schema"
         }
     };
-    reject_remote_mode_for_subcommand(remote, remote_auth_token, subcommand_name)
+    reject_remote_mode_for_subcommand(remote, remote_auth_token_env, subcommand_name)
+}
+
+fn read_remote_auth_token_from_env_var_with<F>(
+    env_var_name: &str,
+    get_var: F,
+) -> anyhow::Result<String>
+where
+    F: FnOnce(&str) -> Result<String, std::env::VarError>,
+{
+    let auth_token = get_var(env_var_name)
+        .map_err(|_| anyhow::anyhow!("environment variable `{env_var_name}` is not set"))?;
+    let auth_token = auth_token.trim().to_string();
+    if auth_token.is_empty() {
+        anyhow::bail!("environment variable `{env_var_name}` is empty");
+    }
+    Ok(auth_token)
+}
+
+fn read_remote_auth_token_from_env_var(env_var_name: &str) -> anyhow::Result<String> {
+    read_remote_auth_token_from_env_var_with(env_var_name, |name| std::env::var(name))
 }
 
 async fn run_interactive_tui(
     mut interactive: TuiCli,
     remote: Option<String>,
-    remote_auth_token: Option<String>,
+    remote_auth_token_env: Option<String>,
     arg0_paths: Arg0DispatchPaths,
 ) -> std::io::Result<AppExitInfo> {
     if let Some(prompt) = interactive.prompt.take() {
@@ -1207,9 +1232,9 @@ async fn run_interactive_tui(
         .map(codex_tui_app_server::normalize_remote_addr)
         .transpose()
         .map_err(std::io::Error::other)?;
-    if remote_auth_token.is_some() && normalized_remote.is_none() {
+    if remote_auth_token_env.is_some() && normalized_remote.is_none() {
         return Ok(AppExitInfo::fatal(
-            "`--remote-auth-token` requires `--remote`.",
+            "`--remote-auth-token-env` requires `--remote`.",
         ));
     }
     if normalized_remote.is_some() && !use_app_server_tui {
@@ -1218,6 +1243,11 @@ async fn run_interactive_tui(
         ));
     }
     if use_app_server_tui {
+        let remote_auth_token = remote_auth_token_env
+            .as_deref()
+            .map(read_remote_auth_token_from_env_var)
+            .transpose()
+            .map_err(std::io::Error::other)?;
         codex_tui_app_server::run_main(
             into_app_server_tui_cli(interactive),
             arg0_paths,
@@ -1786,18 +1816,18 @@ mod tests {
     }
 
     #[test]
-    fn remote_auth_token_flag_parses_for_interactive_root() {
+    fn remote_auth_token_env_flag_parses_for_interactive_root() {
         let cli = MultitoolCli::try_parse_from([
             "codex",
-            "--remote-auth-token",
-            "pairing-token",
+            "--remote-auth-token-env",
+            "CODEX_REMOTE_AUTH_TOKEN",
             "--remote",
             "ws://127.0.0.1:4500",
         ])
         .expect("parse");
         assert_eq!(
-            cli.remote.remote_auth_token.as_deref(),
-            Some("pairing-token")
+            cli.remote.remote_auth_token_env.as_deref(),
+            Some("CODEX_REMOTE_AUTH_TOKEN")
         );
     }
 
@@ -1825,9 +1855,9 @@ mod tests {
     }
 
     #[test]
-    fn reject_remote_auth_token_for_non_interactive_subcommands() {
-        let err = reject_remote_mode_for_subcommand(None, Some("pairing-token"), "exec")
-            .expect_err("non-interactive subcommands should reject --remote-auth-token");
+    fn reject_remote_auth_token_env_for_non_interactive_subcommands() {
+        let err = reject_remote_mode_for_subcommand(None, Some("CODEX_REMOTE_AUTH_TOKEN"), "exec")
+            .expect_err("non-interactive subcommands should reject --remote-auth-token-env");
         assert!(
             err.to_string()
                 .contains("only supported for interactive TUI commands")
@@ -1835,18 +1865,46 @@ mod tests {
     }
 
     #[test]
-    fn reject_remote_auth_token_for_app_server_generate_internal_json_schema() {
+    fn reject_remote_auth_token_env_for_app_server_generate_internal_json_schema() {
         let subcommand =
             AppServerSubcommand::GenerateInternalJsonSchema(GenerateInternalJsonSchemaCommand {
                 out_dir: PathBuf::from("/tmp/out"),
             });
         let err = reject_remote_mode_for_app_server_subcommand(
             None,
-            Some("pairing-token"),
+            Some("CODEX_REMOTE_AUTH_TOKEN"),
             Some(&subcommand),
         )
-        .expect_err("non-interactive app-server subcommands should reject --remote-auth-token");
+        .expect_err("non-interactive app-server subcommands should reject --remote-auth-token-env");
         assert!(err.to_string().contains("generate-internal-json-schema"));
+    }
+
+    #[test]
+    fn read_remote_auth_token_from_env_var_reports_missing_values() {
+        let err = read_remote_auth_token_from_env_var_with("CODEX_REMOTE_AUTH_TOKEN", |_| {
+            Err(std::env::VarError::NotPresent)
+        })
+        .expect_err("missing env vars should be rejected");
+        assert!(err.to_string().contains("is not set"));
+    }
+
+    #[test]
+    fn read_remote_auth_token_from_env_var_trims_values() {
+        let auth_token =
+            read_remote_auth_token_from_env_var_with("CODEX_REMOTE_AUTH_TOKEN", |_| {
+                Ok("  bearer-token  ".to_string())
+            })
+            .expect("env var should parse");
+        assert_eq!(auth_token, "bearer-token");
+    }
+
+    #[test]
+    fn read_remote_auth_token_from_env_var_rejects_empty_values() {
+        let err = read_remote_auth_token_from_env_var_with("CODEX_REMOTE_AUTH_TOKEN", |_| {
+            Ok(" \n\t ".to_string())
+        })
+        .expect_err("empty env vars should be rejected");
+        assert!(err.to_string().contains("is empty"));
     }
 
     #[test]
