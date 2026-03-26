@@ -3,8 +3,6 @@ use codex_protocol::protocol::GranularApprovalConfig;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 #[cfg(not(target_os = "windows"))]
-use std::path::Path;
-#[cfg(not(target_os = "windows"))]
 use std::path::PathBuf;
 
 #[test]
@@ -97,12 +95,8 @@ fn build_sandbox_command_prefers_configured_codex_exe_for_apply_patch() {
     };
     let configured_codex_exe = PathBuf::from("/tmp/codex");
 
-    let command = ApplyPatchRuntime::build_sandbox_command(
-        &request,
-        Path::new("/tmp"),
-        Some(&configured_codex_exe),
-    )
-    .expect("build sandbox command");
+    let command = ApplyPatchRuntime::build_sandbox_command(&request, Some(&configured_codex_exe))
+        .expect("build sandbox command");
 
     assert_eq!(
         command.program,
@@ -135,8 +129,8 @@ fn build_sandbox_command_falls_back_to_current_exe_for_apply_patch() {
         timeout_ms: None,
     };
 
-    let command = ApplyPatchRuntime::build_sandbox_command(&request, Path::new("/tmp"), None)
-        .expect("build sandbox command");
+    let command =
+        ApplyPatchRuntime::build_sandbox_command(&request, None).expect("build sandbox command");
 
     assert_eq!(
         command.program,

@@ -65,21 +65,33 @@ impl ApplyPatchRuntime {
         }
     }
 
+    #[cfg(target_os = "windows")]
     fn build_sandbox_command(
         req: &ApplyPatchRequest,
-        _codex_home: &std::path::Path,
+        codex_home: &std::path::Path,
+    ) -> Result<SandboxCommand, ToolError> {
+        Ok(Self::build_sandbox_command_with_program(
+            req,
+            codex_windows_sandbox::resolve_current_exe_for_launch(codex_home, "codex.exe"),
+        ))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn build_sandbox_command(
+        req: &ApplyPatchRequest,
         configured_codex_exe: Option<&PathBuf>,
     ) -> Result<SandboxCommand, ToolError> {
-        #[cfg(target_os = "windows")]
-        let exe = codex_windows_sandbox::resolve_current_exe_for_launch(_codex_home, "codex.exe");
-        #[cfg(not(target_os = "windows"))]
         let exe = if let Some(path) = configured_codex_exe {
             path.clone()
         } else {
             std::env::current_exe()
                 .map_err(|e| ToolError::Rejected(format!("failed to determine codex exe: {e}")))?
         };
-        Ok(SandboxCommand {
+        Ok(Self::build_sandbox_command_with_program(req, exe))
+    }
+
+    fn build_sandbox_command_with_program(req: &ApplyPatchRequest, exe: PathBuf) -> SandboxCommand {
+        SandboxCommand {
             program: exe.to_string_lossy().to_string(),
             args: vec![
                 CODEX_CORE_APPLY_PATCH_ARG1.to_string(),
@@ -89,7 +101,7 @@ impl ApplyPatchRuntime {
             // Run apply_patch with a minimal environment for determinism and to avoid leaks.
             env: HashMap::new(),
             additional_permissions: req.additional_permissions.clone(),
-        })
+        }
     }
 
     fn stdout_stream(ctx: &ToolCtx) -> Option<crate::exec::StdoutStream> {
@@ -195,11 +207,10 @@ impl ToolRuntime<ApplyPatchRequest, ExecToolCallOutput> for ApplyPatchRuntime {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
-        let command = Self::build_sandbox_command(
-            req,
-            &ctx.turn.config.codex_home,
-            ctx.turn.codex_linux_sandbox_exe.as_ref(),
-        )?;
+        #[cfg(target_os = "windows")]
+        let command = Self::build_sandbox_command(req, &ctx.turn.config.codex_home)?;
+        #[cfg(not(target_os = "windows"))]
+        let command = Self::build_sandbox_command(req, ctx.turn.codex_linux_sandbox_exe.as_ref())?;
         let options = ExecOptions {
             expiration: req.timeout_ms.into(),
             capture_policy: ExecCapturePolicy::ShellTool,
