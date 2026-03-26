@@ -1682,6 +1682,1508 @@
       ],
       "title": "ClientRequest"
     },
+    "ClientResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Typed response from the server to the client.",
+      "oneOf": [
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "initialize"
+              ],
+              "title": "InitializeResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/InitializeResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "InitializeResponse",
+          "type": "object"
+        },
+        {
+          "description": "NEW APIs",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/start"
+              ],
+              "title": "Thread/startResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ThreadStartResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Thread/startResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/resume"
+              ],
+              "title": "Thread/resumeResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ThreadResumeResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Thread/resumeResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/fork"
+              ],
+              "title": "Thread/forkResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ThreadForkResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Thread/forkResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/archive"
+              ],
+              "title": "Thread/archiveResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ThreadArchiveResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Thread/archiveResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/unsubscribe"
+              ],
+              "title": "Thread/unsubscribeResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ThreadUnsubscribeResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Thread/unsubscribeResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/name/set"
+              ],
+              "title": "Thread/name/setResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ThreadSetNameResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Thread/name/setResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/metadata/update"
+              ],
+              "title": "Thread/metadata/updateResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ThreadMetadataUpdateResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Thread/metadata/updateResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/unarchive"
+              ],
+              "title": "Thread/unarchiveResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ThreadUnarchiveResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Thread/unarchiveResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/compact/start"
+              ],
+              "title": "Thread/compact/startResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ThreadCompactStartResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Thread/compact/startResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/shellCommand"
+              ],
+              "title": "Thread/shellCommandResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ThreadShellCommandResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Thread/shellCommandResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/rollback"
+              ],
+              "title": "Thread/rollbackResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ThreadRollbackResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Thread/rollbackResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/list"
+              ],
+              "title": "Thread/listResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ThreadListResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Thread/listResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/loaded/list"
+              ],
+              "title": "Thread/loaded/listResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ThreadLoadedListResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Thread/loaded/listResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/read"
+              ],
+              "title": "Thread/readResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ThreadReadResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Thread/readResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "skills/list"
+              ],
+              "title": "Skills/listResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/SkillsListResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Skills/listResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "plugin/list"
+              ],
+              "title": "Plugin/listResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/PluginListResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Plugin/listResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "plugin/read"
+              ],
+              "title": "Plugin/readResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/PluginReadResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Plugin/readResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "app/list"
+              ],
+              "title": "App/listResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/AppsListResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "App/listResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/readFile"
+              ],
+              "title": "Fs/readFileResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/FsReadFileResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Fs/readFileResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/writeFile"
+              ],
+              "title": "Fs/writeFileResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/FsWriteFileResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Fs/writeFileResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/createDirectory"
+              ],
+              "title": "Fs/createDirectoryResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/FsCreateDirectoryResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Fs/createDirectoryResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/getMetadata"
+              ],
+              "title": "Fs/getMetadataResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/FsGetMetadataResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Fs/getMetadataResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/readDirectory"
+              ],
+              "title": "Fs/readDirectoryResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/FsReadDirectoryResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Fs/readDirectoryResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/remove"
+              ],
+              "title": "Fs/removeResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/FsRemoveResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Fs/removeResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/copy"
+              ],
+              "title": "Fs/copyResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/FsCopyResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Fs/copyResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/watch"
+              ],
+              "title": "Fs/watchResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/FsWatchResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Fs/watchResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fs/unwatch"
+              ],
+              "title": "Fs/unwatchResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/FsUnwatchResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Fs/unwatchResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "skills/config/write"
+              ],
+              "title": "Skills/config/writeResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/SkillsConfigWriteResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Skills/config/writeResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "plugin/install"
+              ],
+              "title": "Plugin/installResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/PluginInstallResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Plugin/installResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "plugin/uninstall"
+              ],
+              "title": "Plugin/uninstallResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/PluginUninstallResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Plugin/uninstallResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "turn/start"
+              ],
+              "title": "Turn/startResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/TurnStartResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Turn/startResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "turn/steer"
+              ],
+              "title": "Turn/steerResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/TurnSteerResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Turn/steerResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "turn/interrupt"
+              ],
+              "title": "Turn/interruptResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/TurnInterruptResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Turn/interruptResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "review/start"
+              ],
+              "title": "Review/startResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ReviewStartResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Review/startResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "model/list"
+              ],
+              "title": "Model/listResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ModelListResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Model/listResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "experimentalFeature/list"
+              ],
+              "title": "ExperimentalFeature/listResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ExperimentalFeatureListResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "ExperimentalFeature/listResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "experimentalFeature/enablement/set"
+              ],
+              "title": "ExperimentalFeature/enablement/setResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ExperimentalFeatureEnablementSetResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "ExperimentalFeature/enablement/setResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "mcpServer/oauth/login"
+              ],
+              "title": "McpServer/oauth/loginResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/McpServerOauthLoginResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "McpServer/oauth/loginResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "config/mcpServer/reload"
+              ],
+              "title": "Config/mcpServer/reloadResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/McpServerRefreshResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Config/mcpServer/reloadResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "mcpServerStatus/list"
+              ],
+              "title": "McpServerStatus/listResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ListMcpServerStatusResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "McpServerStatus/listResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "windowsSandbox/setupStart"
+              ],
+              "title": "WindowsSandbox/setupStartResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/WindowsSandboxSetupStartResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "WindowsSandbox/setupStartResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/login/start"
+              ],
+              "title": "Account/login/startResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/LoginAccountResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Account/login/startResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/login/cancel"
+              ],
+              "title": "Account/login/cancelResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/CancelLoginAccountResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Account/login/cancelResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/logout"
+              ],
+              "title": "Account/logoutResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/LogoutAccountResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Account/logoutResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/rateLimits/read"
+              ],
+              "title": "Account/rateLimits/readResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/GetAccountRateLimitsResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Account/rateLimits/readResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "feedback/upload"
+              ],
+              "title": "Feedback/uploadResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/FeedbackUploadResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Feedback/uploadResponse",
+          "type": "object"
+        },
+        {
+          "description": "Execute a standalone command (argv vector) under the server's sandbox.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "command/exec"
+              ],
+              "title": "Command/execResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/CommandExecResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Command/execResponse",
+          "type": "object"
+        },
+        {
+          "description": "Write stdin bytes to a running `command/exec` session or close stdin.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "command/exec/write"
+              ],
+              "title": "Command/exec/writeResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/CommandExecWriteResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Command/exec/writeResponse",
+          "type": "object"
+        },
+        {
+          "description": "Terminate a running `command/exec` session by client-supplied `processId`.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "command/exec/terminate"
+              ],
+              "title": "Command/exec/terminateResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/CommandExecTerminateResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Command/exec/terminateResponse",
+          "type": "object"
+        },
+        {
+          "description": "Resize a running PTY-backed `command/exec` session by client-supplied `processId`.",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "command/exec/resize"
+              ],
+              "title": "Command/exec/resizeResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/CommandExecResizeResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Command/exec/resizeResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "config/read"
+              ],
+              "title": "Config/readResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ConfigReadResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Config/readResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "externalAgentConfig/detect"
+              ],
+              "title": "ExternalAgentConfig/detectResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigDetectResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "ExternalAgentConfig/detectResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "externalAgentConfig/import"
+              ],
+              "title": "ExternalAgentConfig/importResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ExternalAgentConfigImportResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "ExternalAgentConfig/importResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "config/value/write"
+              ],
+              "title": "Config/value/writeResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ConfigWriteResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Config/value/writeResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "config/batchWrite"
+              ],
+              "title": "Config/batchWriteResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ConfigWriteResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Config/batchWriteResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "configRequirements/read"
+              ],
+              "title": "ConfigRequirements/readResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/ConfigRequirementsReadResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "ConfigRequirements/readResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/read"
+              ],
+              "title": "Account/readResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/v2/GetAccountResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "Account/readResponse",
+          "type": "object"
+        },
+        {
+          "description": "DEPRECATED APIs below",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "getConversationSummary"
+              ],
+              "title": "GetConversationSummaryResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/GetConversationSummaryResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "GetConversationSummaryResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "gitDiffToRemote"
+              ],
+              "title": "GitDiffToRemoteResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/GitDiffToRemoteResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "GitDiffToRemoteResponse",
+          "type": "object"
+        },
+        {
+          "description": "DEPRECATED in favor of GetAccount",
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "getAuthStatus"
+              ],
+              "title": "GetAuthStatusResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/GetAuthStatusResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "GetAuthStatusResponse",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "fuzzyFileSearch"
+              ],
+              "title": "FuzzyFileSearchResponseMethod",
+              "type": "string"
+            },
+            "response": {
+              "$ref": "#/definitions/FuzzyFileSearchResponse"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "response"
+          ],
+          "title": "FuzzyFileSearchResponse",
+          "type": "object"
+        }
+      ],
+      "title": "ClientResponse"
+    },
     "CommandExecutionApprovalDecision": {
       "oneOf": [
         {
@@ -1872,6 +3374,86 @@
       },
       "required": [
         "pathToSkillsMd"
+      ],
+      "type": "object"
+    },
+    "ConversationGitInfo": {
+      "properties": {
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "origin_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ConversationSummary": {
+      "properties": {
+        "cliVersion": {
+          "type": "string"
+        },
+        "conversationId": {
+          "$ref": "#/definitions/v2/ThreadId"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "gitInfo": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ConversationGitInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "modelProvider": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "preview": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/definitions/v2/SessionSource2"
+        },
+        "timestamp": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updatedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "cliVersion",
+        "conversationId",
+        "cwd",
+        "modelProvider",
+        "path",
+        "preview",
+        "source"
       ],
       "type": "object"
     },
@@ -2259,6 +3841,59 @@
         "sessionId"
       ],
       "title": "FuzzyFileSearchSessionUpdatedNotification",
+      "type": "object"
+    },
+    "GetAuthStatusResponse": {
+      "properties": {
+        "authMethod": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/v2/AuthMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "authToken": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requiresOpenaiAuth": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "GetConversationSummaryResponse": {
+      "properties": {
+        "summary": {
+          "$ref": "#/definitions/ConversationSummary"
+        }
+      },
+      "required": [
+        "summary"
+      ],
+      "type": "object"
+    },
+    "GitDiffToRemoteResponse": {
+      "properties": {
+        "diff": {
+          "type": "string"
+        },
+        "sha": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "diff",
+        "sha"
+      ],
       "type": "object"
     },
     "GrantedPermissionProfile": {
@@ -11432,6 +13067,46 @@
               "subAgent"
             ],
             "title": "SubAgentSessionSource",
+            "type": "object"
+          }
+        ]
+      },
+      "SessionSource2": {
+        "oneOf": [
+          {
+            "enum": [
+              "cli",
+              "vscode",
+              "exec",
+              "mcp",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "custom": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "custom"
+            ],
+            "title": "CustomSessionSource2",
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "subagent": {
+                "$ref": "#/definitions/v2/SubAgentSource"
+              }
+            },
+            "required": [
+              "subagent"
+            ],
+            "title": "SubagentSessionSource2",
             "type": "object"
           }
         ]

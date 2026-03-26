@@ -68,6 +68,15 @@ macro_rules! experimental_type_entry {
     };
 }
 
+macro_rules! client_method_entry {
+    ($variant:ident => $wire:literal) => {
+        $wire
+    };
+    ($variant:ident) => {
+        stringify!($variant)
+    };
+}
+
 /// Generates an `enum ClientRequest` where each variant is a request that the
 /// client can send to the server. Each variant has associated `params` and
 /// `response` types. Also generates a `export_client_responses()` function to
@@ -120,6 +129,35 @@ macro_rules! client_request_definitions {
             }
         }
 
+        /// Typed response from the server to the client.
+        #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
+        #[serde(tag = "method", rename_all = "camelCase")]
+        pub enum ClientResponse {
+            $(
+                $(#[doc = $variant_doc])*
+                $(#[serde(rename = $wire)] #[ts(rename = $wire)])?
+                $variant {
+                    #[serde(rename = "id")]
+                    request_id: RequestId,
+                    response: $response,
+                },
+            )*
+        }
+
+        impl ClientResponse {
+            pub fn id(&self) -> &RequestId {
+                match self {
+                    $(Self::$variant { request_id, .. } => request_id,)*
+                }
+            }
+
+            pub fn request_method(&self) -> &'static str {
+                match self {
+                    $(Self::$variant { .. } => client_method_entry!($variant $(=> $wire)?),)*
+                }
+            }
+        }
+
         impl crate::experimental_api::ExperimentalApi for ClientRequest {
             fn experimental_reason(&self) -> Option<&'static str> {
                 match self {
@@ -156,6 +194,7 @@ macro_rules! client_request_definitions {
         pub fn export_client_responses(
             out_dir: &::std::path::Path,
         ) -> ::std::result::Result<(), ::ts_rs::ExportError> {
+            ClientResponse::export_all_to(out_dir)?;
             $(
                 <$response as ::ts_rs::TS>::export_all_to(out_dir)?;
             )*
@@ -193,7 +232,7 @@ macro_rules! client_request_definitions {
 }
 
 client_request_definitions! {
-    Initialize {
+    Initialize => "initialize" {
         params: v1::InitializeParams,
         response: v1::InitializeResponse,
     },
@@ -508,20 +547,20 @@ client_request_definitions! {
     },
 
     /// DEPRECATED APIs below
-    GetConversationSummary {
+    GetConversationSummary => "getConversationSummary" {
         params: v1::GetConversationSummaryParams,
         response: v1::GetConversationSummaryResponse,
     },
-    GitDiffToRemote {
+    GitDiffToRemote => "gitDiffToRemote" {
         params: v1::GitDiffToRemoteParams,
         response: v1::GitDiffToRemoteResponse,
     },
     /// DEPRECATED in favor of GetAccount
-    GetAuthStatus {
+    GetAuthStatus => "getAuthStatus" {
         params: v1::GetAuthStatusParams,
         response: v1::GetAuthStatusResponse,
     },
-    FuzzyFileSearch {
+    FuzzyFileSearch => "fuzzyFileSearch" {
         params: FuzzyFileSearchParams,
         response: FuzzyFileSearchResponse,
     },
@@ -1261,6 +1300,84 @@ mod tests {
                 "id": 1,
             }),
             serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_client_response() -> Result<()> {
+        let response = ClientResponse::ThreadStart {
+            request_id: RequestId::Integer(7),
+            response: v2::ThreadStartResponse {
+                thread: v2::Thread {
+                    id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
+                    preview: "first prompt".to_string(),
+                    ephemeral: true,
+                    model_provider: "openai".to_string(),
+                    created_at: 1,
+                    updated_at: 2,
+                    status: v2::ThreadStatus::Idle,
+                    path: None,
+                    cwd: PathBuf::from("/tmp"),
+                    cli_version: "0.0.0".to_string(),
+                    source: v2::SessionSource::Exec,
+                    agent_nickname: None,
+                    agent_role: None,
+                    git_info: None,
+                    name: None,
+                    turns: Vec::new(),
+                },
+                model: "gpt-5".to_string(),
+                model_provider: "openai".to_string(),
+                service_tier: None,
+                cwd: PathBuf::from("/tmp"),
+                approval_policy: v2::AskForApproval::OnFailure,
+                approvals_reviewer: v2::ApprovalsReviewer::User,
+                sandbox: v2::SandboxPolicy::DangerFullAccess,
+                reasoning_effort: None,
+            },
+        };
+
+        assert_eq!(response.id(), &RequestId::Integer(7));
+        assert_eq!(response.request_method(), "thread/start");
+        assert_eq!(
+            json!({
+                "method": "thread/start",
+                "id": 7,
+                "response": {
+                    "thread": {
+                        "id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                        "preview": "first prompt",
+                        "ephemeral": true,
+                        "modelProvider": "openai",
+                        "createdAt": 1,
+                        "updatedAt": 2,
+                        "status": {
+                            "type": "idle"
+                        },
+                        "path": null,
+                        "cwd": "/tmp",
+                        "cliVersion": "0.0.0",
+                        "source": "exec",
+                        "agentNickname": null,
+                        "agentRole": null,
+                        "gitInfo": null,
+                        "name": null,
+                        "turns": []
+                    },
+                    "model": "gpt-5",
+                    "modelProvider": "openai",
+                    "serviceTier": null,
+                    "cwd": "/tmp",
+                    "approvalPolicy": "on-failure",
+                    "approvalsReviewer": "user",
+                    "sandbox": {
+                        "type": "dangerFullAccess"
+                    },
+                    "reasoningEffort": null
+                }
+            }),
+            serde_json::to_value(&response)?,
         );
         Ok(())
     }

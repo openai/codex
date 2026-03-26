@@ -1,5 +1,6 @@
 use crate::ClientNotification;
 use crate::ClientRequest;
+use crate::ClientResponse;
 use crate::ServerNotification;
 use crate::ServerRequest;
 use crate::export::GENERATED_TS_HEADER;
@@ -56,6 +57,7 @@ pub fn generate_typescript_schema_fixture_subtree_for_tests() -> Result<BTreeMap
     let mut seen = HashSet::new();
 
     collect_typescript_fixture_file::<ClientRequest>(&mut files, &mut seen)?;
+    collect_typescript_fixture_file::<ClientResponse>(&mut files, &mut seen)?;
     visit_typescript_fixture_dependencies(&mut files, &mut seen, |visitor| {
         visit_client_response_types(visitor);
     })?;
