@@ -3,6 +3,7 @@ use crate::agent::control::SpawnAgentOptions;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
+use codex_protocol::protocol::InterAgentCommunication;
 
 pub(crate) struct Handler;
 
@@ -35,6 +36,11 @@ impl ToolHandler for Handler {
             .filter(|role| !role.is_empty());
         let input_items = parse_collab_input(args.message, args.items)?;
         let prompt = input_preview(&input_items);
+        if args.task_name.is_none() {
+            return Err(FunctionCallError::RespondToModel(
+                "spawn_agent in MultiAgentV2 requires task_name".to_string(),
+            ));
+        }
         let session_source = turn.session_source.clone();
         let child_depth = next_thread_spawn_depth(&session_source);
         let max_depth = turn.config.agent_max_depth;
@@ -77,7 +83,7 @@ impl ToolHandler for Handler {
             .agent_control
             .spawn_agent_with_metadata(
                 config,
-                input_items,
+                Vec::new(),
                 Some(thread_spawn_source(
                     session.conversation_id,
                     &turn.session_source,
@@ -91,7 +97,7 @@ impl ToolHandler for Handler {
             )
             .await
             .map_err(collab_spawn_error);
-        let (new_thread_id, new_agent_metadata, status) = match &result {
+        let (new_thread_id, new_agent_metadata, mut status) = match &result {
             Ok(spawned_agent) => (
                 Some(spawned_agent.thread_id),
                 Some(spawned_agent.metadata.clone()),
@@ -112,17 +118,39 @@ impl ToolHandler for Handler {
         let (new_agent_path, new_agent_nickname, new_agent_role) =
             match (&agent_snapshot, new_agent_metadata) {
                 (Some(snapshot), _) => (
-                    snapshot.session_source.get_agent_path().map(String::from),
+                    snapshot.session_source.get_agent_path(),
                     snapshot.session_source.get_nickname(),
                     snapshot.session_source.get_agent_role(),
                 ),
                 (None, Some(metadata)) => (
-                    metadata.agent_path.map(String::from),
+                    metadata.agent_path,
                     metadata.agent_nickname,
                     metadata.agent_role,
                 ),
                 (None, None) => (None, None, None),
             };
+        if let (Ok(spawned_agent), Some(agent_path)) = (&result, new_agent_path.clone()) {
+            let communication = InterAgentCommunication::new(
+                turn.session_source
+                    .get_agent_path()
+                    .unwrap_or_else(AgentPath::root),
+                agent_path,
+                Vec::new(),
+                prompt.clone(),
+                /*trigger_turn*/ true,
+            );
+            session
+                .services
+                .agent_control
+                .send_inter_agent_communication(spawned_agent.thread_id, communication)
+                .await
+                .map_err(|err| collab_agent_error(spawned_agent.thread_id, err))?;
+            status = session
+                .services
+                .agent_control
+                .get_status(spawned_agent.thread_id)
+                .await;
+        }
         let effective_model = agent_snapshot
             .as_ref()
             .map(|snapshot| snapshot.model.clone())
@@ -132,7 +160,7 @@ impl ToolHandler for Handler {
             .and_then(|snapshot| snapshot.reasoning_effort)
             .unwrap_or(args.reasoning_effort.unwrap_or_default());
         let nickname = new_agent_nickname.clone();
-        let task_name = new_agent_path.clone();
+        let task_name = new_agent_path.as_ref().map(ToString::to_string);
         session
             .send_event(
                 &turn,

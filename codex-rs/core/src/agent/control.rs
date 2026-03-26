@@ -269,7 +269,9 @@ impl AgentControl {
         )
         .await;
 
-        self.send_input(new_thread.thread_id, items).await?;
+        if !items.is_empty() {
+            self.send_input(new_thread.thread_id, items).await?;
+        }
         let child_reference = agent_metadata
             .agent_path
             .as_ref()
