@@ -8,8 +8,10 @@ use codex_exec_server::StartedExecProcess;
 use codex_exec_server::WriteResponse;
 use codex_exec_server::WriteStatus;
 use codex_sandboxing::SandboxType;
+use pretty_assertions::assert_eq;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio::time::Duration;
 
 struct MockExecProcess {
     process_id: ProcessId,
@@ -31,7 +33,7 @@ impl ExecProcess for MockExecProcess {
     }
 }
 
-fn remote_process(write_status: WriteStatus) -> UnifiedExecProcess {
+async fn remote_process(write_status: WriteStatus) -> UnifiedExecProcess {
     let (_events_tx, events_rx) = mpsc::channel(1);
     let started = StartedExecProcess {
         process: Arc::new(MockExecProcess {
@@ -43,12 +45,14 @@ fn remote_process(write_status: WriteStatus) -> UnifiedExecProcess {
         events: events_rx,
     };
 
-    UnifiedExecProcess::from((started, SandboxType::None))
+    UnifiedExecProcess::from_remote_started(started, SandboxType::None)
+        .await
+        .expect("remote process should start")
 }
 
 #[tokio::test]
 async fn remote_write_unknown_process_marks_process_exited() {
-    let process = remote_process(WriteStatus::UnknownProcess);
+    let process = remote_process(WriteStatus::UnknownProcess).await;
 
     let err = process
         .write(b"hello")
@@ -61,7 +65,7 @@ async fn remote_write_unknown_process_marks_process_exited() {
 
 #[tokio::test]
 async fn remote_write_closed_stdin_marks_process_exited() {
-    let process = remote_process(WriteStatus::StdinClosed);
+    let process = remote_process(WriteStatus::StdinClosed).await;
 
     let err = process
         .write(b"hello")
@@ -70,4 +74,35 @@ async fn remote_write_closed_stdin_marks_process_exited() {
 
     assert!(matches!(err, UnifiedExecError::WriteToStdin));
     assert!(process.has_exited());
+}
+
+#[tokio::test]
+async fn remote_process_waits_for_early_exit_event() {
+    let (events_tx, events_rx) = mpsc::channel(1);
+    let started = StartedExecProcess {
+        process: Arc::new(MockExecProcess {
+            process_id: "test-process".to_string().into(),
+            write_response: WriteResponse {
+                status: WriteStatus::Accepted,
+            },
+        }),
+        events: events_rx,
+    };
+
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let _ = events_tx
+            .send(codex_exec_server::ExecSessionEvent::Exited {
+                seq: 1,
+                exit_code: 17,
+            })
+            .await;
+    });
+
+    let process = UnifiedExecProcess::from_remote_started(started, SandboxType::None)
+        .await
+        .expect("remote process should observe early exit");
+
+    assert!(process.has_exited());
+    assert_eq!(process.exit_code(), Some(17));
 }

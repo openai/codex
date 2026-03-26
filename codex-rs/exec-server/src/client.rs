@@ -21,6 +21,7 @@ use codex_app_server_protocol::JSONRPCNotification;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
 use tracing::debug;
@@ -452,13 +453,14 @@ async fn handle_server_notification(
             // each event to the single local receiver that owns this process.
             let events_tx = inner.sessions.load().get(&params.process_id).cloned();
             if let Some(events_tx) = events_tx {
-                let _ = events_tx
-                    .send(ExecSessionEvent::Output {
+                try_forward_session_event(
+                    events_tx,
+                    ExecSessionEvent::Output {
                         seq: params.seq,
                         stream: params.stream,
                         chunk: params.chunk.into_inner(),
-                    })
-                    .await;
+                    },
+                );
             }
         }
         EXEC_EXITED_METHOD => {
@@ -466,12 +468,13 @@ async fn handle_server_notification(
                 serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
             let events_tx = inner.sessions.load().get(&params.process_id).cloned();
             if let Some(events_tx) = events_tx {
-                let _ = events_tx
-                    .send(ExecSessionEvent::Exited {
+                try_forward_session_event(
+                    events_tx,
+                    ExecSessionEvent::Exited {
                         seq: params.seq,
                         exit_code: params.exit_code,
-                    })
-                    .await;
+                    },
+                );
             }
         }
         EXEC_CLOSED_METHOD => {
@@ -491,9 +494,7 @@ async fn handle_server_notification(
                 events_tx
             };
             if let Some(events_tx) = events_tx {
-                let _ = events_tx
-                    .send(ExecSessionEvent::Closed { seq: params.seq })
-                    .await;
+                try_forward_session_event(events_tx, ExecSessionEvent::Closed { seq: params.seq });
             }
         }
         other => {
@@ -501,4 +502,180 @@ async fn handle_server_notification(
         }
     }
     Ok(())
+}
+
+fn try_forward_session_event(events_tx: mpsc::Sender<ExecSessionEvent>, event: ExecSessionEvent) {
+    match event {
+        ExecSessionEvent::Output { .. } | ExecSessionEvent::Closed { .. } => {
+            let _ = events_tx.try_send(event);
+        }
+        ExecSessionEvent::Exited { .. } | ExecSessionEvent::Failed { .. } => {
+            match events_tx.try_send(event) {
+                Ok(()) | Err(TrySendError::Closed(_)) => {}
+                Err(TrySendError::Full(event)) => {
+                    tokio::spawn(async move {
+                        let _ = events_tx.send(event).await;
+                    });
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use codex_app_server_protocol::JSONRPCMessage;
+    use codex_app_server_protocol::JSONRPCNotification;
+    use codex_app_server_protocol::JSONRPCResponse;
+    use pretty_assertions::assert_eq;
+    use tokio::io::AsyncBufReadExt;
+    use tokio::io::AsyncWrite;
+    use tokio::io::AsyncWriteExt;
+    use tokio::io::BufReader;
+    use tokio::io::duplex;
+    use tokio::sync::mpsc;
+    use tokio::time::Duration;
+    use tokio::time::timeout;
+
+    use super::ExecServerClient;
+    use super::ExecServerClientConnectOptions;
+    use super::SESSION_EVENT_CHANNEL_CAPACITY;
+    use crate::connection::JsonRpcConnection;
+    use crate::process::ExecSessionEvent;
+    use crate::protocol::EXEC_EXITED_METHOD;
+    use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
+    use crate::protocol::ExecExitedNotification;
+    use crate::protocol::ExecOutputDeltaNotification;
+    use crate::protocol::ExecOutputStream;
+    use crate::protocol::INITIALIZE_METHOD;
+    use crate::protocol::INITIALIZED_METHOD;
+    use crate::protocol::InitializeResponse;
+
+    async fn read_jsonrpc_line<R>(lines: &mut tokio::io::Lines<BufReader<R>>) -> JSONRPCMessage
+    where
+        R: tokio::io::AsyncRead + Unpin,
+    {
+        let line = timeout(Duration::from_secs(1), lines.next_line())
+            .await
+            .expect("json-rpc read should not time out")
+            .expect("json-rpc read should succeed")
+            .expect("json-rpc connection should stay open");
+        serde_json::from_str(&line).expect("json-rpc line should parse")
+    }
+
+    async fn write_jsonrpc_line<W>(writer: &mut W, message: JSONRPCMessage)
+    where
+        W: AsyncWrite + Unpin,
+    {
+        let encoded = serde_json::to_string(&message).expect("json-rpc message should serialize");
+        writer
+            .write_all(format!("{encoded}\n").as_bytes())
+            .await
+            .expect("json-rpc line should write");
+    }
+
+    #[tokio::test]
+    async fn full_session_queue_does_not_block_other_notifications() {
+        let (client_stdin, server_reader) = duplex(1 << 20);
+        let (mut server_writer, client_stdout) = duplex(1 << 20);
+        let (notifications_tx, mut notifications_rx) = mpsc::channel(16);
+        let server = tokio::spawn(async move {
+            let mut lines = BufReader::new(server_reader).lines();
+            let initialize = read_jsonrpc_line(&mut lines).await;
+            let request = match initialize {
+                JSONRPCMessage::Request(request) if request.method == INITIALIZE_METHOD => request,
+                other => panic!("expected initialize request, got {other:?}"),
+            };
+            write_jsonrpc_line(
+                &mut server_writer,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: request.id,
+                    result: serde_json::to_value(InitializeResponse {})
+                        .expect("initialize response should serialize"),
+                }),
+            )
+            .await;
+
+            let initialized = read_jsonrpc_line(&mut lines).await;
+            match initialized {
+                JSONRPCMessage::Notification(notification)
+                    if notification.method == INITIALIZED_METHOD => {}
+                other => panic!("expected initialized notification, got {other:?}"),
+            }
+
+            while let Some(message) = notifications_rx.recv().await {
+                write_jsonrpc_line(&mut server_writer, message).await;
+            }
+        });
+
+        let client = ExecServerClient::connect(
+            JsonRpcConnection::from_stdio(
+                client_stdout,
+                client_stdin,
+                "test-exec-server-client".to_string(),
+            ),
+            ExecServerClientConnectOptions::default(),
+        )
+        .await
+        .expect("client should connect");
+
+        let _noisy_events = client
+            .register_session("noisy")
+            .await
+            .expect("noisy session should register");
+        let mut quiet_events = client
+            .register_session("quiet")
+            .await
+            .expect("quiet session should register");
+
+        for seq in 0..=SESSION_EVENT_CHANNEL_CAPACITY as u64 {
+            notifications_tx
+                .send(JSONRPCMessage::Notification(JSONRPCNotification {
+                    method: EXEC_OUTPUT_DELTA_METHOD.to_string(),
+                    params: Some(
+                        serde_json::to_value(ExecOutputDeltaNotification {
+                            process_id: "noisy".to_string(),
+                            seq,
+                            stream: ExecOutputStream::Stdout,
+                            chunk: b"x".to_vec().into(),
+                        })
+                        .expect("output notification should serialize"),
+                    ),
+                }))
+                .await
+                .expect("output notification should queue");
+        }
+
+        notifications_tx
+            .send(JSONRPCMessage::Notification(JSONRPCNotification {
+                method: EXEC_EXITED_METHOD.to_string(),
+                params: Some(
+                    serde_json::to_value(ExecExitedNotification {
+                        process_id: "quiet".to_string(),
+                        seq: 1,
+                        exit_code: 17,
+                    })
+                    .expect("exit notification should serialize"),
+                ),
+            }))
+            .await
+            .expect("exit notification should queue");
+
+        let quiet_event = timeout(Duration::from_secs(1), quiet_events.recv())
+            .await
+            .expect("quiet session should receive notification before timeout")
+            .expect("quiet session channel should stay open");
+
+        assert_eq!(
+            quiet_event,
+            ExecSessionEvent::Exited {
+                seq: 1,
+                exit_code: 17,
+            }
+        );
+
+        drop(notifications_tx);
+        drop(client);
+        server.await.expect("server task should finish");
+    }
 }

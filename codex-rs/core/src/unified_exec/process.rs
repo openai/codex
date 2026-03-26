@@ -30,6 +30,8 @@ use super::UnifiedExecError;
 use super::head_tail_buffer::HeadTailBuffer;
 use super::process_state::ProcessState;
 
+const EARLY_EXIT_GRACE_PERIOD: Duration = Duration::from_millis(150);
+
 pub(crate) trait SpawnLifecycle: std::fmt::Debug + Send + Sync {
     /// Returns file descriptors that must stay open across the child `exec()`.
     ///
@@ -309,9 +311,7 @@ impl UnifiedExecProcess {
             Err(TryRecvError::Empty) => {}
         }
 
-        if let Ok(exit_result) =
-            tokio::time::timeout(Duration::from_millis(150), &mut exit_rx).await
-        {
+        if let Ok(exit_result) = tokio::time::timeout(EARLY_EXIT_GRACE_PERIOD, &mut exit_rx).await {
             managed.signal_exit(exit_result.ok());
             managed.check_for_sandbox_denial().await?;
             return Ok(managed);
@@ -327,6 +327,33 @@ impl UnifiedExecProcess {
                 cancellation_token.cancel();
             }
         });
+
+        Ok(managed)
+    }
+
+    pub(super) async fn from_remote_started(
+        started: StartedExecProcess,
+        sandbox_type: SandboxType,
+    ) -> Result<Self, UnifiedExecError> {
+        let process_handle = ProcessHandle::Remote(Arc::clone(&started.process));
+        let mut managed = Self::new(process_handle, sandbox_type, /*spawn_lifecycle*/ None);
+        let output_handles = managed.output_handles();
+        managed.output_task = Some(Self::spawn_remote_output_task(
+            started,
+            output_handles,
+            managed.output_tx.clone(),
+            managed.state_tx.clone(),
+        ));
+
+        if tokio::time::timeout(
+            EARLY_EXIT_GRACE_PERIOD,
+            managed.cancellation_token.cancelled(),
+        )
+        .await
+        .is_ok()
+        {
+            managed.check_for_sandbox_denial().await?;
+        }
 
         Ok(managed)
     }
@@ -422,21 +449,6 @@ impl UnifiedExecProcess {
         let state = self.state_rx.borrow().clone();
         let _ = self.state_tx.send_replace(state.exited(exit_code));
         self.cancellation_token.cancel();
-    }
-}
-
-impl From<(StartedExecProcess, SandboxType)> for UnifiedExecProcess {
-    fn from((started, sandbox_type): (StartedExecProcess, SandboxType)) -> Self {
-        let process_handle = ProcessHandle::Remote(Arc::clone(&started.process));
-        let mut managed = Self::new(process_handle, sandbox_type, /*spawn_lifecycle*/ None);
-        let output_handles = managed.output_handles();
-        managed.output_task = Some(Self::spawn_remote_output_task(
-            started,
-            output_handles,
-            managed.output_tx.clone(),
-            managed.state_tx.clone(),
-        ));
-        managed
     }
 }
 
