@@ -1991,19 +1991,19 @@ approval_mode = "approve"
 }
 
 #[test]
-fn mcp_servers_toml_rejects_unknown_server_fields() {
-    let err = toml::from_str::<ConfigToml>(
+fn mcp_servers_toml_ignores_unknown_server_fields() {
+    let config = toml::from_str::<ConfigToml>(
         r#"
 [mcp_servers.docs]
 command = "docs-server"
 trust_level = "trusted"
 "#,
     )
-    .expect_err("unknown MCP server fields should be rejected");
+    .expect("unknown MCP server fields should be ignored");
 
-    assert!(
-        err.to_string().contains("unknown field `trust_level`"),
-        "unexpected error: {err}"
+    assert_eq!(
+        config.mcp_servers.get("docs"),
+        Some(&stdio_mcp("docs-server"))
     );
 }
 
