@@ -126,12 +126,25 @@ fn agent_status_output_schema() -> JsonValue {
     })
 }
 
-fn spawn_agent_output_schema(multi_agent_v2: bool) -> JsonValue {
-    let task_name_description = if multi_agent_v2 {
-        "Canonical task name for the spawned agent."
-    } else {
-        "Canonical task name for the spawned agent when one was assigned."
-    };
+fn spawn_agent_output_schema_v1() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "agent_id": {
+                "type": "string",
+                "description": "Thread identifier for the spawned agent."
+            },
+            "nickname": {
+                "type": ["string", "null"],
+                "description": "User-facing nickname for the spawned agent when available."
+            }
+        },
+        "required": ["agent_id", "nickname"],
+        "additionalProperties": false
+    })
+}
+
+fn spawn_agent_output_schema_v2() -> JsonValue {
     json!({
         "type": "object",
         "properties": {
@@ -141,7 +154,7 @@ fn spawn_agent_output_schema(multi_agent_v2: bool) -> JsonValue {
             },
             "task_name": {
                 "type": ["string", "null"],
-                "description": task_name_description
+                "description": "Canonical task name for the spawned agent."
             },
             "nickname": {
                 "type": ["string", "null"],
@@ -217,7 +230,7 @@ fn wait_output_schema_v1() -> JsonValue {
         "properties": {
             "status": {
                 "type": "object",
-                "description": "Final statuses keyed by canonical task name when available, otherwise by agent id.",
+                "description": "Final statuses keyed by agent id.",
                 "additionalProperties": agent_status_output_schema()
             },
             "timed_out": {
@@ -1133,10 +1146,8 @@ fn create_collab_input_items_schema() -> JsonSchema {
     }
 }
 
-fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
-    let available_models_description = spawn_agent_models_description(&config.available_models);
-    let return_value_description = "Returns the canonical task name when the spawned agent was named, otherwise the agent id, plus the user-facing nickname when available.";
-    let mut properties = BTreeMap::from([
+fn spawn_agent_common_properties(config: &ToolsConfig) -> BTreeMap<String, JsonSchema> {
+    BTreeMap::from([
         (
             "message".to_string(),
             JsonSchema::String {
@@ -1182,21 +1193,15 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
                 ),
             },
         ),
-    ]);
-    properties.insert(
-        "task_name".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Optional task name for the new agent. Use lowercase letters, digits, and underscores."
-                    .to_string(),
-            ),
-        },
-    );
+    ])
+}
 
-    ToolSpec::Function(ResponsesApiTool {
-        name: "spawn_agent".to_string(),
-        description: format!(
-            r#"
+fn spawn_agent_tool_description(
+    available_models_description: &str,
+    return_value_description: &str,
+) -> String {
+    format!(
+        r#"
         Only use `spawn_agent` if and only if the user explicitly asks for sub-agents, delegation, or parallel agent work.
         Requests for depth, thoroughness, research, investigation, or detailed codebase analysis do not count as permission to spawn.
         Agent-role guidance below only helps choose which agent to use after spawning is already authorized; it never authorizes spawning by itself.
@@ -1231,6 +1236,20 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
 - Split implementation into disjoint codebase slices and spawn multiple agents for them in parallel when the write scopes do not overlap.
 - Delegate verification only when it can run in parallel with ongoing implementation and is likely to catch a concrete risk before final integration.
 - The key is to find opportunities to spawn multiple independent subtasks in parallel within the same round, while ensuring each subtask is well-defined, self-contained, and materially advances the main task."#
+    )
+}
+
+fn create_spawn_agent_tool_v1(config: &ToolsConfig) -> ToolSpec {
+    let available_models_description = spawn_agent_models_description(&config.available_models);
+    let return_value_description =
+        "Returns the spawned agent id plus the user-facing nickname when available.";
+    let properties = spawn_agent_common_properties(config);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "spawn_agent".to_string(),
+        description: spawn_agent_tool_description(
+            &available_models_description,
+            return_value_description,
         ),
         strict: false,
         defer_loading: None,
@@ -1239,7 +1258,38 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
             required: None,
             additional_properties: Some(false.into()),
         },
-        output_schema: Some(spawn_agent_output_schema(config.multi_agent_v2)),
+        output_schema: Some(spawn_agent_output_schema_v1()),
+    })
+}
+
+fn create_spawn_agent_tool_v2(config: &ToolsConfig) -> ToolSpec {
+    let available_models_description = spawn_agent_models_description(&config.available_models);
+    let return_value_description = "Returns the canonical task name when the spawned agent was named, otherwise the agent id, plus the user-facing nickname when available.";
+    let mut properties = spawn_agent_common_properties(config);
+    properties.insert(
+        "task_name".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional task name for the new agent. Use lowercase letters, digits, and underscores."
+                    .to_string(),
+            ),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "spawn_agent".to_string(),
+        description: spawn_agent_tool_description(
+            &available_models_description,
+            return_value_description,
+        ),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+        output_schema: Some(spawn_agent_output_schema_v2()),
     })
 }
 
@@ -1401,14 +1451,12 @@ fn create_report_agent_job_result_tool() -> ToolSpec {
     })
 }
 
-fn create_send_input_tool() -> ToolSpec {
+fn create_send_input_tool_v1() -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "target".to_string(),
             JsonSchema::String {
-                description: Some(
-                    "Agent id or canonical task name to message (from spawn_agent).".to_string(),
-                ),
+                description: Some("Agent id to message (from spawn_agent).".to_string()),
             },
         ),
         (
@@ -1546,7 +1594,35 @@ fn create_resume_agent_tool() -> ToolSpec {
     })
 }
 
-fn wait_agent_tool_parameters() -> JsonSchema {
+fn wait_agent_tool_parameters_v1() -> JsonSchema {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "targets".to_string(),
+        JsonSchema::Array {
+            items: Box::new(JsonSchema::String { description: None }),
+            description: Some(
+                "Agent ids to wait on. Pass multiple ids to wait for whichever finishes first."
+                    .to_string(),
+            ),
+        },
+    );
+    properties.insert(
+        "timeout_ms".to_string(),
+        JsonSchema::Number {
+            description: Some(format!(
+                "Optional timeout in milliseconds. Defaults to {DEFAULT_WAIT_TIMEOUT_MS}, min {MIN_WAIT_TIMEOUT_MS}, max {MAX_WAIT_TIMEOUT_MS}. Prefer longer waits (minutes) to avoid busy polling."
+            )),
+        },
+    );
+
+    JsonSchema::Object {
+        properties,
+        required: Some(vec!["targets".to_string()]),
+        additional_properties: Some(false.into()),
+    }
+}
+
+fn wait_agent_tool_parameters_v2() -> JsonSchema {
     let mut properties = BTreeMap::new();
     properties.insert(
         "targets".to_string(),
@@ -1581,7 +1657,7 @@ fn create_wait_agent_tool_v1() -> ToolSpec {
             .to_string(),
         strict: false,
         defer_loading: None,
-        parameters: wait_agent_tool_parameters(),
+        parameters: wait_agent_tool_parameters_v1(),
         output_schema: Some(wait_output_schema_v1()),
     })
 }
@@ -1593,7 +1669,7 @@ fn create_wait_agent_tool_v2() -> ToolSpec {
             .to_string(),
         strict: false,
         defer_loading: None,
-        parameters: wait_agent_tool_parameters(),
+        parameters: wait_agent_tool_parameters_v2(),
         output_schema: Some(wait_output_schema_v2()),
     })
 }
@@ -1740,7 +1816,30 @@ fn create_request_permissions_tool() -> ToolSpec {
     })
 }
 
-fn create_close_agent_tool() -> ToolSpec {
+fn create_close_agent_tool_v1() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "target".to_string(),
+        JsonSchema::String {
+            description: Some("Agent id to close (from spawn_agent).".to_string()),
+        },
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "close_agent".to_string(),
+        description: "Close an agent and any open descendants when they are no longer needed, and return the target agent's previous status before shutdown was requested. Don't keep agents open for too long if they are not needed anymore.".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["target".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: Some(close_agent_output_schema()),
+    })
+}
+
+fn create_close_agent_tool_v2() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
         "target".to_string(),
@@ -2581,6 +2680,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::multi_agents::SpawnAgentHandler;
     use crate::tools::handlers::multi_agents::WaitAgentHandler;
     use crate::tools::handlers::multi_agents_v2::AssignTaskHandler as AssignTaskHandlerV2;
+    use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
     use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
     use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
@@ -2924,56 +3024,37 @@ pub(crate) fn build_specs_with_discoverable_tools(
     builder.register_handler("view_image", view_image_handler);
 
     if config.collab_tools {
-        push_tool_spec(
-            &mut builder,
-            create_spawn_agent_tool(config),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        push_tool_spec(
-            &mut builder,
-            if config.multi_agent_v2 {
-                create_send_message_tool()
-            } else {
-                create_send_input_tool()
-            },
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
         if config.multi_agent_v2 {
+            push_tool_spec(
+                &mut builder,
+                create_spawn_agent_tool_v2(config),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            push_tool_spec(
+                &mut builder,
+                create_send_message_tool(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
             push_tool_spec(
                 &mut builder,
                 create_assign_task_tool(),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
-        }
-        if !config.multi_agent_v2 {
             push_tool_spec(
                 &mut builder,
-                create_resume_agent_tool(),
+                create_wait_agent_tool_v2(),
                 /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
-            builder.register_handler("resume_agent", Arc::new(ResumeAgentHandler));
-        }
-        push_tool_spec(
-            &mut builder,
-            if config.multi_agent_v2 {
-                create_wait_agent_tool_v2()
-            } else {
-                create_wait_agent_tool_v1()
-            },
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        push_tool_spec(
-            &mut builder,
-            create_close_agent_tool(),
-            /*supports_parallel_tool_calls*/ false,
-            config.code_mode_enabled,
-        );
-        if config.multi_agent_v2 {
+            push_tool_spec(
+                &mut builder,
+                create_close_agent_tool_v2(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
             push_tool_spec(
                 &mut builder,
                 create_list_agents_tool(),
@@ -2984,13 +3065,45 @@ pub(crate) fn build_specs_with_discoverable_tools(
             builder.register_handler("send_message", Arc::new(SendMessageHandlerV2));
             builder.register_handler("assign_task", Arc::new(AssignTaskHandlerV2));
             builder.register_handler("wait_agent", Arc::new(WaitAgentHandlerV2));
+            builder.register_handler("close_agent", Arc::new(CloseAgentHandlerV2));
             builder.register_handler("list_agents", Arc::new(ListAgentsHandlerV2));
         } else {
+            push_tool_spec(
+                &mut builder,
+                create_spawn_agent_tool_v1(config),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            push_tool_spec(
+                &mut builder,
+                create_send_input_tool_v1(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            push_tool_spec(
+                &mut builder,
+                create_resume_agent_tool(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            builder.register_handler("resume_agent", Arc::new(ResumeAgentHandler));
+            push_tool_spec(
+                &mut builder,
+                create_wait_agent_tool_v1(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
+            push_tool_spec(
+                &mut builder,
+                create_close_agent_tool_v1(),
+                /*supports_parallel_tool_calls*/ false,
+                config.code_mode_enabled,
+            );
             builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandler));
             builder.register_handler("send_input", Arc::new(SendInputHandler));
             builder.register_handler("wait_agent", Arc::new(WaitAgentHandler));
+            builder.register_handler("close_agent", Arc::new(CloseAgentHandler));
         }
-        builder.register_handler("close_agent", Arc::new(CloseAgentHandler));
     }
 
     if config.agent_jobs_tools {

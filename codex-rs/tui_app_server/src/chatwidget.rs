@@ -864,7 +864,6 @@ pub(crate) struct ChatWidget {
     quit_shortcut_key: Option<KeyBinding>,
     // Simple review mode flag; used to adjust layout and banners.
     is_review_mode: bool,
-    #[cfg(test)]
     // Snapshot of token usage to restore after review mode exits.
     pre_review_token_info: Option<Option<TokenUsageInfo>>,
     // Whether the next streamed assistant content should be preceded by a final message separator.
@@ -2546,7 +2545,6 @@ impl ChatWidget {
         Some(info.total_token_usage.tokens_in_context_window())
     }
 
-    #[cfg(test)]
     fn restore_pre_review_token_info(&mut self) {
         if let Some(saved) = self.pre_review_token_info.take() {
             match saved {
@@ -4527,7 +4525,6 @@ impl ChatWidget {
             quit_shortcut_expires_at: None,
             quit_shortcut_key: None,
             is_review_mode: false,
-            #[cfg(test)]
             pre_review_token_info: None,
             needs_final_message_separator: false,
             had_work_activity: false,
@@ -6032,17 +6029,12 @@ impl ChatWidget {
                 });
             }
             ThreadItem::EnteredReviewMode { review, .. } => {
-                self.add_to_history(history_cell::new_review_status_line(format!(
-                    ">> Code review started: {review} <<"
-                )));
-                if !self.bottom_pane.is_task_running() {
-                    self.bottom_pane.set_task_running(/*running*/ true);
+                if from_replay {
+                    self.enter_review_mode_with_hint(review, /*from_replay*/ true);
                 }
-                self.is_review_mode = true;
             }
-            ThreadItem::ExitedReviewMode { review, .. } => {
-                self.on_agent_message(review);
-                self.is_review_mode = false;
+            ThreadItem::ExitedReviewMode { .. } => {
+                self.exit_review_mode_after_item();
             }
             ThreadItem::ContextCompaction { .. } => {
                 self.on_agent_message("Context compacted".to_owned());
@@ -6167,7 +6159,7 @@ impl ChatWidget {
                 self.handle_turn_completed_notification(notification, replay_kind);
             }
             ServerNotification::ItemStarted(notification) => {
-                self.handle_item_started_notification(notification);
+                self.handle_item_started_notification(notification, replay_kind.is_some());
             }
             ServerNotification::ItemCompleted(notification) => {
                 self.handle_item_completed_notification(notification, replay_kind);
@@ -6451,7 +6443,11 @@ impl ChatWidget {
         }
     }
 
-    fn handle_item_started_notification(&mut self, notification: ItemStartedNotification) {
+    fn handle_item_started_notification(
+        &mut self,
+        notification: ItemStartedNotification,
+        from_replay: bool,
+    ) {
         match notification.item {
             ThreadItem::CommandExecution {
                 id,
@@ -6528,10 +6524,9 @@ impl ChatWidget {
                 agents_states,
             }),
             ThreadItem::EnteredReviewMode { review, .. } => {
-                self.add_to_history(history_cell::new_review_status_line(format!(
-                    ">> Code review started: {review} <<"
-                )));
-                self.is_review_mode = true;
+                if !from_replay {
+                    self.enter_review_mode_with_hint(review, /*from_replay*/ false);
+                }
             }
             _ => {}
         }
@@ -6931,28 +6926,41 @@ impl ChatWidget {
         }
     }
 
-    #[cfg(test)]
-    fn on_entered_review_mode(&mut self, review: ReviewRequest, from_replay: bool) {
-        // Enter review mode and emit a concise banner
+    fn enter_review_mode_with_hint(&mut self, hint: String, from_replay: bool) {
         if self.pre_review_token_info.is_none() {
             self.pre_review_token_info = Some(self.token_info.clone());
         }
-        // Avoid toggling running state for replayed history events on resume.
         if !from_replay && !self.bottom_pane.is_task_running() {
             self.bottom_pane.set_task_running(/*running*/ true);
         }
         self.is_review_mode = true;
-        let hint = review
-            .user_facing_hint
-            .unwrap_or_else(|| codex_core::review_prompts::user_facing_hint(&review.target));
         let banner = format!(">> Code review started: {hint} <<");
         self.add_to_history(history_cell::new_review_status_line(banner));
         self.request_redraw();
     }
 
+    fn exit_review_mode_after_item(&mut self) {
+        self.flush_answer_stream_with_separator();
+        self.flush_interrupt_queue();
+        self.flush_active_cell();
+        self.is_review_mode = false;
+        self.restore_pre_review_token_info();
+        self.add_to_history(history_cell::new_review_status_line(
+            "<< Code review finished >>".to_string(),
+        ));
+        self.request_redraw();
+    }
+
+    #[cfg(test)]
+    fn on_entered_review_mode(&mut self, review: ReviewRequest, from_replay: bool) {
+        let hint = review
+            .user_facing_hint
+            .unwrap_or_else(|| codex_core::review_prompts::user_facing_hint(&review.target));
+        self.enter_review_mode_with_hint(hint, from_replay);
+    }
+
     #[cfg(test)]
     fn on_exited_review_mode(&mut self, review: ExitedReviewModeEvent) {
-        // Leave review mode; if output is present, flush pending stream + show results.
         if let Some(output) = review.review_output {
             self.flush_answer_stream_with_separator();
             self.flush_interrupt_queue();
@@ -6981,14 +6989,7 @@ impl ChatWidget {
             }
             // Final message is rendered as part of the AgentMessage.
         }
-
-        self.is_review_mode = false;
-        self.restore_pre_review_token_info();
-        // Append a finishing banner at the end of this turn.
-        self.add_to_history(history_cell::new_review_status_line(
-            "<< Code review finished >>".to_string(),
-        ));
-        self.request_redraw();
+        self.exit_review_mode_after_item();
     }
 
     fn on_user_message_event(&mut self, event: UserMessageEvent) {

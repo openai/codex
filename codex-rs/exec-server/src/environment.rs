@@ -8,14 +8,14 @@ use crate::RemoteExecServerConnectArgs;
 use crate::file_system::ExecutorFileSystem;
 use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
-use crate::process::ExecProcess;
+use crate::process::ExecBackend;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 
 pub trait ExecutorEnvironment: Send + Sync {
-    fn get_executor(&self) -> Arc<dyn ExecProcess>;
+    fn get_exec_backend(&self) -> Arc<dyn ExecBackend>;
 }
 
 #[derive(Debug, Default)]
@@ -56,7 +56,7 @@ impl EnvironmentManager {
 pub struct Environment {
     exec_server_url: Option<String>,
     remote_exec_server_client: Option<ExecServerClient>,
-    executor: Arc<dyn ExecProcess>,
+    exec_backend: Arc<dyn ExecBackend>,
 }
 
 impl Default for Environment {
@@ -72,7 +72,7 @@ impl Default for Environment {
         Self {
             exec_server_url: None,
             remote_exec_server_client: None,
-            executor: Arc::new(local_process),
+            exec_backend: Arc::new(local_process),
         }
     }
 }
@@ -102,24 +102,24 @@ impl Environment {
             None
         };
 
-        let executor: Arc<dyn ExecProcess> = if let Some(client) = remote_exec_server_client.clone()
-        {
-            Arc::new(RemoteProcess::new(client))
-        } else {
-            let local_process = LocalProcess::default();
-            local_process
-                .initialize()
-                .map_err(|err| ExecServerError::Protocol(err.message))?;
-            local_process
-                .initialized()
-                .map_err(ExecServerError::Protocol)?;
-            Arc::new(local_process)
-        };
+        let exec_backend: Arc<dyn ExecBackend> =
+            if let Some(client) = remote_exec_server_client.clone() {
+                Arc::new(RemoteProcess::new(client))
+            } else {
+                let local_process = LocalProcess::default();
+                local_process
+                    .initialize()
+                    .map_err(|err| ExecServerError::Protocol(err.message))?;
+                local_process
+                    .initialized()
+                    .map_err(ExecServerError::Protocol)?;
+                Arc::new(local_process)
+            };
 
         Ok(Self {
             exec_server_url,
             remote_exec_server_client,
-            executor,
+            exec_backend,
         })
     }
 
@@ -127,8 +127,8 @@ impl Environment {
         self.exec_server_url.as_deref()
     }
 
-    pub fn get_executor(&self) -> Arc<dyn ExecProcess> {
-        Arc::clone(&self.executor)
+    pub fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
+        Arc::clone(&self.exec_backend)
     }
 
     pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
@@ -148,8 +148,8 @@ fn normalize_exec_server_url(exec_server_url: Option<String>) -> Option<String> 
 }
 
 impl ExecutorEnvironment for Environment {
-    fn get_executor(&self) -> Arc<dyn ExecProcess> {
-        Arc::clone(&self.executor)
+    fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
+        Arc::clone(&self.exec_backend)
     }
 }
 
@@ -159,6 +159,7 @@ mod tests {
 
     use super::Environment;
     use super::EnvironmentManager;
+    use crate::ProcessId;
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
@@ -193,9 +194,9 @@ mod tests {
         let environment = Environment::default();
 
         let response = environment
-            .get_executor()
+            .get_exec_backend()
             .start(crate::ExecParams {
-                process_id: "default-env-proc".to_string(),
+                process_id: ProcessId::from("default-env-proc"),
                 argv: vec!["true".to_string()],
                 cwd: std::env::current_dir().expect("read current dir"),
                 env: Default::default(),
@@ -205,11 +206,6 @@ mod tests {
             .await
             .expect("start process");
 
-        assert_eq!(
-            response,
-            crate::ExecResponse {
-                process_id: "default-env-proc".to_string(),
-            }
-        );
+        assert_eq!(response.process.process_id().as_str(), "default-env-proc");
     }
 }

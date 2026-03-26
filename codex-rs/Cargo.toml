@@ -83,7 +83,6 @@ members = [
     "test-macros",
     "package-manager",
     "plugin",
-    "artifacts",
 ]
 resolver = "2"
 
@@ -102,7 +101,6 @@ app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-analytics = { path = "analytics" }
 codex-api = { path = "codex-api" }
-codex-artifacts = { path = "artifacts" }
 codex-code-mode = { path = "code-mode" }
 codex-package-manager = { path = "package-manager" }
 codex-app-server = { path = "app-server" }
@@ -189,6 +187,7 @@ allocative = "0.3.3"
 ansi-to-tui = "7.0.0"
 anyhow = "1"
 arboard = { version = "3", features = ["wayland-data-control"] }
+arc-swap = "1.9.0"
 assert_cmd = "2"
 assert_matches = "1.5.0"
 async-channel = "2.3.1"
@@ -396,7 +395,7 @@ unwrap_used = "deny"
 ignored = [
     "icu_provider",
     "openssl-sys",
-    "codex-artifacts",
+    "codex-package-manager",
     "codex-utils-readiness",
     "codex-utils-template",
     "codex-v8-poc",

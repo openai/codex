@@ -467,15 +467,25 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
             search_content_types: None,
         },
         create_view_image_tool(config.can_request_original_image_detail),
-        create_spawn_agent_tool(&config),
-        create_send_input_tool(),
-        if config.multi_agent_v2 {
-            create_wait_agent_tool_v2()
-        } else {
-            create_wait_agent_tool_v1()
-        },
-        create_close_agent_tool(),
     ] {
+        expected.insert(tool_name(&spec).to_string(), spec);
+    }
+    let collab_specs = if config.multi_agent_v2 {
+        vec![
+            create_spawn_agent_tool_v2(&config),
+            create_send_message_tool(),
+            create_wait_agent_tool_v2(),
+            create_close_agent_tool_v2(),
+        ]
+    } else {
+        vec![
+            create_spawn_agent_tool_v1(&config),
+            create_send_input_tool_v1(),
+            create_wait_agent_tool_v1(),
+            create_close_agent_tool_v1(),
+        ]
+    };
+    for spec in collab_specs {
         expected.insert(tool_name(&spec).to_string(), spec);
     }
     if !config.multi_agent_v2 {

@@ -20,6 +20,7 @@ use crate::protocol::ExecCommandSource;
 use crate::protocol::ExecOutputStream;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
+use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
 use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
 
@@ -121,21 +122,36 @@ pub(crate) fn spawn_exit_watcher(
         exit_token.cancelled().await;
         output_drained.notified().await;
 
-        let exit_code = process.exit_code().unwrap_or(-1);
         let duration = Instant::now().saturating_duration_since(started_at);
-        emit_exec_end_for_unified_exec(
-            session_ref,
-            turn_ref,
-            call_id,
-            command,
-            cwd,
-            Some(process_id.to_string()),
-            transcript,
-            String::new(),
-            exit_code,
-            duration,
-        )
-        .await;
+        if let Some(message) = process.failure_message() {
+            emit_failed_exec_end_for_unified_exec(
+                session_ref,
+                turn_ref,
+                call_id,
+                command,
+                cwd,
+                Some(process_id.to_string()),
+                transcript,
+                message,
+                duration,
+            )
+            .await;
+        } else {
+            let exit_code = process.exit_code().unwrap_or(-1);
+            emit_exec_end_for_unified_exec(
+                session_ref,
+                turn_ref,
+                call_id,
+                command,
+                cwd,
+                Some(process_id.to_string()),
+                transcript,
+                String::new(),
+                exit_code,
+                duration,
+            )
+            .await;
+        }
     });
 }
 
@@ -210,6 +226,52 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
     );
     emitter
         .emit(event_ctx, ToolEventStage::Success(output))
+        .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn emit_failed_exec_end_for_unified_exec(
+    session_ref: Arc<Session>,
+    turn_ref: Arc<TurnContext>,
+    call_id: String,
+    command: Vec<String>,
+    cwd: PathBuf,
+    process_id: Option<String>,
+    transcript: Arc<Mutex<HeadTailBuffer>>,
+    message: String,
+    duration: Duration,
+) {
+    let stdout = resolve_aggregated_output(&transcript, String::new()).await;
+    let aggregated_output = if stdout.is_empty() {
+        message.clone()
+    } else {
+        format!("{stdout}\n{message}")
+    };
+    let output = ExecToolCallOutput {
+        exit_code: -1,
+        stdout: StreamOutput::new(stdout),
+        stderr: StreamOutput::new(message),
+        aggregated_output: StreamOutput::new(aggregated_output),
+        duration,
+        timed_out: false,
+    };
+    let event_ctx = ToolEventCtx::new(
+        session_ref.as_ref(),
+        turn_ref.as_ref(),
+        &call_id,
+        /*turn_diff_tracker*/ None,
+    );
+    let emitter = ToolEmitter::unified_exec(
+        &command,
+        cwd,
+        ExecCommandSource::UnifiedExecStartup,
+        process_id,
+    );
+    emitter
+        .emit(
+            event_ctx,
+            ToolEventStage::Failure(ToolEventFailure::Output(output)),
+        )
         .await;
 }
 
